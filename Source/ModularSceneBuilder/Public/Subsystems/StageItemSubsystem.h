@@ -7,10 +7,8 @@
 #include "GameplayTagContainer.h"
 #include "StageItemSubsystem.generated.h"
 
-class UBaseItemData;
-
 DECLARE_DYNAMIC_MULTICAST_DELEGATE(FOnStageItemCatalogLoaded);
-DECLARE_DYNAMIC_MULTICAST_DELEGATE_TwoParams(FOnStageItemSelectionChanged, UBaseItemData*, NewItem, UBaseItemData*, PreviousItem);
+DECLARE_DYNAMIC_MULTICAST_DELEGATE_TwoParams(FOnStageItemSelectionChanged, class UBaseItemData*, NewItem, class UBaseItemData*, PreviousItem);
 
 /**
  * Single source of truth for the item catalog and the item the user is about to place.
@@ -37,11 +35,11 @@ public:
 
 	/** Every discovered item, sorted by display name. Empty until OnCatalogLoaded fires. */
 	UFUNCTION(BlueprintPure, Category = "StageCraft|Catalog")
-	const TArray<UBaseItemData*>& GetCatalog() const { return ObjectPtrDecay(Catalog); }
+	const TArray<class UBaseItemData*>& GetCatalog() const { return ObjectPtrDecay(Catalog); }
 
 	/** Items whose CategoryTag matches (or is a child of) the given tag. */
 	UFUNCTION(BlueprintCallable, Category = "StageCraft|Catalog")
-	TArray<UBaseItemData*> GetCatalogByCategory(FGameplayTag Category) const;
+	TArray<class UBaseItemData*> GetCatalogByCategory(FGameplayTag Category) const;
 
 	/** Fires once when the catalog finishes loading. Check IsCatalogLoaded() first to avoid missing it. */
 	UPROPERTY(BlueprintAssignable, Category = "StageCraft|Catalog")
@@ -55,13 +53,13 @@ public:
 	 * A newer request supersedes one that is still loading.
 	 */
 	UFUNCTION(BlueprintCallable, Category = "StageCraft|Selection")
-	void SelectItem(UBaseItemData* Item);
+	void SelectItem(class UBaseItemData* Item);
 
 	UFUNCTION(BlueprintCallable, Category = "StageCraft|Selection")
 	void ClearSelection();
 
 	UFUNCTION(BlueprintPure, Category = "StageCraft|Selection")
-	UBaseItemData* GetSelectedItem() const { return SelectedItem; }
+	class UBaseItemData* GetSelectedItem() const { return SelectedItem; }
 
 	UFUNCTION(BlueprintPure, Category = "StageCraft|Selection")
 	bool HasSelection() const { return SelectedItem != nullptr; }
@@ -76,17 +74,17 @@ public:
 private:
 	void LoadCatalog();
 	void HandleCatalogLoaded();
-	void HandleSelectionLoaded(TWeakObjectPtr<UBaseItemData> LoadedItem);
-	void CommitSelection(UBaseItemData* NewItem);
+	void HandleSelectionLoaded(TWeakObjectPtr<class UBaseItemData> LoadedItem);
+	void CommitSelection(class UBaseItemData* NewItem);
 
 	UPROPERTY(Transient)
-	TArray<TObjectPtr<UBaseItemData>> Catalog;
+	TArray<TObjectPtr<class UBaseItemData>> Catalog;
 
 	UPROPERTY(Transient)
-	TObjectPtr<UBaseItemData> SelectedItem;
+	TObjectPtr<class UBaseItemData> SelectedItem = nullptr;
 
 	UPROPERTY(Transient)
-	TObjectPtr<UBaseItemData> PendingSelection;
+	TObjectPtr<class UBaseItemData> PendingSelection = nullptr;
 
 	bool bCatalogLoaded = false;
 };

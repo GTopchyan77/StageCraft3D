@@ -4,13 +4,16 @@
 
 #include "Engine/EngineTypes.h"
 
+/**
+ * Custom trace channels. Both default to Ignore (see [/Script/Engine.CollisionProfile] in
+ * DefaultEngine.ini), so only components that opt in block them. Must stay in sync with the
+ * channel slots configured there.
+ */
 namespace StageCraftCollision
 {
-	/**
-	 * Trace channel that only placed stage items block (default response Ignore, see
-	 * [/Script/Engine.CollisionProfile] in DefaultEngine.ini). Lets delete/select traces pass
-	 * through the floor and level geometry and hit only user content.
-	 * Must stay in sync with the channel slot configured in DefaultEngine.ini.
-	 */
+	/** Blocked only by placed stage items. Delete/select traces pass through the floor and level geometry. */
 	inline constexpr ECollisionChannel StageItemChannel = ECC_GameTraceChannel1;
+
+	/** Blocked only by transform gizmo handles, so handles never interfere with placement or selection traces. */
+	inline constexpr ECollisionChannel GizmoChannel = ECC_GameTraceChannel2;
 }

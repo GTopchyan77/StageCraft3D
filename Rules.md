@@ -128,6 +128,14 @@ When debugging: check `get_output_log` first. When placing things: use `spawn_ac
 - Keep Actor components focused — one responsibility per component
 - Nanite-ready meshes where applicable
 - Comment the "why," not the "what"
+- **Never write forward declarations at the top of header files** (forbidden: `class USpawnSystemComponent;`). Always use inline elaborated type specifiers directly inside template brackets and type wrappers:
+  - `TObjectPtr<class USpawnSystemComponent> SpawnSystem = nullptr;`
+  - `TSubclassOf<class AModularBaseActor> ActorClass;`
+  - `TSoftObjectPtr<class UStaticMesh> Mesh;` / `TSoftClassPtr<class AActor> Class;`
+  - `TWeakObjectPtr<class UObject> WeakObj;`
+  - Types that are not included must also be elaborated at every other use in the header: parameters and returns (`class UBaseItemData* GetItemData() const;`, `const struct FHitResult& Hit`) and dynamic delegate macros (`DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FOnX, class AModularBaseActor*, Actor);`).
+  - Single `TObjectPtr` members get an explicit `= nullptr`. Static arrays (`TObjectPtr<class UStaticMeshComponent> Handles[3];`) cannot and stay as they are.
+  - Only use elaborated specifiers for global-namespace types. Inside a `namespace` block, `class X` would declare a new `Namespace::X` instead of referring to the global type.
 
 ### Live Coding
 After writing or editing C++ files, trigger recompilation via `run_console_command` with the Live Coding hotkey or inform the user to recompile. Never assume changes are live until confirmed.

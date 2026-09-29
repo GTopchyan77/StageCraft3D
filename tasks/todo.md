@@ -3,16 +3,24 @@
 See `STATE.md` for detailed history of completed work.
 
 ## Phase 3 — Player Controller & Spawning/Deletion
-- [x] `StageItem` trace channel (DefaultEngine.ini) + `StageCraftCollision::StageItemChannel` constant; `AModularBaseActor` blocks it
-- [x] `USpawnSystemComponent`: caches the selected item via `UStageItemSubsystem::OnSelectedItemChanged` (no polling); single / continuous grid placement strokes; delete of `IInteractableInterface` actors; `OnItemSpawned` / `OnItemDeleted` delegates
-- [x] `AModularPlayerController`: Enhanced Input (designer-assignable IMC/actions, code-built LMB/RMB fallback), cursor traces (placement = Visibility, delete = StageItem), forwards hits to the spawn component
-- [x] `AStageCraftGameModeBase` wired as `GlobalDefaultGameMode`
-- [x] Clean UE 5.8 build + headless -game smoke test (startup only)
+- [x] Implemented, compiled, headless smoke-tested (see STATE.md #3)
 - [ ] Manual PIE verification (Gevor): place props by holding LMB, lights by single click, RMB deletes
 
+## Phase 4 — Selection & Transform Gizmo
+- [x] `Gizmo` trace channel (ECC_GameTraceChannel2) + `StageCraftCollision::GizmoChannel`
+- [x] `USelectionComponent`: interface-based selection, OnSelect/OnDeselect highlight swap, auto-release on OnDestroyed, `OnSelectionChanged` delegate
+- [x] `AModularTransformGizmo`: world-space translate arrows / rotate rings, drag via cursor ray vs. drag plane, snapping props, Space toggle, constant screen size (ticks only while attached)
+- [x] Controller click arbitration (gizmo > item select > empty deselect+place; RMB item delete > empty deselect+disarm), Space binding with legacy-key consumption
+- [x] Game target compiles clean (editor target blocked by Live Coding while the editor was open)
+- [ ] Editor target rebuild after closing the editor (Gevor)
+- [ ] Manual PIE verification (Gevor): see STATE.md #4 checklist
+
 ## Backlog
-- [ ] Camera navigation (orbit/pan/zoom) — mouse look is disabled in Phase 3 so LMB/RMB don't fight the camera
-- [ ] Hover highlight (per-frame cursor trace only while nothing is held) — Phase 4 alongside selection
+- [ ] Camera navigation (orbit/pan/zoom); mouse look is disabled so LMB/RMB don't fight the camera
+- [ ] Hover highlight via IInteractableInterface::OnHoverBegin/End (needs a cheap throttled cursor trace)
+- [ ] Gizmo handle hover highlight
+- [ ] Place onto an existing item with a modifier (plain LMB on an item now selects it)
+- [ ] Local-space gizmo option; gizmo drawn on top of geometry (needs a custom no-depth-test material)
+- [ ] Undo/redo, hooking OnItemSpawned / OnItemDeleted / gizmo drag end
 - [ ] Overlay materials for hover/selected (content)
-- [ ] Phase 4: Gizmo & transform modes
 - [ ] Phase 5: UMG catalog + light color picker

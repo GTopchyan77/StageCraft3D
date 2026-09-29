@@ -8,11 +8,6 @@
 #include "Data/StageItemTypes.h"
 #include "BaseItemData.generated.h"
 
-class AModularBaseActor;
-class UMaterialInterface;
-class UStaticMesh;
-class UTexture2D;
-
 /**
  * Catalog entry for anything the user can place on stage: props, stage elements and lights.
  *
@@ -55,7 +50,7 @@ public:
 	FText Description;
 
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Display", meta = (AssetBundles = "UI"))
-	TSoftObjectPtr<UTexture2D> Icon;
+	TSoftObjectPtr<class UTexture2D> Icon;
 
 	/** Catalog grouping for UI tabs and filters. */
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Display", meta = (Categories = "StageCraft.Category"))
@@ -71,18 +66,18 @@ public:
 	 * items with behaviour (e.g. lights) point at a subclass or Blueprint.
 	 */
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Spawning", meta = (AssetBundles = "Game"))
-	TSoftClassPtr<AModularBaseActor> ActorClass;
+	TSoftClassPtr<class AModularBaseActor> ActorClass;
 
 	/**
 	 * Optional mesh override pushed onto the spawned actor. Lets many simple props share one
 	 * generic actor class instead of needing a Blueprint per mesh.
 	 */
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Spawning", meta = (AssetBundles = "Game"))
-	TSoftObjectPtr<UStaticMesh> Mesh;
+	TSoftObjectPtr<class UStaticMesh> Mesh;
 
 	/** Per-slot material overrides applied together with Mesh. Empty entries keep the mesh's own material. Ignored when Mesh is not set. */
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Spawning", meta = (AssetBundles = "Game"))
-	TArray<TSoftObjectPtr<UMaterialInterface>> MaterialOverrides;
+	TArray<TSoftObjectPtr<class UMaterialInterface>> MaterialOverrides;
 
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Spawning", meta = (ShowOnlyInnerProperties))
 	FStageItemPlacementRules PlacementRules;

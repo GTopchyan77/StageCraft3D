@@ -37,7 +37,7 @@ Built the data layer so props, stage elements and lights are pure content. You a
 - Compiled clean with `Build.bat ModularSceneBuilderEditor Win64 Development` on UE 5.8 (0 errors, 0 warnings). Done by Claude.
 - Runtime behavior is implemented and awaiting manual verification. To test: create one or two `BaseItemData` assets in `/Game/StageCraft/Items`, run PIE, and check the Output Log for `Stage item catalog loaded: N items.`
 
-**Commit:** uncommitted (working tree)
+**Commit:** `0098752` (committed together with #2)
 
 **Known issues / follow-ups**
 - `ActorClass` is `TSoftClassPtr<AActor>`. Narrow it to `AModularBaseActor` in Phase 2.
@@ -75,7 +75,7 @@ Added the interaction contract and the parent class for every placed stage item.
 - Compiled clean with `Build.bat ModularSceneBuilderEditor Win64 Development` on UE 5.8 (0 errors, 0 warnings). Done by Claude.
 - Runtime behavior is implemented and awaiting manual verification. To test: create a `BaseItemData` with a Mesh, drop an `AModularBaseActor` into a level, and set its ItemData. The mesh should appear. Assign overlay materials in a Blueprint subclass and call `OnHoverBegin` / `OnSelect` from a test Blueprint to check the highlight.
 
-**Commit:** uncommitted (working tree, on top of the uncommitted #1)
+**Commit:** `0098752`
 
 **Known issues / follow-ups**
 - No overlay materials ship yet. The highlight shows nothing until `HoverOverlayMaterial` / `SelectedOverlayMaterial` are set (for example in a `BP_ModularBaseActor` defaults class). This is a content task.
@@ -124,10 +124,131 @@ Users can now place and delete stage items with the mouse. Responsibilities are 
   4. Make a Light item and single-click: exactly one instance should appear.
   5. RMB on an item deletes it; RMB on the floor does nothing.
 
-**Commit:** uncommitted (working tree)
+**Commit:** `2f6da9e`
 
 **Known issues / follow-ups**
 - No camera look or orbit yet (WASD/QE only). Tracked in `tasks/todo.md`.
 - No way to select an item in-game until the Phase 5 UI exists.
 - It is not verified that ADefaultPawn's legacy WASD bindings work alongside the Enhanced Input component in 5.8. They should, but confirm in PIE.
 - The plan was written to `tasks/todo.md` rather than going through a formal plan-mode approval, because the phase spec was provided in full. No Obsidian spec or session log was written: the `S:\` vault is still unreachable from this machine.
+
+---
+
+## #4 — Phase 4: Selection & transform gizmo (2026-09-29)
+
+**What & why**
+Users can select placed items, see them highlighted, and move or rotate them with an Unreal-style gizmo. Space toggles between translate and rotate. Everything is event-driven and interface-based: neither the selection component nor the gizmo knows any concrete item class.
+
+- **`USelectionComponent`** (on the controller, no tick):
+  - **Selecting:** `SelectActor(AActor*)` accepts only `IInteractableInterface` implementers. It calls `Execute_OnDeselect` on the previous actor, which reverts its highlight, and `Execute_OnSelect` on the new one, which applies `SelectedOverlayMaterial` via the Phase 2 actor code.
+  - **Delegate:** fires `OnSelectionChanged(New, Previous)`.
+  - **Destroyed actors:** it binds the selected actor's `OnDestroyed`, so deleting or destroying a selected item releases the selection and hides the gizmo automatically.
+- **`AModularTransformGizmo`** (actor):
+  - **Handles:** three world-aligned translate arrows (engine `/Engine/BasicShapes` Cylinder and Cone) and three rotate rings (a torus generated with `UProceduralMeshComponent`, since the engine ships no runtime ring mesh; both triangle windings are emitted so a one-sided material still renders). Each axis has a dynamic material instance of `/Engine/EngineMaterials/GizmoMaterial` (param `GizmoColor`): red, green and blue, turning yellow while dragged.
+  - **Attachment:** attaches to the target with SnapToTarget location. The root uses absolute rotation and scale, so it follows the target's location while the handles stay world-aligned.
+  - **Screen size:** ticks only while attached, scaling with camera distance for a roughly constant screen size.
+  - **Traces:** handles block only the new `Gizmo` trace channel (ECC_GameTraceChannel2, default Ignore), so placement, selection and deletion traces pass through them. Hidden-mode handles also turn off collision.
+  - **Translate drag math:** on drag start it captures a plane through the pivot that contains the drag axis and faces the camera. The movement is the cursor-ray/plane intersection delta projected onto the axis. A drag can't start when looking straight down the axis.
+  - **Rotate drag math:** the plane is perpendicular to the axis. The rotation is the signed angle between the grab vector and the current vector around the axis, applied as `FQuat(axis, angle) * startRotation`. Near-parallel rays are rejected to avoid jumps.
+  - **Snapping and settings:** optional `TranslationSnap` (cm) and `RotationSnapDegrees` (both 0 = free). Meshes, material, colors and screen factor are designer-overridable.
+  - **Input-free:** the gizmo receives cursor rays through `TryBeginDrag`, `UpdateDrag` and `EndDrag`. It only touches `AActor` location and rotation.
+- **`AModularPlayerController`** changes:
+  - Owns `USelectionComponent` and spawns one gizmo (`GizmoClass`, owner = the controller) for the local player. It re-targets the gizmo from `OnSelectionChanged`.
+  - **LMB priority:** gizmo handle (start drag) > placed item (select) > empty surface (deselect, then place if a catalog item is armed).
+  - **Held LMB:** updates the gizmo drag, or the continuous placement stroke. Per-frame traces happen only while one of those is active.
+  - **RMB:** placed item → delete (unchanged). Empty space → clear the actor selection and disarm the catalog item (`UStageItemSubsystem::ClearSelection`).
+  - **New `ToggleGizmoModeAction`** (default Space). The built-in action consumes legacy keys, so Space doesn't also trigger `ADefaultPawn`'s "fly up" axis. An assigned asset should enable "Consumes Action And Axis Mappings".
+- **Build and config:** private dependency on `ProceduralMeshComponent` (engine plugin, enabled by default). `Gizmo` trace channel added in DefaultEngine.ini.
+- **Housekeeping:** STATE.md #1–#3 commit lines filled in with the real hashes (they had gone stale).
+
+**Files changed**
+- `Source/ModularSceneBuilder/Public/Components/SelectionComponent.h`, `Private/Components/SelectionComponent.cpp`: new
+- `Source/ModularSceneBuilder/Public/Actors/ModularTransformGizmo.h`, `Private/Actors/ModularTransformGizmo.cpp`: new
+- `Source/ModularSceneBuilder/Public/Player/ModularPlayerController.h`, `Private/Player/ModularPlayerController.cpp`: selection, gizmo, click arbitration, Space action
+- `Source/ModularSceneBuilder/Public/Interaction/StageCraftCollision.h`: `GizmoChannel`
+- `Source/ModularSceneBuilder/ModularSceneBuilder.Build.cs`: `ProceduralMeshComponent`
+- `Config/DefaultEngine.ini`: Gizmo trace channel
+- `tasks/todo.md`: Phase 4 checklist and backlog
+- `STATE.md`: this entry and the commit-hash fix
+
+**Verification**
+- The **Game** target (`Build.bat ModularSceneBuilder Win64 Development`) compiles clean: 0 errors, 0 warnings, all module sources. Done by Claude.
+- The **Editor** target was not rebuilt, because Live Coding was active in an open editor session and UBT refused. New classes, a module dependency and header changes can't be live-patched. Gevor needs to close the editor and rebuild (IDE or `Build.bat ModularSceneBuilderEditor Win64 Development`).
+- Runtime is implemented, awaiting manual verification in PIE:
+  1. Place an item.
+  2. LMB it: selected overlay plus gizmo appear at its pivot.
+  3. Drag each arrow: it moves along that world axis only, and the arrow turns yellow.
+  4. Press Space: rings appear. Drag a ring to rotate around that axis. Space should not move the camera up.
+  5. LMB empty floor: deselects (and places if a catalog item is armed).
+  6. RMB empty: deselects and disarms.
+  7. RMB the selected item: it is deleted and the gizmo hides.
+  8. The gizmo stays a similar on-screen size when flying closer or farther with WASD.
+
+**Commit:** uncommitted (working tree)
+
+**Known issues / follow-ups**
+- **Unverified assumptions, check in PIE:**
+  - BasicShapes Cone's pivot is at its centre (tip +Z). If the arrowheads are offset, adjust the head placement in `ModularTransformGizmo.cpp`.
+  - `GizmoMaterial` renders correctly on static and procedural meshes in game.
+  - Legacy-key consumption actually stops Space from moving the default pawn.
+- The gizmo is depth-tested, so it can be hidden inside large meshes. Drawing it on top needs a custom material. Tracked in the backlog.
+- A plain LMB on an existing item now selects it instead of stacking a new item on top. Placing onto items still works mid-stroke; a modifier to force placement is in the backlog.
+- Hover highlight is still not wired (backlog).
+- No Obsidian spec or session log was written: the `S:\` vault is still unreachable. Plan kept in `tasks/todo.md`.
+
+---
+
+## #5 — Coding standard: no elaborated type specifiers in pointer templates (2026-09-29)
+
+**What & why**
+Gevor made this a hard rule: never write `class` or `struct` inside `TObjectPtr<...>`. Always forward-declare at the top of the header and use `TObjectPtr<UType> Name;`. This keeps dependencies visible in one place, and an inline `class X` can silently declare a new type in the wrong namespace.
+
+- `Rules.md` → Code Standards: added the rule. It also covers `TWeakObjectPtr`, `TSoftObjectPtr`, `TSoftClassPtr`, `TSubclassOf`, and inline elaborated specifiers in function signatures.
+- Audit of every `.h` and `.cpp` under `Source/`: **no** `TObjectPtr<class ...>` or `TObjectPtr<struct ...>` (or other pointer templates) existed. All `TObjectPtr` members already used forward-declared or included types.
+- Fixed the one related violation: `UBaseItemData::IsDataValid(class FDataValidationContext&)` now uses a top-of-header `class FDataValidationContext;` forward declaration. The class key matches the engine's `class FDataValidationContext`, so there's no C4099.
+
+**Files changed**
+- `Rules.md`: new Code Standards bullet
+- `Source/ModularSceneBuilder/Public/Data/BaseItemData.h`: forward declaration plus clean signature
+
+**Verification**
+- The Game target compiles clean. Done by Claude.
+- The Editor target is still blocked by Live Coding in the open editor. `IsDataValid` is `WITH_EDITOR`-only, so the changed line itself is compiled only by the Editor build. It is awaiting an editor rebuild after Gevor closes the editor. This is the same pending rebuild as #4.
+
+**Commit:** uncommitted (working tree)
+
+**Known issues / follow-ups**
+- None beyond the pending editor rebuild from #4.
+- **Superseded by #6** on the same day: the rule was reversed.
+
+---
+
+## #6 — Coding standard reversed: inline elaborated type specifiers, no forward declarations (2026-09-29)
+
+**What & why**
+Gevor reversed the #5 rule. Headers must no longer contain top-of-file forward declarations. Every UObject type inside a pointer template is written with an inline elaborated specifier (`TObjectPtr<class USpawnSystemComponent> SpawnSystem = nullptr;`). Types from includes are elaborated too, so the style is uniform. This follows the common Epic engine style and keeps each declaration self-contained.
+
+- `Rules.md` → Code Standards: replaced the #5 bullet with the new rule and examples.
+  - It covers `TObjectPtr`, `TSubclassOf`, `TSoftObjectPtr`, `TSoftClassPtr` and `TWeakObjectPtr`.
+  - Non-included types must be elaborated at every use in the header: parameters, returns and dynamic delegate macro parameters. Otherwise the header doesn't compile once the forward declaration is gone.
+  - Single `TObjectPtr` members get `= nullptr`; static arrays can't.
+  - Caveat: only use elaborated specifiers for global-namespace types, because inside a `namespace` they declare a new type.
+- Refactor, applied mechanically with a Perl script to every header under `Source/ModularSceneBuilder/Public/` (no `.cpp` files contained forward declarations):
+  - Removed all 25 forward declarations from 8 headers: `ModularBaseActor.h`, `ModularTransformGizmo.h`, `SpawnSystemComponent.h`, `BaseItemData.h`, `InteractableInterface.h`, `ModularPlayerController.h`, `StageItemSubsystem.h`, plus `SelectionComponent.h`, which had no forward declarations but gained an elaborated `TObjectPtr`.
+  - Elaborated every pointer-template argument and every remaining use of a formerly forward-declared type (e.g. `const struct FHitResult&`, `class UBaseItemData* GetSelectedItem()`, `DECLARE_DYNAMIC_MULTICAST_DELEGATE_TwoParams(..., class UBaseItemData*, NewItem, ...)`).
+  - `IsDataValid` is back to `class FDataValidationContext&`.
+  - Added `= nullptr` to all single `TObjectPtr` members.
+  - Comment lines were left untouched.
+
+**Files changed**
+- `Rules.md`
+- `Source/ModularSceneBuilder/Public/Actors/ModularBaseActor.h`, `Actors/ModularTransformGizmo.h`, `Components/SelectionComponent.h`, `Components/SpawnSystemComponent.h`, `Data/BaseItemData.h`, `Interaction/InteractableInterface.h`, `Player/ModularPlayerController.h`, `Subsystems/StageItemSubsystem.h`
+
+**Verification**
+- Full rebuild (`-Rebuild`) of the Game target by Claude: UHT regenerated all reflection code and all 11 module sources plus the generated module compiled. 0 errors, 0 warnings. UHT accepts elaborated specifiers in `UPROPERTY` template arguments, `UFUNCTION` parameters and return types, and dynamic delegate macros.
+- The Editor target is still blocked by Live Coding in the open editor. The only editor-only line touched is `IsDataValid(class FDataValidationContext&)`, which matches the engine's own declaration in `UObject`. Awaiting the editor rebuild already pending from #4.
+
+**Commit:** uncommitted (working tree)
+
+**Known issues / follow-ups**
+- New headers must follow the rule by hand. No lint or CI check enforces it yet.

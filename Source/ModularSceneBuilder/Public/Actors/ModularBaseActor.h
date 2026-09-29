@@ -7,12 +7,7 @@
 #include "Interaction/InteractableInterface.h"
 #include "ModularBaseActor.generated.h"
 
-class AModularBaseActor;
-class UBaseItemData;
-class UMaterialInterface;
-class UStaticMeshComponent;
-
-DECLARE_DYNAMIC_MULTICAST_DELEGATE_TwoParams(FOnModularActorSelectionChanged, AModularBaseActor*, Actor, bool, bSelected);
+DECLARE_DYNAMIC_MULTICAST_DELEGATE_TwoParams(FOnModularActorSelectionChanged, class AModularBaseActor*, Actor, bool, bSelected);
 
 /**
  * Parent class for every item the user places on stage.
@@ -42,13 +37,13 @@ public:
 	 * by UStageItemSubsystem::SelectItem; if not, they load synchronously as a fallback.
 	 */
 	UFUNCTION(BlueprintCallable, Category = "StageCraft|Item")
-	virtual void InitializeFromItemData(UBaseItemData* InItemData);
+	virtual void InitializeFromItemData(class UBaseItemData* InItemData);
 
 	UFUNCTION(BlueprintPure, Category = "StageCraft|Item")
-	UBaseItemData* GetItemData() const { return ItemData; }
+	class UBaseItemData* GetItemData() const { return ItemData; }
 
 	UFUNCTION(BlueprintPure, Category = "StageCraft|Item")
-	UStaticMeshComponent* GetMeshComponent() const { return MeshComponent; }
+	class UStaticMeshComponent* GetMeshComponent() const { return MeshComponent; }
 
 	UFUNCTION(BlueprintPure, Category = "StageCraft|Interaction")
 	bool IsHovered() const { return bIsHovered; }
@@ -81,29 +76,29 @@ protected:
 	 * Pushes data-driven visuals onto components. Subclasses call Super and then apply their own
 	 * fields. Must be idempotent because it runs from both InitializeFromItemData and OnConstruction.
 	 */
-	virtual void ApplyItemData(const UBaseItemData& Data);
+	virtual void ApplyItemData(const class UBaseItemData& Data);
 
 	/** Refreshes hover/selection feedback. Override to highlight extra components. */
 	virtual void UpdateHighlight();
 
 	/** Blueprint hook that runs after the C++ ApplyItemData, for per-item setup without C++. */
 	UFUNCTION(BlueprintImplementableEvent, Category = "StageCraft|Item", meta = (DisplayName = "On Item Data Applied"))
-	void BP_OnItemDataApplied(const UBaseItemData* AppliedData);
+	void BP_OnItemDataApplied(const class UBaseItemData* AppliedData);
 
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Components")
-	TObjectPtr<UStaticMeshComponent> MeshComponent;
+	TObjectPtr<class UStaticMeshComponent> MeshComponent = nullptr;
 
 	/** Catalog entry this actor was spawned from. Also editable on level-placed instances for authoring preset stages. */
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "StageCraft|Item", meta = (ExposeOnSpawn = true))
-	TObjectPtr<UBaseItemData> ItemData;
+	TObjectPtr<class UBaseItemData> ItemData = nullptr;
 
 	/** Overlay drawn while hovered. Leave empty to disable hover feedback. */
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "StageCraft|Highlight")
-	TObjectPtr<UMaterialInterface> HoverOverlayMaterial;
+	TObjectPtr<class UMaterialInterface> HoverOverlayMaterial = nullptr;
 
 	/** Overlay drawn while selected. Takes priority over the hover overlay. */
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "StageCraft|Highlight")
-	TObjectPtr<UMaterialInterface> SelectedOverlayMaterial;
+	TObjectPtr<class UMaterialInterface> SelectedOverlayMaterial = nullptr;
 
 private:
 	UPROPERTY(Transient, VisibleInstanceOnly, Category = "StageCraft|Interaction")

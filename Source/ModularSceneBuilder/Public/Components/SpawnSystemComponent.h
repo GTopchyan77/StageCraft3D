@@ -6,12 +6,7 @@
 #include "Components/ActorComponent.h"
 #include "SpawnSystemComponent.generated.h"
 
-class AModularBaseActor;
-class UBaseItemData;
-class UStageItemSubsystem;
-struct FHitResult;
-
-DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FOnStageItemSpawned, AModularBaseActor*, SpawnedActor);
+DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FOnStageItemSpawned, class AModularBaseActor*, SpawnedActor);
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FOnStageItemDeleted, AActor*, DeletedActor);
 
 /**
@@ -35,11 +30,11 @@ public:
 
 	/** Press: spawns the active item at the hit and, for continuous items, opens a stroke. */
 	UFUNCTION(BlueprintCallable, Category = "StageCraft|Spawning")
-	void BeginPlacement(const FHitResult& Hit);
+	void BeginPlacement(const struct FHitResult& Hit);
 
 	/** Held: spawns into the hit's grid cell if this stroke has not filled it yet. No-op outside a stroke. */
 	UFUNCTION(BlueprintCallable, Category = "StageCraft|Spawning")
-	void UpdatePlacement(const FHitResult& Hit);
+	void UpdatePlacement(const struct FHitResult& Hit);
 
 	/** Release: closes the current stroke. */
 	UFUNCTION(BlueprintCallable, Category = "StageCraft|Spawning")
@@ -57,7 +52,7 @@ public:
 	bool TryDeleteActor(AActor* Target);
 
 	UFUNCTION(BlueprintPure, Category = "StageCraft|Spawning")
-	UBaseItemData* GetActiveItem() const { return ActiveItem; }
+	class UBaseItemData* GetActiveItem() const { return ActiveItem; }
 
 	UPROPERTY(BlueprintAssignable, Category = "StageCraft|Spawning")
 	FOnStageItemSpawned OnItemSpawned;
@@ -81,17 +76,17 @@ protected:
 
 private:
 	UFUNCTION()
-	void HandleSelectedItemChanged(UBaseItemData* NewItem, UBaseItemData* PreviousItem);
+	void HandleSelectedItemChanged(class UBaseItemData* NewItem, class UBaseItemData* PreviousItem);
 
-	AModularBaseActor* SpawnItemAt(UBaseItemData& Item, const FTransform& Transform);
-	FTransform ComputePlacementTransform(const UBaseItemData& Item, const FHitResult& Hit) const;
-	FIntPoint ToStrokeCell(const UBaseItemData& Item, const FVector& Location) const;
-
-	UPROPERTY(Transient)
-	TObjectPtr<UStageItemSubsystem> ItemSubsystem;
+	class AModularBaseActor* SpawnItemAt(class UBaseItemData& Item, const FTransform& Transform);
+	FTransform ComputePlacementTransform(const class UBaseItemData& Item, const struct FHitResult& Hit) const;
+	FIntPoint ToStrokeCell(const class UBaseItemData& Item, const FVector& Location) const;
 
 	UPROPERTY(Transient)
-	TObjectPtr<UBaseItemData> ActiveItem;
+	TObjectPtr<class UStageItemSubsystem> ItemSubsystem = nullptr;
+
+	UPROPERTY(Transient)
+	TObjectPtr<class UBaseItemData> ActiveItem = nullptr;
 
 	/** Grid cells (XY) filled during the current stroke. */
 	TSet<FIntPoint> StrokeCells;

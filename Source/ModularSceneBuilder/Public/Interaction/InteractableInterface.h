@@ -7,8 +7,6 @@
 #include "Data/StageItemTypes.h"
 #include "InteractableInterface.generated.h"
 
-class UBaseItemData;
-
 /**
  * Snapshot of what an interactable wants the UI to know about it. Returned by value so callers
  * never hold on to actor internals; the details panel and color picker (Phase 5) read only this.
@@ -20,7 +18,7 @@ struct MODULARSCENEBUILDER_API FStageItemInteractionDetails
 
 	/** Catalog entry the object was spawned from. Null for interactables that are not catalog items. */
 	UPROPERTY(BlueprintReadOnly, Category = "Interaction")
-	TObjectPtr<UBaseItemData> ItemData = nullptr;
+	TObjectPtr<class UBaseItemData> ItemData = nullptr;
 
 	UPROPERTY(BlueprintReadOnly, Category = "Interaction")
 	FText DisplayName;
