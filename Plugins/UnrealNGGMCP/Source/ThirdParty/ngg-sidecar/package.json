@@ -1,0 +1,19 @@
+{
+  "name": "ngg-sidecar",
+  "version": "1.5.0",
+  "description": "Persistent Claude Code session daemon for the NGG UE5 plugin. Survives editor restarts.",
+  "type": "module",
+  "main": "index.js",
+  "private": true,
+  "license": "UNLICENSED",
+  "bin": {
+    "ngg-sidecar": "./index.js"
+  },
+  "scripts": {
+    "start": "node index.js",
+    "stop": "node -e \"fetch('http://localhost:6778/shutdown',{method:'POST'}).then(()=>console.log('stopped')).catch(e=>console.error(e.message))\""
+  },
+  "dependencies": {
+    "ws": "^8.18.0"
+  }
+}

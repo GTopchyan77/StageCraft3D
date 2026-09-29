@@ -1,0 +1,50 @@
+{
+  "name": "unrealngg-mcp",
+  "version": "1.0.0",
+  "description": "MCP server — wraps the UnrealNGGMCP HTTP API so Claude Code can drive UE5 asset operations via the editor bridge plugin",
+  "type": "module",
+  "main": "index.js",
+  "bin": {
+    "unrealngg-mcp": "./index.js"
+  },
+  "scripts": {
+    "start": "node index.js",
+    "dev": "node --watch index.js",
+    "set-token": "node set-token.js",
+    "test": "node --test helpers.test.js paths.test.js ue5client.test.js pcg.unit.test.js gamedev.test.js meshy.test.js setup-assets.test.js index.tools.test.js set-token.test.js rules.test.js toolsets.test.js newtools.test.js",
+    "test:live": "node live.test.mjs",
+    "test:live:endpoints": "node live.endpoints.test.mjs",
+    "test:live:sequencer": "node sequencer.live.test.mjs",
+    "test:live:worldpartition": "node worldpartition.live.test.mjs",
+    "test:live:metasound": "node metasound.live.test.mjs",
+    "test:live:rigging": "node rigging.live.test.mjs",
+    "test:live:rendering": "node rendering.live.test.mjs",
+    "test:live:assetconfig": "node assetconfig.live.test.mjs",
+    "test:live:interchange": "node interchange.live.test.mjs",
+    "test:live:substrate": "node substrate.live.test.mjs",
+    "test:live:landscape": "node landscape.live.test.mjs"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.0.0",
+    "youtube-transcript": "^1.3.1",
+    "zod": "^3.22.0"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "keywords": [
+    "unreal-engine",
+    "ue5",
+    "mcp",
+    "model-context-protocol",
+    "claude",
+    "editor-bridge",
+    "asset-tools"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Artavazdng256/Unreal_NGG_MCP"
+  },
+  "private": true,
+  "license": "UNLICENSED"
+}

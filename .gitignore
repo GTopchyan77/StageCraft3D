@@ -15,3 +15,5 @@ Obj/
 *.user
 *.opendb
 *.VC.db
+# Node dependencies installed by plugins (UnrealNGGMCP bootstrap)
+node_modules/

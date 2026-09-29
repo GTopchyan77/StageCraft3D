@@ -1,0 +1,24 @@
+{
+  "_comment": "Copy to <project root>/BlueprintConvert.json and edit. Every key is optional; anything omitted auto-derives (CLI flag > env var > this file > bridge /project_info > fallback). Delete the _comment keys before use (JSON has no comments).",
+
+  "_comment_mirror_token": "Short C++ identifier prefix for generated mirrors: E<token>Foo / F<token>Foo / U|I|A<token>Foo. Usually NOT the full project name. Example: GameAnim.",
+  "mirror_token": "MyGame",
+
+  "_comment_class_group": "UCLASS ClassGroup=(...) for generated components. Defaults to mirror_token.",
+  "class_group": "MyGame",
+
+  "_comment_module_name": "C++ module name. Default: editor's project name, else the .uproject stem.",
+  "module_name": "MyGame",
+
+  "_comment_api_macro": "UPROPERTY/USTRUCT export macro. Default: <MODULE>_API (uppercased module_name).",
+  "api_macro": "MYGAME_API",
+
+  "_comment_source_dir": "C++ module source dir (absolute or relative to project root). Default: Source/<module_name>.",
+  "source_dir": "Source/MyGame",
+
+  "_comment_vault_dir": "Conversion vault dir. Default: BlueprintConvertInfo.",
+  "vault_dir": "BlueprintConvertInfo",
+
+  "_comment_name_prefixes": "Asset-name prefixes stripped when forming a C++ identifier. Default shown.",
+  "name_prefixes": ["E_", "S_", "BPI_", "BP_", "AC_", "ABP_", "GM_", "PC_", "CR_", "CHT_", "Curve_"]
+}

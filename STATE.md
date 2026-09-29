@@ -173,7 +173,7 @@ Users can select placed items, see them highlighted, and move or rotate them wit
 
 **Verification**
 - The **Game** target (`Build.bat ModularSceneBuilder Win64 Development`) compiles clean: 0 errors, 0 warnings, all module sources. Done by Claude.
-- The **Editor** target was not rebuilt, because Live Coding was active in an open editor session and UBT refused. New classes, a module dependency and header changes can't be live-patched. Gevor needs to close the editor and rebuild (IDE or `Build.bat ModularSceneBuilderEditor Win64 Development`).
+- The **Editor** target is up to date. Rebuilt after the editor was closed (DLL 15:49, newer than all sources). Confirmed by Claude with an up-to-date `Build.bat ModularSceneBuilderEditor Win64 Development` run: Succeeded.
 - Runtime is implemented, awaiting manual verification in PIE:
   1. Place an item.
   2. LMB it: selected overlay plus gizmo appear at its pivot.
@@ -184,7 +184,7 @@ Users can select placed items, see them highlighted, and move or rotate them wit
   7. RMB the selected item: it is deleted and the gizmo hides.
   8. The gizmo stays a similar on-screen size when flying closer or farther with WASD.
 
-**Commit:** uncommitted (working tree)
+**Commit:** `2187677` (together with #5 and #6)
 
 **Known issues / follow-ups**
 - **Unverified assumptions, check in PIE:**
@@ -213,9 +213,9 @@ Gevor made this a hard rule: never write `class` or `struct` inside `TObjectPtr<
 
 **Verification**
 - The Game target compiles clean. Done by Claude.
-- The Editor target is still blocked by Live Coding in the open editor. `IsDataValid` is `WITH_EDITOR`-only, so the changed line itself is compiled only by the Editor build. It is awaiting an editor rebuild after Gevor closes the editor. This is the same pending rebuild as #4.
+- The Editor target is up to date and includes the `WITH_EDITOR` `IsDataValid` line (see #4 verification).
 
-**Commit:** uncommitted (working tree)
+**Commit:** `2187677` (content superseded by #6 in the same commit)
 
 **Known issues / follow-ups**
 - None beyond the pending editor rebuild from #4.
@@ -246,9 +246,53 @@ Gevor reversed the #5 rule. Headers must no longer contain top-of-file forward d
 
 **Verification**
 - Full rebuild (`-Rebuild`) of the Game target by Claude: UHT regenerated all reflection code and all 11 module sources plus the generated module compiled. 0 errors, 0 warnings. UHT accepts elaborated specifiers in `UPROPERTY` template arguments, `UFUNCTION` parameters and return types, and dynamic delegate macros.
-- The Editor target is still blocked by Live Coding in the open editor. The only editor-only line touched is `IsDataValid(class FDataValidationContext&)`, which matches the engine's own declaration in `UObject`. Awaiting the editor rebuild already pending from #4.
+- The Editor target is up to date and includes the `WITH_EDITOR` `IsDataValid(class FDataValidationContext&)` line (see #4 verification).
+
+**Commit:** `2187677`
+
+**Known issues / follow-ups**
+- New headers must follow the rule by hand. No lint or CI check enforces it yet.
+
+---
+
+## #7 — UnrealNGGMCP (Claude Code ↔ editor MCP bridge) wired into the project (2026-09-29)
+
+**What & why**
+Gevor asked why the `UnrealNGGMCP` MCP server wasn't registered in Claude Code.
+
+Root cause: the plugin was only installed at engine level (`UE_5.8/Engine/Plugins/Marketplace/AIEditor162bfba9fb91V2`) and was never enabled in `ModularSceneBuilder.uproject`. So it never loaded, and never ran its first-start step that writes `.mcp.json`. Its own source (`NGGMcpConfig.cpp`) also says an engine-level install "is not a supported layout". It expects `<Project>/Plugins/<folder>`, because the MCP server finds the project root by walking up from its own directory.
+
+How it works:
+- Claude Code launches `node .../unrealngg-mcp/bootstrap.js` over stdio. That server talks HTTP to the editor-side bridge.
+- The bridge picks a free port between 6776 and 6800 and publishes it in `Saved/UnrealNGGMCP/bridge.json`.
+- The auth token lives in `Config/DefaultEngine.ini` and is read by both ends.
+
+Changes:
+- **Plugin copy:** copied the plugin into `Plugins/UnrealNGGMCP/` (uplugin, Source including the bundled `node_modules`, Content, Resources, and the prebuilt 5.8 Binaries; not Intermediate). Per `PluginManager.cpp`, a project plugin takes priority over a disabled engine plugin of the same name, so there's no conflict.
+- **`.uproject`:** enabled `UnrealNGGMCP` (Editor targets only; it is an Editor-type module). Its descriptor also enables EnhancedInput, Niagara, PythonScriptPlugin, GeometryScripting, GameplayAbilities, StateTree, PropertyBindingUtils and PCG as dependencies.
+- **`.mcp.json`:** written at the project root with the exact entry the plugin itself generates for this layout: server key `ue5-ngg`, `node Plugins/UnrealNGGMCP/Source/ThirdParty/unrealngg-mcp/bootstrap.js`, cwd `.`, env `NGG_BRIDGE_TIMEOUT_MS=15000`, and an empty `MESHY_API_KEY`. There is no URL or token by design. On editor start the plugin sees the entry as `AlreadyCorrect` and leaves it alone.
+- **`.gitignore`:** added `node_modules/`. `Plugins/*/Binaries` is already covered by `Binaries/`.
+- **`.claude/`:** the MCP server's first run installed its bundled skills and agents there (7 files: ue5-niagara, ue5-umg-widgets, ue5-senior-dev, ue5-build-engineer, …).
+
+**Files changed**
+- `Plugins/UnrealNGGMCP/**` (new; binaries and node_modules ignored)
+- `ModularSceneBuilder.uproject`
+- `.mcp.json` (new)
+- `.gitignore`
+- `.claude/skills/**`, `.claude/agents/**` (new, installed by the MCP server)
+
+**Verification**
+- Node v22.22.2 and npm 10.9.7 are on PATH.
+- `node bootstrap.js` smoke test by Claude: the server started, loaded its rules (`62718 bytes -> 9668 bytes in instructions (OK)`), installed the skills and agents, and exited cleanly when stdin closed.
+- **Not yet connected.** The running editor (PID 8860) was started before the plugin was enabled, so the bridge isn't up: there is no `Saved/UnrealNGGMCP/bridge.json` and no token in DefaultEngine.ini yet. Remaining steps:
+  1. Gevor saves and closes the editor.
+  2. Rebuild the Editor target so the plugin module builds with the project.
+  3. Relaunch the editor. The bridge starts and writes `bridge.json` plus the token.
+  4. Restart Claude Code (or run `/mcp`) and approve the project-scoped `ue5-ngg` server.
 
 **Commit:** uncommitted (working tree)
 
 **Known issues / follow-ups**
-- New headers must follow the rule by hand. No lint or CI check enforces it yet.
+- The engine-level copy stays in place. It's harmless while disabled, but it's a second copy to keep in sync on plugin updates.
+- Enabling the plugin pulls in heavy dependencies (PCG, GameplayAbilities, StateTree, Python). Expect a longer first editor start.
+- Decide whether to commit `Plugins/UnrealNGGMCP/Source` (the plugin's README intends it to live in the project) and the installed `.claude/` assets.

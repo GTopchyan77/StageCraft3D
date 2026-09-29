@@ -12,7 +12,7 @@ See `STATE.md` for detailed history of completed work.
 - [x] `AModularTransformGizmo`: world-space translate arrows / rotate rings, drag via cursor ray vs. drag plane, snapping props, Space toggle, constant screen size (ticks only while attached)
 - [x] Controller click arbitration (gizmo > item select > empty deselect+place; RMB item delete > empty deselect+disarm), Space binding with legacy-key consumption
 - [x] Game target compiles clean (editor target blocked by Live Coding while the editor was open)
-- [ ] Editor target rebuild after closing the editor (Gevor)
+- [x] Editor target rebuilt and up to date
 - [ ] Manual PIE verification (Gevor): see STATE.md #4 checklist
 
 ## Backlog

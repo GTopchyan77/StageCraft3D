@@ -1,0 +1,13 @@
+{
+  "version": "1.1.0",
+  "installedAt": "2026-09-29T14:14:40.695Z",
+  "files": {
+    "agents/ue5-build-engineer.md": "79788713e0f15e840f84413228f8de84ef60658e29105aecb188ae11ee83d466",
+    "agents/ue5-senior-dev.md": "288586bc377912e4673c31ceadf21b641549e0a1eaa65b4bd1777f6c03482069",
+    "skills/ue5-niagara/SKILL.md": "e9bc6b8222580dfdee93acd17b26a5b990e9569522ec49b98a7b241c091203ef",
+    "skills/ue5-umg-widgets/references/cpp-patterns.md": "3f72481cc6d18e24461cff1affd821e0f8533e2add33a7df7790604b58ae6ffe",
+    "skills/ue5-umg-widgets/references/performance.md": "88dc28ad45e1b1fe9257e8011fec6bcd27695e7e99c110d0b771d09ffa032efe",
+    "skills/ue5-umg-widgets/references/reference-matching.md": "ee1508b5beea24cc9dfaa7e68afb4559f7acb9dee2c0137bbf74f9b31c8c9b8c",
+    "skills/ue5-umg-widgets/SKILL.md": "f7cdc91033003cd77bfd8f0b07412b2a38de66525928aee21f5ba88db9a47b06"
+  }
+}

@@ -1,0 +1,5 @@
+# Exclude dev/test files from npm publish
+node_modules/
+*.test.js
+.env
+.env.*

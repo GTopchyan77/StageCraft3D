@@ -1,0 +1,4 @@
+{
+  "version": "1.1.0",
+  "description": "Claude Code skills and agents bundled with the ue5-ngg MCP server. The server installs everything under skills/ and agents/ into <project>/.claude on first run (and refreshes unmodified files when this version changes). Bump `version` whenever you change bundled content so unedited installs pick it up."
+}

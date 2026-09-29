@@ -1,0 +1,3 @@
+# Python bytecode cache — never commit (regenerated on every run).
+__pycache__/
+*.pyc

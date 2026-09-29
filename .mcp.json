@@ -1,0 +1,13 @@
+{
+	"mcpServers": {
+		"ue5-ngg": {
+			"command": "node",
+			"args": [ "Plugins/UnrealNGGMCP/Source/ThirdParty/unrealngg-mcp/bootstrap.js" ],
+			"cwd": ".",
+			"env": {
+				"NGG_BRIDGE_TIMEOUT_MS": "15000",
+				"MESHY_API_KEY": ""
+			}
+		}
+	}
+}
