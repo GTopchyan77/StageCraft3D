@@ -6,6 +6,7 @@
 #include "Data/BaseItemData.h"
 #include "Engine/CollisionProfile.h"
 #include "Engine/StaticMesh.h"
+#include "Interaction/StageCraftCollision.h"
 #include "Materials/MaterialInterface.h"
 
 #include UE_INLINE_GENERATED_CPP_BY_NAME(ModularBaseActor)
@@ -21,6 +22,7 @@ AModularBaseActor::AModularBaseActor()
 	MeshComponent->SetMobility(EComponentMobility::Movable);
 	MeshComponent->SetCollisionProfileName(UCollisionProfile::BlockAllDynamic_ProfileName);
 	MeshComponent->SetCollisionEnabled(ECollisionEnabled::QueryOnly);
+	MeshComponent->SetCollisionResponseToChannel(StageCraftCollision::StageItemChannel, ECR_Block);
 	MeshComponent->SetGenerateOverlapEvents(false);
 }
 
