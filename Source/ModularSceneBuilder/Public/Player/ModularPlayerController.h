@@ -34,6 +34,9 @@ public:
 	UFUNCTION(BlueprintPure, Category = "StageCraft")
 	class AModularTransformGizmo* GetGizmo() const { return Gizmo; }
 
+	UFUNCTION(BlueprintPure, Category = "StageCraft|UI")
+	class UUserWidget* GetHUDWidget() const { return HUDWidget; }
+
 	/** Cursor trace against surfaces items can be placed on (floor, level geometry, other items). */
 	UFUNCTION(BlueprintCallable, Category = "StageCraft|Trace")
 	bool GetPlacementHitUnderCursor(FHitResult& OutHit) const;
@@ -62,6 +65,13 @@ protected:
 	/** Spawned once for the local player and re-targeted on every selection change. */
 	UPROPERTY(EditDefaultsOnly, Category = "StageCraft|Gizmo")
 	TSubclassOf<class AModularTransformGizmo> GizmoClass;
+
+	/**
+	 * Root editor UI (catalog, inspector, show control panels), created once for the local player.
+	 * Clicks on its visible panels are consumed by UMG and never reach placement/selection input.
+	 */
+	UPROPERTY(EditDefaultsOnly, Category = "StageCraft|UI")
+	TSubclassOf<class UUserWidget> HUDWidgetClass;
 
 	UPROPERTY(EditDefaultsOnly, Category = "StageCraft|Input")
 	TObjectPtr<class UInputMappingContext> EditorMappingContext = nullptr;
@@ -109,4 +119,7 @@ private:
 
 	UPROPERTY(Transient)
 	TObjectPtr<class AModularTransformGizmo> Gizmo = nullptr;
+
+	UPROPERTY(Transient)
+	TObjectPtr<class UUserWidget> HUDWidget = nullptr;
 };

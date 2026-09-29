@@ -3,6 +3,7 @@
 #include "Player/ModularPlayerController.h"
 
 #include "Actors/ModularTransformGizmo.h"
+#include "Blueprint/UserWidget.h"
 #include "Components/SelectionComponent.h"
 #include "Components/SpawnSystemComponent.h"
 #include "EnhancedInputComponent.h"
@@ -58,11 +59,27 @@ void AModularPlayerController::BeginPlay()
 	}
 
 	Selection->OnSelectionChanged.AddDynamic(this, &ThisClass::HandleSelectionChanged);
+
+	// Created after the selection binding so panels that read the current selection in NativeConstruct see a ready controller.
+	if (HUDWidgetClass)
+	{
+		HUDWidget = CreateWidget<UUserWidget>(this, HUDWidgetClass);
+		if (HUDWidget)
+		{
+			HUDWidget->AddToViewport();
+		}
+	}
 }
 
 void AModularPlayerController::EndPlay(const EEndPlayReason::Type EndPlayReason)
 {
 	Selection->OnSelectionChanged.RemoveDynamic(this, &ThisClass::HandleSelectionChanged);
+
+	if (HUDWidget)
+	{
+		HUDWidget->RemoveFromParent();
+		HUDWidget = nullptr;
+	}
 
 	if (Gizmo)
 	{

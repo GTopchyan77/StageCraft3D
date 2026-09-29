@@ -290,9 +290,196 @@ Changes:
   3. Relaunch the editor. The bridge starts and writes `bridge.json` plus the token.
   4. Restart Claude Code (or run `/mcp`) and approve the project-scoped `ue5-ngg` server.
 
-**Commit:** uncommitted (working tree)
+**Commit:** `37d46bd`
 
 **Known issues / follow-ups**
 - The engine-level copy stays in place. It's harmless while disabled, but it's a second copy to keep in sync on plugin updates.
 - Enabling the plugin pulls in heavy dependencies (PCG, GameplayAbilities, StateTree, Python). Expect a longer first editor start.
 - Decide whether to commit `Plugins/UnrealNGGMCP/Source` (the plugin's README intends it to live in the project) and the installed `.claude/` assets.
+
+---
+
+## #8 — Phase 4 wiring: config audit, clean rebuild of both targets, PIE checklist (2026-09-29)
+
+**What & why**
+Closes out Phase 4 integration after the interrupted session. No code changes were needed; this entry records the audit and a clean-build baseline for both targets after the #6 header refactor.
+
+- **Default GameMode:** `DefaultEngine.ini` → `[/Script/EngineSettings.GameMapsSettings] GlobalDefaultGameMode=/Script/ModularSceneBuilder.StageCraftGameModeBase`. Already correct. `AStageCraftGameModeBase` sets `AModularPlayerController` and `ADefaultPawn` in its constructor, so every map without a World Settings override uses it. (`GameDefaultMap` is still the engine `OpenWorld` template.)
+- **Enhanced Input:** `DefaultInput.ini` sets `EnhancedPlayerInput` and `EnhancedInputComponent` as defaults, which `SetupInputComponent` requires.
+- **Asset-free input fallback, verified in code:** `SetupInputComponent` calls `BuildDefaultInputMapping()` if *any* of `EditorMappingContext`, `PlaceAction`, `DeleteAction` or `ToggleGizmoModeAction` is unset.
+  - It creates the missing `UInputAction`s at runtime, plus a fresh `UInputMappingContext` (LMB = Place, RMB = Delete, Space = ToggleGizmoMode). The Space action consumes legacy keys so the pawn doesn't fly up.
+  - It logs `input assets not fully assigned, using built-in LMB/RMB/Space mapping.`
+  - `GizmoClass` defaults to the native `AModularTransformGizmo`.
+  - So PIE works with zero content. Assigning assets (e.g. via `Content/Python/stagecraft_setup_content.py`) is optional and only needed for key rebinding. If you assign assets, assign all four; a partial set gets replaced by the fallback context.
+
+- **PIE test content** (created by Claude through the editor MCP bridge):
+  - `/Game/StageCraft/Items/DA_Test_Crate`: Prop, Continuous, `/Engine/BasicShapes/Cube`, 100 cm grid, +50 Z offset.
+  - `/Game/StageCraft/Items/DA_Test_Light`: Light, Single, `/Engine/BasicShapes/Sphere`, +50 Z offset.
+  - `/Game/StageCraft/Maps/L_StageTest`: a classic (non-World-Partition) level with a 40 m floor plane, directional light, sky light, fog (disabled) and a PlayerStart looking down at the floor.
+  - `/Game/StageCraft/Debug/BP_StageTestArmer`: an Actor with custom events `ArmCrate` and `ArmLight`, each calling `StageItemSubsystem::SelectItem`. BeginPlay arms the crate. It's an actor rather than level-Blueprint logic because the MCP bridge can't edit level Blueprints. Delete it once the Phase 5 catalog UI exists.
+
+**Files changed**
+- `Content/StageCraft/Items/DA_Test_Crate.uasset`, `DA_Test_Light.uasset`, `Content/StageCraft/Maps/L_StageTest.umap`, `Content/StageCraft/Debug/BP_StageTestArmer.uasset`: new
+- `STATE.md`: this entry; #7 commit line corrected (it was committed in `37d46bd`)
+- `tasks/todo.md`: Phase 4 build item
+
+**Verification**
+- Clean `-Rebuild` of the **Game** target (`Build.bat ModularSceneBuilder Win64 Development`) by Claude: 21/21 actions, all 11 module sources plus generated code compiled, `ModularSceneBuilder.exe` linked. Result: Succeeded, 0 errors, 0 warnings.
+- Clean `-Rebuild` of the **Editor** target (`Build.bat ModularSceneBuilderEditor Win64 Development`) by Claude with the editor closed: 23/23 actions, the same module sources plus the `UnrealNGGMCP` project plugin, `UnrealEditor-ModularSceneBuilder.dll` linked. Result: Succeeded, 0 errors, 0 warnings.
+- Runtime is **not yet verified in PIE**. Manual checklist (Gevor):
+
+  **Setup** (test content already exists, see below)
+  1. Open `/Game/StageCraft/Maps/L_StageTest` and press Play. `BP_StageTestArmer` arms the Test Crate on BeginPlay.
+  2. To switch items, open the console (`~`) and run `ke * ArmLight` or `ke * ArmCrate`.
+  3. The Output Log shows `Game class is 'StageCraftGameModeBase'`, the input fallback line, and `Stage item catalog loaded: 2 items.` (confirmed by Claude in an automated PIE run).
+
+  **Spawning**
+  4. Hold LMB and drag on the floor: one prop per 1 m cell, with no stacking while the cursor rests on the new item.
+  5. With the Light item armed, a single LMB click places exactly one.
+
+  **Selecting**
+  6. LMB a placed item: selected overlay (if assigned) plus the gizmo at its pivot.
+  7. LMB empty floor: deselects (and places if an item is armed).
+  8. RMB empty space: deselects and disarms.
+
+  **Gizmo**
+  9. Drag each arrow: movement is along that world axis only, and the arrow turns yellow while dragged.
+  10. Press **Space**: arrows swap for rings, and the camera does **not** fly up. Drag a ring: the item rotates around that axis. Press Space again to return to translate.
+  11. Fly closer and farther with WASD: the gizmo stays roughly the same size on screen.
+
+  **Deleting**
+  12. RMB the selected item: it is destroyed and the gizmo hides. RMB on the floor deletes nothing.
+
+  Also check: the arrowheads sit on the shafts (Cone pivot assumption), and the gizmo is visible on both arrows and rings (GizmoMaterial on procedural mesh).
+
+**Commit:** uncommitted (working tree)
+
+**Known issues / follow-ups**
+- Open items from #4 still stand: overlay materials are a content task, the gizmo is depth-tested, and there's no hover highlight or camera orbit yet.
+- `GameDefaultMap` still points at the engine `OpenWorld` template. Set a StageCraft map once one exists.
+
+---
+
+## #9 — Phase 5 architecture: concert production data model, parameter inspector, show control & DMX boundary (2026-09-29)
+
+**What & why**
+StageCraft grows from a prop placer into a concert production and pre-vis tool. This entry lays down the C++ core that every later Phase 5 feature builds on. It does **not** include Widget Blueprints, catalog content, or a DMX transport; those are listed as open tasks in `tasks/todo.md`.
+
+Design principle: **one self-describing parameter model** feeds the inspector, the cue system, DMX and (later) save files. No system needs to know concrete equipment classes.
+
+```
+UBaseItemData (catalog, const)          AModularBaseActor (placed instance, live state)
+ |- ULightingFixtureData  --spawns-->    |- ALightingFixtureActor --registers--> UShowControlSubsystem <--> UStageDMXBridge <--> Art-Net/sACN (future module)
+ |- UAudioEquipmentData   --spawns-->    |- AAudioEquipmentActor                 (fixture registry, patch,
+ '- UStageTrussData       --spawns-->    '- AStageTrussActor                      cue list, fades, DMX I/O)
+                                                 | IStageParameterInterface + OnParameterChanged
+                                                 v
+                    USelectionComponent --> UStageInspectorPanel --> UStageParameterSectionWidget --> UStageParameterRowWidget
+```
+
+**1. Equipment data model (catalog = `UBaseItemData` subclasses; instance state = actor subclasses)**
+- `UBaseItemData` gains `FStageEquipmentSpecs Specs` (Manufacturer, WeightKg, PowerDrawWatts). It sits on the base class because rigging load and power distribution calculations need it for every item.
+- `EStageItemType` gains `Truss` and `Audio`, appended at the end so existing assets keep their values.
+- `ULightingFixtureData`:
+  - **Kind and color:** FixtureKind (spot/beam/wash moving head, LED par, strobe, laser) and ColorSystem (None/RGB/RGBW/CMY). ColorTemperatureK is used by fixed-white fixtures.
+  - **Optics:** luminous flux, beam angle min/max (zoom), beam range.
+  - **Motion:** pan/tilt limits, plus yoke and head meshes with pivot offsets.
+  - **DMX mode:** DMXModeName plus `TArray<FStageFixtureDMXChannel>`: an attribute tag, a 1-based channel, and a 16-bit flag.
+  - **Capability queries:** `SupportsAttribute`, `GetAttributeRange` (physical range, also the DMX normalization range), `GetAttributeDefault`, and `GetDMXFootprint`.
+  - **Editor support:** the `GenerateDefaultDMXLayout` button builds 16-bit pan/tilt, then dimmer, shutter, color and zoom. The constructor runs the same builder, so new assets start with a sensible mode.
+  - **Validation:** overlapping channels, channels past 512, channels mapped to an attribute the fixture can't do, and bad ranges.
+- `UAudioEquipmentData`: AudioKind (line array element, point source, sub, monitor, console, amp, processor), H/V coverage, max SPL, frequency response, impedance, MaxSplayAngle, and ChannelCount. `IsLoudspeaker()` decides which inspector rows appear.
+- `UStageTrussData`: PieceKind (straight, corner, junction, tower, base plate, hoist), profile and width, length, max point load, `FStageRiggingPoint`s (local transform and safe working load) and `FStageTrussConnector`s (for future snap-to-truss). Each length is its own asset, as in a rental inventory, so truss instances have nothing to tune.
+- Each data subclass constructor presets its ItemType, ActorClass, a category tag and Single placement.
+- Per-instance runtime state, all `SaveGame`:
+  - `AModularBaseActor`: `InstanceLabel`.
+  - `ALightingFixtureActor`: `FixtureId`, `FStageDMXPatch` (universe/address) and `TMap<FGameplayTag,float> Attributes`.
+  - `AAudioEquipmentActor`: gain dB, mute, delay ms, polarity and splay (clamped to the catalog max).
+- `ALightingFixtureActor` components: the root base mesh, then PanPivot → YokeMesh, then TiltPivot → HeadMesh + `USpotLightComponent` BeamLight (lumens).
+  - The beam leaves along the head's +Z, which points up for a standing fixture and down when the actor is flipped to hang.
+  - All writes go through `SetAttribute`/`SetAttributes`: clamp, update the components once, broadcast.
+  - Colors are edited as RGB(W). C/M/Y exist only as DMX channel encodings (C = 1 − R).
+  - The moving parts are selectable too, via the StageItem channel, and they mirror the selection overlay.
+
+**2. Parameter model and inspector (GrandMA3-style)**
+- `Data/StageParameterTypes.h` defines the model:
+  - `FStageParameterValue`: a tagged union of Float, Integer, Bool, Color, Vector, Rotator and Text.
+  - `FStageParameterDescriptor`: id tag, name, value, min/max, DisplayScale (e.g. 0..1 shown as %), step, units, read-only.
+  - `FStageParameterSection`: a feature group tag, a title and its rows.
+- Native tags:
+  - `StageCraft.FeatureGroup.*` (Info, Transform, Patch, Dimmer, Position, Color, Beam, Audio, Rigging).
+  - `StageCraft.Param.*` for edit-only values.
+  - `StageCraft.Attribute.*` for Dimmer, Pan, Tilt, Zoom, Shutter, ColorR/G/B/W, the composite ColorRGB, and ColorC/M/Y. Attributes are what cues record and what DMX addresses.
+- `IStageParameterInterface` has `GetParameterSections`, `GetParameterValue` and `SetParameterValue`. It is a BlueprintNativeEvent, separate from `IInteractableInterface`.
+- `AModularBaseActor` implements the interface through three virtual hooks (`GatherParameterSections`, `ReadParameter`, `WriteParameter`). Subclasses call Super, so every item gets Info (label, model, weight, power) and Transform (location, rotation) at the top.
+- `AModularBaseActor::OnParameterChanged(Actor, ParameterId)` covers every change source, because gizmo moves arrive through the root component's `TransformUpdated` (bound in BeginPlay). Inspector edits, the gizmo, cue fades and DMX input therefore all update the panel live. An invalid tag means "rebuild".
+- **UI (C++ bases, layout in Widget Blueprints):**
+  - `UStageInspectorPanel`: follows the controller's `USelectionComponent` and builds sections and rows from the descriptors. Rows are chosen by type, with a separate read-only row class. Values refresh in place on `OnParameterChanged`. A rejected or clamped edit snaps the row back to the actual value.
+  - `UStageParameterSectionWidget`: `RowContainer` is required; the header and color strip are optional.
+  - `UStageParameterRowWidget`: optional named widgets (`ValueSpinBox`, `SpinX/Y/Z`, `ValueCheckBox`, `ValueTextBox`, `ColorSwatch`, `LabelText`, `UnitsText`, `ValueText`, `GroupColorStrip`) are wired automatically: ranges in display units, live drag, and read-only state. Types with no native editor (Color) call `CommitValue` from Blueprint.
+  - `UStageCraftUITheme` (data asset): a dark console palette with an amber accent (#FFB300), panel #15171C and row #1A1D23. Feature groups get colors: Dimmer yellow, Position blue, Color magenta, Beam green, Patch orange, Audio teal, Rigging brown.
+  - `AModularPlayerController::HUDWidgetClass` creates the root editor UI for the local player. Visible UMG panels consume clicks, so UI clicks never place or select items.
+  - Planned WBP layout: a left dock for the catalog (category tabs driven by the new tags), a right dock for the inspector (Info / Transform / Patch / Dimmer / Position / Color / Beam sections, each with a 4 px color strip), a bottom dock for the show panel (cue list, Go / Back, fade time, DMX source switch) and a top bar (show name, DMX status, FPS).
+
+**3. Show control and DMX foundation**
+- `UShowControlSubsystem` (`UTickableWorldSubsystem`, Game/PIE worlds only). It ticks only while a fade runs or DMX output is active.
+  - **Fixture registry and patch:** fixtures register themselves on BeginPlay, with no world iteration. Registration assigns the next free fixture ID and, if `bAutoPatchNewFixtures` is set, the next free address range. Other queries: `FindNextFreePatch`, `FindPatchConflicts` (overlaps are allowed as on a console, and reported) and `GetPatchedUniverses`.
+  - **Cues:** `FShowCue` holds a number (decimals allowed), label, fade time and per-FixtureId attribute maps. `StoreCue` records a full snapshot ("cue only"). Tracking needs no format change later, because unrecorded attributes are simply absent.
+    - Playback: `GoToCue`, `Go` (next), `FinishFade`, `SetCues` (load), with linear crossfades from the live values. A new Go during a fade takes over from where the fixtures are.
+    - Delegates: `OnCueStarted`, `OnCueFinished` and `OnCueListChanged`.
+  - **Control source:** `Internal` means cues drive the fixtures and DMX goes out; StageCraft acts as the console. `External` means incoming DMX drives the fixtures and cues are disabled; StageCraft is the visualiser for an MA3/ChamSys desk.
+- **DMX codec:** `ALightingFixtureActor::WriteDMX` / `ReadDMX` convert attributes to and from a 512-slot buffer, with 8/16-bit coarse+fine and CMY inversion. `UShowControlSubsystem::RenderDMXUniverse(Universe)` exposes the encoded frame (useful for debugging a patch).
+- `UStageDMXBridge` (abstract, Blueprintable) is the transport boundary.
+  - **Output:** the subsystem calls `SendUniverse` at `DMXOutputRateHz` (44 Hz).
+  - **Input:** the bridge calls `ReceiveUniverse`.
+  - **Why no plugin dependency:** the core module does **not** depend on the DMX Engine plugin. UE 5.8 ships `Engine/Plugins/VirtualProduction/DMX` (DMXEngine, DMXProtocol, DMXFixtures, DMXGDTF, DatasmithMVR). A future `StageCraftDMX` module will depend on `DMXProtocol` and implement the bridge with Art-Net/sACN input and output ports. This keeps cook and startup light for users without DMX, and isolates engine-plugin API churn.
+
+**4. Catalog categories**
+- New native tags:
+  - `StageCraft.Category.Stage.Deck` and `.Stage.Riser`
+  - `.Truss.Straight`, `.Truss.Corner` and `.Truss.Tower`
+  - `.Rigging` and `.Rigging.Motor`
+  - `.Lighting.MovingHead`, `.Lighting.Par`, `.Lighting.Strobe` and `.Lighting.Laser`
+  - `.Audio.LineArray`, `.Audio.Subwoofer`, `.Audio.Monitor`, `.Audio.Console` and `.Audio.Amplifier`
+- The parent tags stay valid filters, because `UStageItemSubsystem::GetCatalogByCategory` matches child tags.
+
+**Files changed**
+- `Source/ModularSceneBuilder/ModularSceneBuilder.Build.cs`: `UMG` (public) plus `Slate` and `SlateCore` (private)
+- `Public/Data/StageItemTypes.h`, `Private/Data/StageItemTypes.cpp`: `EStageItemType::Truss/Audio`, `FStageEquipmentSpecs`, 16 category tags
+- `Public/Data/BaseItemData.h`: `Specs`
+- `Public/Data/StageParameterTypes.h`, `Private/Data/StageParameterTypes.cpp`: new
+- `Public/Data/LightingFixtureData.h`, `Private/Data/LightingFixtureData.cpp`: new
+- `Public/Data/AudioEquipmentData.h`, `Private/Data/AudioEquipmentData.cpp`: new
+- `Public/Data/StageTrussData.h`, `Private/Data/StageTrussData.cpp`: new
+- `Public/Interaction/StageParameterInterface.h`: new
+- `Public/Actors/ModularBaseActor.h`, `Private/Actors/ModularBaseActor.cpp`: implements `IStageParameterInterface`; adds `OnParameterChanged`, `InstanceLabel`, the root `TransformUpdated` binding and BeginPlay
+- `Public/Actors/LightingFixtureActor.h`, `Private/Actors/LightingFixtureActor.cpp`: new
+- `Public/Actors/AudioEquipmentActor.h`, `Private/Actors/AudioEquipmentActor.cpp`: new
+- `Public/Actors/StageTrussActor.h`, `Private/Actors/StageTrussActor.cpp`: new
+- `Public/Show/ShowControlTypes.h`: new (`FStageDMXPatch`, `FShowCue`, `FShowCueFixtureState`, `EStageControlSource`)
+- `Public/Show/StageDMXBridge.h`, `Private/Show/StageDMXBridge.cpp`: new
+- `Public/Subsystems/ShowControlSubsystem.h`, `Private/Subsystems/ShowControlSubsystem.cpp`: new
+- `Public/UI/StageCraftUITheme.h`, `Private/UI/StageCraftUITheme.cpp`: new
+- `Public/UI/StageParameterRowWidget.h`, `Private/UI/StageParameterRowWidget.cpp`: new
+- `Public/UI/StageParameterSectionWidget.h`, `Private/UI/StageParameterSectionWidget.cpp`: new
+- `Public/UI/StageInspectorPanel.h`, `Private/UI/StageInspectorPanel.cpp`: new
+- `Public/Player/ModularPlayerController.h`, `Private/Player/ModularPlayerController.cpp`: `HUDWidgetClass` and `GetHUDWidget()`
+- `STATE.md`, `tasks/todo.md`
+
+**Verification**
+- **Game** target (`Build.bat ModularSceneBuilder Win64 Development`) built by Claude: 26/26 actions, UHT with -WarningsAsErrors, `ModularSceneBuilder.exe` linked. Result: Succeeded, 0 errors, 0 warnings.
+- **Editor** target not built: the editor was open (Live Coding). Close the editor and run `RunEditor.bat` (it detects the stale module and rebuilds), or build `ModularSceneBuilderEditor` manually.
+- Runtime is **not verified**. It needs content first (fixture/audio/truss data assets and the inspector Widget Blueprints; see `tasks/todo.md` Phase 5).
+- The Phase 4 PIE checklist (#8) is also still open. Phase 5 changes `AModularBaseActor` (a new BeginPlay binding and the parameter interface), so run that checklist on this build.
+
+**Commit:** uncommitted (working tree)
+
+**Known issues / follow-ups**
+- **Strobe:** the Shutter attribute is recorded and sent over DMX but not animated. It needs one central strobe clock in `UShowControlSubsystem`, not per-actor ticks.
+- **Beams:** a beam is a spot light only. A visible shaft needs volumetric fog in the level or a beam-cone mesh/material. Lasers need their own Niagara-based actor (FixtureKind `Laser` currently renders as a spot).
+- **Color editing:** there is no native UMG color wheel. The Color row needs a WBP color picker that calls `CommitValue` (this is the Phase 5 "light color picker" item).
+- **Show persistence:** cues and instance state are `SaveGame`-tagged but nothing saves a show yet (a `USaveGame`-based show file comes later).
+- **Inspector rebuilds:** the inspector rebuilds every widget on each selection change. Pool rows if selection switching shows up in profiling.
+- **Audio:** audio parameters are design data only; coverage and SPL visualisation come later. Line array hang building (splay chaining) comes later.
+- **Rigging:** load calculations (hung weight per rigging point against the safe working load) and snap-to-truss via `Connectors` / `RiggingPoints` are not built yet.
+- No Obsidian session log: the vault `S:\OBSIDIAN VAULTS\...` is not reachable from this machine (same as #1).

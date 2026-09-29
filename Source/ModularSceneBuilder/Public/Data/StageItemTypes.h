@@ -17,6 +17,8 @@ enum class EStageItemType : uint8
 	Prop			UMETA(DisplayName = "Prop"),
 	StageElement	UMETA(DisplayName = "Stage Element"),
 	Light			UMETA(DisplayName = "Light"),
+	Truss			UMETA(DisplayName = "Truss / Rigging"),
+	Audio			UMETA(DisplayName = "Audio"),
 };
 
 /** How the spawn system places an item while the placement input is held. */
@@ -51,6 +53,26 @@ struct MODULARSCENEBUILDER_API FStageItemPlacementRules
 	bool bAlignToSurfaceNormal = false;
 };
 
+/**
+ * Physical specs every piece of production gear shares. Weight and power feed rigging load and
+ * power distribution calculations, so they live on the base catalog entry rather than per subclass.
+ */
+USTRUCT(BlueprintType)
+struct MODULARSCENEBUILDER_API FStageEquipmentSpecs
+{
+	GENERATED_BODY()
+
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Specs")
+	FText Manufacturer;
+
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Specs", meta = (ClampMin = "0.0", Units = "kg"))
+	float WeightKg = 0.f;
+
+	/** Maximum power draw. Zero for passive gear (truss, passive speakers). */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Specs", meta = (ClampMin = "0.0", DisplayName = "Power Draw (W)"))
+	float PowerDrawWatts = 0.f;
+};
+
 /** Native tags so C++ can reference categories without string literals. Designers may add more in Project Settings. */
 namespace StageCraftTags
 {
@@ -61,4 +83,22 @@ namespace StageCraftTags
 	MODULARSCENEBUILDER_API UE_DECLARE_GAMEPLAY_TAG_EXTERN(Category_Screen);
 	MODULARSCENEBUILDER_API UE_DECLARE_GAMEPLAY_TAG_EXTERN(Category_Lighting);
 	MODULARSCENEBUILDER_API UE_DECLARE_GAMEPLAY_TAG_EXTERN(Category_Prop);
+
+	// Concert production sub-categories. Parents stay valid filters because GetCatalogByCategory matches children.
+	MODULARSCENEBUILDER_API UE_DECLARE_GAMEPLAY_TAG_EXTERN(Category_Stage_Deck);
+	MODULARSCENEBUILDER_API UE_DECLARE_GAMEPLAY_TAG_EXTERN(Category_Stage_Riser);
+	MODULARSCENEBUILDER_API UE_DECLARE_GAMEPLAY_TAG_EXTERN(Category_Truss_Straight);
+	MODULARSCENEBUILDER_API UE_DECLARE_GAMEPLAY_TAG_EXTERN(Category_Truss_Corner);
+	MODULARSCENEBUILDER_API UE_DECLARE_GAMEPLAY_TAG_EXTERN(Category_Truss_Tower);
+	MODULARSCENEBUILDER_API UE_DECLARE_GAMEPLAY_TAG_EXTERN(Category_Rigging);
+	MODULARSCENEBUILDER_API UE_DECLARE_GAMEPLAY_TAG_EXTERN(Category_Rigging_Motor);
+	MODULARSCENEBUILDER_API UE_DECLARE_GAMEPLAY_TAG_EXTERN(Category_Lighting_MovingHead);
+	MODULARSCENEBUILDER_API UE_DECLARE_GAMEPLAY_TAG_EXTERN(Category_Lighting_Par);
+	MODULARSCENEBUILDER_API UE_DECLARE_GAMEPLAY_TAG_EXTERN(Category_Lighting_Strobe);
+	MODULARSCENEBUILDER_API UE_DECLARE_GAMEPLAY_TAG_EXTERN(Category_Lighting_Laser);
+	MODULARSCENEBUILDER_API UE_DECLARE_GAMEPLAY_TAG_EXTERN(Category_Audio_LineArray);
+	MODULARSCENEBUILDER_API UE_DECLARE_GAMEPLAY_TAG_EXTERN(Category_Audio_Subwoofer);
+	MODULARSCENEBUILDER_API UE_DECLARE_GAMEPLAY_TAG_EXTERN(Category_Audio_Monitor);
+	MODULARSCENEBUILDER_API UE_DECLARE_GAMEPLAY_TAG_EXTERN(Category_Audio_Console);
+	MODULARSCENEBUILDER_API UE_DECLARE_GAMEPLAY_TAG_EXTERN(Category_Audio_Amplifier);
 }

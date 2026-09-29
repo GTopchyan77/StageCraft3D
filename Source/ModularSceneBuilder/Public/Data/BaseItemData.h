@@ -81,4 +81,9 @@ public:
 
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Spawning", meta = (ShowOnlyInnerProperties))
 	FStageItemPlacementRules PlacementRules;
+
+	// --- Equipment ---
+
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Specs", meta = (ShowOnlyInnerProperties))
+	FStageEquipmentSpecs Specs;
 };

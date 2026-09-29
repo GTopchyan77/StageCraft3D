@@ -5,9 +5,13 @@
 #include "CoreMinimal.h"
 #include "GameFramework/Actor.h"
 #include "Interaction/InteractableInterface.h"
+#include "Interaction/StageParameterInterface.h"
 #include "ModularBaseActor.generated.h"
 
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_TwoParams(FOnModularActorSelectionChanged, class AModularBaseActor*, Actor, bool, bSelected);
+
+/** ParameterId is the row that changed. An invalid tag means "structure changed, rebuild everything". */
+DECLARE_DYNAMIC_MULTICAST_DELEGATE_TwoParams(FOnStageParameterChanged, class AModularBaseActor*, Actor, FGameplayTag, ParameterId);
 
 /**
  * Parent class for every item the user places on stage.
@@ -24,7 +28,7 @@ DECLARE_DYNAMIC_MULTICAST_DELEGATE_TwoParams(FOnModularActorSelectionChanged, cl
  * The actor never ticks. Hover and selection feedback update only when that state changes.
  */
 UCLASS(Blueprintable)
-class MODULARSCENEBUILDER_API AModularBaseActor : public AActor, public IInteractableInterface
+class MODULARSCENEBUILDER_API AModularBaseActor : public AActor, public IInteractableInterface, public IStageParameterInterface
 {
 	GENERATED_BODY()
 
@@ -58,6 +62,17 @@ public:
 	UPROPERTY(BlueprintAssignable, Category = "StageCraft|Interaction")
 	FOnModularActorSelectionChanged OnSelectionChanged;
 
+	/**
+	 * Fires whenever an inspector-visible value changes, from any source: the inspector itself,
+	 * the gizmo (transform), cue playback or incoming DMX. The inspector binds here for live rows.
+	 */
+	UPROPERTY(BlueprintAssignable, Category = "StageCraft|Parameters")
+	FOnStageParameterChanged OnParameterChanged;
+
+	/** User-facing instance name, e.g. "Spot 101" or "Main L 03". Falls back to the catalog name when empty. */
+	UFUNCTION(BlueprintPure, Category = "StageCraft|Item")
+	FText GetInstanceLabel() const;
+
 	//~ Begin IInteractableInterface
 	virtual void OnHoverBegin_Implementation() override;
 	virtual void OnHoverEnd_Implementation() override;
@@ -66,11 +81,28 @@ public:
 	virtual FStageItemInteractionDetails GetInteractionDetails_Implementation() const override;
 	//~ End IInteractableInterface
 
+	//~ Begin IStageParameterInterface
+	virtual TArray<FStageParameterSection> GetParameterSections_Implementation() const override;
+	virtual bool GetParameterValue_Implementation(FGameplayTag ParameterId, FStageParameterValue& OutValue) const override;
+	virtual bool SetParameterValue_Implementation(FGameplayTag ParameterId, const FStageParameterValue& Value) override;
+	//~ End IStageParameterInterface
+
 protected:
 	//~ Begin AActor Interface
 	virtual void OnConstruction(const FTransform& Transform) override;
+	virtual void BeginPlay() override;
 	virtual void EndPlay(const EEndPlayReason::Type EndPlayReason) override;
 	//~ End AActor Interface
+
+	/**
+	 * Parameter model hooks. Subclasses call Super first so Info and Transform stay at the top,
+	 * then append their own sections. Read/Write return true when they handled the id.
+	 */
+	virtual void GatherParameterSections(TArray<FStageParameterSection>& OutSections) const;
+	virtual bool ReadParameter(const FGameplayTag& ParameterId, FStageParameterValue& OutValue) const;
+	virtual bool WriteParameter(const FGameplayTag& ParameterId, const FStageParameterValue& Value);
+
+	void NotifyParameterChanged(const FGameplayTag& ParameterId);
 
 	/**
 	 * Pushes data-driven visuals onto components. Subclasses call Super and then apply their own
@@ -92,6 +124,9 @@ protected:
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "StageCraft|Item", meta = (ExposeOnSpawn = true))
 	TObjectPtr<class UBaseItemData> ItemData = nullptr;
 
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, SaveGame, Category = "StageCraft|Item")
+	FText InstanceLabel;
+
 	/** Overlay drawn while hovered. Leave empty to disable hover feedback. */
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "StageCraft|Highlight")
 	TObjectPtr<class UMaterialInterface> HoverOverlayMaterial = nullptr;
@@ -101,6 +136,11 @@ protected:
 	TObjectPtr<class UMaterialInterface> SelectedOverlayMaterial = nullptr;
 
 private:
+	/** Turns gizmo drags (and any other move) into Transform parameter notifications. */
+	void HandleRootTransformUpdated(class USceneComponent* UpdatedComponent, EUpdateTransformFlags UpdateTransformFlags, ETeleportType Teleport);
+
+	FDelegateHandle RootTransformUpdatedHandle;
+
 	UPROPERTY(Transient, VisibleInstanceOnly, Category = "StageCraft|Interaction")
 	bool bIsHovered = false;
 
