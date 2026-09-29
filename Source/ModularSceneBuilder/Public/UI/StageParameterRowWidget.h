@@ -18,8 +18,10 @@ DECLARE_DELEGATE_TwoParams(FOnStageParameterRowCommitted, const FGameplayTag& /*
  *   ValueSpinBox (Float/Integer), SpinX/SpinY/SpinZ (Vector/Rotator), ValueCheckBox (Bool),
  *   ValueTextBox (Text), ColorSwatch (Color preview).
  *
- * Types without a native editor (Color today) call CommitValue from Blueprint, e.g. from a
- * color wheel popup, and receive updates through BP_OnValueRefreshed.
+ * Any editor the Blueprint does not bind itself is created at runtime inside EditorSlot (a
+ * Horizontal Box is ideal), so one generic row Blueprint serves every parameter type. Color
+ * gets a swatch plus R/G/B percent boxes until a dedicated color picker calls CommitValue.
+ * When an editable editor exists, ValueText is collapsed; read-only rows show only ValueText.
  */
 UCLASS(Abstract, Blueprintable)
 class MODULARSCENEBUILDER_API UStageParameterRowWidget : public UUserWidget
@@ -85,7 +87,15 @@ protected:
 	UPROPERTY(BlueprintReadOnly, Category = "StageCraft|Inspector", meta = (BindWidgetOptional))
 	TObjectPtr<class UImage> ColorSwatch = nullptr;
 
+	/** Receives auto-created editors for value widgets the Blueprint did not bind. */
+	UPROPERTY(BlueprintReadOnly, Category = "StageCraft|Inspector", meta = (BindWidgetOptional))
+	TObjectPtr<class UPanelWidget> EditorSlot = nullptr;
+
 private:
+	void CreateMissingEditors();
+	class USpinBox* CreateSpinBox(const TCHAR* Name);
+	void AddToEditorSlot(class UWidget& Widget, bool bFill);
+	bool HasEditor() const;
 	void ConfigureSpinBox(class USpinBox& SpinBox, bool bUseRange) const;
 	void SetSpinValue(class USpinBox* SpinBox, double StoredValue);
 	void CommitComponents();

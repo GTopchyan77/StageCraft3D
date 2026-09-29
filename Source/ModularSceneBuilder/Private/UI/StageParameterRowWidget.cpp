@@ -2,9 +2,12 @@
 
 #include "UI/StageParameterRowWidget.h"
 
+#include "Blueprint/WidgetTree.h"
 #include "Components/CheckBox.h"
 #include "Components/EditableTextBox.h"
+#include "Components/HorizontalBoxSlot.h"
 #include "Components/Image.h"
+#include "Components/PanelWidget.h"
 #include "Components/SpinBox.h"
 #include "Components/TextBlock.h"
 
@@ -47,6 +50,15 @@ void UStageParameterRowWidget::InitializeRow(const FStageParameterDescriptor& In
 	}
 
 	const bool bEditable = !Descriptor.bReadOnly;
+	if (bEditable)
+	{
+		CreateMissingEditors();
+	}
+	if (ValueText)
+	{
+		ValueText->SetVisibility(bEditable && HasEditor() ? ESlateVisibility::Collapsed : ESlateVisibility::HitTestInvisible);
+	}
+
 	switch (Descriptor.GetType())
 	{
 	case EStageParameterType::Float:
@@ -67,6 +79,25 @@ void UStageParameterRowWidget::InitializeRow(const FStageParameterDescriptor& In
 			if (Spin)
 			{
 				ConfigureSpinBox(*Spin, /*bUseRange*/ false);
+				Spin->SetIsEnabled(bEditable);
+				Spin->OnValueChanged.AddUniqueDynamic(this, &ThisClass::HandleComponentSpinChanged);
+				Spin->OnValueCommitted.AddUniqueDynamic(this, &ThisClass::HandleComponentSpinCommitted);
+			}
+		}
+		break;
+
+	case EStageParameterType::Color:
+		// Interim editor: R/G/B in percent. A color wheel replaces this by calling CommitValue.
+		for (USpinBox* Spin : { SpinX.Get(), SpinY.Get(), SpinZ.Get() })
+		{
+			if (Spin)
+			{
+				Spin->SetMinFractionalDigits(0);
+				Spin->SetMaxFractionalDigits(1);
+				Spin->SetMinValue(0.f);
+				Spin->SetMaxValue(100.f);
+				Spin->SetMinSliderValue(0.f);
+				Spin->SetMaxSliderValue(100.f);
 				Spin->SetIsEnabled(bEditable);
 				Spin->OnValueChanged.AddUniqueDynamic(this, &ThisClass::HandleComponentSpinChanged);
 				Spin->OnValueCommitted.AddUniqueDynamic(this, &ThisClass::HandleComponentSpinCommitted);
@@ -96,6 +127,83 @@ void UStageParameterRowWidget::InitializeRow(const FStageParameterDescriptor& In
 
 	BP_OnRowInitialized(Descriptor, InGroupColor);
 	RefreshValue(Descriptor.Value);
+}
+
+USpinBox* UStageParameterRowWidget::CreateSpinBox(const TCHAR* Name)
+{
+	USpinBox* Spin = WidgetTree->ConstructWidget<USpinBox>(USpinBox::StaticClass(), FName(Name));
+	AddToEditorSlot(*Spin, /*bFill*/ true);
+	return Spin;
+}
+
+void UStageParameterRowWidget::AddToEditorSlot(UWidget& Widget, bool bFill)
+{
+	UPanelSlot* ChildSlot = EditorSlot->AddChild(&Widget);
+	if (UHorizontalBoxSlot* BoxSlot = Cast<UHorizontalBoxSlot>(ChildSlot))
+	{
+		BoxSlot->SetSize(FSlateChildSize(bFill ? ESlateSizeRule::Fill : ESlateSizeRule::Automatic));
+		BoxSlot->SetVerticalAlignment(VAlign_Center);
+		BoxSlot->SetPadding(FMargin(2.f, 0.f));
+	}
+}
+
+bool UStageParameterRowWidget::HasEditor() const
+{
+	switch (Descriptor.GetType())
+	{
+	case EStageParameterType::Float:
+	case EStageParameterType::Integer:	return ValueSpinBox != nullptr;
+	case EStageParameterType::Vector:
+	case EStageParameterType::Rotator:
+	case EStageParameterType::Color:	return SpinX || SpinY || SpinZ;
+	case EStageParameterType::Bool:		return ValueCheckBox != nullptr;
+	case EStageParameterType::Text:		return ValueTextBox != nullptr;
+	default:							return false;
+	}
+}
+
+void UStageParameterRowWidget::CreateMissingEditors()
+{
+	if (!EditorSlot || !WidgetTree || HasEditor())
+	{
+		return;
+	}
+
+	switch (Descriptor.GetType())
+	{
+	case EStageParameterType::Float:
+	case EStageParameterType::Integer:
+		ValueSpinBox = CreateSpinBox(TEXT("ValueSpinBox"));
+		break;
+
+	case EStageParameterType::Color:
+		if (!ColorSwatch)
+		{
+			ColorSwatch = WidgetTree->ConstructWidget<UImage>(UImage::StaticClass(), TEXT("ColorSwatch"));
+			ColorSwatch->SetDesiredSizeOverride(FVector2D(18.0, 18.0));
+			AddToEditorSlot(*ColorSwatch, /*bFill*/ false);
+		}
+		[[fallthrough]]; // Color also uses the three component boxes.
+	case EStageParameterType::Vector:
+	case EStageParameterType::Rotator:
+		SpinX = CreateSpinBox(TEXT("SpinX"));
+		SpinY = CreateSpinBox(TEXT("SpinY"));
+		SpinZ = CreateSpinBox(TEXT("SpinZ"));
+		break;
+
+	case EStageParameterType::Bool:
+		ValueCheckBox = WidgetTree->ConstructWidget<UCheckBox>(UCheckBox::StaticClass(), TEXT("ValueCheckBox"));
+		AddToEditorSlot(*ValueCheckBox, /*bFill*/ false);
+		break;
+
+	case EStageParameterType::Text:
+		ValueTextBox = WidgetTree->ConstructWidget<UEditableTextBox>(UEditableTextBox::StaticClass(), TEXT("ValueTextBox"));
+		AddToEditorSlot(*ValueTextBox, /*bFill*/ true);
+		break;
+
+	default:
+		break;
+	}
 }
 
 void UStageParameterRowWidget::ConfigureSpinBox(USpinBox& SpinBox, bool bUseRange) const
@@ -175,6 +283,9 @@ void UStageParameterRowWidget::RefreshValue(const FStageParameterValue& InValue)
 		{
 			ColorSwatch->SetColorAndOpacity(FLinearColor(InValue.Color.R, InValue.Color.G, InValue.Color.B, 1.f));
 		}
+		if (SpinX) { SpinX->SetValue(InValue.Color.R * 100.f); }
+		if (SpinY) { SpinY->SetValue(InValue.Color.G * 100.f); }
+		if (SpinZ) { SpinZ->SetValue(InValue.Color.B * 100.f); }
 		break;
 	}
 
@@ -235,6 +346,12 @@ void UStageParameterRowWidget::CommitComponents()
 	{
 		const FRotator& Current = Descriptor.Value.Rotator;
 		CommitValue(FStageParameterValue::MakeRotator(FRotator(Read(SpinY, Current.Pitch), Read(SpinZ, Current.Yaw), Read(SpinX, Current.Roll))));
+	}
+	else if (Descriptor.GetType() == EStageParameterType::Color)
+	{
+		const FLinearColor& Current = Descriptor.Value.Color;
+		auto ReadPercent = [](const USpinBox* Spin, float Fallback) { return Spin ? Spin->GetValue() / 100.f : Fallback; };
+		CommitValue(FStageParameterValue::MakeColor(FLinearColor(ReadPercent(SpinX, Current.R), ReadPercent(SpinY, Current.G), ReadPercent(SpinZ, Current.B), 1.f)));
 	}
 }
 

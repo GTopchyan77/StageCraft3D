@@ -352,7 +352,7 @@ Closes out Phase 4 integration after the interrupted session. No code changes we
 
   Also check: the arrowheads sit on the shafts (Cone pivot assumption), and the gizmo is visible on both arrows and rings (GizmoMaterial on procedural mesh).
 
-**Commit:** uncommitted (working tree)
+**Commit:** `6810e66`
 
 **Known issues / follow-ups**
 - Open items from #4 still stand: overlay materials are a content task, the gizmo is depth-tested, and there's no hover highlight or camera orbit yet.
@@ -472,7 +472,7 @@ UBaseItemData (catalog, const)          AModularBaseActor (placed instance, live
 - Runtime is **not verified**. It needs content first (fixture/audio/truss data assets and the inspector Widget Blueprints; see `tasks/todo.md` Phase 5).
 - The Phase 4 PIE checklist (#8) is also still open. Phase 5 changes `AModularBaseActor` (a new BeginPlay binding and the parameter interface), so run that checklist on this build.
 
-**Commit:** uncommitted (working tree)
+**Commit:** `6810e66`
 
 **Known issues / follow-ups**
 - **Strobe:** the Shutter attribute is recorded and sent over DMX but not animated. It needs one central strobe clock in `UShowControlSubsystem`, not per-actor ticks.
@@ -483,3 +483,74 @@ UBaseItemData (catalog, const)          AModularBaseActor (placed instance, live
 - **Audio:** audio parameters are design data only; coverage and SPL visualisation come later. Line array hang building (splay chaining) comes later.
 - **Rigging:** load calculations (hung weight per rigging point against the safe working load) and snap-to-truss via `Connectors` / `RiggingPoints` are not built yet.
 - No Obsidian session log: the vault `S:\OBSIDIAN VAULTS\...` is not reachable from this machine (same as #1).
+
+---
+
+## #10 — Phase 5 Part 2: inspector Widget Blueprints, test equipment, volumetric fog stage (2026-09-29)
+
+**What & why**
+This entry makes the Phase 5 core (#9) visible and usable in PIE: a working GrandMA-style inspector, one test asset per equipment family, and a dark, fogged test stage so beams read.
+
+- **Generic row via `EditorSlot` (C++).** The MCP widget tool cannot create `SpinBox` widgets, and per-type row Blueprints would multiply maintenance. `UStageParameterRowWidget` now builds any value editor the Blueprint did not bind at runtime, inside an optional `EditorSlot` panel:
+  - SpinBox for Float/Integer, X/Y/Z boxes for Vector/Rotator, a CheckBox for Bool, an EditableTextBox for Text.
+  - Color gets a swatch plus R/G/B percent boxes, an interim editor until the colour-wheel picker lands.
+  - `ValueText` collapses when an editable editor exists; read-only rows show only `ValueText`.
+  - The result is that one row Blueprint serves every parameter type.
+- **Widget Blueprints** (all `/Game/StageCraft/UI/`, dark console palette from `DA_StageCraftTheme`):
+  - `Inspector/WBP_StageParameterRow` (parent `UStageParameterRowWidget`): a Border (#1A1D23) around a HorizontalBox. The box holds `GroupColorStrip` (3 px), `LabelText` (grey, fill 0.42), `EditorSlot` (fill 0.58), `ValueText` and `UnitsText`.
+  - `Inspector/WBP_StageParameterSection` (parent `UStageParameterSectionWidget`): a Border (#15171C) around a VerticalBox. Inside is a `HeaderBar` (#1E2128) with `GroupColorStrip` (4 px) and `HeaderText` (bold, upper case), followed by `RowContainer`.
+  - `Inspector/WBP_StageInspectorPanel` (parent `UStageInspectorPanel`): a Border (#0B0C0F, slightly translucent) around a VerticalBox.
+    - The box holds a `TitleBar` (amber "INSPECTOR" caption, `TitleText`, `SubtitleText`), then the `EmptyState` hint, then `SectionContainer` (a ScrollBox, fill).
+    - Class defaults: `Theme` = `DA_StageCraftTheme`, `SectionWidgetClass` = `WBP_StageParameterSection`, `FallbackRowWidgetClass` = `WBP_StageParameterRow`.
+  - `WBP_StageCraftHUD` (plain UserWidget): a CanvasPanel with the inspector docked top-right, 380 × 820 px, 12 px margin.
+  - `DA_StageCraftTheme` (`UStageCraftUITheme`): the C++ default palette.
+- **HUD wiring:**
+  - `/Game/StageCraft/Blueprints/BP_StageCraftPlayerController` (child of `AModularPlayerController`) sets `HUDWidgetClass` = `WBP_StageCraftHUD`.
+  - `BP_StageCraftGameMode` (child of `AStageCraftGameModeBase`) sets `PlayerControllerClass` = that controller.
+  - `L_StageTest` World Settings → GameMode Override = `BP_StageCraftGameMode`. The global C++ default in `DefaultEngine.ini` is unchanged.
+- **Test equipment** (`/Game/StageCraft/Data/`, created by Claude through the editor MCP bridge, not with a script):
+  - `DA_MovingHead_Test` (`ULightingFixtureData`): MovingHeadSpot, RGBW, 25 000 lm, zoom 4–40°, pan ±270°, tilt ±135°.
+    - Base Cylinder with a Sphere head (placeholder engine meshes, 1 m scale).
+    - Pivots: pan 50, tilt 60, beam 52 cm.
+    - Mode "Standard 12ch", with the auto-generated layout: Pan16, Tilt16, Dim16, Shutter, R, G, B, W, Zoom. 24.5 kg, 470 W.
+  - `DA_LineArray_Test` (`UAudioEquipmentData`): LineArrayElement, 110 × 10°, 141 dB, 55 Hz–18 kHz, 8 Ω, max splay 10°, 58 kg, Cube mesh.
+  - `DA_Truss_Test` (`UStageTrussData`): straight F34-class box truss.
+    - The length is **1.0 m** so it matches the 100 cm placeholder cube; 900 kg max point load, 7 kg.
+    - Rigging points End_A / Centre / End_B (450 / 900 / 450 kg SWL); connectors Face_A and Face_B.
+  - `/Game/StageCraft/Data` is added to the `StageItem` Asset Manager scan in `DefaultGame.ini`, otherwise these items never reach the catalog.
+- **`L_StageTest` stage:**
+  - **Fog:** `EnvironmentFog` enabled with **Volumetric Fog on**: density 0.004, falloff 0.2, dark inscattering, scattering distribution 0.6, volumetric distance 80 m.
+  - **Lighting:** a night look (directional light 0.3, cool tint; sky light 0.15) so beams dominate.
+  - **Floor fix:** the `Floor` plane was actually at its unscaled 1 m size (contrary to #8). It is now scaled 40 × 40 so placement traces hit it everywhere.
+  - **Pre-placed instances:** `MH_Test_1` "Spot 101" (open white, beam up), `MH_Test_2` "Spot 102" (blue, tilt 45°, zoom 20°), `LA_Test_1` "Main L 01" and `Truss_Test_1` "Truss DS 01".
+
+**Files changed**
+- `Source/ModularSceneBuilder/Public/UI/StageParameterRowWidget.h`, `Private/UI/StageParameterRowWidget.cpp`: `EditorSlot`, runtime editor creation, Color R/G/B editor
+- `Config/DefaultGame.ini`: `/Game/StageCraft/Data` added to the StageItem scan directories
+- `Content/StageCraft/UI/DA_StageCraftTheme.uasset`, `Content/StageCraft/UI/WBP_StageCraftHUD.uasset`: new
+- `Content/StageCraft/UI/Inspector/WBP_StageInspectorPanel.uasset`, `WBP_StageParameterSection.uasset`, `WBP_StageParameterRow.uasset`: new
+- `Content/StageCraft/Blueprints/BP_StageCraftPlayerController.uasset`, `BP_StageCraftGameMode.uasset`: new
+- `Content/StageCraft/Data/DA_MovingHead_Test.uasset`, `DA_LineArray_Test.uasset`, `DA_Truss_Test.uasset`: new
+- `Content/StageCraft/Maps/L_StageTest.umap`: GameMode override, volumetric fog, night lighting, floor scale, 4 test instances
+- `STATE.md`, `tasks/todo.md`
+
+**Verification**
+- **Editor build:** after the `EditorSlot` change, the **Editor** target (`ModularSceneBuilderEditor`) was rebuilt by Claude with the editor closed: Succeeded, 0 errors. A first attempt failed on C4458 (a local named `Slot` shadowed `UWidget::Slot`); renaming it to `ChildSlot` fixed it.
+  - The Game target was not rebuilt after the row change. It is the same module code, so rebuild it before a packaged test.
+- **PIE run by Claude:** the mouse was driven on the PC and the editor window captured, because a scene-capture screenshot can't show UMG.
+  - **Startup log:** `Game class is 'BP_StageCraftGameMode_C'`, the controller is `BP_StageCraftPlayerController_C`, `Fixture 1 registered (...), patch 1.001`, `Fixture 2 registered (...), patch 1.013` (auto-patch honours the 12-channel footprint), and `Stage item catalog loaded: 5 items.` No new warnings during PIE.
+  - **Empty state:** the HUD shows INSPECTOR / "No Selection" plus the hint text.
+  - **Selection:** LMB on Spot 102 selects it and shows the gizmo. The inspector fills with Info (label, model, 24.5 kg, 470 W), Transform (400, 300, 50), Patch (ID 2, Universe 1, Address 13, "Mode: Standard 12ch", 12 ch), Dimmer (100 / 0), Position (Pan 0, Tilt 45), Color (blue swatch, 10 / 30 / 100, White 0) and Beam (Zoom 20). Each section has its feature-group colour strip.
+  - **Write path:** typing 25 into Dimmer and pressing Enter updates the row to 25.0, and the blue beam visibly dims in the viewport.
+- **Editor viewport:** screenshots confirm the volumetric beams (white up, blue tilted) and that the fixture meshes and floor are present.
+- **Not yet verified by Gevor.** Still open: gizmo drag with live Transform rows, the Color R/G/B edit, text-label edit, and selecting the speaker and truss (Audio / Rigging sections). The Phase 4 checklist (#8) is still open too.
+
+**Commit:** uncommitted (working tree)
+
+**Known issues / follow-ups**
+- **Level-placed items need a construction rerun.** Setting `ItemData` on a level-placed actor through the MCP tool doesn't rerun construction. The actor showed defaults until the level was reloaded (OnConstruction runs on load). In the editor Details panel this is not an issue. Consider applying ItemData in `PostEditChangeProperty` explicitly for scripted edits.
+- **Default styling of runtime editors:** the EditableTextBox is white with a large font, and SpinBoxes use the light default look, so the Label row stands out. Next step: style them from `UStageCraftUITheme` (add SpinBox/TextBox styles to the theme), or bind styled widgets in the row Blueprint.
+- **Panel sizing:** the panel is a fixed 380 × 820 px canvas slot (the tool can't set stretch anchors), and units text clips at the right edge. Next step: stretch-anchor it top-to-bottom in the WBP designer and widen the units column.
+- **Placeholder meshes:** everything uses 1 m engine shapes, so the moving head is about 2 m tall and the truss is a solid cube. Swap in real meshes (or add a mesh scale to `UBaseItemData`).
+- **VC++ redistributable:** the editor warns that it is outdated (14.44 installed, 14.50 wanted). Install `D:\UE_5.8\Engine\Extras\Redist\en-us\vc_redist.x64.exe`. The warning dialog blocks unattended editor launches until dismissed.
+- **No test script:** the test assets were created directly through MCP. There is no Python regeneration script; re-create them from the values above if needed.

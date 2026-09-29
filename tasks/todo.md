@@ -18,7 +18,7 @@ See `STATE.md` for detailed history of completed work.
 
 ## Phase 5 — Concert Production & Lighting Suite (architecture: STATE.md #9)
 
-### 5.1 Core C++ (implemented, Game target compiles clean; awaiting Editor build + PIE)
+### 5.1 Core C++ (implemented; Editor target compiles clean; PIE smoke-tested by Claude, STATE.md #10)
 - [x] Equipment data model: `ULightingFixtureData`, `UAudioEquipmentData`, `UStageTrussData`, `FStageEquipmentSpecs`, `EStageItemType::Truss/Audio`
 - [x] Placed-instance state: `ALightingFixtureActor` (FixtureId, DMX patch, attributes, pan/tilt/beam), `AAudioEquipmentActor`, `AStageTrussActor`
 - [x] Parameter model: `FStageParameterValue/Descriptor/Section`, `IStageParameterInterface`, Param/Attribute/FeatureGroup native tags
@@ -27,15 +27,20 @@ See `STATE.md` for detailed history of completed work.
 - [x] `UShowControlSubsystem`: fixture registry, auto fixture ID and auto-patch, patch conflict query, cue store/go/fade, Internal/External control source
 - [x] DMX boundary: `UStageDMXBridge`, fixture `WriteDMX`/`ReadDMX` (8/16-bit, CMY), `RenderDMXUniverse`
 - [x] New catalog category tags (Stage.Deck/Riser, Truss.*, Rigging.*, Lighting.*, Audio.*)
-- [ ] Editor target build with the editor closed (Game target built by Claude, see STATE.md #9)
+- [x] Editor target build with the editor closed (STATE.md #10)
+- [x] Row widget builds missing editors at runtime in `EditorSlot` (one generic row WBP for every type; interim Color R/G/B editor)
+- [ ] Rebuild the Game target after the `EditorSlot` change (only the Editor target was rebuilt)
 
-### 5.2 Content (next)
-- [ ] `DA_StageCraftTheme` (UStageCraftUITheme)
-- [ ] Row WBPs: `WBP_Row_Float` (ValueSpinBox), `WBP_Row_Vector` (SpinX/Y/Z; also used for Rotator), `WBP_Row_Bool`, `WBP_Row_Text`, `WBP_Row_Color` (ColorSwatch + picker), `WBP_Row_ReadOnly` (ValueText)
-- [ ] `WBP_InspectorSection` (RowContainer, HeaderText, GroupColorStrip) and `WBP_Inspector` (SectionContainer in a ScrollBox, TitleText, SubtitleText, EmptyState)
-- [ ] `WBP_StageCraftHUD` root layout (left: catalog, right: inspector, bottom: show panel, top bar), assigned via a `BP_ModularPlayerController` subclass or the game mode
-- [ ] Test catalog: a moving head (`DA_Fix_MovingHeadSpot`), an LED par (RGBW, no pan/tilt), a line array element, a sub, an F34 2 m truss, a chain hoist
-- [ ] Level: volumetric fog in `L_StageTest` so beams read
+### 5.2 Content (Part 2, STATE.md #10)
+- [x] `DA_StageCraftTheme` (UStageCraftUITheme, C++ default palette)
+- [x] `WBP_StageParameterRow` (generic row: GroupColorStrip, LabelText, EditorSlot, ValueText, UnitsText); replaces the planned per-type row WBPs
+- [x] `WBP_StageParameterSection` (HeaderBar, GroupColorStrip, HeaderText, RowContainer) and `WBP_StageInspectorPanel` (TitleBar, TitleText, SubtitleText, EmptyState, SectionContainer ScrollBox; defaults for Theme, SectionWidgetClass, FallbackRowWidgetClass)
+- [x] `WBP_StageCraftHUD` (inspector docked on the right) + `BP_StageCraftPlayerController` (HUDWidgetClass) + `BP_StageCraftGameMode`, set as the `L_StageTest` GameMode override
+- [x] Test equipment in `/Game/StageCraft/Data/`: `DA_MovingHead_Test`, `DA_LineArray_Test`, `DA_Truss_Test`; Data folder added to the Asset Manager scan
+- [x] `L_StageTest`: volumetric fog, night lighting, 40 m floor fix, two moving heads + line array + truss pre-placed
+- [ ] HUD layout: left catalog, bottom show panel, top bar; stretch-anchor the inspector top-to-bottom in the designer
+- [ ] Style the runtime editors from the theme (SpinBox/EditableTextBox styles in `UStageCraftUITheme`); widen the units column
+- [ ] More test content: LED par (RGBW, no pan/tilt), subwoofer, 2 m / 3 m truss, chain hoist; real meshes instead of 1 m engine shapes
 
 ### 5.3 Features on top of the core
 - [ ] Light color picker WBP (HSV wheel + RGBW faders) calling `CommitValue`, replacing the old `bSupportsColorEditing` path
@@ -50,7 +55,9 @@ See `STATE.md` for detailed history of completed work.
 - [ ] Multi-select + group edit in the inspector (MA-style "selection" of many fixtures)
 
 ### 5.4 Verification (Gevor)
-- [ ] PIE: place a fixture; the inspector shows Info/Transform/Patch/Dimmer/Position/Color/Beam; editing Dimmer/Pan/Tilt/Zoom updates the light live
+- [x] (Claude, automated PIE) Select Spot 102: the inspector shows Info/Transform/Patch/Dimmer/Position/Color/Beam with live values; Dimmer 25 dims the beam
+- [ ] PIE: open `L_StageTest`, click each pre-placed item (Spot 101/102, Main L 01, Truss DS 01); check the Audio and Rigging sections
+- [ ] PIE: edit Pan/Tilt/Zoom/Color R-G-B/Label; the light and rows update live
 - [ ] PIE: drag with the gizmo; the Transform rows update live
 - [ ] PIE: StoreCue 1 / change values / StoreCue 2 / GoToCue 1; the fade runs over the fade time
 - [ ] Output Log: `Fixture N registered (...), patch U.AAA.` for each placed fixture, with no patch overlaps
