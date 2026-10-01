@@ -20,7 +20,8 @@ void USelectionComponent::EndPlay(const EEndPlayReason::Type EndPlayReason)
 
 bool USelectionComponent::SelectActor(AActor* Target)
 {
-	if (!IsValid(Target) || !Target->Implements<UInteractableInterface>())
+	// An actor already being destroyed would be selected after its OnDestroyed fired, leaving a dangling selection.
+	if (!IsValid(Target) || Target->IsActorBeingDestroyed() || !Target->Implements<UInteractableInterface>())
 	{
 		return false;
 	}

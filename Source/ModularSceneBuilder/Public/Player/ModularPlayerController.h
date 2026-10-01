@@ -8,19 +8,24 @@
 
 /**
  * Stage editing controller. Its only jobs are Enhanced Input, cursor tracing and deciding which
- * system a click belongs to; the actual work lives in focused components/actors:
- *   USpawnSystemComponent (place/delete), USelectionComponent (selection), AModularTransformGizmo (transform).
+ * system an input belongs to; the actual work lives in focused components/actors:
+ *   USpawnSystemComponent (place/delete), USelectionComponent (selection), AModularTransformGizmo
+ *   (transform), AStageCameraPawn (fly camera motion and smoothing).
  *
- * Left-click priority: gizmo handle (drag) > placed item (select) > empty surface (deselect, then
- * place if a catalog item is armed).
+ * Mouse buttons have exclusive jobs, as in the Unreal Editor viewport:
+ *  - Left: gizmo handle (drag) > placed item (select) > empty surface (deselect, then place if a
+ *    catalog item is armed). Ignored entirely while the right button is held.
+ *  - Right: navigation only. While held: mouse = look, W/S = forward/back along the view, A/D =
+ *    strafe, E/Q = straight up/down world Z. It never selects, places or deletes, and is ignored
+ *    while a left-button drag is in progress. Cursor hide/capture/restore is done by
+ *    UStageCraftGameViewportClient, so this class never changes the input mode mid-press.
+ *  - Wheel: fly speed, with or without the right button held. It scales every fly axis alike.
  *
- * The right mouse button works like the Unreal Editor viewport. Holding it hides and captures the cursor
- * and enables fly navigation (mouse = look, WASD = move, Q/E = down/up, wheel = fly speed). Releasing
- * it puts the cursor back where it was. A short press with no mouse or fly movement counts as a click:
- * placed item (delete) > empty (deselect and disarm).
+ * Keys: Delete removes the selected item, Esc deselects and disarms the catalog item, Space toggles
+ * the gizmo between translate and rotate.
  *
  * Input assets are designer-assignable in a Blueprint subclass. If any slot is empty, an equivalent
- * mapping (LMB, RMB, Space, and the fly keys) is built in code, so the project works with no content.
+ * mapping is built in code, so the project works with no content.
  */
 UCLASS()
 class MODULARSCENEBUILDER_API AModularPlayerController : public APlayerController
@@ -42,7 +47,7 @@ public:
 	UFUNCTION(BlueprintPure, Category = "StageCraft|UI")
 	class UUserWidget* GetHUDWidget() const { return HUDWidget; }
 
-	/** True while the secondary button is held and the camera is in fly navigation. */
+	/** True while the right mouse button is held and the camera is in fly navigation. */
 	UFUNCTION(BlueprintPure, Category = "StageCraft|Camera")
 	bool IsNavigatingCamera() const { return bIsNavigatingCamera; }
 
@@ -92,14 +97,19 @@ protected:
 	UPROPERTY(EditDefaultsOnly, Category = "StageCraft|Input")
 	TObjectPtr<class UInputAction> PlaceAction = nullptr;
 
-	/** Secondary button: hold for fly navigation, click without movement to delete or back out. */
+	/** Hold to navigate (right mouse button). Navigation only: it never selects, places or deletes. */
 	UPROPERTY(EditDefaultsOnly, Category = "StageCraft|Input")
-	TObjectPtr<class UInputAction> SecondaryAction = nullptr;
+	TObjectPtr<class UInputAction> NavigateAction = nullptr;
 
-	/**
-	 * Switches the gizmo between translate and rotate. Space is also the default pawn's "fly up"
-	 * key, so an assigned asset should enable "Consumes Action And Axis Mappings".
-	 */
+	/** Deletes the selected item (Delete key). */
+	UPROPERTY(EditDefaultsOnly, Category = "StageCraft|Input")
+	TObjectPtr<class UInputAction> DeleteAction = nullptr;
+
+	/** Backs out of everything: clears the actor selection and disarms the catalog item (Esc). */
+	UPROPERTY(EditDefaultsOnly, Category = "StageCraft|Input")
+	TObjectPtr<class UInputAction> CancelAction = nullptr;
+
+	/** Switches the gizmo between translate and rotate (Space). */
 	UPROPERTY(EditDefaultsOnly, Category = "StageCraft|Input")
 	TObjectPtr<class UInputAction> ToggleGizmoModeAction = nullptr;
 
@@ -107,13 +117,14 @@ protected:
 	int32 MappingContextPriority = 0;
 
 	/**
-	 * Added only while the secondary button is held, so the fly keys stay free the rest of the time.
-	 * Must map CameraLookAction, CameraMoveAction and CameraSpeedAction.
+	 * Applied for the whole session; the handlers act only while NavigateAction is held. Never
+	 * added/removed per press, because rebuilding mappings while keys are held makes press/release
+	 * pairing unreliable. Must map CameraLookAction, CameraMoveAction and CameraSpeedAction.
 	 */
 	UPROPERTY(EditDefaultsOnly, Category = "StageCraft|Input|Camera")
 	TObjectPtr<class UInputMappingContext> CameraNavigationMappingContext = nullptr;
 
-	/** Axis2D look delta (X = yaw, Y = pitch). */
+	/** Axis2D look delta in raw mouse counts (X = yaw, Y = pitch). */
 	UPROPERTY(EditDefaultsOnly, Category = "StageCraft|Input|Camera")
 	TObjectPtr<class UInputAction> CameraLookAction = nullptr;
 
@@ -125,37 +136,9 @@ protected:
 	UPROPERTY(EditDefaultsOnly, Category = "StageCraft|Input|Camera")
 	TObjectPtr<class UInputAction> CameraSpeedAction = nullptr;
 
-	/** Above the editor context, so the fly keys win while navigating. */
+	/** Above the editor context, so the fly keys win when both map the same key. */
 	UPROPERTY(EditDefaultsOnly, Category = "StageCraft|Input|Camera")
 	int32 CameraNavigationContextPriority = 1;
-
-	/** Degrees of rotation per raw mouse count. */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "StageCraft|Camera", meta = (ClampMin = "0.001"))
-	float LookSensitivity = 0.2f;
-
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "StageCraft|Camera", meta = (ClampMin = "1.0", Units = "cm/s"))
-	float FlySpeed = 1200.f;
-
-	UPROPERTY(EditAnywhere, Category = "StageCraft|Camera", meta = (ClampMin = "1.0", Units = "cm/s"))
-	float MinFlySpeed = 50.f;
-
-	UPROPERTY(EditAnywhere, Category = "StageCraft|Camera", meta = (ClampMin = "1.0", Units = "cm/s"))
-	float MaxFlySpeed = 20000.f;
-
-	/** Speed multiplier per mouse-wheel notch while navigating. */
-	UPROPERTY(EditAnywhere, Category = "StageCraft|Camera", meta = (ClampMin = "1.01"))
-	float FlySpeedStepFactor = 1.25f;
-
-	/**
-	 * A secondary press counts as a click (delete/back out) only if the mouse moved less than this many
-	 * raw counts, no fly key was used, and the button was released within MaxSecondaryClickDuration.
-	 */
-	UPROPERTY(EditAnywhere, Category = "StageCraft|Camera", meta = (ClampMin = "0.0"))
-	float SecondaryClickDragThreshold = 4.f;
-
-	/** Holding the button longer than this never deletes, even without movement: deletion must be deliberate. */
-	UPROPERTY(EditAnywhere, Category = "StageCraft|Camera", meta = (ClampMin = "0.0", Units = "s"))
-	float MaxSecondaryClickDuration = 0.35f;
 
 	UPROPERTY(EditDefaultsOnly, Category = "StageCraft|Trace")
 	TEnumAsByte<ECollisionChannel> PlacementTraceChannel;
@@ -166,7 +149,6 @@ protected:
 private:
 	void BuildDefaultInputMapping();
 	void BuildDefaultCameraMapping();
-	void ApplyEditorInputMode();
 
 	UFUNCTION()
 	void HandleSelectionChanged(AActor* NewSelection, AActor* PreviousSelection);
@@ -174,19 +156,20 @@ private:
 	void HandlePrimaryStarted();
 	void HandlePrimaryTriggered();
 	void HandlePrimaryCompleted();
-	void HandleSecondaryStarted();
-	void HandleSecondaryCompleted();
-	void HandleSecondaryClick();
+	void HandleNavigateStarted();
+	void HandleNavigateCompleted();
+	void HandleDelete();
+	void HandleCancel();
 	void HandleToggleGizmoMode();
 
 	void HandleCameraLook(const struct FInputActionValue& Value);
 	void HandleCameraMove(const struct FInputActionValue& Value);
 	void HandleCameraSpeed(const struct FInputActionValue& Value);
 
-	void BeginCameraNavigation();
-	void EndCameraNavigation();
-	void ApplyFlySpeed() const;
+	/** The fly camera, or null when a different pawn is possessed (navigation is then a no-op). */
+	class AStageCameraPawn* GetCameraPawn() const;
 
+	bool IsPrimaryInteractionActive() const;
 	bool TryBeginGizmoDrag();
 	bool GetCursorRay(FVector& OutOrigin, FVector& OutDirection) const;
 
@@ -196,11 +179,5 @@ private:
 	UPROPERTY(Transient)
 	TObjectPtr<class UUserWidget> HUDWidget = nullptr;
 
-	// Fly navigation state, captured when the secondary button goes down.
 	bool bIsNavigatingCamera = false;
-	bool bNavigationUsedFlyKeys = false;
-	bool bHasNavigationCursorPosition = false;
-	float NavigationMouseTravel = 0.f;
-	double NavigationStartTime = 0.0;
-	FVector2D NavigationCursorPosition = FVector2D::ZeroVector;
 };

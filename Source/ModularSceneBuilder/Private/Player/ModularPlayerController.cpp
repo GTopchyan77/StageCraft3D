@@ -8,29 +8,24 @@
 #include "Components/SpawnSystemComponent.h"
 #include "EnhancedInputComponent.h"
 #include "EnhancedInputSubsystems.h"
+#include "Engine/Engine.h"
 #include "Engine/GameInstance.h"
 #include "Engine/LocalPlayer.h"
 #include "Engine/World.h"
-#include "GameFramework/FloatingPawnMovement.h"
-#include "GameFramework/Pawn.h"
 #include "InputAction.h"
 #include "InputActionValue.h"
 #include "InputMappingContext.h"
 #include "InputModifiers.h"
 #include "Interaction/StageCraftCollision.h"
 #include "ModularSceneBuilder.h"
+#include "Player/StageCameraPawn.h"
+#include "Player/StageCraftGameViewportClient.h"
 #include "Subsystems/StageItemSubsystem.h"
 
 #include UE_INLINE_GENERATED_CPP_BY_NAME(ModularPlayerController)
 
 namespace ModularPlayerController
 {
-	// Matches the Unreal Editor viewport: a few degrees short of vertical so yaw stays well defined.
-	constexpr double MaxLookPitch = 89.0;
-
-	// Snappy start/stop like the editor camera, scaled with speed so every speed step feels the same.
-	constexpr float FlyAccelerationPerSpeed = 8.f;
-
 	void MapAxisKey(UInputMappingContext* Context, const UInputAction* Action, const FKey& Key, TOptional<EInputAxisSwizzle> Swizzle = {}, bool bNegate = false)
 	{
 		FEnhancedActionKeyMapping& Mapping = Context->MapKey(Action, Key);
@@ -68,10 +63,19 @@ void AModularPlayerController::BeginPlay()
 		return;
 	}
 
-	ApplyEditorInputMode();
+	// The only input mode this controller ever uses. RMB cursor capture is handled below Slate's input-mode
+	// level by UStageCraftGameViewportClient, so nothing here changes mode while a button is held.
+	FInputModeGameAndUI InputMode;
+	InputMode.SetHideCursorDuringCapture(false);
+	InputMode.SetLockMouseToViewportBehavior(EMouseLockMode::DoNotLock);
+	SetInputMode(InputMode);
 
-	// Engine look input (the default pawn's mouse bindings) stays off: rotation only ever comes from
-	// fly navigation, which sets the control rotation directly.
+	if (!Cast<UStageCraftGameViewportClient>(GetWorld()->GetGameViewport()))
+	{
+		UE_LOG(LogStageCraft, Warning, TEXT("%s: GameViewportClientClassName is not StageCraftGameViewportClient; RMB navigation will turn the view but cannot hide or capture the cursor."), *GetName());
+	}
+
+	// Engine look input stays off: the view is owned by AStageCameraPawn, which sets the control rotation itself.
 	SetIgnoreLookInput(true);
 
 	if (GizmoClass)
@@ -97,10 +101,7 @@ void AModularPlayerController::BeginPlay()
 
 void AModularPlayerController::EndPlay(const EEndPlayReason::Type EndPlayReason)
 {
-	if (bIsNavigatingCamera)
-	{
-		EndCameraNavigation();
-	}
+	bIsNavigatingCamera = false;
 
 	Selection->OnSelectionChanged.RemoveDynamic(this, &ThisClass::HandleSelectionChanged);
 
@@ -119,19 +120,11 @@ void AModularPlayerController::EndPlay(const EEndPlayReason::Type EndPlayReason)
 	Super::EndPlay(EndPlayReason);
 }
 
-void AModularPlayerController::ApplyEditorInputMode()
-{
-	FInputModeGameAndUI InputMode;
-	InputMode.SetHideCursorDuringCapture(false);
-	InputMode.SetLockMouseToViewportBehavior(EMouseLockMode::DoNotLock);
-	SetInputMode(InputMode);
-}
-
 void AModularPlayerController::SetupInputComponent()
 {
 	Super::SetupInputComponent();
 
-	if (!EditorMappingContext || !PlaceAction || !SecondaryAction || !ToggleGizmoModeAction)
+	if (!EditorMappingContext || !PlaceAction || !NavigateAction || !DeleteAction || !CancelAction || !ToggleGizmoModeAction)
 	{
 		BuildDefaultInputMapping();
 	}
@@ -144,6 +137,7 @@ void AModularPlayerController::SetupInputComponent()
 	if (UEnhancedInputLocalPlayerSubsystem* InputSubsystem = ULocalPlayer::GetSubsystem<UEnhancedInputLocalPlayerSubsystem>(GetLocalPlayer()))
 	{
 		InputSubsystem->AddMappingContext(EditorMappingContext, MappingContextPriority);
+		InputSubsystem->AddMappingContext(CameraNavigationMappingContext, CameraNavigationContextPriority);
 	}
 
 	UEnhancedInputComponent* EnhancedInput = Cast<UEnhancedInputComponent>(InputComponent);
@@ -158,12 +152,14 @@ void AModularPlayerController::SetupInputComponent()
 	EnhancedInput->BindAction(PlaceAction, ETriggerEvent::Triggered, this, &ThisClass::HandlePrimaryTriggered);
 	EnhancedInput->BindAction(PlaceAction, ETriggerEvent::Completed, this, &ThisClass::HandlePrimaryCompleted);
 	EnhancedInput->BindAction(PlaceAction, ETriggerEvent::Canceled, this, &ThisClass::HandlePrimaryCompleted);
-	EnhancedInput->BindAction(SecondaryAction, ETriggerEvent::Started, this, &ThisClass::HandleSecondaryStarted);
-	EnhancedInput->BindAction(SecondaryAction, ETriggerEvent::Completed, this, &ThisClass::HandleSecondaryCompleted);
-	EnhancedInput->BindAction(SecondaryAction, ETriggerEvent::Canceled, this, &ThisClass::HandleSecondaryCompleted);
+	EnhancedInput->BindAction(NavigateAction, ETriggerEvent::Started, this, &ThisClass::HandleNavigateStarted);
+	EnhancedInput->BindAction(NavigateAction, ETriggerEvent::Completed, this, &ThisClass::HandleNavigateCompleted);
+	EnhancedInput->BindAction(NavigateAction, ETriggerEvent::Canceled, this, &ThisClass::HandleNavigateCompleted);
+	EnhancedInput->BindAction(DeleteAction, ETriggerEvent::Started, this, &ThisClass::HandleDelete);
+	EnhancedInput->BindAction(CancelAction, ETriggerEvent::Started, this, &ThisClass::HandleCancel);
 	EnhancedInput->BindAction(ToggleGizmoModeAction, ETriggerEvent::Started, this, &ThisClass::HandleToggleGizmoMode);
 
-	// Bound permanently; they only fire while CameraNavigationMappingContext is applied.
+	// Always mapped. Look and move act only while NavigateAction is held; speed (wheel) acts any time.
 	EnhancedInput->BindAction(CameraLookAction, ETriggerEvent::Triggered, this, &ThisClass::HandleCameraLook);
 	EnhancedInput->BindAction(CameraMoveAction, ETriggerEvent::Triggered, this, &ThisClass::HandleCameraMove);
 	EnhancedInput->BindAction(CameraSpeedAction, ETriggerEvent::Triggered, this, &ThisClass::HandleCameraSpeed);
@@ -171,28 +167,35 @@ void AModularPlayerController::SetupInputComponent()
 
 void AModularPlayerController::BuildDefaultInputMapping()
 {
-	UE_LOG(LogStageCraft, Log, TEXT("%s: input assets not fully assigned, using built-in LMB/RMB/Space mapping."), *GetName());
+	UE_LOG(LogStageCraft, Log, TEXT("%s: input assets not fully assigned, using built-in LMB/RMB/Delete/Esc/Space mapping."), *GetName());
 
 	if (!PlaceAction)
 	{
 		PlaceAction = NewObject<UInputAction>(this, TEXT("IA_Place_Default"));
 	}
-	if (!SecondaryAction)
+	if (!NavigateAction)
 	{
-		SecondaryAction = NewObject<UInputAction>(this, TEXT("IA_Secondary_Default"));
+		NavigateAction = NewObject<UInputAction>(this, TEXT("IA_Navigate_Default"));
+	}
+	if (!DeleteAction)
+	{
+		DeleteAction = NewObject<UInputAction>(this, TEXT("IA_Delete_Default"));
+	}
+	if (!CancelAction)
+	{
+		CancelAction = NewObject<UInputAction>(this, TEXT("IA_Cancel_Default"));
 	}
 	if (!ToggleGizmoModeAction)
 	{
 		ToggleGizmoModeAction = NewObject<UInputAction>(this, TEXT("IA_ToggleGizmoMode_Default"));
-		// Stop Space from also driving any legacy "fly up" axis mapping while held.
-		ToggleGizmoModeAction->bConsumesActionAndAxisMappings = true;
-		ToggleGizmoModeAction->TriggerEventsThatConsumeLegacyKeys = static_cast<int32>(ETriggerEvent::Started | ETriggerEvent::Ongoing | ETriggerEvent::Triggered);
 	}
 
 	// A fresh context, because an assigned one cannot be trusted to map actions it was not authored with.
 	EditorMappingContext = NewObject<UInputMappingContext>(this, TEXT("IMC_StageEditor_Default"));
 	EditorMappingContext->MapKey(PlaceAction, EKeys::LeftMouseButton);
-	EditorMappingContext->MapKey(SecondaryAction, EKeys::RightMouseButton);
+	EditorMappingContext->MapKey(NavigateAction, EKeys::RightMouseButton);
+	EditorMappingContext->MapKey(DeleteAction, EKeys::Delete);
+	EditorMappingContext->MapKey(CancelAction, EKeys::Escape);
 	EditorMappingContext->MapKey(ToggleGizmoModeAction, EKeys::SpaceBar);
 }
 
@@ -225,6 +228,7 @@ void AModularPlayerController::BuildDefaultCameraMapping()
 	Context->MapKey(CameraSpeedAction, EKeys::MouseWheelAxis);
 
 	// A digital key yields (1,0,0); swizzle routes it onto Y (right) or Z (up), negate flips the direction.
+	// Space/Ctrl are not mapped: Space toggles the gizmo and Ctrl is reserved for multi-select.
 	MapAxisKey(Context, CameraMoveAction, EKeys::W);
 	MapAxisKey(Context, CameraMoveAction, EKeys::S, {}, /*bNegate*/ true);
 	MapAxisKey(Context, CameraMoveAction, EKeys::D, EInputAxisSwizzle::YXZ);
@@ -264,9 +268,19 @@ bool AModularPlayerController::GetCursorRay(FVector& OutOrigin, FVector& OutDire
 	return DeprojectMousePositionToWorld(OutOrigin, OutDirection);
 }
 
+AStageCameraPawn* AModularPlayerController::GetCameraPawn() const
+{
+	return Cast<AStageCameraPawn>(GetPawn());
+}
+
+bool AModularPlayerController::IsPrimaryInteractionActive() const
+{
+	return (Gizmo && Gizmo->IsDragging()) || SpawnSystem->IsPlacementStrokeActive();
+}
+
 void AModularPlayerController::HandlePrimaryStarted()
 {
-	// The cursor is hidden and frozen while flying, so a left click there has no meaningful target.
+	// The cursor is hidden and frozen while flying; a left click there has no meaningful target.
 	if (bIsNavigatingCamera)
 	{
 		return;
@@ -324,49 +338,44 @@ void AModularPlayerController::HandlePrimaryCompleted()
 	SpawnSystem->EndPlacement();
 }
 
-void AModularPlayerController::HandleSecondaryStarted()
+void AModularPlayerController::HandleNavigateStarted()
 {
-	// Moving the view mid-drag would drag the target or paint along the camera path, not the user's intent.
-	const bool bPrimaryBusy = (Gizmo && Gizmo->IsDragging()) || SpawnSystem->IsPlacementStrokeActive();
-	if (bIsNavigatingCamera || bPrimaryBusy)
+	// Turning the view mid-drag would drag the target or paint along the camera path.
+	if (IsPrimaryInteractionActive())
+	{
+		return;
+	}
+	bIsNavigatingCamera = true;
+}
+
+void AModularPlayerController::HandleNavigateCompleted()
+{
+	// Releasing only stops feeding input; the pawn eases to a stop on its own. Nothing is selected,
+	// placed or deleted here, however short the press was.
+	bIsNavigatingCamera = false;
+}
+
+void AModularPlayerController::HandleDelete()
+{
+	AActor* Target = Selection->GetSelectedActor();
+	if (!Target || bIsNavigatingCamera || IsPrimaryInteractionActive())
 	{
 		return;
 	}
 
-	// Click vs. hold is only known on release, so every press starts navigating, as in the Unreal Editor.
-	BeginCameraNavigation();
+	// Released before destruction rather than via OnDestroyed, so the gizmo and inspector never
+	// observe a selected actor that is being torn down.
+	Selection->ClearSelection();
+	SpawnSystem->TryDeleteActor(Target);
 }
 
-void AModularPlayerController::HandleSecondaryCompleted()
+void AModularPlayerController::HandleCancel()
 {
-	if (!bIsNavigatingCamera)
+	if (bIsNavigatingCamera)
 	{
-		return; // The press was ignored (primary drag in progress).
+		return;
 	}
 
-	const double HeldSeconds = GetWorld()->GetRealTimeSeconds() - NavigationStartTime;
-	const bool bWasClick = !bNavigationUsedFlyKeys
-		&& NavigationMouseTravel <= SecondaryClickDragThreshold
-		&& HeldSeconds <= MaxSecondaryClickDuration;
-
-	// Restores the cursor first, so the click traces from where the user pressed.
-	EndCameraNavigation();
-
-	if (bWasClick)
-	{
-		HandleSecondaryClick();
-	}
-}
-
-void AModularPlayerController::HandleSecondaryClick()
-{
-	FHitResult Hit;
-	if (GetStageItemHitUnderCursor(Hit) && SpawnSystem->TryDeleteActor(Hit.GetActor()))
-	{
-		return; // Selection releases itself through the actor's OnDestroyed.
-	}
-
-	// Right-click on empty space backs out of everything: actor selection and the armed catalog item.
 	Selection->ClearSelection();
 
 	if (UStageItemSubsystem* ItemSubsystem = GetGameInstance() ? GetGameInstance()->GetSubsystem<UStageItemSubsystem>() : nullptr)
@@ -375,116 +384,49 @@ void AModularPlayerController::HandleSecondaryClick()
 	}
 }
 
-void AModularPlayerController::BeginCameraNavigation()
-{
-	bIsNavigatingCamera = true;
-	bNavigationUsedFlyKeys = false;
-	NavigationMouseTravel = 0.f;
-	NavigationStartTime = GetWorld()->GetRealTimeSeconds();
-
-	float CursorX = 0.f, CursorY = 0.f;
-	bHasNavigationCursorPosition = GetMousePosition(CursorX, CursorY);
-	NavigationCursorPosition = FVector2D(CursorX, CursorY);
-
-	// Game-only mode switches Slate to high-precision (raw) mouse input with the cursor locked, so the
-	// view keeps turning when the cursor would otherwise hit the screen edge. The button-down already
-	// gave the viewport mouse capture; game-only keeps it until the release restores the editor mode.
-	bShowMouseCursor = false;
-	SetInputMode(FInputModeGameOnly());
-
-	if (UEnhancedInputLocalPlayerSubsystem* InputSubsystem = ULocalPlayer::GetSubsystem<UEnhancedInputLocalPlayerSubsystem>(GetLocalPlayer()))
-	{
-		// Keys already held when RMB goes down (e.g. W first, then RMB) should fly immediately.
-		FModifyContextOptions Options;
-		Options.bIgnoreAllPressedKeysUntilRelease = false;
-		InputSubsystem->AddMappingContext(CameraNavigationMappingContext, CameraNavigationContextPriority, Options);
-	}
-
-	ApplyFlySpeed();
-}
-
-void AModularPlayerController::EndCameraNavigation()
-{
-	bIsNavigatingCamera = false;
-
-	if (UEnhancedInputLocalPlayerSubsystem* InputSubsystem = ULocalPlayer::GetSubsystem<UEnhancedInputLocalPlayerSubsystem>(GetLocalPlayer()))
-	{
-		InputSubsystem->RemoveMappingContext(CameraNavigationMappingContext);
-	}
-
-	bShowMouseCursor = true;
-	ApplyEditorInputMode();
-
-	// Raw-input mode does not reliably restore the OS cursor, so put it back explicitly.
-	if (bHasNavigationCursorPosition)
-	{
-		SetMouseLocation(FMath::RoundToInt(NavigationCursorPosition.X), FMath::RoundToInt(NavigationCursorPosition.Y));
-	}
-}
-
 void AModularPlayerController::HandleCameraLook(const FInputActionValue& Value)
 {
-	if (!bIsNavigatingCamera)
+	if (bIsNavigatingCamera)
 	{
-		return;
+		if (AStageCameraPawn* CameraPawn = GetCameraPawn())
+		{
+			CameraPawn->AddLookInput(Value.Get<FVector2D>());
+		}
 	}
-
-	const FVector2D Delta = Value.Get<FVector2D>();
-	NavigationMouseTravel += static_cast<float>(Delta.Size());
-
-	FRotator Rotation = GetControlRotation();
-	Rotation.Yaw = FRotator::NormalizeAxis(Rotation.Yaw + Delta.X * LookSensitivity);
-	Rotation.Pitch = FMath::ClampAngle(Rotation.Pitch + Delta.Y * LookSensitivity, -ModularPlayerController::MaxLookPitch, ModularPlayerController::MaxLookPitch);
-	Rotation.Roll = 0.0;
-	SetControlRotation(Rotation);
 }
 
 void AModularPlayerController::HandleCameraMove(const FInputActionValue& Value)
 {
-	APawn* CameraPawn = GetPawn();
-	if (!bIsNavigatingCamera || !CameraPawn)
+	if (bIsNavigatingCamera)
 	{
-		return;
+		if (AStageCameraPawn* CameraPawn = GetCameraPawn())
+		{
+			CameraPawn->AddFlyInput(Value.Get<FVector>());
+		}
 	}
-
-	const FVector Input = Value.Get<FVector>();
-	if (Input.IsNearlyZero())
-	{
-		return;
-	}
-	bNavigationUsedFlyKeys = true;
-
-	// Forward follows the full view direction (pitch included) and up is world Z, as in the editor viewport.
-	const FRotationMatrix ViewAxes(GetControlRotation());
-	CameraPawn->AddMovementInput(ViewAxes.GetScaledAxis(EAxis::X), Input.X);
-	CameraPawn->AddMovementInput(ViewAxes.GetScaledAxis(EAxis::Y), Input.Y);
-	CameraPawn->AddMovementInput(FVector::UpVector, Input.Z);
 }
 
 void AModularPlayerController::HandleCameraSpeed(const FInputActionValue& Value)
 {
+	// Not gated on RMB: the wheel has no other job in the stage view, so speed can be dialled in
+	// before flying as well as during. Wheel input over a UMG panel never reaches here (UMG consumes it).
+	AStageCameraPawn* CameraPawn = GetCameraPawn();
 	const float Steps = Value.Get<float>();
-	if (!bIsNavigatingCamera || FMath::IsNearlyZero(Steps))
+	if (!CameraPawn || FMath::IsNearlyZero(Steps))
 	{
 		return;
 	}
 
-	FlySpeed = FMath::Clamp(FlySpeed * FMath::Pow(FlySpeedStepFactor, Steps), MinFlySpeed, MaxFlySpeed);
-	ApplyFlySpeed();
-}
+	const float NewSpeed = CameraPawn->AdjustFlySpeed(Steps);
 
-void AModularPlayerController::ApplyFlySpeed() const
-{
-	const APawn* CameraPawn = GetPawn();
-	UFloatingPawnMovement* Movement = CameraPawn ? Cast<UFloatingPawnMovement>(CameraPawn->GetMovementComponent()) : nullptr;
-	if (!Movement)
+#if !UE_BUILD_SHIPPING
+	// Interim readout until the HUD binds AStageCameraPawn::OnFlySpeedChanged; a fixed key replaces the previous line.
+	if (GEngine)
 	{
-		return; // A custom pawn with its own movement keeps its own speed.
+		GEngine->AddOnScreenDebugMessage(static_cast<uint64>(GetUniqueID()), 1.5f, FColor(120, 200, 255),
+			FString::Printf(TEXT("Camera speed: %.2f m/s  |  look x%.2f"), NewSpeed / 100.f, CameraPawn->GetLookSpeedScale()));
 	}
-
-	Movement->MaxSpeed = FlySpeed;
-	Movement->Acceleration = FlySpeed * ModularPlayerController::FlyAccelerationPerSpeed;
-	Movement->Deceleration = FlySpeed * ModularPlayerController::FlyAccelerationPerSpeed;
+#endif
 }
 
 void AModularPlayerController::HandleToggleGizmoMode()

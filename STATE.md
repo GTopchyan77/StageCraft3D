@@ -620,10 +620,228 @@ Two UX problems made the tool feel unlike a professional editor. The camera coul
   5. Move a selected item halfway into the floor or a truss. Arrows and rings stay fully visible, and dragging a buried handle works.
   6. The gizmo stays crisp and correctly coloured inside the volumetric fog in `L_StageTest`.
 
-**Commit:** uncommitted (working tree)
+**Commit:** `b75a4ae`
 
 **Known issues / follow-ups**
 - Depth-test-free handles draw their far side through their near side. The colour is flat, so this reads as a solid shape, but overlapping axes in rotate mode all show (as in the UE editor). Hover highlight is still in the backlog.
 - If the window loses focus mid-navigation, recovery relies on Enhanced Input flushing the RMB release. Check alt-tab during RMB in PIE.
 - No orbit (Alt+LMB) or pan (MMB) yet. Only fly mode was in scope.
 - Rebuild the Game target before a packaged test.
+
+
+---
+
+## #12 — Fix: placement dead after RMB delete; RMB camera rebuilt on the engine's native capture path (2026-10-01)
+
+**What & why**
+- **Bug: no placement after deleting (root cause found by reading the code; Gevor's PIE log showed no errors).**
+  - In this build the only way to arm an item is `BP_StageTestArmer`. It calls `SelectItem(DA_Test_Crate)` once, on BeginPlay, and there is no catalog UI to re-arm.
+  - `HandleSecondaryClick` (#3, kept in #11) called `UStageItemSubsystem::ClearSelection()` on every RMB click that did not hit a stage item. One right-click slightly off a cube, or a delete that missed, disarmed the crate. LMB then fell through to `BeginPlacement` with `ActiveItem == nullptr`, and placement was dead for the rest of the session.
+  - #11 made a miss more likely. The click threshold was 4 raw mouse counts, and normal hand jitter on a high-DPI mouse exceeds that. The click trace also ran at a cursor position restored by `SetMouseLocation`, not at the press point.
+  - **Fix:**
+    - An RMB click on empty space now **only deselects**. The armed item stays armed.
+    - Disarming is an explicit new **`CancelAction` (Esc)**, which deselects and disarms. In PIE, the editor uses Esc to stop play, so test Esc in Standalone or with the PIE stop key rebound.
+    - The click trace runs at the **press position** (`PressCursorPosition`, captured on RMB Started) through `GetHitResultAtScreenPosition`.
+    - The click threshold is now 12 counts.
+- **Deterministic teardown on delete:**
+  - The controller clears the selection *before* `TryDeleteActor` when the target is the selected actor, so the gizmo and inspector never see a selected actor that is mid-destruction. The `OnDestroyed` path stays as a backstop.
+  - `USelectionComponent::SelectActor` and `USpawnSystemComponent::TryDeleteActor` reject actors already being destroyed (`IsActorBeingDestroyed`).
+  - `TryDeleteActor` logs `Deleting stage item X.`
+  - The audit found no stale state in `USpawnSystemComponent`: `BeginPlacement` always calls `EndPlacement` first, the stroke closes on Completed/Canceled, and `ActiveItem` changes only through the subsystem delegate.
+- **RMB camera rebuilt: no input-mode switching and no context churn.**
+  - **What #11 did, and why it was fragile:** every RMB press called `SetInputMode(GameOnly)`, toggled `bShowMouseCursor` and added the fly mapping context; release reversed all of it and called `SetMouseLocation`. This ran from Enhanced Input handlers, a tick after the Slate mouse events. It changed viewport focus and flush rules, and rebuilt key mappings while buttons were held. Those are the usual causes of a lost release (stuck in fly mode: cursor hidden, LMB ignored) and of the "camera locks" symptom.
+  - **New `UStageCraftGameViewportClient`** (`GameViewportClientClassName` in `DefaultEngine.ini`, also used by PIE):
+    - It tracks mouse buttons in `InputKey` and returns true from `HideCursorDuringCapture()` only while RMB is the only button held.
+    - The engine's `FSceneViewport` then does what the Unreal Editor viewport does: at mouse-down it hides the cursor and uses high-precision raw mouse deltas, and at mouse-up it restores the cursor to the press point and releases capture.
+    - LMB drags (gizmo, painting) keep a visible, moving cursor. Button state resets in `LostFocus` (alt-tab).
+    - The controller warns at BeginPlay if this viewport client is not configured.
+  - **Controller:**
+    - It keeps one input mode for the whole session (GameAndUI).
+    - The camera mapping context is applied once, in `SetupInputComponent`. Look, move and speed handlers act only while `bIsNavigatingCamera`.
+    - `Begin/EndCameraNavigation` just set state.
+    - Look, fly, wheel speed, the pawn and the click-vs-drag rules are otherwise as in #11.
+- **Gizmo (request item 3):** re-checked. `M_GizmoHandle` is Translucent, Unlit, with `GizmoColor`; `bDisableDepthTest` was confirmed True in #11, and the gizmo CDO uses it. No change needed.
+
+**Files changed**
+- `Source/ModularSceneBuilder/Public/Player/StageCraftGameViewportClient.h`, `Private/Player/StageCraftGameViewportClient.cpp`: new
+- `Config/DefaultEngine.ini`: `[/Script/Engine.Engine] GameViewportClientClassName=/Script/ModularSceneBuilder.StageCraftGameViewportClient`
+- `Source/ModularSceneBuilder/Public/Player/ModularPlayerController.h`, `Private/Player/ModularPlayerController.cpp`: `CancelAction` (Esc), press-position click trace, no disarm on RMB miss, explicit deselect before delete, input-mode juggling removed, camera context always applied, threshold 12
+- `Source/ModularSceneBuilder/Private/Components/SelectionComponent.cpp`: reject actors being destroyed
+- `Source/ModularSceneBuilder/Private/Components/SpawnSystemComponent.cpp`: reject actors being destroyed; delete log
+- `STATE.md`, `tasks/todo.md`
+
+**Verification**
+- **Build:** `Build.bat ModularSceneBuilderEditor Win64 Development` Succeeded (Claude), with 0 errors and 0 warnings. The editor was closed with `ue5_kill_editor`, rebuilt, and relaunched.
+- **PIE startup (Claude):**
+  - The log shows the built-in `LMB/RMB/Esc/Space` and RMB fly mappings, both fixtures registered, and the catalog loaded with 5 items.
+  - The "not StageCraftGameViewportClient" warning did **not** appear, so the custom viewport client is active in PIE.
+  - No new warnings or errors.
+- **Not tested by Claude:** real mouse interaction. Synthetic mouse input from Claude's shell does not reach the desktop (a taskbar click had no effect), so the camera feel and the delete → place loop could not be driven automatically.
+- **Awaiting manual verification (Gevor), PIE on `L_StageTest`:**
+  1. LMB places a crate. RMB-click the crate: it is deleted (log `Deleting stage item ...`). LMB on the floor immediately places again.
+  2. Right-click empty floor several times, then LMB: it still places.
+  3. Hold RMB and move: the view turns with no cursor visible and no stop at the screen edge. Release: the cursor is back where you pressed.
+  4. RMB + W/A/S/D/Q/E flies, the wheel changes speed, and WASD alone does nothing.
+  5. Select a crate and LMB-drag a gizmo arrow: the cursor stays visible and the camera does not move. Pressing RMB during the drag does nothing.
+  6. Alt-tab while holding RMB, then come back: the cursor is visible and LMB works.
+  7. Push a selected crate into the floor: the gizmo stays visible and grabbable.
+
+**Commit:** uncommitted (working tree)
+
+**Known issues / follow-ups**
+- Esc stops PIE in the editor. Rebind the PIE stop key or test Cancel in Standalone. The real catalog UI should also offer a "pointer / no item" button.
+- `BP_StageTestArmer` is the only arming path until the UMG catalog panel exists (5.3).
+
+
+---
+
+## #13 — Editor-viewport fly camera rewrite (damped, world-Z vertical) & RMB made navigation-only (2026-10-01)
+
+**What & why**
+Gevor reported that the camera still felt clunky, especially when moving vertically and looking around. There were two root causes:
+1. **Movement went through `UFloatingPawnMovement`** (inherited from `ADefaultPawn`). It normalises the *summed* input vector: E plus W or A/D shared one unit of input, so climbing slowed when strafing. Its acceleration/braking model, with `TurningBoost`, is tuned for pawns, not cameras.
+2. **Look applied raw high-precision mouse deltas straight to the control rotation.** Raw deltas arrive in uneven per-frame bursts, and every burst showed up as a jerk.
+
+**Changes:**
+- **`AStageCameraPawn` rewritten as a plain `APawn`** (root `USceneComponent`, eye height 0, no movement component, no collision). Motion is integrated directly (`AddActorWorldOffset`, no sweep), so no clamp, normalisation or sweep can distort it.
+  - **Look:** `AddLookInput(raw counts)` moves a **target** rotation: `LookSensitivity` 0.2°/count, pitch clamped to ±`MaxPitch` (89°), roll always 0. The view eases toward the target with frame-rate-independent exponential smoothing (`RotationSmoothing` 25/s, about 40 ms of glide), along the shortest path across the ±180° yaw seam. The pawn writes the result to the controller's control rotation. When it is at rest, it adopts rotations set by others (spawn, game-mode restart) instead of fighting them.
+  - **Fly:** `AddFlyInput(x = forward, y = right, z = up)` is accumulated per frame.
+    - W/S move along the full look vector and A/D along the view's horizontal right vector, as in the UE editor.
+    - **E/Q move strictly along world Z on a separate axis.** The forward/strafe part is clamped to unit length on its own, so vertical speed never depends on pitch or on other held keys.
+    - Velocity eases toward the target with the same exponential model (`MovementSmoothing` 8/s, about a 0.12 s ease-in/out) and snaps to rest below 0.5 cm/s, so idle costs nothing.
+    - `AdjustFlySpeed` (wheel): ×1.25 per notch, clamped 50–20000 cm/s.
+    - `SetViewRotation(rot, bSnap)` is available for future "focus selection".
+  - The pawn ticks after its controller (`AddTickPrerequisiteActor` in `PossessedBy`), so input applies in the same frame. All tuning properties live on the pawn. The input API is BlueprintCallable (gamepad and UI later).
+- **`AModularPlayerController` simplified to pure input routing.** All camera maths and the `FloatingPawnMovement` dependency are removed.
+  - **RMB is navigation only.** `NavigateAction` (was `SecondaryAction`): Started sets `bIsNavigatingCamera`, Completed/Canceled clears it. While it is held, look/move/speed are forwarded to the pawn. It never selects, places or deletes, and it is ignored while a gizmo drag or placement stroke is active.
+  - **LMB is ignored while navigating.**
+  - **Delete moved to the Delete key** (`DeleteAction`): deletes the *selected* item (the selection is cleared first). This **supersedes #12's RMB-click delete** and removes the click-vs-drag thresholds and the press-position trace.
+  - Esc (Cancel: deselect + disarm) and Space (gizmo mode) are unchanged. The Space "consume legacy keys" workaround is removed, because no legacy bindings exist any more.
+  - Space/Ctrl are **not** mapped as up/down: Space is the gizmo toggle, and a statically mapped key would steal it at any priority (Enhanced Input claims keys when it rebuilds mappings). Ctrl is reserved for multi-select. Q/E match the UE editor defaults.
+- `UStageCraftGameViewportClient` (#12) still owns cursor hide, raw deltas and cursor restore on RMB.
+
+**Files changed**
+- `Source/ModularSceneBuilder/Public/Player/StageCameraPawn.h`, `Private/Player/StageCameraPawn.cpp`: rewritten (`APawn`, damped look/fly)
+- `Source/ModularSceneBuilder/Public/Player/ModularPlayerController.h`, `Private/Player/ModularPlayerController.cpp`: `NavigateAction` / `DeleteAction` (Delete key); RMB-click delete, the thresholds, `LookSensitivity`/`FlySpeed` (moved to the pawn) and `ApplyFlySpeed` removed
+- `STATE.md`, `tasks/todo.md`
+
+**Verification**
+- **Build:** `Build.bat ModularSceneBuilderEditor Win64 Development` Succeeded twice (Claude), with 0 errors and 0 warnings. The editor was closed, rebuilt and relaunched.
+- **Automated in-PIE flight test (Claude).** A Python slate-tick script called the pawn's real `AddFlyInput`/`AddLookInput` every frame on `L_StageTest` and recorded the pose. It ran at about 110 fps; the editor's background CPU throttle was turned off for the run and restored afterwards.
+
+  | Phase (view pitch −45°) | Result |
+  |---|---|
+  | E only, 1 s | dX = dY = 0.0 exactly. vZ rises smoothly and monotonically to 1,200 cm/s (5-sample windows: 227 → 528 → 742 → 883 → 933 → 1,085 → … → 1,200) |
+  | Release | Coasts 144 cm (model: v/k = 150), then 2 cm/s → rest |
+  | Q only | Pure −Z, symmetric with E |
+  | W + E | Horizontal 848 cm/s along the look vector, plus a full-strength climb (net vZ = 1,200 − 848 = 351), not normalised away |
+  | Look far past vertical | Pitch eases with a per-frame decay of 0.80 (= e^(−25·0.009)), stops at **89.0°**, roll 0.00, no flip |
+  | Large yaw input | Wraps across ±180° without spinning the long way; roll stays 0 |
+
+  - The PIE log shows no StageCraft warnings or errors.
+- **Not tested by Claude:** the feel with a physical mouse. Synthetic OS mouse input does not reach the desktop from Claude's shell.
+- **Awaiting manual verification (Gevor), PIE:**
+  1. **Look:** hold RMB and look around; it should feel 1:1 with a soft glide, with no jitter and no flip at the top or bottom.
+  2. **Climb:** RMB + E/Q gives straight vertical moves at any pitch; RMB + W+E climbs at full speed while moving forward.
+  3. **Stop:** releasing RMB eases to a stop in about 0.1–0.2 s.
+  4. **Speed:** RMB + wheel changes speed.
+  5. **No interference:** quick RMB clicks never select, place or delete. LMB does nothing while RMB is held. RMB does nothing during an LMB gizmo drag.
+  6. **Delete:** select an item, press Delete; it is removed, and LMB places again immediately.
+
+**Commit:** uncommitted (working tree, together with #12)
+
+**Known issues / follow-ups**
+- **Tuning:** `RotationSmoothing`, `MovementSmoothing`, `LookSensitivity` and `FlySpeed` are on `AStageCameraPawn`. Set them in a BP subclass, then point `DefaultPawnClass` at it.
+- **Not yet built:** orbit (Alt+LMB), pan (MMB), wheel dolly without RMB, and focus-selection (F; `SetViewRotation` is ready for it).
+- **PIE caveat:** Esc stops PIE in the editor (see #12).
+
+
+---
+
+## #14 — Mouse wheel sets fly speed at any time, uniform on all axes, with feedback (2026-10-01)
+
+**What & why**
+Gevor reported that scrolling did not change camera speed, or did not seem to apply to every direction.
+
+**Root cause:** `AModularPlayerController::HandleCameraSpeed` (#13) acted only while RMB was held, and nothing showed the current speed. Scrolling on its own did nothing, and a change made during flight was invisible. The speed itself was already uniform: `AStageCameraPawn::TickMovement` multiplies the combined forward/strafe/vertical target by one `FlySpeed`. The automated test below confirms this per axis.
+
+- **Wheel works with or without RMB.** The wheel has no other job in the stage view. UMG panels still consume wheel input over their scroll boxes, so the inspector scrolls normally.
+- **`AStageCameraPawn::AdjustFlySpeed` now returns the new speed and broadcasts `OnFlySpeedChanged(float)`** (BlueprintAssignable) when the value actually changes, for a HUD readout.
+  - Only the target speed changes. The real velocity eases toward it through the existing `MovementSmoothing`, so scrolling mid-flight speeds up or slows down smoothly instead of jumping.
+- **Range widened:** `MinFlySpeed` 50 → **10 cm/s** (close-up rigging), `MaxFlySpeed` stays 20,000 cm/s (200 m/s, arena layouts). Steps stay geometric at ×1.25 per notch (about 34 notches end to end), so each notch feels the same at any speed.
+- **Interim feedback:** in non-shipping builds the controller shows `Camera speed: X.XX m/s` with `AddOnScreenDebugMessage`. It uses a fixed key, so each notch replaces the previous line, and the line fades after 1.5 s. The HUD should bind `OnFlySpeedChanged` and replace this.
+
+**Files changed**
+- `Source/ModularSceneBuilder/Public/Player/StageCameraPawn.h`, `Private/Player/StageCameraPawn.cpp`: `FOnStageCameraFlySpeedChanged` / `OnFlySpeedChanged`, `AdjustFlySpeed` returns float, `MinFlySpeed` 10, comments
+- `Source/ModularSceneBuilder/Public/Player/ModularPlayerController.h`, `Private/Player/ModularPlayerController.cpp`: wheel no longer gated on RMB, on-screen speed readout (`#if !UE_BUILD_SHIPPING`), `Engine/Engine.h` include
+- `STATE.md`, `tasks/todo.md`
+
+**Verification**
+- **Build:** `Build.bat ModularSceneBuilderEditor Win64 Development` Succeeded (Claude), with 0 errors and 0 warnings. The editor was closed, rebuilt and relaunched.
+- **Automated in-PIE speed test (Claude).**
+  - **Method:** wheel notches were injected with `EnhancedInputLocalPlayerSubsystem.InjectInputVectorForAction(IA_CameraSpeed_Default)`, which is the real controller path, **with RMB not held**. Fly input went through `AddFlyInput`. Velocity was computed from the world delta time at about 114 fps, with the background throttle off for the run and restored afterwards.
+
+  | Check | Result |
+  |---|---|
+  | 3 notches up, no RMB | `FlySpeed` 1,200 → **2,343.75** (= 1200·1.25³) |
+  | Forward only | steady 2,343 cm/s on X, Y = Z = 0 |
+  | Right only | steady 2,343 cm/s on Y |
+  | Up (E) only | steady 2,343 cm/s on Z, so the speed applies uniformly to all three axes |
+  | 5 notches down **mid-flight** | 2,343.75 → **768.00**. Velocity eases down; the largest single-frame change is 103 cm/s at 8.8 ms frames (model: 1,575·(1−e^(−8·0.0088)) = 107), so no jump |
+  | −60 / +60 notches | clamps at exactly **10** and **20,000** cm/s |
+
+  - The PIE log shows no StageCraft warnings or errors.
+- **Awaiting manual verification (Gevor), PIE:**
+  1. Scroll without RMB: the on-screen speed changes.
+  2. Hold RMB and fly with W, A/D, E/Q while scrolling: all directions speed up and slow down together and smoothly.
+  3. Scroll over the inspector panel: the panel scrolls and the camera speed does not change.
+
+**Commit:** uncommitted (working tree, together with #12 and #13)
+
+**Known issues / follow-ups**
+- Bind `OnFlySpeedChanged` in `WBP_StageCraftHUD` for a proper speed indicator, then remove the debug-message readout.
+- The speed is not saved between sessions. If wanted, store it in a `USaveGame` or user settings later.
+
+
+---
+
+## #15 — Look speed follows fly speed (square-root curve, clamped) (2026-10-01)
+
+**What & why**
+Gevor reported that the wheel sped up flying but looking around stayed fixed, so a fast flight across the stage turned "painfully slowly". He asked to scale look sensitivity with `FlySpeed`.
+
+- **Not strictly proportional.** Fly speed spans 10 cm/s – 200 m/s (2,000×, #14). A 1:1 link would give about 0.001°/count at the slow end (look frozen) and about 400°/count at the fast end (a full spin per twitch).
+- **Implemented curve:** `AStageCameraPawn::GetLookSpeedScale()` = clamp((FlySpeed / `LookSpeedReferenceFlySpeed`)^`LookSpeedScaleExponent`, `MinLookSpeedScale`, `MaxLookSpeedScale`).
+  - Defaults: reference 1,200 cm/s (the default fly speed, scale 1.0), exponent **0.5** (square root: each doubling of fly speed turns about 1.41× faster), clamp **×0.5 … ×3.0**.
+  - With the defaults, the ×0.5 floor applies at and below 300 cm/s (finer aim for close-up rigging), and the ×3.0 ceiling at and above 10,800 cm/s.
+- **Smoothing is unchanged.** `AddLookInput` multiplies the raw delta by `LookSensitivity * GetLookSpeedScale()` into the **target** rotation, and `RotationSmoothing` (25/s) still eases the view toward it. A faster look is as smooth as before, and a wheel notch mid-turn changes the rate without a jump.
+- **`bScaleLookWithFlySpeed`** (default on) turns this off for stock UE-editor behaviour, where look speed is fixed.
+- The interim on-screen readout now shows `Camera speed: X.XX m/s | look xN.NN`.
+
+**Files changed**
+- `Source/ModularSceneBuilder/Public/Player/StageCameraPawn.h`, `Private/Player/StageCameraPawn.cpp`: `GetLookSpeedScale()` (BlueprintPure); `bScaleLookWithFlySpeed`, `LookSpeedReferenceFlySpeed`, `LookSpeedScaleExponent`, `Min/MaxLookSpeedScale`; `AddLookInput` uses the scale
+- `Source/ModularSceneBuilder/Private/Player/ModularPlayerController.cpp`: readout includes the look scale
+- `STATE.md`, `tasks/todo.md`
+
+**Verification**
+- **Build:** `Build.bat ModularSceneBuilderEditor Win64 Development` Succeeded (Claude), with 0 errors and 0 warnings. The editor was closed, rebuilt and relaunched.
+- **Automated in-PIE look test (Claude).**
+  - **Method:** fly speed was set by injecting wheel notches into `IA_CameraSpeed_Default`, the real controller path. An identical sweep of 300 counts of yaw (10 counts/frame × 30 frames) was then applied through `AddLookInput`, and the settled turn measured. The background throttle was off for the run and restored afterwards.
+
+  | Fly speed | Look scale | Turned | Expected (300 · 0.2 · scale) |
+  |---|---|---|---|
+  | 1,200 cm/s | 1.000 | 60.00° | 60.00° |
+  | 393 cm/s | 0.572 (= √(393/1200)) | 34.34° | 34.35° |
+  | 10 / 93 / 182 cm/s | 0.500 (floor) | 30.00° | 30.00° |
+  | 20,000 cm/s | 3.000 (ceiling) | 180.00° | 180.00° |
+
+  - **Smoothness:** per-frame yaw steps ease in (0.19° → 0.97°) and out (→ 0.04°) with no jumps.
+  - The test's case labels used wrong notch arithmetic. The speeds above are the measured ones; the high-middle of the curve (for example 3,600 cm/s → ×1.73) follows from the same verified formula but was not sampled.
+  - The PIE log shows no StageCraft warnings or errors.
+- **Awaiting manual verification (Gevor), PIE:** scroll up until the readout shows about ×2–3 and check that hold-RMB looking is clearly faster but still controllable. Scroll down to about 1–3 m/s and check that look is finer for precise aiming. If the link is too strong or too weak, tune `LookSpeedScaleExponent` (0 = off, 1 = proportional) or the clamps in a BP subclass of `AStageCameraPawn`.
+
+**Commit:** uncommitted (working tree, together with #12–#14)
+
+**Known issues / follow-ups**
+- Unlike the stock UE editor, look speed is tied to fly speed. This is intentional, at Gevor's request, and can be disabled with `bScaleLookWithFlySpeed`.
+- Working tree also holds `Content/StageCraft/Blueprints/BP_StageCameraPawn.uasset` (new BP child of `AStageCameraPawn`, all defaults) and a modified `BP_StageCraftGameMode.uasset` (`DefaultPawnClass` = `BP_StageCameraPawn`). They were saved in the editor at 17:06 and were not created by Claude. They are left **unstaged** for Gevor to review. The #15 PIE test ran with this BP pawn; its values equal the C++ defaults, so the results hold.

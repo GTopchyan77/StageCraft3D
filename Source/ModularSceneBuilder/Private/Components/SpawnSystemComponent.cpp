@@ -109,11 +109,12 @@ void USpawnSystemComponent::EndPlacement()
 
 bool USpawnSystemComponent::TryDeleteActor(AActor* Target)
 {
-	if (!IsValid(Target) || !Target->Implements<UInteractableInterface>())
+	if (!IsValid(Target) || Target->IsActorBeingDestroyed() || !Target->Implements<UInteractableInterface>())
 	{
 		return false;
 	}
 
+	UE_LOG(LogStageCraft, Log, TEXT("Deleting stage item %s."), *Target->GetName());
 	OnItemDeleted.Broadcast(Target);
 	// Selection listeners are released by AModularBaseActor::EndPlay.
 	return Target->Destroy();

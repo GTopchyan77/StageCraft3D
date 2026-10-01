@@ -73,3 +73,26 @@ See `STATE.md` for detailed history of completed work.
 - [ ] Local-space gizmo option
 - [ ] Undo/redo, hooking OnItemSpawned / OnItemDeleted / gizmo drag end
 - [ ] Overlay materials for hover/selected (content)
+
+## Editor UX fixes, round 2 (STATE.md #12)
+- [x] Placement dead after RMB delete/miss: RMB on empty no longer disarms; Esc = Cancel; press-position click trace; threshold 12 counts
+- [x] RMB capture moved to `UStageCraftGameViewportClient` (engine-native hide/raw-delta/restore); no mid-press SetInputMode or context churn
+- [x] Editor build clean; PIE startup log clean, custom viewport client active
+- [ ] PIE verification (Gevor): STATE.md #12 checklist (delete then place loop, RMB look/fly, gizmo drag + RMB, alt-tab)
+
+## Fly camera rewrite (STATE.md #13)
+- [x] `AStageCameraPawn` as plain APawn: damped look (pitch clamp 89, no roll), W/S look-vector, A/D strafe, E/Q pure world Z on its own axis, damped velocity, wheel speed
+- [x] RMB navigation-only; Delete key deletes the selection (replaces RMB-click delete)
+- [x] Editor build clean; in-PIE flight test passes (pure Z, smooth ease, 89 clamp)
+- [ ] Feel check with a physical mouse (Gevor): STATE.md #13 checklist
+
+## Wheel fly speed (STATE.md #14)
+- [x] Wheel changes fly speed with or without RMB; uniform on all axes; eased; 10 cm/s to 200 m/s; `OnFlySpeedChanged` + interim on-screen readout
+- [x] Editor build clean; in-PIE speed test passes (injected wheel, per-axis speeds, mid-flight easing, clamps)
+- [ ] Bind `OnFlySpeedChanged` in `WBP_StageCraftHUD` and drop the debug-message readout
+- [ ] Feel check (Gevor): STATE.md #14 checklist
+
+## Look speed follows fly speed (STATE.md #15)
+- [x] `GetLookSpeedScale()`: sqrt curve vs 1200 cm/s, clamp x0.5..x3, toggle `bScaleLookWithFlySpeed`; smoothing unchanged
+- [x] Editor build clean; in-PIE look test matches formula exactly at 4 speeds incl. both clamps
+- [ ] Feel check (Gevor): fast flight turns faster but controllable; tune exponent/clamps if needed
