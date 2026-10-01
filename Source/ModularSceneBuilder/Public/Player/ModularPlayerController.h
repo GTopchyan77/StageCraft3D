@@ -4,7 +4,11 @@
 
 #include "CoreMinimal.h"
 #include "GameFramework/PlayerController.h"
+#include "Data/StageParameterTypes.h"
+#include "Economy/StageEconomyTypes.h"
 #include "ModularPlayerController.generated.h"
+
+DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FOnStageRequestRejected, const FStageEconomyResultInfo&, Result);
 
 /**
  * Stage editing controller. Its only jobs are Enhanced Input, cursor tracing and deciding which
@@ -23,6 +27,11 @@
  *
  * Keys: Delete removes the selected item, Esc deselects and disarms the catalog item, Space toggles
  * the gizmo between translate and rotate.
+ *
+ * Request bridge: widgets never write to the game directly. Parameter edits, purchases and
+ * placements go through RequestParameterChange / RequestPurchase / the spawn component's
+ * PlacementValidator, which ask the GameMode (rules + ownership) and only then let the
+ * session or economy subsystem apply them. Refusals are broadcast on OnRequestRejected.
  *
  * Input assets are designer-assignable in a Blueprint subclass. If any slot is empty, an equivalent
  * mapping is built in code, so the project works with no content.
@@ -65,6 +74,31 @@ public:
 	 */
 	UFUNCTION(BlueprintCallable, Category = "StageCraft|Trace")
 	bool GetGizmoHitUnderCursor(FHitResult& OutHit) const;
+
+	// --- Request bridge (UI -> GameMode rules -> subsystems) ---
+
+	/** Validates with the GameMode, then applies through the session. The single write path for UI edits. */
+	UFUNCTION(BlueprintCallable, Category = "StageCraft|Requests")
+	FStageEconomyResultInfo RequestParameterChange(UObject* Target, FGameplayTag ParameterId, const FStageParameterValue& Value);
+
+	/** Starts a purchase. The result is the validation outcome; completion is reported on OnRequestRejected (failure) or the economy's OnPurchaseCompleted. */
+	UFUNCTION(BlueprintCallable, Category = "StageCraft|Requests")
+	FStageEconomyResultInfo RequestPurchase(class UStageProductData* Product);
+
+	/** Whether Item may be placed now (for graying out catalog entries). */
+	UFUNCTION(BlueprintCallable, Category = "StageCraft|Requests")
+	FStageEconomyResultInfo CanPlaceItem(const class UBaseItemData* Item) const;
+
+	/**
+	 * Marks what this player may not edit before a panel builds controls: locked parameters become
+	 * read-only with bLocked set, and locked Type options are labelled. Display only; every write
+	 * is still validated by RequestParameterChange.
+	 */
+	void DecorateParameterSections(const UObject* Target, TArray<FStageParameterSection>& Sections) const;
+
+	/** Every refused request (UI toasts, shop prompts). */
+	UPROPERTY(BlueprintAssignable, Category = "StageCraft|Requests")
+	FOnStageRequestRejected OnRequestRejected;
 
 protected:
 	//~ Begin APlayerController Interface
@@ -152,6 +186,14 @@ private:
 
 	UFUNCTION()
 	void HandleSelectionChanged(AActor* NewSelection, AActor* PreviousSelection);
+
+	UFUNCTION()
+	void HandlePurchaseCompleted(class UStageProductData* Product, FStageEconomyResultInfo Result);
+
+	FStageEconomyResultInfo ValidatePlacement(const class UBaseItemData& Item);
+	void ReportRejection(const FStageEconomyResultInfo& Result);
+	class AStageCraftGameModeBase* GetStageGameMode() const;
+	class UStageEconomySubsystem* GetEconomy() const;
 
 	void HandlePrimaryStarted();
 	void HandlePrimaryTriggered();

@@ -46,6 +46,13 @@ public:
 	UFUNCTION(BlueprintPure, Category = "StageCraft|Item")
 	class UBaseItemData* GetItemData() const { return ItemData; }
 
+	/**
+	 * Catalog items this instance can be switched to in place (the inspector's Type dropdown, whose
+	 * option index is the index here): same data class and item type as the current ItemData, which
+	 * is always included. Public so rule checks can resolve a Type option to the item it selects.
+	 */
+	void GetSwappableItems(TArray<class UBaseItemData*>& OutItems) const;
+
 	UFUNCTION(BlueprintPure, Category = "StageCraft|Item")
 	class UStaticMeshComponent* GetMeshComponent() const { return MeshComponent; }
 
@@ -103,12 +110,6 @@ protected:
 	virtual bool WriteParameter(const FGameplayTag& ParameterId, const FStageParameterValue& Value);
 
 	void NotifyParameterChanged(const FGameplayTag& ParameterId);
-
-	/**
-	 * Catalog items this instance can be switched to in place (the inspector's Type dropdown): same
-	 * data class and item type as the current ItemData, which is always included.
-	 */
-	void GetSwappableItems(TArray<class UBaseItemData*>& OutItems) const;
 
 	/**
 	 * Pushes data-driven visuals onto components. Subclasses call Super and then apply their own

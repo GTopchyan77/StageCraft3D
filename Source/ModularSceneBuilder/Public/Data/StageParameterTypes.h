@@ -107,6 +107,10 @@ struct MODULARSCENEBUILDER_API FStageParameterDescriptor
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Parameter")
 	bool bReadOnly = false;
 
+	/** Read-only because the player does not own it (set by AModularPlayerController::DecorateParameterSections). UI can show a lock / "Unlock" button. */
+	UPROPERTY(BlueprintReadOnly, Category = "Parameter")
+	bool bLocked = false;
+
 	/** Choices of an Enum parameter, in index order (the inspector shows them as a dropdown). */
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Parameter")
 	TArray<FText> Options;

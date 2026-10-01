@@ -115,3 +115,18 @@ See `STATE.md` for detailed history of completed work.
 - [x] Editor + Game builds clean; in-PIE synthetic-input test passes on Pan and Tilt
 - [ ] Feel and visual check with a physical mouse (Gevor): STATE.md #17 checklist
 - [ ] Optional: share drag/popup/reset with `UStageFaderWidget`
+
+## Core architecture & shop foundation (STATE.md #18)
+- [x] `UStageProfileSubsystem` (persistent profile/wallet/entitlements, SaveGame slot, integrity hash, friend-only mutation)
+- [x] `UStageEconomySubsystem` (product catalog, ownership, validate → backend → re-validate → atomic commit) + `UStageCommerceBackend` / local backend
+- [x] `UStageProductData`, `UStageUnlockCondition` (+ Entitlements / ProfileLevel), economy structs and result codes; item `RequiredEntitlement` / `ParameterEntitlements`
+- [x] `UStageSessionSubsystem` (placed items, power/weight totals, session limits, single parameter write path, dirty flag)
+- [x] GameMode rules (`EvaluatePlacement` / `EvaluateParameterChange`, `SessionRules`); controller request bridge; views commit via the controller and show locks
+- [x] Dev console commands (`StageCraft.Shop.*`, `StageCraft.Profile.*`), Shipping-safe
+- [x] Editor / Game / Shipping builds clean; in-PIE economy test passes (locks, purchase, forged product, funds, parameter lock, power rule, travel, persistence, tamper)
+- [x] Rules.md architecture + economy security section
+- [ ] Manual check (Gevor): STATE.md #18 checklist
+- [ ] Shop widget + wallet readout + rejection toast (replace on-screen debug messages)
+- [ ] Lock badges / Unlock buttons in the catalog
+- [ ] Session-limit check on Type swap; parameter display names in lock messages
+- [ ] Server-authoritative commerce backend + RPC requests when multi-user/marketplace starts

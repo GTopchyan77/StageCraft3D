@@ -86,4 +86,18 @@ public:
 
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Specs", meta = (ShowOnlyInnerProperties))
 	FStageEquipmentSpecs Specs;
+
+	// --- Economy (UStageEconomySubsystem) ---
+
+	/** Needed to place this item or switch an instance to it. Empty = free. A UStageProductData sells it. */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Economy", meta = (Categories = "StageCraft.Entitlement"))
+	FGameplayTag RequiredEntitlement;
+
+	/**
+	 * Parameters of this item that need an entitlement to be edited (parameter id -> entitlement),
+	 * e.g. StageCraft.Attribute.Zoom -> StageCraft.Entitlement.Feature.ZoomOptics. Unlisted parameters are free.
+	 * Locked parameters still show their value; the inspector marks them read-only.
+	 */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Economy", meta = (ForceInlineRow))
+	TMap<FGameplayTag, FGameplayTag> ParameterEntitlements;
 };

@@ -4,10 +4,14 @@
 
 #include "CoreMinimal.h"
 #include "Components/ActorComponent.h"
+#include "Economy/StageEconomyTypes.h"
 #include "SpawnSystemComponent.generated.h"
 
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FOnStageItemSpawned, class AModularBaseActor*, SpawnedActor);
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FOnStageItemDeleted, AActor*, DeletedActor);
+
+/** Decides whether an item may be placed now. Bound by the owning controller, which asks the GameMode. */
+DECLARE_DELEGATE_RetVal_OneParam(FStageEconomyResultInfo, FStagePlacementValidator, const class UBaseItemData& /*Item*/);
 
 /**
  * Turns cursor hits into placed stage items and removes them again.
@@ -53,6 +57,12 @@ public:
 
 	UFUNCTION(BlueprintPure, Category = "StageCraft|Spawning")
 	class UBaseItemData* GetActiveItem() const { return ActiveItem; }
+
+	/**
+	 * Asked before every spawn, including each stamp of a continuous stroke; a refusal ends the
+	 * stroke. Unbound means no rules apply (tests, tools); in play the controller always binds it.
+	 */
+	FStagePlacementValidator PlacementValidator;
 
 	UPROPERTY(BlueprintAssignable, Category = "StageCraft|Spawning")
 	FOnStageItemSpawned OnItemSpawned;

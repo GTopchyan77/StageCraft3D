@@ -3,6 +3,7 @@
 #include "Data/BaseItemData.h"
 
 #include "Actors/ModularBaseActor.h"
+#include "Economy/StageEconomyTypes.h"
 
 #if WITH_EDITOR
 #include "Misc/DataValidation.h"
@@ -58,6 +59,22 @@ EDataValidationResult UBaseItemData::IsDataValid(FDataValidationContext& Context
 	if (IsLight() && PlacementRules.PlacementMode == EStageItemPlacementMode::Continuous)
 	{
 		Context.AddWarning(FText::Format(LOCTEXT("ContinuousLight", "{0}: Lights are expected to use Single placement; continuous stamping creates many dynamic lights."), FText::FromName(GetFName())));
+	}
+
+	// A gate with a non-entitlement tag could never be owned, so the item would be locked forever.
+	if (RequiredEntitlement.IsValid() && !RequiredEntitlement.MatchesTag(StageCraftTags::Entitlement))
+	{
+		Context.AddError(FText::Format(LOCTEXT("BadRequiredEntitlement", "{0}: RequiredEntitlement must be a StageCraft.Entitlement tag."), FText::FromName(GetFName())));
+		Result = EDataValidationResult::Invalid;
+	}
+	for (const TPair<FGameplayTag, FGameplayTag>& Gate : ParameterEntitlements)
+	{
+		if (!Gate.Key.IsValid() || !Gate.Value.MatchesTag(StageCraftTags::Entitlement))
+		{
+			Context.AddError(FText::Format(LOCTEXT("BadParameterEntitlement", "{0}: each ParameterEntitlements entry needs a parameter tag and a StageCraft.Entitlement tag."), FText::FromName(GetFName())));
+			Result = EDataValidationResult::Invalid;
+			break;
+		}
 	}
 
 	return Result == EDataValidationResult::NotValidated ? EDataValidationResult::Valid : Result;

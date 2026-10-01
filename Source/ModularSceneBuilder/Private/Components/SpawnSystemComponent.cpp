@@ -132,6 +132,17 @@ AModularBaseActor* USpawnSystemComponent::SpawnItemAt(UBaseItemData& Item, const
 		return nullptr;
 	}
 
+	if (PlacementValidator.IsBound())
+	{
+		const FStageEconomyResultInfo Verdict = PlacementValidator.Execute(Item);
+		if (!Verdict.IsSuccess())
+		{
+			// Stop stamping: the next cell of the stroke would be refused for the same reason.
+			EndPlacement();
+			return nullptr;
+		}
+	}
+
 	// Deferred so construction scripts and BeginPlay already see the item data.
 	AModularBaseActor* Actor = World->SpawnActorDeferred<AModularBaseActor>(ActorClass, Transform, nullptr, nullptr, ESpawnActorCollisionHandlingMethod::AlwaysSpawn);
 	if (!Actor)

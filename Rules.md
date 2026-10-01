@@ -165,6 +165,76 @@ Switches: `-CheckOnly` reports only (exit 2 if stale), `-Yes` builds without ask
 
 ---
 
+## Architecture — Subsystems, Data Binding, Economy Security
+
+These rules describe how StageCraft is layered (STATE.md #18). New features must fit them. A change that needs to break one is an architecture decision: write an ADR first.
+
+### Where state lives (pick by lifetime)
+| Lifetime | Home | Current classes |
+|---|---|---|
+| The whole run, across level travel, saved to disk | `UGameInstanceSubsystem` | `UStageProfileSubsystem` (profile, wallet, entitlements), `UStageEconomySubsystem` (shop rules), `UStageItemSubsystem` (catalog) |
+| One level / stage session | `UWorldSubsystem` (Game + PIE worlds only, via `DoesSupportWorldType`) | `UStageSessionSubsystem` (placed items, totals, session rules, dirty flag), `UShowControlSubsystem` (fixtures, cues, DMX) |
+| One local player's input and tools | Components on `AModularPlayerController` | `USelectionComponent`, `USpawnSystemComponent` |
+| Per local user settings (split-screen, per-user preferences) | `ULocalPlayerSubsystem` | none yet; add one only for per-user data that is not gameplay state |
+
+- Prefer a subsystem over subclassing `UGameInstance`, so the systems stay composable.
+- Use `Collection.InitializeDependency<T>()` when one subsystem needs another during `Initialize`.
+- Subsystems never poll and never iterate the world. Actors register on `BeginPlay` and unregister on `EndPlay`. Consumers read state once and then bind to delegates.
+- A subsystem that ticks uses `UTickableWorldSubsystem` with an `IsTickable()` that is false while idle.
+
+### Roles of the framework classes
+- **GameMode** (`AStageCraftGameModeBase`) is the rules authority.
+  - It decides every guarded request: `EvaluatePlacement` and `EvaluateParameterChange` (BlueprintNativeEvents; a Blueprint override calls the parent first).
+  - It hands `SessionRules` to the session at `StartPlay`.
+  - It holds no persistent state.
+- **PlayerController** (`AModularPlayerController`) is the only bridge from UI to the game.
+  - Widgets call `RequestParameterChange`, `RequestPurchase` and `CanPlaceItem`.
+  - The controller asks the GameMode, then lets the session or economy subsystem apply the request, and broadcasts refusals on `OnRequestRejected`.
+  - It contains no rules of its own.
+- **Subsystems** own state and the operations on it. They expose read access to everyone and mutation only along the path above.
+- **Components** stay rule-agnostic. They take validators as delegates, e.g. `USpawnSystemComponent::PlacementValidator`, so they work unbound in tests and tools.
+
+### Safe data binding (UI ↔ game)
+- Widgets never call `SetParameterValue`, profile mutators or `SpawnActor` directly.
+  - In play, all writes go through the controller's request bridge.
+  - Only a view not owned by an `AModularPlayerController` (an editor utility) writes directly.
+- **One write path, always read back.** After a commit, the view re-reads the value from the object, so a clamped, refused or rejected edit snaps back.
+- **Push, never poll.** Views bind to `OnParameterChanged`, `OnSelectionChanged`, `OnEntitlementsChanged`, `OnBalanceChanged` and `OnStatsChanged`.
+- **Structural changes rebuild on the next tick** (`RequestRebuild`), never inside the widget callback that caused them.
+- **Display is not permission.** `DecorateParameterSections` marks locked rows read-only for display only; every write is still validated.
+- Unbind every delegate in `NativeDestruct` / `EndPlay` / `Deinitialize`. Bind with `AddUniqueDynamic`.
+
+### Economy security standards
+1. **Single writer.**
+   - `UStageProfileSubsystem` has no public mutation of money, entitlements or history.
+   - `UStageEconomySubsystem` is its only friend.
+   - Never add a public or BlueprintCallable mutator to the profile; add a validated operation to the economy instead.
+2. **Validate → settle → re-validate → apply atomically.**
+   - The economy checks integrity, catalog membership, pending state, ownership, unlock conditions and funds (summed per currency).
+   - The `UStageCommerceBackend` settles the purchase.
+   - When the backend answers, the economy checks again and commits all-or-nothing with `CommitPurchase`.
+3. **Deny by default.** Missing GameMode, subsystem, profile or product means refusal. Unknown codes are failures.
+4. **Catalog-only sales.** Only Asset Manager-scanned `StageProduct` assets are sold. Runtime-constructed products are `UnknownProduct`.
+5. **Idempotency.**
+   - At most one purchase per product is in flight.
+   - Every attempt carries a `TransactionId` (`FGuid`).
+   - Backends must answer exactly once; a server must treat the ID as an idempotency key.
+6. **Money is integers.** Use `int64` whole units, with overflow and negative-balance checks. Never use `float` for currency.
+7. **Integrity.**
+   - Saves carry a salted SHA-1 of the economy fields.
+   - A mismatch freezes spending (`IntegrityViolation`) without deleting the player's data, and the tampered save is never re-hashed.
+   - This deters casual file edits only. **Anything sold for real money must be validated server-side by a `UStageCommerceBackend` implementation**; the client is never the authority.
+8. **Entitlements, not objects.**
+   - Products grant `StageCraft.Entitlement.*` tags.
+   - Content declares what a tag unlocks (`UBaseItemData::RequiredEntitlement`, `ParameterEntitlements`).
+   - An empty tag means free. Ownership checks are exact-tag (`HasTagExact`), so a parent tag never unlocks its children.
+9. **Dev-only cheats are compiled out.**
+   - `DevResetProfile`, `DevReloadProfile`, `DevGrantCurrency` and the `StageCraft.Shop.*` / `StageCraft.Profile.*` console commands are `DevelopmentOnly` and wrapped in `#if !UE_BUILD_SHIPPING`.
+   - Verify with a Shipping build whenever they change.
+10. **Tests must not leave purchases behind.** An automated test that buys something resets or deletes the `StageCraftProfile` save slot when it finishes.
+
+---
+
 ## Workflow Orchestration
 
 ### Plan Mode Default

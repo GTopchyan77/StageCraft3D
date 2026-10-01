@@ -1049,8 +1049,141 @@ UStageParameterViewWidget  (abstract)       UStageParameterControlWidget  (abstr
   5. Double-click: the head returns home (0°).
   6. Drag past a limit and reverse: it responds at once.
 
-**Commit:** uncommitted (working tree)
+**Commit:** d5f6fff
 
 **Known issues / follow-ups**
 - Faders (`UStageFaderWidget`) still use the stock slider drag. The same delta drag, popup and reset could move into the control base if wanted.
 - The popup sits above the strip. That suits the bar at the bottom of the screen; a bar docked at the top would need a "below" placement option.
+
+## #18 — Core architecture: profile/economy/session subsystems, GameMode rules, controller request bridge, shop foundation (2026-10-01)
+
+**Request:** lay down the core architecture before marketplace work:
+- **GameInstanceSubsystem:** persistent profile, currency, inventory and unlocks that survive level travel.
+- **World or LocalPlayer subsystem:** live stage state.
+- **GameMode:** the rules.
+- **PlayerController:** the secure bridge from UI to the subsystems.
+- **Economy foundation:** data assets and structs for costs, requirements, ownership and unlock conditions, with validation before any purchase or parameter change.
+- **Docs:** Rules.md and STATE.md. The request said "stat.md"; this project's status file is STATE.md.
+
+**Layout**
+
+| Layer | Class | Responsibility |
+|---|---|---|
+| GameInstance | `UStageProfileSubsystem` (new) | Profile (name, level), wallet `TMap<Currency tag, int64>`, entitlements, purchase history. Saved to slot `StageCraftProfile`: synchronous load, async save with a queued re-save, final save on shutdown. Integrity hash. Read-only to everyone except its friend the economy. |
+| GameInstance | `UStageEconomySubsystem` (new) | Product catalog (Asset Manager type `StageProduct`, `/Game/StageCraft/Shop`), ownership queries, `ValidateItemUse` / `ValidateParameterChange`, `CanPurchase` / `RequestPurchase`, `OnPurchaseCompleted`. Settles through a configurable `UStageCommerceBackend`. |
+| GameInstance | `UStageItemSubsystem` (existing) | Item catalog and the armed item. Unchanged. |
+| World | `UStageSessionSubsystem` (new) | Placed-item registry (actors register on BeginPlay/EndPlay), live totals (`FStageSessionStats`: items, W, kg), current `FStageSessionRules`, `EvaluateSessionLimits`, `ApplyParameterChange` (the single write point for UI edits), dirty flag. |
+| World | `UShowControlSubsystem` (existing) | Fixtures, cues, DMX. Unchanged. |
+| GameMode | `AStageCraftGameModeBase` | Holds `SessionRules`, passes them to the session at `StartPlay`. Decides `EvaluatePlacement` (ownership if enforced, then session limits) and `EvaluateParameterChange` (ownership if enforced). Both are BlueprintNativeEvents. |
+| PlayerController | `AModularPlayerController` | `RequestParameterChange`, `RequestPurchase`, `CanPlaceItem`, `DecorateParameterSections`, `OnRequestRejected`. Binds the spawn component's `PlacementValidator`. Interim on-screen messages for refusals and purchases. |
+| LocalPlayer | none | Deliberately not added. This is a single-user editor; per-player tool state stays in controller components. A `ULocalPlayerSubsystem` is reserved for per-user settings (Rules.md table). |
+
+**Economy data model** (`Public/Economy/`)
+- **`StageEconomyTypes.h`:**
+  - `EStageEconomyResult` (Success, InvalidRequest, UnknownProduct, AlreadyOwned, RequirementsNotMet, InsufficientFunds, PurchasePending, BackendRejected, IntegrityViolation, Locked, SessionRuleViolation) and `FStageEconomyResultInfo` (code + user-facing message).
+  - `EStageOwnershipState` (Free, Owned, Purchasable, Locked).
+  - Structs: `FStageCurrencyAmount`, `FStagePurchaseRecord`, `FStagePlayerProfile`, `FStagePurchaseRequest`.
+  - Native tags: `StageCraft.Currency(.Credits)`, `StageCraft.Entitlement(.Item/.Feature)`.
+- **`UStageProductData`** (PrimaryDataAsset): DisplayName, Description, Icon (UI bundle), `Price[]`, `GrantedEntitlements`, instanced `Requirements[]`. `IsDataValid` rejects products that grant nothing, bad or duplicate currencies, and empty conditions.
+- **`UStageUnlockCondition`** (abstract, EditInlineNew, Blueprintable, `IsMet` BlueprintNativeEvent), with subclasses `_Entitlements` and `_ProfileLevel`.
+- **`UStageCommerceBackend`** (abstract; `ProcessPurchase` must answer once) and **`UStageLocalCommerceBackend`** (offline, approves immediately). Selected by `CommerceBackendClass` in DefaultGame.ini; empty means local.
+- **`UStageProfileSaveGame`**: Version, Profile, IntegrityHash.
+- **`UBaseItemData`** (new Economy category):
+  - `RequiredEntitlement` gates placing an item and switching to it.
+  - `ParameterEntitlements` (parameter → entitlement) gates editing.
+  - Empty means free, so existing content is unaffected. Validation requires `StageCraft.Entitlement` tags.
+- **`FStageParameterDescriptor::bLocked`** is set together with `bReadOnly` for display.
+
+**Security points:**
+- The economy is the single writer of profile money and entitlements.
+- Purchases follow validate, then backend, then re-validate, then an atomic commit.
+- The price is summed per currency, so duplicate price lines can't slip past the funds check.
+- Only catalog products can be sold; forged objects are rejected.
+- One purchase can be in flight per product, and each carries a `TransactionId`.
+- Money is `int64` with overflow and negative checks.
+- Requests are denied by default.
+- **Integrity:** a salted SHA-1 over a canonical string of balances, entitlements, history IDs and level. On mismatch the profile still loads, but spending and grants are frozen and the save is never re-hashed. It is documented as tamper-deterrence only; real-money sales need a server backend.
+
+**Data flow:**
+- **UI edit:** `UStageParameterViewWidget::CommitParameter` → `AModularPlayerController::RequestParameterChange` → `GameMode::EvaluateParameterChange` (→ `Economy::ValidateParameterChange`, including the Type dropdown resolving to the target item) → `Session::ApplyParameterChange` → actor → `OnParameterChanged` → views refresh.
+- **Placement:** `USpawnSystemComponent::SpawnItemAt` → `PlacementValidator` (controller) → `GameMode::EvaluatePlacement`. A refusal ends the stroke.
+- **Purchase:** `RequestPurchase` (controller) → economy → backend → `CommitPurchase` → `OnBalanceChanged` / `OnEntitlementsChanged` → views rebuild, so a purchase unlocks rows without reselecting.
+- **Gizmo moves:** unchanged. Transform is never economy-gated; the session only marks dirty from the transform change events.
+
+**Dev tools** (non-Shipping):
+- `DevResetProfile`, `DevReloadProfile`, `DevGrantCurrency`.
+- Console commands, run in PIE:
+  - `StageCraft.Shop.List`
+  - `StageCraft.Shop.Buy <ProductAssetName>`
+  - `StageCraft.Profile.Status`
+  - `StageCraft.Profile.Reset`
+  - `StageCraft.Profile.Grant <Amount> [CurrencyTag]`
+
+**Test content:**
+- `DA_Product_MovingHeadWash` (1500 Credits, grants `StageCraft.Entitlement.Item.MovingHeadWash`).
+- `DA_MovingHead_Wash_Test.RequiredEntitlement` is set to that tag. **The Wash test fixture is now locked until bought.**
+- New tags in `Config/DefaultGameplayTags.ini` (new file): that entitlement, plus `StageCraft.Entitlement.Feature.TestOptics`, which nothing sells and is kept for lock tests.
+- Starting balance: 5000 Credits (DefaultGame.ini).
+
+**Files changed**
+- New C++:
+  - `Public/Economy/` `StageEconomyTypes.h`, `StageProductData.h`, `StageUnlockCondition.h`, `StageCommerceBackend.h`, `StageProfileSaveGame.h`
+  - `Private/Economy/` `StageEconomyTypes.cpp`, `StageProductData.cpp`, `StageUnlockCondition.cpp`, `StageCommerceBackend.cpp`, `StageEconomyConsoleCommands.cpp`
+  - `Public/Subsystems/` + `Private/Subsystems/` `StageProfileSubsystem`, `StageEconomySubsystem`, `StageSessionSubsystem`
+  - `Public/Game/StageSessionTypes.h`
+- Modified C++:
+  - `Game/StageCraftGameModeBase.h/.cpp`, `Player/ModularPlayerController.h/.cpp`
+  - `Components/SpawnSystemComponent.h/.cpp` (validator)
+  - `Actors/ModularBaseActor.h/.cpp` (session registration; `GetSwappableItems` made public)
+  - `Data/BaseItemData.h/.cpp` (economy fields and validation), `Data/StageParameterTypes.h` (`bLocked`)
+  - `UI/StageParameterViewWidget.h/.cpp` (commits through the controller, decoration, rebuild on entitlement change)
+- Config: `Config/DefaultGame.ini` (StageProduct scan, profile and economy sections), `Config/DefaultGameplayTags.ini` (new).
+- Content:
+  - New: `Content/StageCraft/Shop/DA_Product_MovingHeadWash.uasset`.
+  - Modified: `Content/StageCraft/Data/DA_MovingHead_Wash_Test.uasset` (RequiredEntitlement).
+  - Re-saved with the new properties at their defaults (no value changes): `Content/StageCraft/Data/DA_MovingHead_Test.uasset`, `Content/StageCraft/Blueprints/BP_StageCraftGameMode.uasset`. During the test, the GameMode power limit was set to 1 W and restored to 0, and `ParameterEntitlements` was set on the Spot test fixture and cleared again.
+- Docs: `Rules.md` (new "Architecture — Subsystems, Data Binding, Economy Security" section), `STATE.md`, `tasks/todo.md`.
+
+**Verification**
+- **Builds (Claude), editor closed:** `ModularSceneBuilderEditor` Development, `ModularSceneBuilder` (Game) Development, and `ModularSceneBuilder` **Shipping** (proves the dev-only code compiles out). All succeeded with 0 errors and 0 warnings.
+- **Automated in-PIE test (Claude), `L_StageTest`, real subsystems, controller and HUD inspector:**
+
+  | Check | Result |
+  |---|---|
+  | New profile | 5000 Credits, no entitlements, integrity ok; product catalog `[DA_Product_MovingHeadWash]` |
+  | Ownership states | Spot `Free`, Wash `Purchasable` |
+  | Session | started; 4 items, 940 W, 114 kg in the level |
+  | Inspector Type options | `Test Moving Head Spot`, `Test Moving Head Wash (locked)` |
+  | Swap to Wash (controller, and the inspector row's own commit) | `Locked` "Test Moving Head Wash is locked. Unlock it in the shop."; item stays Spot |
+  | `CanPlaceItem(Wash)` | `Locked` |
+  | Forged product (`new_object`) / null | `UnknownProduct` / `InvalidRequest` |
+  | Buy | Success; 3500 left; entitlement owned; history 1 record (1500 paid); Wash now `Owned` |
+  | Buy again | `AlreadyOwned`; balance unchanged |
+  | After purchase | inspector rebuilt without "(locked)"; swap to Wash succeeds and back; session dirty |
+  | Parameter lock (Zoom → TestOptics on the Spot data) | `Locked`, Zoom stays 20; inspector Zoom row `bLocked` + read-only, Dimmer row unaffected; after clearing, the edit applies (20 → 27) |
+  | Funds (balance 1000, price 1500) | `InsufficientFunds` "Needs 1,500 …; you have 1,000."; still `Purchasable`; request refused, nothing granted; overdraw grant refused |
+  | Power rule (GameMode `MaxTotalPowerWatts` = 1 W, test only) | `SessionRuleViolation` "Not enough power: 940 W of 1 W in use, Test Moving Head Spot needs 470 W." |
+  | Level travel (`open L_StageTest`) | balance 3500 and entitlement kept (GameInstance); the session restarted (dirty reset to false, stats recomputed) |
+  | Reload from disk | 3500, entitlement, integrity ok, 1 purchase |
+  | Tamper: the save's balance bytes 3500 → 999999 | loads 999999, integrity **false**, purchase → `IntegrityViolation`, dev grant refused; reset restores a valid 5000 profile |
+  | Cleanup | save slot deleted, so the next PIE starts with a fresh profile; GameMode rules restored to 0; throttle restored |
+
+  - Test-script slip, not a code issue: the "new session object" check compared path names, which are identical after reloading the same map. A fresh session is shown instead by the dirty flag resetting.
+- **Not verified by Claude:** how the on-screen refusal and purchase messages look, and the flow by hand.
+- **Awaiting manual verification (Gevor), PIE:**
+  1. Select a moving head. The Type dropdown shows "Test Moving Head Wash (locked)". Choosing it shows an orange "…is locked" message and nothing changes.
+  2. Console: `StageCraft.Profile.Status`, then `StageCraft.Shop.List`, then `StageCraft.Shop.Buy DA_Product_MovingHeadWash`. A green "Purchased Moving Head Wash" appears, and the dropdown entry loses "(locked)" without reselecting.
+  3. Switch to Wash, stop PIE, play again: still owned, 3500 Credits.
+  4. `StageCraft.Profile.Reset` locks it again.
+
+**Commit:** uncommitted (working tree)
+
+**Known issues / follow-ups**
+- **No shop or wallet UI yet.** Bind `UStageEconomySubsystem::GetProducts` / `CanPurchase` / `OnPurchaseCompleted`, `UStageProfileSubsystem::OnBalanceChanged` and `AModularPlayerController::OnRequestRejected` in a shop widget and a HUD toast, then remove the interim `AddOnScreenDebugMessage` feedback.
+- **Catalog filtering:** the catalog UI still lists locked items. Use `UStageEconomySubsystem::GetItemState` for a lock badge and buy button.
+- **Networking:** decisions run on the GameMode (authority only). For multi-user editing, the controller requests become Server RPCs, and the profile/economy authority moves to a backend.
+- **Gaps in the rules:**
+  - Session limits are checked on placement only. A Type swap to a heavier or more power-hungry model is not limit-checked yet.
+  - Parameter names in lock messages show the tag (`StageCraft.Attribute.Zoom`); a display-name lookup is pending.
+- **Profile save:** on Windows it writes to `Saved/SaveGames/StageCraftProfile.sav`. Profile level has no XP system feeding it yet.
+- **Test leftovers:** `StageCraft.Entitlement.Feature.TestOptics` is a test-only tag. `DA_MovingHead_Wash_Test` is now locked by default by design; clear its `RequiredEntitlement` if that gets in the way.

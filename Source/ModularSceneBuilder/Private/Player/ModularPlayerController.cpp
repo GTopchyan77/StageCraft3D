@@ -12,6 +12,9 @@
 #include "Engine/GameInstance.h"
 #include "Engine/LocalPlayer.h"
 #include "Engine/World.h"
+#include "Economy/StageProductData.h"
+#include "Game/StageCraftGameModeBase.h"
+#include "Interaction/StageParameterInterface.h"
 #include "InputAction.h"
 #include "InputActionValue.h"
 #include "InputMappingContext.h"
@@ -20,7 +23,9 @@
 #include "ModularSceneBuilder.h"
 #include "Player/StageCameraPawn.h"
 #include "Player/StageCraftGameViewportClient.h"
+#include "Subsystems/StageEconomySubsystem.h"
 #include "Subsystems/StageItemSubsystem.h"
+#include "Subsystems/StageSessionSubsystem.h"
 
 #include UE_INLINE_GENERATED_CPP_BY_NAME(ModularPlayerController)
 
@@ -88,6 +93,13 @@ void AModularPlayerController::BeginPlay()
 
 	Selection->OnSelectionChanged.AddDynamic(this, &ThisClass::HandleSelectionChanged);
 
+	// Every spawn, including each stamp of a stroke, is decided by the GameMode through this controller.
+	SpawnSystem->PlacementValidator.BindUObject(this, &ThisClass::ValidatePlacement);
+	if (UStageEconomySubsystem* Economy = GetEconomy())
+	{
+		Economy->OnPurchaseCompleted.AddUniqueDynamic(this, &ThisClass::HandlePurchaseCompleted);
+	}
+
 	// Created after the selection binding so panels that read the current selection in NativeConstruct see a ready controller.
 	if (HUDWidgetClass)
 	{
@@ -104,6 +116,11 @@ void AModularPlayerController::EndPlay(const EEndPlayReason::Type EndPlayReason)
 	bIsNavigatingCamera = false;
 
 	Selection->OnSelectionChanged.RemoveDynamic(this, &ThisClass::HandleSelectionChanged);
+	SpawnSystem->PlacementValidator.Unbind();
+	if (UStageEconomySubsystem* Economy = GetEconomy())
+	{
+		Economy->OnPurchaseCompleted.RemoveDynamic(this, &ThisClass::HandlePurchaseCompleted);
+	}
 
 	if (HUDWidget)
 	{
@@ -450,3 +467,158 @@ bool AModularPlayerController::TryBeginGizmoDrag()
 		&& GetCursorRay(RayOrigin, RayDirection)
 		&& Gizmo->TryBeginDrag(GizmoHit, RayOrigin, RayDirection);
 }
+
+// --- Request bridge ---
+
+#define LOCTEXT_NAMESPACE "StageCraftPlayerController"
+
+AStageCraftGameModeBase* AModularPlayerController::GetStageGameMode() const
+{
+	// Null on clients in a networked session: the decision then has to go to the server (future RPC).
+	return GetWorld() ? GetWorld()->GetAuthGameMode<AStageCraftGameModeBase>() : nullptr;
+}
+
+UStageEconomySubsystem* AModularPlayerController::GetEconomy() const
+{
+	const UGameInstance* GameInstance = GetGameInstance();
+	return GameInstance ? GameInstance->GetSubsystem<UStageEconomySubsystem>() : nullptr;
+}
+
+FStageEconomyResultInfo AModularPlayerController::RequestParameterChange(UObject* Target, FGameplayTag ParameterId, const FStageParameterValue& Value)
+{
+	const AStageCraftGameModeBase* GameMode = GetStageGameMode();
+	UStageSessionSubsystem* Session = UWorld::GetSubsystem<UStageSessionSubsystem>(GetWorld());
+	if (!GameMode || !Session)
+	{
+		// Deny by default: without the rules authority there is nobody to approve the edit.
+		const FStageEconomyResultInfo Result = FStageEconomyResultInfo::Fail(EStageEconomyResult::InvalidRequest,
+			LOCTEXT("NoAuthority", "Editing needs the StageCraft game mode."));
+		ReportRejection(Result);
+		return Result;
+	}
+
+	const FStageEconomyResultInfo Verdict = GameMode->EvaluateParameterChange(this, Target, ParameterId, Value);
+	if (!Verdict.IsSuccess())
+	{
+		ReportRejection(Verdict);
+		return Verdict;
+	}
+
+	// A value the target cannot take (wrong type, read-only id) is not a rule violation, so it is
+	// returned but not reported; the panel snaps back on read-back anyway.
+	if (!Session->ApplyParameterChange(Target, ParameterId, Value))
+	{
+		return FStageEconomyResultInfo::Fail(EStageEconomyResult::InvalidRequest, LOCTEXT("NotAccepted", "The value was not accepted."));
+	}
+	return FStageEconomyResultInfo::Ok();
+}
+
+FStageEconomyResultInfo AModularPlayerController::RequestPurchase(UStageProductData* Product)
+{
+	UStageEconomySubsystem* Economy = GetEconomy();
+	const FStageEconomyResultInfo Result = Economy
+		? Economy->RequestPurchase(Product)
+		: FStageEconomyResultInfo::Fail(EStageEconomyResult::InvalidRequest, LOCTEXT("NoEconomy", "The shop is not available."));
+	if (!Result.IsSuccess())
+	{
+		ReportRejection(Result);
+	}
+	return Result;
+}
+
+void AModularPlayerController::HandlePurchaseCompleted(UStageProductData* Product, FStageEconomyResultInfo Result)
+{
+	if (!Result.IsSuccess())
+	{
+		ReportRejection(Result);
+		return;
+	}
+
+	UE_LOG(LogStageCraft, Log, TEXT("%s: purchased %s."), *GetName(), *GetNameSafe(Product));
+	// Interim feedback until a shop widget binds UStageEconomySubsystem::OnPurchaseCompleted.
+	if (GEngine && Product)
+	{
+		GEngine->AddOnScreenDebugMessage(static_cast<uint64>(GetUniqueID()) + 1, 3.f, FColor(120, 230, 140),
+			FText::Format(LOCTEXT("Purchased", "Purchased {0}"), Product->DisplayName).ToString());
+	}
+}
+
+FStageEconomyResultInfo AModularPlayerController::CanPlaceItem(const UBaseItemData* Item) const
+{
+	const AStageCraftGameModeBase* GameMode = GetStageGameMode();
+	return GameMode
+		? GameMode->EvaluatePlacement(this, Item)
+		: FStageEconomyResultInfo::Fail(EStageEconomyResult::InvalidRequest, LOCTEXT("NoAuthorityPlace", "Placement needs the StageCraft game mode."));
+}
+
+FStageEconomyResultInfo AModularPlayerController::ValidatePlacement(const UBaseItemData& Item)
+{
+	const FStageEconomyResultInfo Result = CanPlaceItem(&Item);
+	if (!Result.IsSuccess())
+	{
+		ReportRejection(Result);
+	}
+	return Result;
+}
+
+void AModularPlayerController::ReportRejection(const FStageEconomyResultInfo& Result)
+{
+	UE_LOG(LogStageCraft, Log, TEXT("%s: request refused (%s): %s"), *GetName(),
+		*UEnum::GetValueAsString(Result.Code), *Result.Message.ToString());
+
+	// Interim feedback until a HUD toast binds OnRequestRejected. One key, so repeats replace each other.
+	if (GEngine && IsLocalController())
+	{
+		GEngine->AddOnScreenDebugMessage(static_cast<uint64>(GetUniqueID()) + 1, 3.f, FColor(255, 170, 90), Result.Message.ToString());
+	}
+	OnRequestRejected.Broadcast(Result);
+}
+
+void AModularPlayerController::DecorateParameterSections(const UObject* Target, TArray<FStageParameterSection>& Sections) const
+{
+	const AStageCraftGameModeBase* GameMode = GetStageGameMode();
+	if (!Target)
+	{
+		return;
+	}
+
+	for (FStageParameterSection& Section : Sections)
+	{
+		for (FStageParameterDescriptor& Descriptor : Section.Parameters)
+		{
+			if (Descriptor.bReadOnly)
+			{
+				continue;
+			}
+
+			// Same check a commit of the current value would get, so the display never promises an edit the rules refuse.
+			const FStageEconomyResultInfo Verdict = GameMode
+				? GameMode->EvaluateParameterChange(this, Target, Descriptor.Id, Descriptor.Value)
+				: FStageEconomyResultInfo::Fail(EStageEconomyResult::InvalidRequest, FText::GetEmpty());
+			if (!Verdict.IsSuccess())
+			{
+				Descriptor.bReadOnly = true;
+				Descriptor.bLocked = Verdict.Code == EStageEconomyResult::Locked;
+				continue;
+			}
+
+			if (Descriptor.GetType() == EStageParameterType::Enum && GameMode)
+			{
+				for (int32 Option = 0; Option < Descriptor.Options.Num(); ++Option)
+				{
+					if (Option == Descriptor.Value.Integer)
+					{
+						continue;
+					}
+					const FStageEconomyResultInfo OptionVerdict = GameMode->EvaluateParameterChange(this, Target, Descriptor.Id, FStageParameterValue::MakeEnum(Option));
+					if (OptionVerdict.Code == EStageEconomyResult::Locked)
+					{
+						Descriptor.Options[Option] = FText::Format(LOCTEXT("LockedOption", "{0} (locked)"), Descriptor.Options[Option]);
+					}
+				}
+			}
+		}
+	}
+}
+
+#undef LOCTEXT_NAMESPACE

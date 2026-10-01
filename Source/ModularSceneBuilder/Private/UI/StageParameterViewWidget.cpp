@@ -8,6 +8,7 @@
 #include "Interaction/StageParameterInterface.h"
 #include "Player/ModularPlayerController.h"
 #include "TimerManager.h"
+#include "Subsystems/StageProfileSubsystem.h"
 #include "UI/StageCraftUITheme.h"
 #include "UI/StageParameterControlWidget.h"
 
@@ -29,6 +30,13 @@ void UStageParameterViewWidget::NativeConstruct()
 		}
 	}
 
+	// Buying (or losing) an entitlement changes which rows are editable, so the view rebuilds.
+	if (UStageProfileSubsystem* Profile = GetGameInstance() ? GetGameInstance()->GetSubsystem<UStageProfileSubsystem>() : nullptr)
+	{
+		Profile->OnEntitlementsChanged.AddUniqueDynamic(this, &ThisClass::HandleEntitlementsChanged);
+		BoundProfile = Profile;
+	}
+
 	if (bFollowSelection)
 	{
 		Inspect(Selection ? Selection->GetSelectedActor() : nullptr);
@@ -46,10 +54,20 @@ void UStageParameterViewWidget::NativeDestruct()
 		Selection->OnSelectionChanged.RemoveDynamic(this, &ThisClass::HandleSelectionChanged);
 	}
 	BoundSelection.Reset();
+	if (UStageProfileSubsystem* Profile = BoundProfile.Get())
+	{
+		Profile->OnEntitlementsChanged.RemoveDynamic(this, &ThisClass::HandleEntitlementsChanged);
+	}
+	BoundProfile.Reset();
 	bRebuildPending = false;
 	Inspect(nullptr);
 
 	Super::NativeDestruct();
+}
+
+void UStageParameterViewWidget::HandleEntitlementsChanged()
+{
+	RequestRebuild();
 }
 
 void UStageParameterViewWidget::HandleSelectionChanged(AActor* NewSelection, AActor* PreviousSelection)
@@ -118,7 +136,11 @@ void UStageParameterViewWidget::Rebuild()
 
 	if (UObject* Target = InspectedObject.Get())
 	{
-		const TArray<FStageParameterSection> Sections = IStageParameterInterface::Execute_GetParameterSections(Target);
+		TArray<FStageParameterSection> Sections = IStageParameterInterface::Execute_GetParameterSections(Target);
+		if (const AModularPlayerController* Controller = Cast<AModularPlayerController>(GetOwningPlayer()))
+		{
+			Controller->DecorateParameterSections(Target, Sections);
+		}
 		BuildView(*Target, Sections);
 	}
 
@@ -163,7 +185,12 @@ bool UStageParameterViewWidget::CommitParameter(FGameplayTag ParameterId, const 
 		return false;
 	}
 
-	const bool bAccepted = IStageParameterInterface::Execute_SetParameterValue(Target, ParameterId, Value);
+	// In play, edits go through the controller's request bridge (rules, ownership, session). A view
+	// owned by anything else (an editor utility widget) is outside the game's rules and writes directly.
+	AModularPlayerController* Controller = Cast<AModularPlayerController>(GetOwningPlayer());
+	const bool bAccepted = Controller
+		? Controller->RequestParameterChange(Target, ParameterId, Value).IsSuccess()
+		: IStageParameterInterface::Execute_SetParameterValue(Target, ParameterId, Value);
 
 	// Read back even when a change event already fired: an edit that clamps to the current value
 	// fires nothing, and the control must not keep showing the out-of-range number the user typed.

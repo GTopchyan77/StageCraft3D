@@ -17,8 +17,11 @@
  *  - Binds AModularBaseActor::OnParameterChanged and pushes each change into the registered
  *    controls for that id, directly (no tick, no polling), so gizmo drags, cue fades and DMX input
  *    show up the same frame.
- *  - Commits control edits through IStageParameterInterface and always reads the value back, so a
- *    clamped or rejected edit snaps the control to what the object really holds.
+ *  - Commits control edits through the owning AModularPlayerController's request bridge (GameMode
+ *    rules + ownership, then the session applies them) and always reads the value back, so a
+ *    clamped, refused or rejected edit snaps the control to what the object really holds.
+ *  - Lets the controller mark locked parameters read-only before controls are built, and rebuilds
+ *    when the player's entitlements change (a purchase unlocks rows without reselecting).
  *  - Structural changes (an invalid tag, e.g. after the item type was swapped) rebuild on the next
  *    tick, never inside the widget callback that caused them, and repeated requests coalesce.
  */
@@ -96,6 +99,9 @@ private:
 	UFUNCTION()
 	void HandleParameterChanged(class AModularBaseActor* Actor, FGameplayTag ParameterId);
 
+	UFUNCTION()
+	void HandleEntitlementsChanged();
+
 	void HandleControlCommitted(const FGameplayTag& ParameterId, const FStageParameterValue& Value);
 	void RefreshControls(const FGameplayTag& ParameterId);
 	void UnregisterControls();
@@ -104,6 +110,7 @@ private:
 	TWeakObjectPtr<class UObject> InspectedObject;
 	TWeakObjectPtr<class AModularBaseActor> BoundActor;
 	TWeakObjectPtr<class USelectionComponent> BoundSelection;
+	TWeakObjectPtr<class UStageProfileSubsystem> BoundProfile;
 
 	/** Few dozen at most, so a flat list beats a map: lookups are by linear scan per change. */
 	UPROPERTY(Transient)

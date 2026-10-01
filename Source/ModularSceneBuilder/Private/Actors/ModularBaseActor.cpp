@@ -10,6 +10,7 @@
 #include "Interaction/StageCraftCollision.h"
 #include "Materials/MaterialInterface.h"
 #include "Subsystems/StageItemSubsystem.h"
+#include "Subsystems/StageSessionSubsystem.h"
 
 #include UE_INLINE_GENERATED_CPP_BY_NAME(ModularBaseActor)
 
@@ -91,10 +92,20 @@ void AModularBaseActor::BeginPlay()
 
 	// Only the root is watched: child moves (e.g. a moving head's pan/tilt pivots) are attributes, not transform.
 	RootTransformUpdatedHandle = MeshComponent->TransformUpdated.AddUObject(this, &ThisClass::HandleRootTransformUpdated);
+
+	if (UStageSessionSubsystem* Session = UWorld::GetSubsystem<UStageSessionSubsystem>(GetWorld()))
+	{
+		Session->RegisterItem(this);
+	}
 }
 
 void AModularBaseActor::EndPlay(const EEndPlayReason::Type EndPlayReason)
 {
+	if (UStageSessionSubsystem* Session = UWorld::GetSubsystem<UStageSessionSubsystem>(GetWorld()))
+	{
+		Session->UnregisterItem(this);
+	}
+
 	MeshComponent->TransformUpdated.Remove(RootTransformUpdatedHandle);
 	RootTransformUpdatedHandle.Reset();
 
