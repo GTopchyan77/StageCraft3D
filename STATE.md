@@ -845,3 +845,130 @@ Gevor reported that the wheel sped up flying but looking around stayed fixed, so
 **Known issues / follow-ups**
 - Unlike the stock UE editor, look speed is tied to fly speed. This is intentional, at Gevor's request, and can be disabled with `bScaleLookWithFlySpeed`.
 - Working tree also holds `Content/StageCraft/Blueprints/BP_StageCameraPawn.uasset` (new BP child of `AStageCameraPawn`, all defaults) and a modified `BP_StageCraftGameMode.uasset` (`DefaultPawnClass` = `BP_StageCameraPawn`). They were saved in the editor at 17:06 and were not created by Claude. They are left **unstaged** for Gevor to review. The #15 PIE test ran with this BP pawn; its values equal the C++ defaults, so the results hold.
+
+
+---
+
+## #16 — Phase 5 Part 2 UI: shared parameter binding, dropdown rows, fader & encoder bank (2026-10-01)
+
+**What & why**
+The inspector (#9/#10) already built typed rows from `IStageParameterInterface` sections and refreshed them from `AModularBaseActor::OnParameterChanged`. The gaps against the GrandMA3-style brief were:
+- no dropdown/enum rows;
+- live updates overwrote a spin box the user was typing into or dragging (only the Text row had a focus guard);
+- structural changes rebuilt immediately, even from inside the widget that caused them;
+- no fader/encoder bar.
+
+The binding logic was also private to the inspector, so a second panel would have had to copy it.
+
+**UI architecture (all `Source/ModularSceneBuilder/.../UI/`)**
+
+```
+UStageParameterViewWidget  (abstract)       UStageParameterControlWidget  (abstract)
+  selection follow, bind target,              one parameter: descriptor, RefreshValue,
+  commit + read-back, deferred rebuild        CommitValue, focus-safe ApplyValue
+   ├─ UStageInspectorPanel   (sections+rows)   ├─ UStageParameterRowWidget  (inspector row)
+   └─ UStageFaderBankWidget  (strips)          ├─ UStageFaderWidget        (fader / toggle / color channel)
+                                               └─ UStageEncoderWidget      (painted dial)
+```
+
+- **`UStageParameterViewWidget`** (new base of every parameter panel):
+  - **Selection:** follows the owning `AModularPlayerController`'s `USelectionComponent` (`bFollowSelection`), or shows whatever `Inspect()` is given.
+  - **Live refresh:** binds `OnParameterChanged`. Each change refreshes every registered control for that id directly, with no tick or polling, so gizmo, cue, DMX and other-panel edits appear the same frame.
+  - **Commit:** `CommitParameter(Id, Value)` (BlueprintCallable) writes through the interface, then **always reads back**. An edit that clamps to the current value fires no event, but still snaps the control to the truth.
+  - **Structural changes** (invalid tag) go through `RequestRebuild()`: next tick, coalesced, never inside the triggering widget's callback.
+  - Owns `Theme` and `GetGroupColor`. Exposes `GetNumControls()` / `FindControl()`, which are used by the tests.
+  - The subclass hooks are `ClearView`, `BuildView`, `OnViewUpdated` and `OnParameterRefreshed`.
+- **`UStageParameterControlWidget`** (new base of every control):
+  - Owns the descriptor, group color, the `OnCommitted` delegate, `RefreshValue` and `CommitValue`.
+  - **Focus guard:** `ApplyValue(Value, bForce)` skips widgets for which `IsUserInteracting()` is true (keyboard focus inside, or mouse capture), so a cue or DMX frame never yanks a dragged fader or overwrites half-typed text. The value is still stored. `FinishInteraction()` re-applies it, forced, when the edit ends.
+  - `FormatValue` (shared) and `ToDisplay` / `FromDisplay` (display-scale and integer rounding).
+- **`UStageInspectorPanel`** is now a thin `BuildView` (sections and rows by type) plus header and empty state. All its UPROPERTY and BindWidget names are unchanged; `Theme` moved to the base under the same name. `WBP_StageInspectorPanel` keeps its settings.
+- **`UStageParameterRowWidget`:**
+  - **New: Enum rows** — a `ValueComboBox` (`UComboBoxString`), bound or auto-created in `EditorSlot`. It is filled from `Descriptor.Options`. Only user picks commit (`ESelectInfo::Direct` is ignored), and an open dropdown is never overwritten.
+  - **Focus guard on spin boxes:** the single, Vector, Rotator and Color spin boxes are focus-guarded. `OnValueCommitted` / `OnEndSliderMovement` call `FinishInteraction`.
+- **Parameter model (`StageParameterTypes`):**
+  - `EStageParameterType::Enum` (appended last, so serialized values stay stable).
+  - `FStageParameterValue::MakeEnum`, `FStageParameterDescriptor::Options` / `WithOptions()`.
+  - New tag `StageCraft.Param.Info.Type`.
+- **Item type selector (`AModularBaseActor`):**
+  - **Type row:** the Info section gets a **Type** dropdown when more than one catalog item has the same data class and `ItemType` (`GetSwappableItems`; the current item is always listed, even if it is outside the catalog).
+  - **Swap:** choosing a type calls `InitializeFromItemData` in place. Transform, label, fixture ID and patch are kept; `ApplyItemData` adapts meshes and the attribute set.
+  - **Rebuild:** `InitializeFromItemData` now broadcasts a rebuild (invalid tag) after BeginPlay, so every open view rebuilds.
+  - *DMX modes:* `ULightingFixtureData` has a single `DMXModeName`, so there is no mode list to offer yet (see follow-ups).
+- **`UStageFaderWidget`** (new, non-abstract): a console channel strip showing name, vertical `USlider` and readout.
+  - **Ranged numbers:** Float/Integer with a range span the display range (Dimmer 0–100 %, Gain −60–12 dB). The mouse wheel nudges by 1 % of the range (Shift: 0.1 %) and is **Handled**, so it never also changes camera fly speed.
+  - **Bool:** shown as a toggle (Mute, Polarity).
+  - **Color channel:** `SetColorComponent(0..2)` edits one channel of a Color parameter, with the bar tinted red, green or blue.
+  - Builds a default tree in `NativeOnInitialized` when the class has no designed tree. Optional BindWidget names: `NameText`, `ValueSlider`, `ValueToggle`, `ValueText`, `GroupColorStrip`.
+- **`UStageEncoderWidget`** (new, non-abstract): a painted 270° dial (ring, value arc in the group color, pointer) via `NativePaint`.
+  - Left-drag anywhere on it: right/up increases, full range = `PixelsPerFullRange` (300 px), Shift ×0.1. The drag accumulates its own value, so clamping never makes it sticky.
+  - Mouse wheel: step = descriptor `Step` or 1 % of the range (Shift ×0.1).
+  - `FinishInteraction` runs on release or capture loss. A default tree is built when needed; optional names: `NameText`, `ValueText`, `DialArea`.
+- **`UStageFaderBankWidget`** (new, non-abstract): the quick-access bar for the selection.
+  - **What it shows:** sections whose feature group is in `FeatureGroups` (default Dimmer, Color, Position, Beam, Audio, in item order, with `GroupSpacing` between groups).
+  - **Controls per parameter:** ranged numbers get faders, or encoders for `EncoderParameters` (default Pan, Tilt). Bools get toggles; Color gets three channel faders bound to the one color parameter. Read-only, text, vector and enum parameters stay in the inspector.
+  - **Header and empty state:** `TitleText` reads "FADERS | <label>"; `EmptyState` shows a hint.
+
+**Content**
+- **`/Game/StageCraft/UI/Faders/WBP_StageFaderBank`** (new, parent `UStageFaderBankWidget`):
+  - Layout: `Border_Root` (dark, 92 % opaque) → `BarColumn` → `TitleText` (amber, 9 pt), `EmptyState` (grey, 8 pt), `FaderScroll` (horizontal) → `FaderContainer`.
+  - Theme: `DA_StageCraftTheme`.
+- **`/Game/StageCraft/UI/WBP_StageCraftHUD`** rebuilt with `Inspector` (unchanged slot: top-right, −12/12, 380 × 820) plus **`FaderBank`** (bottom-left, 12/−12, auto-size).
+  - **Why rebuilt:** `ue5_add_widget_to_blueprint` ignores `user_widget_class` and silently inserts a TextBlock (plugin bug, see follow-ups).
+  - **How:** the HUD was recreated through `ue5_create_widget_blueprint` at a temporary path. `BP_StageCraftPlayerController.HUDWidgetClass` was re-pointed, then the old HUD was deleted and the new one renamed back to `WBP_StageCraftHUD`. The controller now references `/Game/StageCraft/UI/WBP_StageCraftHUD.WBP_StageCraftHUD_C`, with no redirector left.
+  - The old HUD's graph held only the default placeholder events.
+- **`/Game/StageCraft/Data/DA_MovingHead_Wash_Test`** (new): a duplicate of `DA_MovingHead_Test`, "Test Moving Head Wash", zoom 8–55° (the spot is 4–40°). It gives the Type dropdown a real choice.
+
+**Files changed**
+- **New:**
+  - `Public/UI/StageParameterViewWidget.h`, `Private/UI/StageParameterViewWidget.cpp`
+  - `Public/UI/StageParameterControlWidget.h`, `Private/UI/StageParameterControlWidget.cpp`
+  - `Public/UI/StageFaderWidget.h`, `Private/UI/StageFaderWidget.cpp`
+  - `Public/UI/StageEncoderWidget.h`, `Private/UI/StageEncoderWidget.cpp`
+  - `Public/UI/StageFaderBankWidget.h`, `Private/UI/StageFaderBankWidget.cpp`
+- **Rewritten / modified:**
+  - `Public/UI/StageInspectorPanel.h`, `Private/UI/StageInspectorPanel.cpp`
+  - `Public/UI/StageParameterRowWidget.h`, `Private/UI/StageParameterRowWidget.cpp`
+  - `Public/Data/StageParameterTypes.h`, `Private/Data/StageParameterTypes.cpp`
+  - `Public/Actors/ModularBaseActor.h`, `Private/Actors/ModularBaseActor.cpp`
+- **Content:**
+  - New: `Content/StageCraft/UI/Faders/WBP_StageFaderBank.uasset`, `Content/StageCraft/Data/DA_MovingHead_Wash_Test.uasset`
+  - Modified: `Content/StageCraft/UI/WBP_StageCraftHUD.uasset`, `Content/StageCraft/Blueprints/BP_StageCraftPlayerController.uasset`
+- `STATE.md`, `tasks/todo.md`
+
+**Verification**
+- **Builds (Claude), editor closed:**
+  - `Build.bat ModularSceneBuilderEditor Win64 Development`: Succeeded, 0 errors, 0 warnings. The first attempt failed on UHT `Units = "px"` (not a valid unit) and was fixed by removing that meta.
+  - **Game target** `Build.bat ModularSceneBuilder Win64 Development`: Succeeded, 0 errors, 0 warnings.
+- **Automated in-PIE UI test (Claude), `L_StageTest`, against the real HUD instances (`WBP_StageInspectorPanel_C`, `WBP_StageFaderBank_C`):**
+
+  | Check | Result |
+  |---|---|
+  | Select Spot 102 | Inspector 18 rows (including Type); fader bank 9 strips: Dimmer, Strobe faders, **Pan/Tilt encoders**, R/G/B channel faders, White, Zoom |
+  | Fader → fixture (`CommitValue` 0.42) | fixture 0.42, inspector row 0.42, fader 0.42 |
+  | Fixture → UI (`SetAttribute` 0.8, the cue/DMX path) | inspector row 0.8, fader 0.8 |
+  | Commit 5.0 (out of range) | fixture clamps to 1.0; fader and row read back 1.0 |
+  | Focus guard | focused Dimmer spin box keeps 100 while the fixture goes to 0.25 (row still tracks 0.25); after focus moves, it shows the live 30 |
+  | Type dropdown | options [Spot, Wash]; a row commit swaps to `DA_MovingHead_Wash_Test`. **Same frame:** old widgets, Zoom max 40 (no rebuild inside the callback). **Next tick:** a *new* Zoom fader with max 55. Swap back restores 40 |
+  | Select line array | Gain, Delay, Splay faders; Mute, Polarity toggles |
+  | Clear selection | both panels have 0 controls |
+
+  - The PIE log has no StageCraft/UMG warnings or errors during the test runs.
+  - The background CPU throttle was off for the run and restored afterwards.
+- **Not verified by Claude (it cannot see or drive the UI):** the look of the bar, actual mouse drag on faders and encoders, and the wheel being consumed over the strips.
+- **Awaiting manual verification (Gevor), PIE:**
+  1. Select a moving head. The bar appears bottom-left; drag Dimmer and R/G/B and the light changes live.
+  2. Drag the Pan/Tilt encoders (Shift = fine); the head moves.
+  3. Scroll over a fader: it nudges, and camera speed does not change.
+  4. While dragging a fader, the inspector row follows (and the reverse).
+  5. Change Type to Wash: the beam range changes and both panels rebuild.
+  6. Select the speaker: Mute and Polarity toggles work.
+
+**Commit:** uncommitted (working tree)
+
+**Known issues / follow-ups**
+- **Plugin bug (UnrealNGGMCP):** `HandleAddWidgetToBlueprint` in `Plugins/UnrealNGGMCP/Source/UnrealNGGMCP/Private/NGGWidgets.cpp` resolves types with a local `ResolveWidgetClass(TypeName)` that ignores `user_widget_class`, so `type: UserWidget` silently becomes a TextBlock. The create handler uses `NGGWidgetPriv::ResolveWidgetClass(TypeName, UserWidgetClassPath)` correctly. This was not patched (plugin code); it is a one-line fix if wanted.
+- **DMX modes:** `ULightingFixtureData` has one `DMXModeName`. A mode dropdown needs a `TArray` of modes (name + channel layout) and a per-instance mode index in the patch. The Enum row type is ready for it.
+- **Color:** the inspector Color row is still swatch + R/G/B percent; the bank gives R/G/B faders. An HSV wheel / colour picker WBP remains in 5.3.
+- **Multi-select:** the views show one object. GrandMA-style multi-fixture editing needs the selection component to hold a set and the view to fan out commits.
+- **Strip layout and style:** the default strip layout is C++-built (58 px faders, 70 px encoders, built-in colours). For designer control, create WBP subclasses of `UStageFaderWidget` / `UStageEncoderWidget` with the named widgets and assign them in `WBP_StageFaderBank` (`FaderWidgetClass` / `EncoderWidgetClass`).

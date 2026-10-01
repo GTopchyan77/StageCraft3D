@@ -5,9 +5,11 @@
 #include "Components/StaticMeshComponent.h"
 #include "Data/BaseItemData.h"
 #include "Engine/CollisionProfile.h"
+#include "Engine/GameInstance.h"
 #include "Engine/StaticMesh.h"
 #include "Interaction/StageCraftCollision.h"
 #include "Materials/MaterialInterface.h"
+#include "Subsystems/StageItemSubsystem.h"
 
 #include UE_INLINE_GENERATED_CPP_BY_NAME(ModularBaseActor)
 
@@ -36,6 +38,39 @@ void AModularBaseActor::InitializeFromItemData(UBaseItemData* InItemData)
 	{
 		ApplyItemData(*ItemData);
 		BP_OnItemDataApplied(ItemData);
+	}
+
+	// A live swap changes which sections and rows exist; views rebuild instead of refreshing rows.
+	if (HasActorBegunPlay())
+	{
+		NotifyParameterChanged(FGameplayTag());
+	}
+}
+
+void AModularBaseActor::GetSwappableItems(TArray<UBaseItemData*>& OutItems) const
+{
+	OutItems.Reset();
+	const UGameInstance* GameInstance = GetGameInstance();
+	const UStageItemSubsystem* Catalog = GameInstance ? GameInstance->GetSubsystem<UStageItemSubsystem>() : nullptr;
+	if (!ItemData || !Catalog)
+	{
+		return;
+	}
+
+	// Same data class and item type: ApplyItemData of this actor class understands every candidate,
+	// so a moving head can become another moving head but never a speaker.
+	for (UBaseItemData* Candidate : Catalog->GetCatalog())
+	{
+		if (Candidate && Candidate->GetClass() == ItemData->GetClass() && Candidate->ItemType == ItemData->ItemType)
+		{
+			OutItems.Add(Candidate);
+		}
+	}
+
+	// Level-placed instances may use an item outside the scanned catalog; it must still be listed.
+	if (!OutItems.Contains(ItemData))
+	{
+		OutItems.Insert(ItemData, 0);
 	}
 }
 
@@ -204,6 +239,20 @@ void AModularBaseActor::GatherParameterSections(TArray<FStageParameterSection>& 
 			Info.Add(StageCraftTags::Param_Info_Power, LOCTEXT("Power", "Power"), FStageParameterValue::MakeFloat(ItemData->Specs.PowerDrawWatts))
 				.Display(1.0, LOCTEXT("Watt", "W")).ReadOnly();
 		}
+
+		TArray<UBaseItemData*> Swappable;
+		GetSwappableItems(Swappable);
+		if (Swappable.Num() > 1)
+		{
+			TArray<FText> Names;
+			Names.Reserve(Swappable.Num());
+			for (const UBaseItemData* Item : Swappable)
+			{
+				Names.Add(Item->DisplayName);
+			}
+			Info.Add(StageCraftTags::Param_Info_Type, LOCTEXT("Type", "Type"), FStageParameterValue::MakeEnum(Swappable.IndexOfByKey(ItemData)))
+				.WithOptions(MoveTemp(Names));
+		}
 	}
 
 	FStageParameterSection& Transform = OutSections.Emplace_GetRef(StageCraftTags::FeatureGroup_Transform, LOCTEXT("TransformSection", "Transform"));
@@ -219,6 +268,13 @@ bool AModularBaseActor::ReadParameter(const FGameplayTag& ParameterId, FStagePar
 	{
 		OutValue = FStageParameterValue::MakeText(GetInstanceLabel());
 		return true;
+	}
+	if (ParameterId == StageCraftTags::Param_Info_Type)
+	{
+		TArray<UBaseItemData*> Swappable;
+		GetSwappableItems(Swappable);
+		OutValue = FStageParameterValue::MakeEnum(Swappable.IndexOfByKey(ItemData));
+		return Swappable.Num() > 1;
 	}
 	if (ParameterId == StageCraftTags::Param_Transform_Location)
 	{
@@ -239,6 +295,21 @@ bool AModularBaseActor::WriteParameter(const FGameplayTag& ParameterId, const FS
 	{
 		InstanceLabel = Value.Text;
 		NotifyParameterChanged(ParameterId);
+		return true;
+	}
+	if (ParameterId == StageCraftTags::Param_Info_Type && Value.Type == EStageParameterType::Enum)
+	{
+		TArray<UBaseItemData*> Swappable;
+		GetSwappableItems(Swappable);
+		if (!Swappable.IsValidIndex(Value.Integer))
+		{
+			return false;
+		}
+		// Keeps transform, label, fixture ID and patch; ApplyItemData adapts the rest (meshes, attribute set).
+		if (Swappable[Value.Integer] != ItemData)
+		{
+			InitializeFromItemData(Swappable[Value.Integer]);
+		}
 		return true;
 	}
 	// Transform writes notify through HandleRootTransformUpdated, so gizmo and inspector share one path.

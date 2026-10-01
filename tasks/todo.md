@@ -96,3 +96,13 @@ See `STATE.md` for detailed history of completed work.
 - [x] `GetLookSpeedScale()`: sqrt curve vs 1200 cm/s, clamp x0.5..x3, toggle `bScaleLookWithFlySpeed`; smoothing unchanged
 - [x] Editor build clean; in-PIE look test matches formula exactly at 4 speeds incl. both clamps
 - [ ] Feel check (Gevor): fast flight turns faster but controllable; tune exponent/clamps if needed
+
+## Phase 5 Part 2 UI: inspector binding, dropdowns, fader bank (STATE.md #16)
+- [x] `UStageParameterViewWidget` / `UStageParameterControlWidget` bases: selection follow, live refresh, commit + read-back, focus-safe refresh, deferred rebuild
+- [x] Inspector + rows on the new bases; Enum type + dropdown rows; item Type selector (swap fixture/speaker model in place)
+- [x] `UStageFaderWidget` (fader / toggle / color channel), `UStageEncoderWidget` (painted dial), `UStageFaderBankWidget` (quick-access bar)
+- [x] `WBP_StageFaderBank` + docked in `WBP_StageCraftHUD` bottom-left; `DA_MovingHead_Wash_Test`
+- [x] Editor + Game targets build clean; in-PIE two-way binding / clamp / focus / type-swap / audio test passes
+- [ ] Visual + mouse check of faders and encoders (Gevor): STATE.md #16 checklist
+- [ ] DMX mode list per fixture (data + patch), exposed through the Enum row
+- [ ] Optional: one-line fix of `HandleAddWidgetToBlueprint` (UnrealNGGMCP) to honour `user_widget_class`

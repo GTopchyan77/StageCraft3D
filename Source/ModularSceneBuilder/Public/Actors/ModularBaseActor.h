@@ -105,6 +105,12 @@ protected:
 	void NotifyParameterChanged(const FGameplayTag& ParameterId);
 
 	/**
+	 * Catalog items this instance can be switched to in place (the inspector's Type dropdown): same
+	 * data class and item type as the current ItemData, which is always included.
+	 */
+	void GetSwappableItems(TArray<class UBaseItemData*>& OutItems) const;
+
+	/**
 	 * Pushes data-driven visuals onto components. Subclasses call Super and then apply their own
 	 * fields. Must be idempotent because it runs from both InitializeFromItemData and OnConstruction.
 	 */

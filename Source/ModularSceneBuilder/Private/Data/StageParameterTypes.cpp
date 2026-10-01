@@ -60,6 +60,14 @@ FStageParameterValue FStageParameterValue::MakeText(const FText& InValue)
 	return Result;
 }
 
+FStageParameterValue FStageParameterValue::MakeEnum(int32 InOptionIndex)
+{
+	FStageParameterValue Result;
+	Result.Type = EStageParameterType::Enum;
+	Result.Integer = InOptionIndex;
+	return Result;
+}
+
 FStageParameterDescriptor& FStageParameterSection::Add(const FGameplayTag& InId, const FText& InName, const FStageParameterValue& InValue)
 {
 	FStageParameterDescriptor& Descriptor = Parameters.AddDefaulted_GetRef();
@@ -84,6 +92,7 @@ namespace StageCraftTags
 
 	UE_DEFINE_GAMEPLAY_TAG_COMMENT(Param_Info_Label,			"StageCraft.Param.Info.Label",			"User label of the placed instance.");
 	UE_DEFINE_GAMEPLAY_TAG_COMMENT(Param_Info_Model,			"StageCraft.Param.Info.Model",			"Catalog model name (read-only).");
+	UE_DEFINE_GAMEPLAY_TAG_COMMENT(Param_Info_Type,			"StageCraft.Param.Info.Type",			"Catalog item of the instance; changing it swaps the model in place.");
 	UE_DEFINE_GAMEPLAY_TAG_COMMENT(Param_Info_Weight,			"StageCraft.Param.Info.Weight",			"Weight in kg (read-only).");
 	UE_DEFINE_GAMEPLAY_TAG_COMMENT(Param_Info_Power,			"StageCraft.Param.Info.Power",			"Power draw in W (read-only).");
 	UE_DEFINE_GAMEPLAY_TAG_COMMENT(Param_Transform_Location,	"StageCraft.Param.Transform.Location",	"World location in cm.");

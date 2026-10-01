@@ -4,6 +4,7 @@
 
 #include "Blueprint/WidgetTree.h"
 #include "Components/CheckBox.h"
+#include "Components/ComboBoxString.h"
 #include "Components/EditableTextBox.h"
 #include "Components/HorizontalBoxSlot.h"
 #include "Components/Image.h"
@@ -13,29 +14,8 @@
 
 #include UE_INLINE_GENERATED_CPP_BY_NAME(StageParameterRowWidget)
 
-#define LOCTEXT_NAMESPACE "StageCraftParameterRow"
-
-namespace
+void UStageParameterRowWidget::OnInitializeControl()
 {
-	FText FormatNumber(double Value, int32 FractionalDigits)
-	{
-		FNumberFormattingOptions Options;
-		Options.MinimumFractionalDigits = FractionalDigits;
-		Options.MaximumFractionalDigits = FractionalDigits;
-		return FText::AsNumber(Value, &Options);
-	}
-
-	FText WithUnits(const FText& Value, const FText& Units)
-	{
-		return Units.IsEmpty() ? Value : FText::Format(LOCTEXT("ValueWithUnits", "{0} {1}"), Value, Units);
-	}
-}
-
-void UStageParameterRowWidget::InitializeRow(const FStageParameterDescriptor& InDescriptor, const FLinearColor& InGroupColor)
-{
-	Descriptor = InDescriptor;
-	TGuardValue<bool> Guard(bSuppressCommit, true);
-
 	if (LabelText)
 	{
 		LabelText->SetText(Descriptor.DisplayName);
@@ -46,7 +26,7 @@ void UStageParameterRowWidget::InitializeRow(const FStageParameterDescriptor& In
 	}
 	if (GroupColorStrip)
 	{
-		GroupColorStrip->SetColorAndOpacity(InGroupColor);
+		GroupColorStrip->SetColorAndOpacity(GroupColor);
 	}
 
 	const bool bEditable = !Descriptor.bReadOnly;
@@ -69,38 +49,29 @@ void UStageParameterRowWidget::InitializeRow(const FStageParameterDescriptor& In
 			ValueSpinBox->SetIsEnabled(bEditable);
 			ValueSpinBox->OnValueChanged.AddUniqueDynamic(this, &ThisClass::HandleSpinValueChanged);
 			ValueSpinBox->OnValueCommitted.AddUniqueDynamic(this, &ThisClass::HandleSpinValueCommitted);
+			ValueSpinBox->OnEndSliderMovement.AddUniqueDynamic(this, &ThisClass::HandleSpinEndSliderMovement);
 		}
 		break;
 
 	case EStageParameterType::Vector:
 	case EStageParameterType::Rotator:
-		for (USpinBox* Spin : { SpinX.Get(), SpinY.Get(), SpinZ.Get() })
-		{
-			if (Spin)
-			{
-				ConfigureSpinBox(*Spin, /*bUseRange*/ false);
-				Spin->SetIsEnabled(bEditable);
-				Spin->OnValueChanged.AddUniqueDynamic(this, &ThisClass::HandleComponentSpinChanged);
-				Spin->OnValueCommitted.AddUniqueDynamic(this, &ThisClass::HandleComponentSpinCommitted);
-			}
-		}
-		break;
-
 	case EStageParameterType::Color:
-		// Interim editor: R/G/B in percent. A color wheel replaces this by calling CommitValue.
 		for (USpinBox* Spin : { SpinX.Get(), SpinY.Get(), SpinZ.Get() })
 		{
 			if (Spin)
 			{
-				Spin->SetMinFractionalDigits(0);
-				Spin->SetMaxFractionalDigits(1);
-				Spin->SetMinValue(0.f);
-				Spin->SetMaxValue(100.f);
-				Spin->SetMinSliderValue(0.f);
-				Spin->SetMaxSliderValue(100.f);
+				if (Descriptor.GetType() == EStageParameterType::Color)
+				{
+					ConfigurePercentSpinBox(*Spin);
+				}
+				else
+				{
+					ConfigureSpinBox(*Spin, /*bUseRange*/ false);
+				}
 				Spin->SetIsEnabled(bEditable);
 				Spin->OnValueChanged.AddUniqueDynamic(this, &ThisClass::HandleComponentSpinChanged);
 				Spin->OnValueCommitted.AddUniqueDynamic(this, &ThisClass::HandleComponentSpinCommitted);
+				Spin->OnEndSliderMovement.AddUniqueDynamic(this, &ThisClass::HandleSpinEndSliderMovement);
 			}
 		}
 		break;
@@ -121,12 +92,19 @@ void UStageParameterRowWidget::InitializeRow(const FStageParameterDescriptor& In
 		}
 		break;
 
-	default:
+	case EStageParameterType::Enum:
+		if (ValueComboBox)
+		{
+			ValueComboBox->ClearOptions();
+			for (const FText& Option : Descriptor.Options)
+			{
+				ValueComboBox->AddOption(Option.ToString());
+			}
+			ValueComboBox->SetIsEnabled(bEditable && Descriptor.Options.Num() > 1);
+			ValueComboBox->OnSelectionChanged.AddUniqueDynamic(this, &ThisClass::HandleComboSelectionChanged);
+		}
 		break;
 	}
-
-	BP_OnRowInitialized(Descriptor, InGroupColor);
-	RefreshValue(Descriptor.Value);
 }
 
 USpinBox* UStageParameterRowWidget::CreateSpinBox(const TCHAR* Name)
@@ -158,6 +136,7 @@ bool UStageParameterRowWidget::HasEditor() const
 	case EStageParameterType::Color:	return SpinX || SpinY || SpinZ;
 	case EStageParameterType::Bool:		return ValueCheckBox != nullptr;
 	case EStageParameterType::Text:		return ValueTextBox != nullptr;
+	case EStageParameterType::Enum:		return ValueComboBox != nullptr;
 	default:							return false;
 	}
 }
@@ -201,7 +180,9 @@ void UStageParameterRowWidget::CreateMissingEditors()
 		AddToEditorSlot(*ValueTextBox, /*bFill*/ true);
 		break;
 
-	default:
+	case EStageParameterType::Enum:
+		ValueComboBox = WidgetTree->ConstructWidget<UComboBoxString>(UComboBoxString::StaticClass(), TEXT("ValueComboBox"));
+		AddToEditorSlot(*ValueComboBox, /*bFill*/ true);
 		break;
 	}
 }
@@ -234,37 +215,53 @@ void UStageParameterRowWidget::ConfigureSpinBox(USpinBox& SpinBox, bool bUseRang
 	}
 }
 
-void UStageParameterRowWidget::SetSpinValue(USpinBox* SpinBox, double StoredValue)
+void UStageParameterRowWidget::ConfigurePercentSpinBox(USpinBox& SpinBox) const
 {
-	if (SpinBox)
+	SpinBox.SetMinFractionalDigits(0);
+	SpinBox.SetMaxFractionalDigits(1);
+	SpinBox.SetMinValue(0.f);
+	SpinBox.SetMaxValue(100.f);
+	SpinBox.SetMinSliderValue(0.f);
+	SpinBox.SetMaxSliderValue(100.f);
+}
+
+void UStageParameterRowWidget::SetSpinValue(USpinBox* SpinBox, double DisplayValue, bool bForce)
+{
+	if (SpinBox && (bForce || !IsUserInteracting(SpinBox)))
 	{
-		SpinBox->SetValue(static_cast<float>(StoredValue * Descriptor.DisplayScale));
+		SpinBox->SetValue(static_cast<float>(DisplayValue));
 	}
 }
 
-void UStageParameterRowWidget::RefreshValue(const FStageParameterValue& InValue)
+void UStageParameterRowWidget::ApplyValue(const FStageParameterValue& InValue, bool bForce)
 {
-	Descriptor.Value = InValue;
-	TGuardValue<bool> Guard(bSuppressCommit, true);
+	const double Scale = Descriptor.DisplayScale;
 
 	switch (InValue.Type)
 	{
 	case EStageParameterType::Float:
-		SetSpinValue(ValueSpinBox, InValue.Float);
-		break;
 	case EStageParameterType::Integer:
-		SetSpinValue(ValueSpinBox, InValue.Integer);
+		SetSpinValue(ValueSpinBox, ToDisplay(InValue), bForce);
 		break;
 	case EStageParameterType::Vector:
-		SetSpinValue(SpinX, InValue.Vector.X);
-		SetSpinValue(SpinY, InValue.Vector.Y);
-		SetSpinValue(SpinZ, InValue.Vector.Z);
+		SetSpinValue(SpinX, InValue.Vector.X * Scale, bForce);
+		SetSpinValue(SpinY, InValue.Vector.Y * Scale, bForce);
+		SetSpinValue(SpinZ, InValue.Vector.Z * Scale, bForce);
 		break;
 	case EStageParameterType::Rotator:
 		// Displayed as roll / pitch / yaw around X / Y / Z, matching the gizmo's rings.
-		SetSpinValue(SpinX, InValue.Rotator.Roll);
-		SetSpinValue(SpinY, InValue.Rotator.Pitch);
-		SetSpinValue(SpinZ, InValue.Rotator.Yaw);
+		SetSpinValue(SpinX, InValue.Rotator.Roll * Scale, bForce);
+		SetSpinValue(SpinY, InValue.Rotator.Pitch * Scale, bForce);
+		SetSpinValue(SpinZ, InValue.Rotator.Yaw * Scale, bForce);
+		break;
+	case EStageParameterType::Color:
+		if (ColorSwatch)
+		{
+			ColorSwatch->SetColorAndOpacity(FLinearColor(InValue.Color.R, InValue.Color.G, InValue.Color.B, 1.f));
+		}
+		SetSpinValue(SpinX, InValue.Color.R * 100.0, bForce);
+		SetSpinValue(SpinY, InValue.Color.G * 100.0, bForce);
+		SetSpinValue(SpinZ, InValue.Color.B * 100.0, bForce);
 		break;
 	case EStageParameterType::Bool:
 		if (ValueCheckBox)
@@ -273,19 +270,17 @@ void UStageParameterRowWidget::RefreshValue(const FStageParameterValue& InValue)
 		}
 		break;
 	case EStageParameterType::Text:
-		if (ValueTextBox && !ValueTextBox->HasKeyboardFocus())
+		if (ValueTextBox && (bForce || !IsUserInteracting(ValueTextBox)))
 		{
 			ValueTextBox->SetText(InValue.Text);
 		}
 		break;
-	case EStageParameterType::Color:
-		if (ColorSwatch)
+	case EStageParameterType::Enum:
+		// An open dropdown is left alone; the selection it is about to make wins.
+		if (ValueComboBox && (bForce || !ValueComboBox->IsOpen()) && ValueComboBox->GetSelectedIndex() != InValue.Integer)
 		{
-			ColorSwatch->SetColorAndOpacity(FLinearColor(InValue.Color.R, InValue.Color.G, InValue.Color.B, 1.f));
+			ValueComboBox->SetSelectedIndex(InValue.Integer);
 		}
-		if (SpinX) { SpinX->SetValue(InValue.Color.R * 100.f); }
-		if (SpinY) { SpinY->SetValue(InValue.Color.G * 100.f); }
-		if (SpinZ) { SpinZ->SetValue(InValue.Color.B * 100.f); }
 		break;
 	}
 
@@ -293,30 +288,22 @@ void UStageParameterRowWidget::RefreshValue(const FStageParameterValue& InValue)
 	{
 		ValueText->SetText(FormatValue(Descriptor, InValue));
 	}
-
-	BP_OnValueRefreshed(InValue);
-}
-
-void UStageParameterRowWidget::CommitValue(const FStageParameterValue& InValue)
-{
-	if (bSuppressCommit || Descriptor.bReadOnly)
-	{
-		return;
-	}
-	OnCommitted.ExecuteIfBound(Descriptor.Id, InValue);
 }
 
 void UStageParameterRowWidget::HandleSpinValueChanged(float InValue)
 {
-	const double Stored = InValue / Descriptor.DisplayScale;
-	CommitValue(Descriptor.GetType() == EStageParameterType::Integer
-		? FStageParameterValue::MakeInteger(FMath::RoundToInt(Stored))
-		: FStageParameterValue::MakeFloat(Stored));
+	CommitValue(FromDisplay(InValue));
 }
 
 void UStageParameterRowWidget::HandleSpinValueCommitted(float InValue, ETextCommit::Type CommitMethod)
 {
 	HandleSpinValueChanged(InValue);
+	FinishInteraction();
+}
+
+void UStageParameterRowWidget::HandleSpinEndSliderMovement(float InValue)
+{
+	FinishInteraction();
 }
 
 void UStageParameterRowWidget::HandleComponentSpinChanged(float InValue)
@@ -327,14 +314,16 @@ void UStageParameterRowWidget::HandleComponentSpinChanged(float InValue)
 void UStageParameterRowWidget::HandleComponentSpinCommitted(float InValue, ETextCommit::Type CommitMethod)
 {
 	CommitComponents();
+	FinishInteraction();
 }
 
 void UStageParameterRowWidget::CommitComponents()
 {
 	// Unbound component boxes keep the last known value, so a row may show only some axes.
-	auto Read = [this](const USpinBox* Spin, double Fallback)
+	const double Scale = Descriptor.DisplayScale != 0.0 ? Descriptor.DisplayScale : 1.0;
+	auto Read = [Scale](const USpinBox* Spin, double Fallback)
 	{
-		return Spin ? Spin->GetValue() / Descriptor.DisplayScale : Fallback;
+		return Spin ? Spin->GetValue() / Scale : Fallback;
 	};
 
 	if (Descriptor.GetType() == EStageParameterType::Vector)
@@ -365,32 +354,15 @@ void UStageParameterRowWidget::HandleTextCommitted(const FText& InText, ETextCom
 	if (CommitMethod != ETextCommit::OnCleared)
 	{
 		CommitValue(FStageParameterValue::MakeText(InText));
+		FinishInteraction();
 	}
 }
 
-FText UStageParameterRowWidget::FormatValue(const FStageParameterDescriptor& InDescriptor, const FStageParameterValue& InValue)
+void UStageParameterRowWidget::HandleComboSelectionChanged(FString SelectedItem, ESelectInfo::Type SelectionType)
 {
-	const double Scale = InDescriptor.DisplayScale;
-	switch (InValue.Type)
+	// Direct = set from code (ApplyValue); only user picks are edits.
+	if (SelectionType != ESelectInfo::Direct && ValueComboBox)
 	{
-	case EStageParameterType::Float:
-		return WithUnits(FormatNumber(InValue.Float * Scale, 1), InDescriptor.Units);
-	case EStageParameterType::Integer:
-		return WithUnits(FText::AsNumber(InValue.Integer), InDescriptor.Units);
-	case EStageParameterType::Bool:
-		return InValue.bBool ? LOCTEXT("On", "On") : LOCTEXT("Off", "Off");
-	case EStageParameterType::Vector:
-		return WithUnits(FText::Format(LOCTEXT("Vector", "({0}, {1}, {2})"),
-			FormatNumber(InValue.Vector.X * Scale, 0), FormatNumber(InValue.Vector.Y * Scale, 0), FormatNumber(InValue.Vector.Z * Scale, 0)), InDescriptor.Units);
-	case EStageParameterType::Rotator:
-		return WithUnits(FText::Format(LOCTEXT("Rotator", "({0}, {1}, {2})"),
-			FormatNumber(InValue.Rotator.Roll, 1), FormatNumber(InValue.Rotator.Pitch, 1), FormatNumber(InValue.Rotator.Yaw, 1)), InDescriptor.Units);
-	case EStageParameterType::Color:
-		return FText::FromString(InValue.Color.ToFColor(/*bSRGB*/ true).ToHex().Left(6));
-	case EStageParameterType::Text:
-	default:
-		return InValue.Text;
+		CommitValue(FStageParameterValue::MakeEnum(ValueComboBox->GetSelectedIndex()));
 	}
 }
-
-#undef LOCTEXT_NAMESPACE

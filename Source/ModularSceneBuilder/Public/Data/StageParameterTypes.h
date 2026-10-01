@@ -27,6 +27,8 @@ enum class EStageParameterType : uint8
 	Vector,
 	Rotator,
 	Text,
+	/** One of FStageParameterDescriptor::Options, stored as an index in FStageParameterValue::Integer. Appended last to keep serialized values stable. */
+	Enum,
 };
 
 /** Tagged union of every value a parameter can hold. Only the member matching Type is meaningful. */
@@ -66,6 +68,7 @@ struct MODULARSCENEBUILDER_API FStageParameterValue
 	static FStageParameterValue MakeVector(const FVector& InValue);
 	static FStageParameterValue MakeRotator(const FRotator& InValue);
 	static FStageParameterValue MakeText(const FText& InValue);
+	static FStageParameterValue MakeEnum(int32 InOptionIndex);
 };
 
 /** One inspector row: identity, type, current value and how to present/limit it. */
@@ -104,12 +107,17 @@ struct MODULARSCENEBUILDER_API FStageParameterDescriptor
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Parameter")
 	bool bReadOnly = false;
 
+	/** Choices of an Enum parameter, in index order (the inspector shows them as a dropdown). */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Parameter")
+	TArray<FText> Options;
+
 	EStageParameterType GetType() const { return Value.Type; }
 	bool HasRange() const { return Min < Max; }
 
 	FStageParameterDescriptor& Range(double InMin, double InMax) { Min = InMin; Max = InMax; return *this; }
 	FStageParameterDescriptor& Display(double InScale, const FText& InUnits, double InStep = 0.0) { DisplayScale = InScale; Units = InUnits; Step = InStep; return *this; }
 	FStageParameterDescriptor& ReadOnly() { bReadOnly = true; return *this; }
+	FStageParameterDescriptor& WithOptions(TArray<FText> InOptions) { Options = MoveTemp(InOptions); return *this; }
 };
 
 /** A titled group of rows. FeatureGroup drives the section color strip (GrandMA-style feature groups). */
@@ -151,6 +159,7 @@ namespace StageCraftTags
 	// Edit-only parameters.
 	MODULARSCENEBUILDER_API UE_DECLARE_GAMEPLAY_TAG_EXTERN(Param_Info_Label);
 	MODULARSCENEBUILDER_API UE_DECLARE_GAMEPLAY_TAG_EXTERN(Param_Info_Model);
+	MODULARSCENEBUILDER_API UE_DECLARE_GAMEPLAY_TAG_EXTERN(Param_Info_Type);
 	MODULARSCENEBUILDER_API UE_DECLARE_GAMEPLAY_TAG_EXTERN(Param_Info_Weight);
 	MODULARSCENEBUILDER_API UE_DECLARE_GAMEPLAY_TAG_EXTERN(Param_Info_Power);
 	MODULARSCENEBUILDER_API UE_DECLARE_GAMEPLAY_TAG_EXTERN(Param_Transform_Location);

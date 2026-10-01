@@ -3,11 +3,8 @@
 #pragma once
 
 #include "CoreMinimal.h"
-#include "Blueprint/UserWidget.h"
-#include "Data/StageParameterTypes.h"
+#include "UI/StageParameterControlWidget.h"
 #include "StageParameterRowWidget.generated.h"
-
-DECLARE_DELEGATE_TwoParams(FOnStageParameterRowCommitted, const FGameplayTag& /*ParameterId*/, const FStageParameterValue& /*Value*/);
 
 /**
  * One inspector row. The C++ base does all the wiring; a Widget Blueprint only supplies the
@@ -15,44 +12,27 @@ DECLARE_DELEGATE_TwoParams(FOnStageParameterRowCommitted, const FGameplayTag& /*
  * automatically (ranges, display units, live drag, read-only state):
  *
  *   LabelText, UnitsText, ValueText (read-only/value display), GroupColorStrip,
- *   ValueSpinBox (Float/Integer), SpinX/SpinY/SpinZ (Vector/Rotator), ValueCheckBox (Bool),
- *   ValueTextBox (Text), ColorSwatch (Color preview).
+ *   ValueSpinBox (Float/Integer), SpinX/SpinY/SpinZ (Vector/Rotator/Color), ValueCheckBox (Bool),
+ *   ValueTextBox (Text), ValueComboBox (Enum dropdown), ColorSwatch (Color preview).
  *
  * Any editor the Blueprint does not bind itself is created at runtime inside EditorSlot (a
  * Horizontal Box is ideal), so one generic row Blueprint serves every parameter type. Color
- * gets a swatch plus R/G/B percent boxes until a dedicated color picker calls CommitValue.
- * When an editable editor exists, ValueText is collapsed; read-only rows show only ValueText.
+ * gets a swatch plus R/G/B percent boxes. When an editable editor exists, ValueText is
+ * collapsed; read-only rows show only ValueText.
+ *
+ * Live values never fight the user (see UStageParameterControlWidget): a box being typed into or
+ * dragged keeps the user's value until the edit ends, then settles on the object's real value.
  */
 UCLASS(Abstract, Blueprintable)
-class MODULARSCENEBUILDER_API UStageParameterRowWidget : public UUserWidget
+class MODULARSCENEBUILDER_API UStageParameterRowWidget : public UStageParameterControlWidget
 {
 	GENERATED_BODY()
 
-public:
-	void InitializeRow(const FStageParameterDescriptor& InDescriptor, const FLinearColor& InGroupColor);
-
-	/** Pushes a new value from the inspected object into the row without echoing it back as a commit. */
-	void RefreshValue(const FStageParameterValue& InValue);
-
-	/** Sends a user edit to the inspected object. Values are in stored units (not display units). */
-	UFUNCTION(BlueprintCallable, Category = "StageCraft|Inspector")
-	void CommitValue(const FStageParameterValue& InValue);
-
-	UFUNCTION(BlueprintPure, Category = "StageCraft|Inspector")
-	const FStageParameterDescriptor& GetDescriptor() const { return Descriptor; }
-
-	/** Human-readable value in display units, e.g. "75.0 %", "(120, 0, 350) cm". */
-	UFUNCTION(BlueprintPure, Category = "StageCraft|Inspector")
-	static FText FormatValue(const FStageParameterDescriptor& InDescriptor, const FStageParameterValue& InValue);
-
-	FOnStageParameterRowCommitted OnCommitted;
-
 protected:
-	UFUNCTION(BlueprintImplementableEvent, Category = "StageCraft|Inspector", meta = (DisplayName = "On Row Initialized"))
-	void BP_OnRowInitialized(const FStageParameterDescriptor& InDescriptor, FLinearColor GroupColor);
-
-	UFUNCTION(BlueprintImplementableEvent, Category = "StageCraft|Inspector", meta = (DisplayName = "On Value Refreshed"))
-	void BP_OnValueRefreshed(const FStageParameterValue& InValue);
+	//~ Begin UStageParameterControlWidget Interface
+	virtual void OnInitializeControl() override;
+	virtual void ApplyValue(const FStageParameterValue& InValue, bool bForce) override;
+	//~ End UStageParameterControlWidget Interface
 
 	UPROPERTY(BlueprintReadOnly, Category = "StageCraft|Inspector", meta = (BindWidgetOptional))
 	TObjectPtr<class UTextBlock> LabelText = nullptr;
@@ -84,6 +64,10 @@ protected:
 	UPROPERTY(BlueprintReadOnly, Category = "StageCraft|Inspector", meta = (BindWidgetOptional))
 	TObjectPtr<class UEditableTextBox> ValueTextBox = nullptr;
 
+	/** Enum parameters: filled from the descriptor's Options. */
+	UPROPERTY(BlueprintReadOnly, Category = "StageCraft|Inspector", meta = (BindWidgetOptional))
+	TObjectPtr<class UComboBoxString> ValueComboBox = nullptr;
+
 	UPROPERTY(BlueprintReadOnly, Category = "StageCraft|Inspector", meta = (BindWidgetOptional))
 	TObjectPtr<class UImage> ColorSwatch = nullptr;
 
@@ -97,7 +81,8 @@ private:
 	void AddToEditorSlot(class UWidget& Widget, bool bFill);
 	bool HasEditor() const;
 	void ConfigureSpinBox(class USpinBox& SpinBox, bool bUseRange) const;
-	void SetSpinValue(class USpinBox* SpinBox, double StoredValue);
+	void ConfigurePercentSpinBox(class USpinBox& SpinBox) const;
+	void SetSpinValue(class USpinBox* SpinBox, double DisplayValue, bool bForce);
 	void CommitComponents();
 
 	UFUNCTION()
@@ -105,6 +90,9 @@ private:
 
 	UFUNCTION()
 	void HandleSpinValueCommitted(float InValue, ETextCommit::Type CommitMethod);
+
+	UFUNCTION()
+	void HandleSpinEndSliderMovement(float InValue);
 
 	UFUNCTION()
 	void HandleComponentSpinChanged(float InValue);
@@ -118,8 +106,6 @@ private:
 	UFUNCTION()
 	void HandleTextCommitted(const FText& InText, ETextCommit::Type CommitMethod);
 
-	FStageParameterDescriptor Descriptor;
-
-	/** Set while the row writes widget values itself, so widget change events are not sent back as edits. */
-	bool bSuppressCommit = false;
+	UFUNCTION()
+	void HandleComboSelectionChanged(FString SelectedItem, ESelectInfo::Type SelectionType);
 };
