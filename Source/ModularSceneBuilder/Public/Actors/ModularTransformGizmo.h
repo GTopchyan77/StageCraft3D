@@ -22,8 +22,10 @@ DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FOnGizmoModeChanged, EGizmoMode, New
  * along with the target via attachment (absolute rotation/scale keep the handles world-aligned)
  * and knows nothing about input: the controller supplies cursor rays for TryBeginDrag/UpdateDrag.
  *
- * Handles block only the StageCraft "Gizmo" trace channel, so they never interfere with
- * placement, selection or deletion traces. Arrows use engine BasicShapes; rotation rings are
+ * Handles render on top of all scene geometry (HandleMaterial has depth testing disabled) and are
+ * picked with TraceHandles, which tests only the handle components, so a gizmo buried inside another
+ * mesh stays both visible and grabbable. Handles block only the StageCraft "Gizmo" trace channel, so
+ * they never interfere with placement, selection or deletion traces. Arrows use engine BasicShapes; rotation rings are
  * generated procedurally because the engine ships no runtime torus mesh.
  *
  * Ticks only while attached, to keep a constant on-screen size.
@@ -74,6 +76,12 @@ public:
 	UFUNCTION(BlueprintPure, Category = "StageCraft|Gizmo")
 	bool IsDragging() const { return DragAxisIndex != INDEX_NONE; }
 
+	/**
+	 * Closest visible handle hit by the world-space ray. Ignores all other geometry on purpose: the
+	 * handles draw on top of everything, so anything the user can see must also be clickable.
+	 */
+	bool TraceHandles(const FVector& RayOrigin, const FVector& RayDirection, struct FHitResult& OutHit) const;
+
 protected:
 	//~ Begin AActor Interface
 	virtual void BeginPlay() override;
@@ -98,7 +106,11 @@ protected:
 	UPROPERTY(EditDefaultsOnly, Category = "StageCraft|Gizmo|Appearance")
 	TObjectPtr<class UStaticMesh> ArrowHeadMesh = nullptr;
 
-	/** Must expose a "GizmoColor" vector parameter (the engine's GizmoMaterial does). */
+	/**
+	 * Must expose a "GizmoColor" vector parameter. The default, /Game/StageCraft/Gizmo/M_GizmoHandle, is
+	 * unlit translucent with Disable Depth Test, so handles are never hidden by meshes. Any replacement
+	 * needs the same settings to keep that guarantee. Falls back to the engine GizmoMaterial (depth tested).
+	 */
 	UPROPERTY(EditDefaultsOnly, Category = "StageCraft|Gizmo|Appearance")
 	TObjectPtr<class UMaterialInterface> HandleMaterial = nullptr;
 

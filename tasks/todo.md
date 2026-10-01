@@ -63,10 +63,13 @@ See `STATE.md` for detailed history of completed work.
 - [ ] Output Log: `Fixture N registered (...), patch U.AAA.` for each placed fixture, with no patch overlaps
 
 ## Backlog
-- [ ] Camera navigation (orbit/pan/zoom); mouse look is disabled so LMB/RMB don't fight the camera
+- [x] RMB fly navigation (mouse look, WASD/QE, wheel speed) with click-vs-drag arbitration (STATE.md #11)
+- [ ] PIE verification (Gevor): STATE.md #11 checklist (look/fly/speed, RMB click-delete vs. drag, buried gizmo visible and draggable, fog)
+- [ ] Orbit (Alt+LMB) / pan (MMB) / focus-on-selection (F)
 - [ ] Hover highlight via IInteractableInterface::OnHoverBegin/End (needs a cheap throttled cursor trace)
 - [ ] Gizmo handle hover highlight
 - [ ] Place onto an existing item with a modifier (plain LMB on an item now selects it)
-- [ ] Local-space gizmo option; gizmo drawn on top of geometry (needs a custom no-depth-test material)
+- [x] Gizmo drawn on top of geometry: `M_GizmoHandle` (Disable Depth Test) + `TraceHandles` picking (STATE.md #11)
+- [ ] Local-space gizmo option
 - [ ] Undo/redo, hooking OnItemSpawned / OnItemDeleted / gizmo drag end
 - [ ] Overlay materials for hover/selected (content)

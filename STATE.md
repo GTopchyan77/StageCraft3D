@@ -554,3 +554,76 @@ This entry makes the Phase 5 core (#9) visible and usable in PIE: a working Gran
 - **Placeholder meshes:** everything uses 1 m engine shapes, so the moving head is about 2 m tall and the truss is a solid cube. Swap in real meshes (or add a mesh scale to `UBaseItemData`).
 - **VC++ redistributable:** the editor warns that it is outdated (14.44 installed, 14.50 wanted). Install `D:\UE_5.8\Engine\Extras\Redist\en-us\vc_redist.x64.exe`. The warning dialog blocks unattended editor launches until dismissed.
 - **No test script:** the test assets were created directly through MCP. There is no Python regeneration script; re-create them from the values above if needed.
+
+
+---
+
+## #11 — Editor-style RMB fly camera & always-on-top transform gizmo (2026-10-01)
+
+**What & why**
+Two UX problems made the tool feel unlike a professional editor. The camera could not be steered: look input was disabled so clicks would not swing the view, and the `ADefaultPawn` legacy bindings moved the camera on WASD at all times. The gizmo was also hidden whenever the selected item sat inside another mesh, because the engine `GizmoMaterial` is depth-tested.
+
+- **RMB fly navigation (Unreal Editor style), in `AModularPlayerController`:**
+  - **Press:** every RMB press starts navigating, because click vs. hold is only known on release. The controller saves the cursor position, hides the cursor and switches to `FInputModeGameOnly`. Slate then delivers raw high-precision mouse deltas with the cursor locked, so the view keeps turning past the screen edge. It also adds `CameraNavigationMappingContext` (priority 1) with `bIgnoreAllPressedKeysUntilRelease = false`, so a key held before RMB (W, then RMB) flies immediately.
+  - **While held:**
+    - Mouse turns the view: yaw, plus pitch clamped to ±89°. `LookSensitivity` (0.2°/count) is applied directly to the control rotation; engine look input stays ignored.
+    - W/S move along the full view direction, A/D move right/left, E/Q move along world up/down. All of these go through `Pawn->AddMovementInput`.
+    - The mouse wheel scales `FlySpeed` by `FlySpeedStepFactor` (1.25 per notch), clamped to 50–20000 cm/s. `ApplyFlySpeed` writes it to the pawn's `UFloatingPawnMovement`, with acceleration and deceleration at 8× speed for a snappy start and stop.
+  - **Release:** removes the fly context, restores `FInputModeGameAndUI` and the cursor, and moves the cursor back to its saved position.
+  - **Click vs. drag:** a release counts as a *click* (the old RMB behaviour: delete the item under the cursor, or else deselect and disarm) only if all of these hold:
+    - mouse travel ≤ `SecondaryClickDragThreshold` (4 raw counts);
+    - no fly key was used;
+    - the button was held ≤ `MaxSecondaryClickDuration` (0.35 s). Holding longer never deletes, so deletion stays deliberate.
+  - **No conflicts:**
+    - LMB is ignored while navigating, because the cursor is hidden and frozen.
+    - RMB is ignored during a gizmo drag or a placement stroke.
+    - RMB on a UMG panel is consumed by UMG, as before.
+    - `EndPlay` ends any active navigation.
+  - **Input slots:**
+    - `DeleteAction` is renamed to **`SecondaryAction`**. No Blueprint had it assigned (checked `BP_StageCraftPlayerController`).
+    - New slots: `CameraNavigationMappingContext`, `CameraLookAction` (Axis2D, Mouse2D), `CameraMoveAction` (Axis3D; Swizzle/Negate modifiers map W/S/A/D/Q/E) and `CameraSpeedAction` (Axis1D, MouseWheelAxis). When the slots are empty, `BuildDefaultCameraMapping` builds all of them in code.
+- **`AStageCameraPawn`** (new, `ADefaultPawn` subclass) is now the `DefaultPawnClass` of `AStageCraftGameModeBase`; `BP_StageCraftGameMode` inherits it.
+  - `bAddDefaultMovementBindings = false`, so WASD/QE do nothing unless RMB is held.
+  - Collision is off on the sphere and the mesh, so the camera flies through trusses and decks like the editor viewport.
+- **Always-on-top gizmo:**
+  - **New material `/Game/StageCraft/Gizmo/M_GizmoHandle`:**
+    - Surface, Translucent, Unlit, Two Sided, **Disable Depth Test**.
+    - Translucency pass **After DOF**, Responsive AA on.
+    - Vertex fog, per-pixel fog and cloud fog off, so the `L_StageTest` volumetric fog does not wash it out.
+    - VectorParameter `GizmoColor` drives Emissive; Opacity is 1.
+  - **Gizmo material and render settings:**
+    - The gizmo constructor loads `M_GizmoHandle` and falls back to the engine `GizmoMaterial` (depth-tested) only if the asset is missing. The existing per-axis DMIs (`GizmoColor`, highlight colour) work unchanged.
+    - Handles get translucent sort priority 1000, so they draw over other translucency such as beams.
+    - Handles are also kept out of decals, indirect lighting, distance-field lighting, ray tracing, reflection captures and sky captures.
+  - **Selectable when buried:** the new `AModularTransformGizmo::TraceHandles(RayOrigin, RayDir, OutHit)` line-traces each active, collision-enabled handle component directly with `LineTraceComponent` and keeps the closest hit. A handle inside another mesh is therefore always grabbable, independent of other actors' collision responses. `GetGizmoHitUnderCursor` now uses it, and the controller's `GizmoTraceChannel` property is removed (unused). Handles still block only the Gizmo channel for any world trace.
+
+**Files changed**
+- `Source/ModularSceneBuilder/Public/Player/ModularPlayerController.h`, `Private/Player/ModularPlayerController.cpp`: RMB fly navigation, `SecondaryAction`, camera input slots and defaults, `IsNavigatingCamera()`, gizmo picking through `TraceHandles`
+- `Source/ModularSceneBuilder/Public/Player/StageCameraPawn.h`, `Private/Player/StageCameraPawn.cpp`: new
+- `Source/ModularSceneBuilder/Private/Game/StageCraftGameModeBase.cpp`: `DefaultPawnClass = AStageCameraPawn`
+- `Source/ModularSceneBuilder/Public/Actors/ModularTransformGizmo.h`, `Private/Actors/ModularTransformGizmo.cpp`: `TraceHandles`, on-top material default with fallback, handle render flags
+- `Content/StageCraft/Gizmo/M_GizmoHandle.uasset`: new. It was created headlessly by Claude with a Python commandlet (`UnrealEditor-Cmd -run=pythonscript -EnablePlugins=PythonScriptPlugin`), because the MCP bridge was taken by another project's editor.
+- `STATE.md`, `tasks/todo.md`
+
+**Verification**
+- **Build:** `Build.bat ModularSceneBuilderEditor Win64 Development` Succeeded (Claude), with 0 errors and 0 warnings in project sources. The Game target was not rebuilt.
+- **Headless commandlet check (Claude), 0 errors / 0 warnings:**
+  - The gizmo CDO resolves `HandleMaterial = /Game/StageCraft/Gizmo/M_GizmoHandle`.
+  - `StageCraftGameModeBase` and `BP_StageCraftGameMode` both use `StageCameraPawn`, with `bAddDefaultMovementBindings = False`.
+  - The material reports `disable_depth_test = True`, Translucent, Unlit, and the `GizmoColor` parameter.
+  - The first run, which created the asset, logged the expected one-time "CDO Constructor: Failed to find M_GizmoHandle".
+- **Runtime behaviour is implemented, awaiting manual verification (Gevor).** PIE checklist:
+  1. Hold RMB and move the mouse. The view turns, the cursor is hidden, and it is not stopped at the screen edge. On release the cursor reappears where it was.
+  2. Hold RMB with W/A/S/D/Q/E: the camera flies and passes through geometry. The wheel while holding RMB changes speed. Without RMB, WASD does nothing.
+  3. A quick RMB click on an item deletes it; on empty space it deselects and disarms. RMB with a drag or a hold over 0.35 s never deletes.
+  4. LMB select, place and gizmo drag behave as before, with no camera movement.
+  5. Move a selected item halfway into the floor or a truss. Arrows and rings stay fully visible, and dragging a buried handle works.
+  6. The gizmo stays crisp and correctly coloured inside the volumetric fog in `L_StageTest`.
+
+**Commit:** uncommitted (working tree)
+
+**Known issues / follow-ups**
+- Depth-test-free handles draw their far side through their near side. The colour is flat, so this reads as a solid shape, but overlapping axes in rotate mode all show (as in the UE editor). Hover highlight is still in the backlog.
+- If the window loses focus mid-navigation, recovery relies on Enhanced Input flushing the RMB release. Check alt-tab during RMB in PIE.
+- No orbit (Alt+LMB) or pan (MMB) yet. Only fly mode was in scope.
+- Rebuild the Game target before a packaged test.

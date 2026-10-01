@@ -28,6 +28,12 @@ namespace ModularTransformGizmo
 
 	const FName GizmoColorParameter(TEXT("GizmoColor"));
 
+	// Far enough to reach the gizmo from any camera in a stage-sized level (10 km).
+	constexpr double HandleTraceDistance = 1.0e6;
+
+	// Draw after any other translucency (beams, haze cards), which would otherwise paint over the handles.
+	constexpr int32 HandleTranslucencySortPriority = 1000;
+
 	void ConfigureHandle(UPrimitiveComponent* Handle)
 	{
 		// Visible only to gizmo traces; placement/selection/deletion traces pass straight through.
@@ -36,7 +42,16 @@ namespace ModularTransformGizmo
 		Handle->SetCollisionResponseToAllChannels(ECR_Ignore);
 		Handle->SetCollisionResponseToChannel(StageCraftCollision::GizmoChannel, ECR_Block);
 		Handle->SetGenerateOverlapEvents(false);
+
+		// The handles are an overlay, not scene content: keep them out of every lighting and capture path.
 		Handle->SetCastShadow(false);
+		Handle->SetReceivesDecals(false);
+		Handle->SetAffectDynamicIndirectLighting(false);
+		Handle->SetAffectDistanceFieldLighting(false);
+		Handle->SetVisibleInRayTracing(false);
+		Handle->bVisibleInReflectionCaptures = false;
+		Handle->bVisibleInRealTimeSkyCaptures = false;
+		Handle->SetTranslucentSortPriority(HandleTranslucencySortPriority);
 	}
 
 	void SetHandleActive(UPrimitiveComponent* Handle, bool bActive)
@@ -56,10 +71,16 @@ AModularTransformGizmo::AModularTransformGizmo()
 
 	static ConstructorHelpers::FObjectFinder<UStaticMesh> CylinderMesh(TEXT("/Engine/BasicShapes/Cylinder.Cylinder"));
 	static ConstructorHelpers::FObjectFinder<UStaticMesh> ConeMesh(TEXT("/Engine/BasicShapes/Cone.Cone"));
-	static ConstructorHelpers::FObjectFinder<UMaterialInterface> GizmoMaterial(TEXT("/Engine/EngineMaterials/GizmoMaterial.GizmoMaterial"));
+	static ConstructorHelpers::FObjectFinder<UMaterialInterface> OnTopMaterial(TEXT("/Game/StageCraft/Gizmo/M_GizmoHandle.M_GizmoHandle"));
 	ArrowShaftMesh = CylinderMesh.Object;
 	ArrowHeadMesh = ConeMesh.Object;
-	HandleMaterial = GizmoMaterial.Object;
+	HandleMaterial = OnTopMaterial.Object;
+	if (!HandleMaterial)
+	{
+		// Keeps the gizmo usable if the project asset is missing, at the cost of being hidden by geometry.
+		static ConstructorHelpers::FObjectFinder<UMaterialInterface> EngineGizmoMaterial(TEXT("/Engine/EngineMaterials/GizmoMaterial.GizmoMaterial"));
+		HandleMaterial = EngineGizmoMaterial.Object;
+	}
 
 	GizmoRoot = CreateDefaultSubobject<USceneComponent>(TEXT("GizmoRoot"));
 	GizmoRoot->SetMobility(EComponentMobility::Movable);
@@ -394,6 +415,50 @@ int32 AModularTransformGizmo::FindHandleAxis(const UPrimitiveComponent* Componen
 		}
 	}
 	return INDEX_NONE;
+}
+
+bool AModularTransformGizmo::TraceHandles(const FVector& RayOrigin, const FVector& RayDirection, FHitResult& OutHit) const
+{
+	if (!IsValid(Target) || IsHidden())
+	{
+		return false;
+	}
+
+	const FVector RayEnd = RayOrigin + RayDirection * ModularTransformGizmo::HandleTraceDistance;
+	// Simple collision is enough: shafts/heads have engine convex hulls and the rings use complex-as-simple.
+	const FCollisionQueryParams Params(SCENE_QUERY_STAT(GizmoHandleTrace), /*bTraceComplex*/ false);
+
+	bool bHit = false;
+	double ClosestDistanceSquared = TNumericLimits<double>::Max();
+
+	auto TestHandle = [&](UPrimitiveComponent* Handle)
+	{
+		// FindHandleAxis rejects handles of the inactive mode; the collision check rejects hidden ones.
+		if (!Handle || !Handle->IsQueryCollisionEnabled() || FindHandleAxis(Handle) == INDEX_NONE)
+		{
+			return;
+		}
+
+		FHitResult Hit;
+		if (Handle->LineTraceComponent(Hit, RayOrigin, RayEnd, Params))
+		{
+			const double DistanceSquared = FVector::DistSquared(RayOrigin, Hit.ImpactPoint);
+			if (DistanceSquared < ClosestDistanceSquared)
+			{
+				ClosestDistanceSquared = DistanceSquared;
+				OutHit = Hit;
+				bHit = true;
+			}
+		}
+	};
+
+	for (int32 Axis = 0; Axis < 3; ++Axis)
+	{
+		TestHandle(ShaftComponents[Axis]);
+		TestHandle(HeadComponents[Axis]);
+		TestHandle(RingComponents[Axis]);
+	}
+	return bHit;
 }
 
 bool AModularTransformGizmo::IntersectDragPlane(const FVector& RayOrigin, const FVector& RayDirection, FVector& OutPoint) const
