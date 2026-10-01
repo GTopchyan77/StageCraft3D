@@ -106,3 +106,12 @@ See `STATE.md` for detailed history of completed work.
 - [ ] Visual + mouse check of faders and encoders (Gevor): STATE.md #16 checklist
 - [ ] DMX mode list per fixture (data + patch), exposed through the Enum row
 - [ ] Optional: one-line fix of `HandleAddWidgetToBlueprint` (UnrealNGGMCP) to honour `user_widget_class`
+
+## Pan/Tilt encoder usability (STATE.md #17)
+- [x] Vertical delta drag past the drag threshold, no value jump; high-precision mouse with the cursor restored on release
+- [x] Shift fine mode (`FineScale` 0.2) for drag and wheel; clamped accumulator with no dead zone
+- [x] Value popup ("Pan: 45.0°", "fine"), escapes the bar's clipping; hover/active highlight; `ResizeUpDown` cursor; eased needle
+- [x] Double-click `ResetToDefault()` via the new descriptor `DefaultValue` (fixture defaults)
+- [x] Editor + Game builds clean; in-PIE synthetic-input test passes on Pan and Tilt
+- [ ] Feel and visual check with a physical mouse (Gevor): STATE.md #17 checklist
+- [ ] Optional: share drag/popup/reset with `UStageFaderWidget`

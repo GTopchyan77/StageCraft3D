@@ -111,6 +111,13 @@ struct MODULARSCENEBUILDER_API FStageParameterDescriptor
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Parameter")
 	TArray<FText> Options;
 
+	/** Value a quick reset (double-click on an encoder) returns to. Only meaningful when bHasDefault. */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Parameter")
+	FStageParameterValue DefaultValue;
+
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Parameter")
+	bool bHasDefault = false;
+
 	EStageParameterType GetType() const { return Value.Type; }
 	bool HasRange() const { return Min < Max; }
 
@@ -118,6 +125,7 @@ struct MODULARSCENEBUILDER_API FStageParameterDescriptor
 	FStageParameterDescriptor& Display(double InScale, const FText& InUnits, double InStep = 0.0) { DisplayScale = InScale; Units = InUnits; Step = InStep; return *this; }
 	FStageParameterDescriptor& ReadOnly() { bReadOnly = true; return *this; }
 	FStageParameterDescriptor& WithOptions(TArray<FText> InOptions) { Options = MoveTemp(InOptions); return *this; }
+	FStageParameterDescriptor& WithDefault(const FStageParameterValue& InDefault) { DefaultValue = InDefault; bHasDefault = true; return *this; }
 };
 
 /** A titled group of rows. FeatureGroup drives the section color strip (GrandMA-style feature groups). */

@@ -964,7 +964,7 @@ UStageParameterViewWidget  (abstract)       UStageParameterControlWidget  (abstr
   5. Change Type to Wash: the beam range changes and both panels rebuild.
   6. Select the speaker: Mute and Polarity toggles work.
 
-**Commit:** uncommitted (working tree)
+**Commit:** 1ed42e8
 
 **Known issues / follow-ups**
 - **Plugin bug (UnrealNGGMCP):** `HandleAddWidgetToBlueprint` in `Plugins/UnrealNGGMCP/Source/UnrealNGGMCP/Private/NGGWidgets.cpp` resolves types with a local `ResolveWidgetClass(TypeName)` that ignores `user_widget_class`, so `type: UserWidget` silently becomes a TextBlock. The create handler uses `NGGWidgetPriv::ResolveWidgetClass(TypeName, UserWidgetClassPath)` correctly. This was not patched (plugin code); it is a one-line fix if wanted.
@@ -972,3 +972,85 @@ UStageParameterViewWidget  (abstract)       UStageParameterControlWidget  (abstr
 - **Color:** the inspector Color row is still swatch + R/G/B percent; the bank gives R/G/B faders. An HSV wheel / colour picker WBP remains in 5.3.
 - **Multi-select:** the views show one object. GrandMA-style multi-fixture editing needs the selection component to hold a set and the view to fan out commits.
 - **Strip layout and style:** the default strip layout is C++-built (58 px faders, 70 px encoders, built-in colours). For designer control, create WBP subclasses of `UStageFaderWidget` / `UStageEncoderWidget` with the named widgets and assign them in `WBP_StageFaderBank` (`FaderWidgetClass` / `EncoderWidgetClass`).
+
+## #17 — Pan/Tilt encoder usability: vertical delta drag, fine mode, value popup, double-click reset (2026-10-01)
+
+**Request:** make the Pan/Tilt dials easy to use with a mouse while keeping their look. Requirements:
+- free-form vertical drag;
+- Shift for 5x finer control;
+- a live value popup ("Pan: 45°") and hover/active feedback;
+- double-click to reset;
+- smooth easing, safe clamping, and no value or cursor jump when a drag starts.
+
+**What changed (`UStageEncoderWidget`)**
+- **Drag:**
+  - Press anywhere on the strip and drag vertically (up increases).
+  - `PixelsPerFullRange` (300 px) covers the whole range. On a Pan of -270..270 that is 1.8° per px.
+  - Only the Y delta counts, so the arc no longer needs tracing and where you press does not matter.
+- **Click vs drag:** a press stays a click until it travels past Slate's drag-trigger distance (5 px), and that travel is not applied, so starting a drag never jumps the value. Then:
+  - The encoder switches to the high-precision mouse: the cursor is hidden and raw deltas mean screen edges never stop a drag.
+  - On release the cursor reappears exactly where it vanished. The anchor is taken from the OS cursor, so it lands on the exact pixel.
+  - Switching to high precision needs a re-capture, which reports our own capture as lost. A one-shot `bIgnoreNextCaptureLost` guard keeps the drag alive.
+- **Fine mode:** `FineScale` = 0.2 (5x finer) while Shift is held, for both drag and wheel. Toggling Shift mid-drag causes no jump, because the drag is delta-based.
+- **Clamping:** the drag accumulator is clamped on every step, so pushing past a limit builds no dead zone and the first move back responds at once. Integer parameters round only on commit. The value the object holds is always read back (`FinishInteraction`).
+- **Double-click:** `ResetToDefault()` (BlueprintCallable). It uses the new descriptor default (`FStageParameterDescriptor::DefaultValue` / `bHasDefault` / `WithDefault()`), which fixtures fill from `ULightingFixtureData::GetAttributeDefault`: Pan/Tilt home at 0, Zoom at its widest. Without a default it falls back to 0 clamped into range.
+- **Feedback:**
+  - Hovering brightens the ring and arc.
+  - An active drag adds a group-colour halo and a thicker arc and pointer.
+  - The cursor shows `ResizeUpDown` over editable encoders.
+  - The needle eases toward the value using `1 - e^(-k·dt)` with `NeedleSmoothing` = 28, so cue and DMX jumps read as motion. The readout text is always exact.
+- **Value popup:**
+  - It shows "Pan: 45.0°", plus "fine" while Shift is held. It is painted above the dial in a rounded box with a group-colour outline.
+  - It appears while dragging and for `PopupLingerTime` (0.9 s) after a release, wheel step or reset.
+  - It clips to its own zone without intersecting the parent, so the fader bank's scroll box does not cut it off. It is drawn 100 layers up so neighbouring strips do not cover it.
+  - New queries: `IsDragging()`, `IsPopupVisible()`, `GetPopupText()`.
+- **Wheel during a drag:** it is consumed and ignored, so it cannot fight the drag accumulator.
+- **Degree unit:** now "°" attached to the number (`45.0°`) everywhere: Pan/Tilt/Zoom, speaker Splay and the inspector rotation row. `FormatValue` adds no space for "°" only.
+
+**Files changed**
+- `Source/ModularSceneBuilder/Public/UI/StageEncoderWidget.h`, `Private/UI/StageEncoderWidget.cpp`
+- `Source/ModularSceneBuilder/Public/Data/StageParameterTypes.h` (descriptor default)
+- `Source/ModularSceneBuilder/Private/UI/StageParameterControlWidget.cpp` (degree formatting)
+- `Source/ModularSceneBuilder/Private/Actors/LightingFixtureActor.cpp` (defaults, °), `AudioEquipmentActor.cpp` (°), `ModularBaseActor.cpp` (°)
+- `STATE.md`, `tasks/todo.md`
+
+**Verification**
+- **Builds (Claude), editor closed:** `ModularSceneBuilderEditor` and **Game target** `ModularSceneBuilder` (Win64 Development) both succeeded with 0 errors and 0 warnings.
+- **Automated in-PIE input test (Claude):**
+  - Setup: `L_StageTest`, Spot 102 selected, real HUD encoder instances.
+  - Method: synthetic pointer events were sent through `FSlateApplication` (the real routing path: hit test, capture, high-precision mouse, double-click), using a temporary console command.
+  - Cleanup: the harness file was deleted afterwards and both targets were rebuilt without it.
+  - Results for Pan (-270..270):
+
+  | Step | Result |
+  |---|---|
+  | Press | value unchanged, mouse captured, not dragging |
+  | Move 2 px (below the 5 px threshold) | value unchanged, not dragging |
+  | Move 6 px more (crosses the threshold) | dragging, **value unchanged (no jump)**, capture kept, high-precision on, popup on |
+  | Drag up 30 px | +54.0° (1.8°/px) |
+  | Shift + up 10 px | +3.6° (5x finer) |
+  | Down 5000 px | clamps at -270 |
+  | Up 10 px right after | -252 (no dead zone) |
+  | Release | not dragging, capture released, high-precision off, popup lingers |
+  | Click without moving | value unchanged |
+  | Double-click | resets to 0.0° |
+  | Wheel +1 / Shift + wheel +1 | +5.4° / +1.08° |
+  | Popup text | `Pan: 54.0°` etc.; still visible a few frames after the input, gone after ~3 s |
+
+  - Tilt (-135..135) gave matching results: 0.9°/px, 0.18°/px with Shift, clamp, reset to 0.
+  - The first run returned the cursor 1 px off, because the anchor was rounded from the fractional synthetic position. The anchor now comes from the OS cursor and was rebuilt, but that build was not re-tested.
+  - Log: no StageCraft/UMG warnings or errors. The background CPU throttle was off for the run and restored to True afterwards.
+- **Not verified by Claude:** the look of the popup and highlights (the screen grab came back black) and the feel with a physical mouse.
+- **Awaiting manual verification (Gevor), PIE:**
+  1. Hover a Pan/Tilt dial: the ring brightens and the cursor shows up/down arrows.
+  2. Drag vertically anywhere on the strip: the head moves smoothly, the cursor hides, and on release it reappears where it started.
+  3. Hold Shift mid-drag: the speed drops 5x with no jump, and the popup says "fine".
+  4. The popup "Pan: …°" shows above the dial and is not cut off by the bar.
+  5. Double-click: the head returns home (0°).
+  6. Drag past a limit and reverse: it responds at once.
+
+**Commit:** uncommitted (working tree)
+
+**Known issues / follow-ups**
+- Faders (`UStageFaderWidget`) still use the stock slider drag. The same delta drag, popup and reset could move into the control base if wanted.
+- The popup sits above the strip. That suits the bar at the bottom of the screen; a bar docked at the top would need a "below" placement option.

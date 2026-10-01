@@ -437,12 +437,13 @@ void ALightingFixtureActor::GatherParameterSections(TArray<FStageParameterSectio
 		float Max = 1.f;
 		if (Fixture->GetAttributeRange(Attribute, Min, Max))
 		{
-			Section.Add(Attribute, Name, FStageParameterValue::MakeFloat(GetAttribute(Attribute))).Range(Min, Max).Display(DisplayScale, Units);
+			Section.Add(Attribute, Name, FStageParameterValue::MakeFloat(GetAttribute(Attribute))).Range(Min, Max).Display(DisplayScale, Units)
+				.WithDefault(FStageParameterValue::MakeFloat(Fixture->GetAttributeDefault(Attribute)));
 		}
 	};
 
 	const FText Percent = LOCTEXT("Percent", "%");
-	const FText Degrees = LOCTEXT("Degrees", "deg");
+	const FText Degrees = LOCTEXT("Degrees", "°");
 
 	FStageParameterSection& Dimmer = OutSections.Emplace_GetRef(StageCraftTags::FeatureGroup_Dimmer, LOCTEXT("DimmerSection", "Dimmer"));
 	AddAttribute(Dimmer, StageCraftTags::Attribute_Dimmer, LOCTEXT("Dim", "Dimmer"), 100.0, Percent);

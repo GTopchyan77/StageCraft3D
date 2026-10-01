@@ -20,7 +20,14 @@ namespace StageParameterControl
 
 	FText WithUnits(const FText& Value, const FText& Units)
 	{
-		return Units.IsEmpty() ? Value : FText::Format(LOCTEXT("ValueWithUnits", "{0} {1}"), Value, Units);
+		if (Units.IsEmpty())
+		{
+			return Value;
+		}
+		// Degrees attach to the number ("45.0°"); every other unit is spaced ("75.0 %", "12 dB").
+		return Units.ToString() == TEXT("°")
+			? FText::Format(LOCTEXT("ValueWithDegrees", "{0}{1}"), Value, Units)
+			: FText::Format(LOCTEXT("ValueWithUnits", "{0} {1}"), Value, Units);
 	}
 }
 

@@ -259,7 +259,7 @@ void AModularBaseActor::GatherParameterSections(TArray<FStageParameterSection>& 
 	Transform.Add(StageCraftTags::Param_Transform_Location, LOCTEXT("Location", "Location"), FStageParameterValue::MakeVector(GetActorLocation()))
 		.Display(1.0, LOCTEXT("Cm", "cm"), 1.0);
 	Transform.Add(StageCraftTags::Param_Transform_Rotation, LOCTEXT("Rotation", "Rotation"), FStageParameterValue::MakeRotator(GetActorRotation()))
-		.Display(1.0, LOCTEXT("Deg", "deg"), 1.0);
+		.Display(1.0, LOCTEXT("Deg", "°"), 1.0);
 }
 
 bool AModularBaseActor::ReadParameter(const FGameplayTag& ParameterId, FStageParameterValue& OutValue) const

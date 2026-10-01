@@ -54,7 +54,7 @@ void AAudioEquipmentActor::GatherParameterSections(TArray<FStageParameterSection
 
 	if (Audio->SupportsSplay())
 	{
-		Section.Add(StageCraftTags::Param_Audio_Splay, LOCTEXT("Splay", "Splay"), FStageParameterValue::MakeFloat(SplayAngle)).Range(0.0, Audio->MaxSplayAngle).Display(1.0, LOCTEXT("Deg", "deg"), 0.5);
+		Section.Add(StageCraftTags::Param_Audio_Splay, LOCTEXT("Splay", "Splay"), FStageParameterValue::MakeFloat(SplayAngle)).Range(0.0, Audio->MaxSplayAngle).Display(1.0, LOCTEXT("Deg", "°"), 0.5);
 	}
 }
 
