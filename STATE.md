@@ -796,7 +796,7 @@ Gevor reported that scrolling did not change camera speed, or did not seem to ap
   2. Hold RMB and fly with W, A/D, E/Q while scrolling: all directions speed up and slow down together and smoothly.
   3. Scroll over the inspector panel: the panel scrolls and the camera speed does not change.
 
-**Commit:** uncommitted (working tree, together with #12 and #13)
+**Commit:** `364686c` (together with #12 and #13)
 
 **Known issues / follow-ups**
 - Bind `OnFlySpeedChanged` in `WBP_StageCraftHUD` for a proper speed indicator, then remove the debug-message readout.
@@ -840,7 +840,7 @@ Gevor reported that the wheel sped up flying but looking around stayed fixed, so
   - The PIE log shows no StageCraft warnings or errors.
 - **Awaiting manual verification (Gevor), PIE:** scroll up until the readout shows about ×2–3 and check that hold-RMB looking is clearly faster but still controllable. Scroll down to about 1–3 m/s and check that look is finer for precise aiming. If the link is too strong or too weak, tune `LookSpeedScaleExponent` (0 = off, 1 = proportional) or the clamps in a BP subclass of `AStageCameraPawn`.
 
-**Commit:** uncommitted (working tree, together with #12–#14)
+**Commit:** `364686c` (together with #12–#14)
 
 **Known issues / follow-ups**
 - Unlike the stock UE editor, look speed is tied to fly speed. This is intentional, at Gevor's request, and can be disabled with `bScaleLookWithFlySpeed`.
@@ -1176,7 +1176,7 @@ UStageParameterViewWidget  (abstract)       UStageParameterControlWidget  (abstr
   3. Switch to Wash, stop PIE, play again: still owned, 3500 Credits.
   4. `StageCraft.Profile.Reset` locks it again.
 
-**Commit:** uncommitted (working tree)
+**Commit:** `9fa6948`
 
 **Known issues / follow-ups**
 - **No shop or wallet UI yet.** Bind `UStageEconomySubsystem::GetProducts` / `CanPurchase` / `OnPurchaseCompleted`, `UStageProfileSubsystem::OnBalanceChanged` and `AModularPlayerController::OnRequestRejected` in a shop widget and a HUD toast, then remove the interim `AddOnScreenDebugMessage` feedback.
@@ -1187,3 +1187,32 @@ UStageParameterViewWidget  (abstract)       UStageParameterControlWidget  (abstr
   - Parameter names in lock messages show the tag (`StageCraft.Attribute.Zoom`); a display-name lookup is pending.
 - **Profile save:** on Windows it writes to `Saved/SaveGames/StageCraftProfile.sav`. Profile level has no XP system feeding it yet.
 - **Test leftovers:** `StageCraft.Entitlement.Feature.TestOptics` is a test-only tag. `DA_MovingHead_Wash_Test` is now locked by default by design; clear its `RequiredEntitlement` if that gets in the way.
+
+---
+
+## #19 — Rules.md: Senior++ UE Production Engineering Standard added; CLAUDE.md now loads Rules.md (2026-10-02)
+
+**Request:** add Gevor's "Unreal Engine Production Engineering Standard" (48 sections) to Rules.md so it covers everything, and always refer to it when writing code.
+
+**What changed and why**
+- **Rules.md:** the standard was added as a new `## Unreal Engine Production Engineering Standard` section, between "Architecture" and "Workflow Orchestration".
+  - Its headings were demoted (`###` sections, `####` subsections) to fit the file's hierarchy. The text is otherwise verbatim.
+  - A short preamble says the project-specific rules take precedence where they are more specific.
+- **Conflicts reconciled:**
+  - **Forward declarations.** The standard's "forward declare wherever possible" (§24, §25, §38) now names this project's form: inline elaborated type specifiers, never a block of `class X;` lines at the top of a header.
+  - **Blueprint vs C++.** The section said "default to Blueprints". It now follows §15: Blueprints for UI, designer configuration and orchestration; C++ for rules, networking, save/load, the economy, performance and complex state.
+  - **Pointers.** "Use `TObjectPtr<>` over raw pointers" now follows §9: `TObjectPtr`, `TWeakObjectPtr`, soft pointers, and raw pointers only for locals.
+  - **UPROPERTY exposure.** "Always use UPROPERTY/UFUNCTION" now asks for the narrowest specifiers that fit (§11).
+  - **§9 example** uses `TObjectPtr<class UObjectType> Object = nullptr;` to match Code Standards.
+- **CLAUDE.md (new):** contains only `@Rules.md`. Before this, no CLAUDE.md existed, so Rules.md was never loaded into Claude sessions automatically. It now is, every session.
+- **STATE.md hygiene:** entries #14, #15 and #18 still said "uncommitted". They now show their commits (`364686c`, `364686c`, `9fa6948`).
+
+**Files changed:** `Rules.md`, `CLAUDE.md` (new), `STATE.md`. Outside the repo: Claude project memory `rules-md-engineering-standard.md`.
+
+**Verification:** documentation only, so there is no build or PIE test. Checked that Rules.md keeps CRLF line endings and `git diff --check` is clean.
+
+**Commit:** uncommitted (working tree)
+
+**Known issues / follow-ups**
+- The "MCP Tools — Use Them" section still lists the older UnrealClaude tool names (`get_level_actors`, `blueprint_modify`, …). The connected server is `ue5-ngg` (`ue5_*` tools). It was not changed because it was out of scope.
+- Rules.md grew from 335 to about 2,000 lines, and it now loads into every session's context.
