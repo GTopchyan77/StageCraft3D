@@ -130,3 +130,14 @@ See `STATE.md` for detailed history of completed work.
 - [ ] Lock badges / Unlock buttons in the catalog
 - [ ] Session-limit check on Type swap; parameter display names in lock messages
 - [ ] Server-authoritative commerce backend + RPC requests when multi-user/marketplace starts
+
+## Phase 6 — Dockable workspace, detachable viewport, preferences (design: `Docs/ADR/0001-dockable-workspace.md`, STATE.md #20)
+- [x] Architecture designed; engine facts verified in UE 5.8 source (ADR §2)
+- [x] Gevor approved the ADR decisions (Standalone/packaged-only workspace, PIE keeps the current HUD; UMG panels in Slate dock tabs; existing view-binding pattern)
+- [x] Phase 0 spike on `spike/dockable-workspace`: GO (ADR §8, STATE.md #21). Verified by Claude in Standalone Game: docked viewport + panels, float to monitor 3, cursor picking docked and floated, unknown tab on restore, reset, level travel, saved resolution untouched; +0.32 ms GPU at 1600x900
+- [ ] Gevor, by mouse in Standalone Game (Play > Standalone Game): drag-split/re-dock/tear-off tabs, move the floating viewport between monitors, RMB fly + gizmo + Delete in a floated viewport, Alt+Enter/F11 with a floated viewport, OS-close a floating viewport window, resize the main window
+- [ ] Phase 1 shell. Already in the spike: `UStageCraftGameEngine`, `UStageWorkspaceSubsystem`, `FStageWorkspaceShell`, `StageCraft.Panel.*` tags, Viewport/Inspector/Fader panels, default layout, controller register/unregister. Remaining: `UStagePanelDefinition` assets (replace the interim config classes, async load), Window menu, viewport-overlay HUD layer, hide the viewport tab's close button, floating window titles, fullscreen routing
+- [ ] Phase 2 layouts: `FStageLayoutStore`, Save As/Load/Reset, restore on launch, monitor clamping, automation tests
+- [ ] Phase 3 preferences: `UStageCraftUserSettings`, Preferences panel (General, Layout, Viewport, Graphics)
+- [ ] Phase 4 key bindings: IMCs to assets with player-mappable keys, `UEnhancedInputUserSettings`, Keyboard page
+- [ ] Phase 5 polish: Slate style from `UStageCraftUITheme`, overlay DPI rule, per-monitor fullscreen viewport

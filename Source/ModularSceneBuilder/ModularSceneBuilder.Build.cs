@@ -10,7 +10,8 @@ public class ModularSceneBuilder : ModuleRules
 	
 		PublicDependencyModuleNames.AddRange(new string[] { "Core", "CoreUObject", "Engine", "InputCore", "EnhancedInput", "GameplayTags", "UMG" });
 
-		PrivateDependencyModuleNames.AddRange(new string[] { "ProceduralMeshComponent", "Slate", "SlateCore" });
+		// ApplicationCore: FDisplayMetrics (monitor work areas) for the dockable workspace.
+		PrivateDependencyModuleNames.AddRange(new string[] { "ProceduralMeshComponent", "Slate", "SlateCore", "ApplicationCore" });
 
 		// DMX Engine (Art-Net/sACN) is deliberately not a dependency of this module. A separate
 		// module that depends on "DMXProtocol" implements UStageDMXBridge (see STATE.md #9).

@@ -1216,3 +1216,114 @@ UStageParameterViewWidget  (abstract)       UStageParameterControlWidget  (abstr
 **Known issues / follow-ups**
 - The "MCP Tools — Use Them" section still lists the older UnrealClaude tool names (`get_level_actors`, `blueprint_modify`, …). The connected server is `ue5-ngg` (`ue5_*` tools). It was not changed because it was out of scope.
 - Rules.md grew from 335 to about 2,000 lines, and it now loads into every session's context.
+
+---
+
+## #20 — Design: dockable multi-window workspace, detachable viewport, preferences (2026-10-02)
+
+**Request:** design the architecture, core manager classes and implementation steps for an Unreal-Editor-style workspace:
+- dockable, splittable, tabbed and floating panels;
+- a 3D viewport that can be detached to another monitor;
+- a preferences system (layouts, UI scale, window configuration, key bindings, viewport and graphics);
+- serialized named layouts.
+
+This entry covers the design only. No code was written.
+
+**What was produced**
+- `Docs/ADR/0001-dockable-workspace.md`. It holds the verified engine facts (F1–F11, with UE 5.8 source refs), the class layering, the state model, an API sketch, the layout file format and validation rules, the viewport-detach rules, the alternatives rejected, the consequences, a 6-phase plan and the test strategy.
+- Key decisions (proposed; awaiting Gevor's approval):
+  - Main window = docking root. `FGlobalTabmanager` is hosted the way Trace Insights does it.
+  - The game viewport goes into a dock tab via `UStageCraftGameEngine::CreateGameViewportWidget` with `RenderDirectlyToWindow(false)`. The engine default renders straight to the window backbuffer, so it can't be docked.
+  - `UStageWorkspaceSubsystem` (GameInstance) owns `FStageWorkspaceShell` (all Slate) and `FStageLayoutStore` (pure, unit-testable).
+  - Panels are data (`UStagePanelDefinition`, `StageCraft.Panel.*` tags) with UMG content.
+  - Preferences live in `UStageCraftUserSettings : UGameUserSettings`. Key bindings use `UEnhancedInputUserSettings`.
+  - Layouts are saved to our own JSON under `Saved/StageCraft/Layouts`, because the editor layout ini is not loaded in game builds.
+  - The workspace works only in Standalone Game or packaged builds. PIE keeps the current HUD.
+- Engine risks found (spike items):
+  - `UGameEngine::OnViewportResized` saves the viewport size as the screen resolution.
+  - `ResizeFrame` resizes whichever window holds the viewport.
+  - `SwitchGameWindowToUseGameViewport` (startup and loading-movie end) resets the main window's content.
+  - Closing the main window quits the app.
+  - The separate render target has a cost that must be measured.
+
+**Files changed:** `Docs/ADR/0001-dockable-workspace.md` (new), `tasks/todo.md` (Phase 6 checklist), `STATE.md`.
+
+**Verification:** design only, so nothing to build or test. Engine claims were checked in `C:/Program Files/Epic Games/UE_5.8/Engine/Source`. The ADR marks the ones not yet confirmed as Phase 0 spike items.
+
+**Commit:** uncommitted (working tree)
+
+**Known issues / follow-ups**
+- Waiting on Gevor to approve the ADR decisions before the Phase 0 spike.
+- Rules.md housekeeping:
+  - The Obsidian vault (`S:\...`) is not reachable on this machine, so the ADR went into the repo under `Docs/ADR/`.
+  - `RunEditor.bat` / `Scripts/Launch/RunEditor.ps1` do not exist in this project; that Rules.md section references `DamenTools8.uproject`.
+
+---
+
+## #21 — Phase 0 spike: dockable workspace with a detachable 3D viewport (2026-10-02, branch `spike/dockable-workspace`)
+
+**What and why.** The spike proves the design in ADR 0001 (#20). In Standalone Game:
+- The 3D viewport renders inside a Slate dock tab, with the Inspector and Faders as dock panels around it.
+- The viewport can float into its own window on another monitor.
+- Cursor picking works in both cases.
+- Layouts can be replaced, and level travel keeps the workspace.
+
+Verdict: **GO** (ADR §8). The code is the start of Phase 1, not throwaway.
+
+**Engine findings that changed the design** (ADR F12–F14):
+- **F12.** Every frame, `FEngineLoop::Tick` calls `GetMoviePlayer()->WaitForMovieToFinish(true)` (`LaunchEngineLoop.cpp:5902`). With no movie playing, that runs `UGameEngine::SwitchGameWindowToUseGameViewport()`, which resets the main window's content to `UGameEngine::GameViewportWidget`. This also happens in Shipping.
+  - Fix: `UStageCraftGameEngine::SetMainWindowContent` puts the dock root inside a host `SViewport` and points the public `GameViewportWidget` member at that host.
+  - `GetGameViewportWidget()` is overridden to keep returning the real viewport.
+  - For the one first `UGameEngine::Tick` (`GameEngine.cpp:2022`, a one-time `RegisterGameViewport`), the member is the real viewport. Without that, Slate ensures (`SlateApplication.cpp:2547`).
+- **F13.** `FTabManager::SpawnTab` skips a tab while the spawner's previous tab is still alive. `CloseAllAreas` only defers window destruction, and for an embedded area it would target the main window.
+  - Fix: `FStageWorkspaceShell::TearDownPanels` releases the Workspace tab's content, destroys floating panel windows immediately, and rebuilds a fresh panel tab manager for each layout.
+- **F14.** Nomad tabs in `FGlobalTabmanager`'s primary area did not dock into the main window.
+  - Fix: the structure Slate's standalone tools use. One major tab ("StageCraft.Workspace", tab well hidden) owns a panel `FTabManager`, and the panels are panel tabs in it. The host window is found with `FindWidgetWindow`, because `SDockTab::GetParentWindow` is null there.
+- **Install timing.** The first attempt installed during the first map's `BeginPlay`. The startup window switch (`LaunchEngineLoop.cpp:4893`) then removed it. With the F12 host, installing at controller registration is safe.
+
+**Files changed**
+- New (`Source/ModularSceneBuilder`):
+  - `Public/Workspace/StageCraftGameEngine.h`, `Private/Workspace/StageCraftGameEngine.cpp`: separate-render-target viewport, main-window content host, first-tick registration, removal of resize-to-resolution handling.
+  - `Public/Workspace/StageWorkspaceSubsystem.h`, `Private/Workspace/StageWorkspaceSubsystem.cpp`: GameInstance subsystem; states `Uninitialized`/`Unsupported`/`Ready`/`ShuttingDown`; panels built against the registered local controller (UMG `CreateWidget` + `TakeWidget`); `OnPanelHostChanged`.
+  - `Private/Workspace/StageWorkspaceShell.h/.cpp`: all Slate (root layout, Workspace major tab, panel tab manager, viewport tab that cannot close, relocation and close events, `TearDownPanels`).
+  - `Public/Workspace/StageWorkspaceTypes.h`, `Private/Workspace/StageWorkspaceTypes.cpp`: `LogStageWorkspace`, `EStageWorkspaceState`, `EStagePanelHost`, native tags `StageCraft.Panel(.Viewport|.Inspector|.FaderBank)`.
+  - `Private/Workspace/StageWorkspaceConsoleCommands.cpp` (non-Shipping): `StageCraft.Workspace.Status`, `.FloatViewport [MonitorIndex]`, `.Reset`, `.ViewportOnly`, `.TestUnknownTab`, `.ProbePick`, `.Delay <s> <cmd>`.
+- Modified:
+  - `Private/Player/ModularPlayerController.cpp`: register/unregister with the workspace in BeginPlay/EndPlay; the fixed HUD is not shown while the workspace is active, because it holds only the same two panels today.
+  - `ModularSceneBuilder.Build.cs`: private `ApplicationCore`.
+  - `Config/DefaultEngine.ini`: `GameEngine=/Script/ModularSceneBuilder.StageCraftGameEngine`.
+  - `Config/DefaultGame.ini`: interim `InspectorPanelClass` / `FaderBankPanelClass`.
+  - `Docs/ADR/0001-dockable-workspace.md`: status, F9 superseded, F12–F14, §3 updated, §8 results.
+  - `tasks/todo.md`.
+
+**Verification**
+- Builds: the Editor target compiles clean (0 errors, 0 warnings). The Development Game target compiles clean. Shipping Game target: compiles clean (0 errors, 0 warnings), which confirms the `#if !UE_BUILD_SHIPPING` code (console commands, `-StageDirectViewport`, `GetShellForDiagnostics`) is compiled out without breaking the build.
+- Tested by Claude in Standalone Game (scripted via `-ExecCmds`, 3 monitors, logs plus per-window captures):
+  - Docked viewport at tab size (1212×637) with live Inspector and Faders panels.
+  - Picking MATCH in the docked viewport.
+  - Float to monitor 3 at (3890, 50) with picking MATCH (OS cursor at 4533, 429).
+  - A layout naming an unknown tab is handled.
+  - Reset destroys the floating window.
+  - Level travel keeps the layout and rebuilds the panels; the main window does not move.
+  - `GSystemResolution` and the saved resolution are untouched.
+  - No ensures or warnings.
+- Frame cost (one run each, 1600×900, RTX 3060 Ti): GPU 5.65 → 5.97 ms (+0.32 ms, +5.7 %), render thread +0.35 ms, game thread +0.08 ms. See ADR §8 for caveats.
+- **PIE not re-run.** It is expected to be unchanged: the subsystem is not created when `GIsEditor` is true, the editor ignores `GameEngine=`, and the controller then shows the HUD as before.
+- **Awaiting manual verification (Gevor), in Play ▸ Standalone Game:**
+  1. Drag tabs to split, re-dock and tear off.
+  2. Drag the floating viewport between monitors.
+  3. RMB fly, gizmo drag and Delete in a floated viewport.
+  4. Alt+Enter / F11 with a floated viewport.
+  5. OS-close a floating viewport window.
+  6. Resize the main window by hand.
+  7. Quick PIE check that the HUD is unchanged.
+
+**Commit:** uncommitted (working tree, branch `spike/dockable-workspace`). #19 and #20 are also uncommitted on this branch.
+
+**Known issues / follow-ups**
+- The viewport tab shows a close button, though closing it is refused. Floating windows have no title.
+- Fullscreen toggles (Alt+Enter / F11) are not routed through the workspace yet (ADR §3.5).
+- In workspace mode the fixed HUD is suppressed, so it is not yet a viewport-overlay layer. Interim debug messages still draw on the viewport.
+- Panel widget classes are interim config soft references, loaded synchronously. `UStagePanelDefinition` assets with async loading come in Phase 1. The classes are cooked today only because `WBP_StageCraftHUD` references them.
+- The frame-cost measurement is a single sample. Repeat at 4K and with several runs.
+- Nothing is persisted yet. Layout files come in Phase 2.

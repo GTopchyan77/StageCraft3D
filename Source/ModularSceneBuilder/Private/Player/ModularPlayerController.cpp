@@ -26,6 +26,7 @@
 #include "Subsystems/StageEconomySubsystem.h"
 #include "Subsystems/StageItemSubsystem.h"
 #include "Subsystems/StageSessionSubsystem.h"
+#include "Workspace/StageWorkspaceSubsystem.h"
 
 #include UE_INLINE_GENERATED_CPP_BY_NAME(ModularPlayerController)
 
@@ -100,8 +101,15 @@ void AModularPlayerController::BeginPlay()
 		Economy->OnPurchaseCompleted.AddUniqueDynamic(this, &ThisClass::HandlePurchaseCompleted);
 	}
 
-	// Created after the selection binding so panels that read the current selection in NativeConstruct see a ready controller.
-	if (HUDWidgetClass)
+	// Both happen after the selection binding, so panels that read the current selection in NativeConstruct see a ready controller.
+	// In the dockable workspace (Standalone/packaged) the panels live in dock tabs. The fixed HUD holds only those same panels today,
+	// so it is not shown there. It returns as the viewport-overlay layer in Phase 1.
+	UStageWorkspaceSubsystem* Workspace = GetGameInstance() ? GetGameInstance()->GetSubsystem<UStageWorkspaceSubsystem>() : nullptr;
+	if (Workspace)
+	{
+		Workspace->RegisterLocalController(this);
+	}
+	if (HUDWidgetClass && !(Workspace && Workspace->IsWorkspaceActive()))
 	{
 		HUDWidget = CreateWidget<UUserWidget>(this, HUDWidgetClass);
 		if (HUDWidget)
@@ -120,6 +128,11 @@ void AModularPlayerController::EndPlay(const EEndPlayReason::Type EndPlayReason)
 	if (UStageEconomySubsystem* Economy = GetEconomy())
 	{
 		Economy->OnPurchaseCompleted.RemoveDynamic(this, &ThisClass::HandlePurchaseCompleted);
+	}
+
+	if (UStageWorkspaceSubsystem* Workspace = GetGameInstance() ? GetGameInstance()->GetSubsystem<UStageWorkspaceSubsystem>() : nullptr)
+	{
+		Workspace->UnregisterLocalController(this);
 	}
 
 	if (HUDWidget)
