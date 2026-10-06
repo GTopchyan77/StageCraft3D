@@ -5,6 +5,7 @@
 #include "CoreMinimal.h"
 #include "GameFramework/Actor.h"
 #include "Placement/StagePlacementTypes.h"
+#include "Placement/StageSnapTypes.h"
 #include "StagePlacementPreview.generated.h"
 
 /**
@@ -32,13 +33,17 @@ public:
 	/**
 	 * Moves the preview. ItemTransform is where the item will spawn; LandingPoint/SurfaceNormal place the
 	 * marker on the surface. State must be Valid or Refused; it selects the colour.
+	 * SnapGuides are the object-snap alignment lines to draw (none hides them).
 	 */
-	void ShowAt(const FTransform& ItemTransform, const FVector& LandingPoint, const FVector& SurfaceNormal, EStagePlacementPreviewState State);
+	void ShowAt(const FTransform& ItemTransform, const FVector& LandingPoint, const FVector& SurfaceNormal, EStagePlacementPreviewState State, TConstArrayView<FStageSnapGuide> SnapGuides = {});
 
 	/** Hides ghost and marker. Idempotent. */
 	void HidePreview();
 
 	bool IsPreviewVisible() const { return !IsHidden(); }
+
+	/** Object-snap guides currently drawn with the preview (diagnostics). */
+	int32 GetVisibleSnapGuideCount() const;
 
 protected:
 	//~ Begin AActor Interface
@@ -69,6 +74,10 @@ protected:
 
 	UPROPERTY(VisibleAnywhere, Category = "Components")
 	TObjectPtr<class UDecalComponent> LandingMarker = nullptr;
+
+	/** Object-snap alignment guides, shown with the ghost. */
+	UPROPERTY(VisibleAnywhere, Category = "Components")
+	TObjectPtr<class UStageSnapGuidesComponent> SnapGuidesComponent = nullptr;
 
 private:
 	void ApplyGhostMaterials();

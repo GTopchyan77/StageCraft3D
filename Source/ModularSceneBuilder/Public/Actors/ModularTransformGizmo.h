@@ -4,6 +4,7 @@
 
 #include "CoreMinimal.h"
 #include "GameFramework/Actor.h"
+#include "Placement/StageSnapTypes.h"
 #include "ModularTransformGizmo.generated.h"
 
 UENUM(BlueprintType)
@@ -15,6 +16,9 @@ enum class EGizmoMode : uint8
 };
 
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FOnGizmoModeChanged, EGizmoMode, NewMode);
+DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FOnGizmoDragStarted, AActor*, Target);
+/** StartTransform is the target's transform when the drag began; the target already holds the end transform. */
+DECLARE_DYNAMIC_MULTICAST_DELEGATE_TwoParams(FOnGizmoDragFinished, AActor*, Target, const FTransform&, StartTransform);
 
 /**
  * World-space move/rotate/scale gizmo for one target actor.
@@ -79,6 +83,29 @@ public:
 
 	UFUNCTION(BlueprintPure, Category = "StageCraft|Gizmo")
 	bool IsDragging() const { return DragAxisIndex != INDEX_NONE; }
+
+	/** A handle drag began on Target. */
+	UPROPERTY(BlueprintAssignable, Category = "StageCraft|Gizmo")
+	FOnGizmoDragStarted OnDragStarted;
+
+	/**
+	 * Every drag that began ends here exactly once: on release, and also when a drag is cut short by a mode
+	 * change or a new target. Fires even if nothing moved; Target is null if it was destroyed mid-drag.
+	 * The undo history records the change from here.
+	 */
+	UPROPERTY(BlueprintAssignable, Category = "StageCraft|Gizmo")
+	FOnGizmoDragFinished OnDragFinished;
+
+	/**
+	 * Optional object snapping of Move drags onto nearby items, along the dragged axis. Bound by the
+	 * controller to UStageSnappingComponent; when a snap engages it wins over TranslationSnap.
+	 */
+	FStageTranslationSnapper TranslationSnapper;
+
+#if !UE_BUILD_SHIPPING
+	/** Development verification only: world position of the Move handle for Axis (0..2), for scripted drags. */
+	FVector DevGetMoveHandleLocation(int32 Axis) const;
+#endif
 
 	/**
 	 * Closest visible handle hit by the world-space ray. Ignores all other geometry on purpose: the
@@ -148,6 +175,10 @@ protected:
 
 	UPROPERTY(VisibleAnywhere, Category = "Components")
 	TObjectPtr<class UStaticMeshComponent> UniformScaleComponent = nullptr;
+
+	/** Object-snap alignment guides while a Move drag is snapped. */
+	UPROPERTY(VisibleAnywhere, Category = "Components")
+	TObjectPtr<class UStageSnapGuidesComponent> SnapGuidesComponent = nullptr;
 
 private:
 	/** Handle index of the centre cube; 0..2 are the X/Y/Z axes. */

@@ -5,6 +5,7 @@
 #include "Actors/ModularBaseActor.h"
 #include "Data/BaseItemData.h"
 #include "Engine/World.h"
+#include "History/StageItemSnapshot.h"
 #include "Interaction/InteractableInterface.h"
 #include "ModularSceneBuilder.h"
 
@@ -17,38 +18,67 @@ USpawnSystemComponent::USpawnSystemComponent()
 
 AModularBaseActor* USpawnSystemComponent::SpawnItem(UBaseItemData* Item, const FTransform& Transform)
 {
-	UWorld* World = GetWorld();
-	if (!World || !Item)
+	if (!Item)
 	{
-		UE_LOG(LogStageCraft, Warning, TEXT("%s: cannot spawn %s: missing world or item."), *GetNameSafe(GetOwner()), *GetNameSafe(Item));
+		UE_LOG(LogStageCraft, Warning, TEXT("%s: cannot spawn: no item."), *GetNameSafe(GetOwner()));
+		return nullptr;
+	}
+	return SpawnValidated(*Item, Transform, nullptr);
+}
+
+AModularBaseActor* USpawnSystemComponent::RestoreItem(const FStageItemSnapshot& Snapshot)
+{
+	// Catalog items are resident while the catalog is loaded; this only loads if the asset was unloaded since.
+	UBaseItemData* Item = Snapshot.Item.LoadSynchronous();
+	if (!Item || !Snapshot.InstanceId.IsValid())
+	{
+		UE_LOG(LogStageCraft, Warning, TEXT("%s: cannot restore %s: its catalog item %s is gone."), *GetNameSafe(GetOwner()),
+			*Snapshot.DisplayName.ToString(), *Snapshot.Item.ToString());
+		return nullptr;
+	}
+	return SpawnValidated(*Item, Snapshot.Transform, &Snapshot);
+}
+
+AModularBaseActor* USpawnSystemComponent::SpawnValidated(UBaseItemData& Item, const FTransform& Transform, const FStageItemSnapshot* Restore)
+{
+	UWorld* World = GetWorld();
+	if (!World)
+	{
+		UE_LOG(LogStageCraft, Warning, TEXT("%s: cannot spawn %s: no world."), *GetNameSafe(GetOwner()), *Item.GetName());
 		return nullptr;
 	}
 
-	if (PlacementValidator.IsBound() && !PlacementValidator.Execute(*Item).IsSuccess())
+	if (PlacementValidator.IsBound() && !PlacementValidator.Execute(Item).IsSuccess())
 	{
 		// The validator's owner reports the refusal (toast, error cue); nothing to add here.
 		return nullptr;
 	}
 
 	// Normally already resident: UStageItemSubsystem streams the Game bundle before an item is armed.
-	UClass* ActorClass = Item->ActorClass.LoadSynchronous();
+	UClass* ActorClass = Item.ActorClass.LoadSynchronous();
 	if (!ActorClass)
 	{
-		UE_LOG(LogStageCraft, Warning, TEXT("%s: cannot spawn %s: ActorClass is not set."), *GetNameSafe(GetOwner()), *Item->GetName());
+		UE_LOG(LogStageCraft, Warning, TEXT("%s: cannot spawn %s: ActorClass is not set."), *GetNameSafe(GetOwner()), *Item.GetName());
 		return nullptr;
 	}
 
-	// Deferred so construction scripts and BeginPlay already see the item data.
+	// Deferred so construction scripts and BeginPlay already see the item data (and, when restoring, the old id and state).
 	AModularBaseActor* Actor = World->SpawnActorDeferred<AModularBaseActor>(ActorClass, Transform, nullptr, nullptr, ESpawnActorCollisionHandlingMethod::AlwaysSpawn);
 	if (!Actor)
 	{
 		return nullptr;
 	}
 
-	Actor->InitializeFromItemData(Item);
+	if (Restore)
+	{
+		Actor->AssignInstanceId(Restore->InstanceId);
+		Actor->RestoreSnapshotState(*Restore);
+	}
+	Actor->InitializeFromItemData(&Item);
 	Actor->FinishSpawning(Transform);
 
-	UE_LOG(LogStageCraft, Log, TEXT("Placed %s (%s) at %s."), *Actor->GetName(), *Item->GetName(), *Transform.GetLocation().ToCompactString());
+	UE_LOG(LogStageCraft, Log, TEXT("%s %s (%s) at %s."), Restore ? TEXT("Restored") : TEXT("Placed"), *Actor->GetName(), *Item.GetName(),
+		*Transform.GetLocation().ToCompactString());
 	OnItemSpawned.Broadcast(Actor);
 	return Actor;
 }

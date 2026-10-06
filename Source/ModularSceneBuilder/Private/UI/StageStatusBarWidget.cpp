@@ -14,6 +14,7 @@
 #include "Economy/StageProductData.h"
 #include "Engine/GameInstance.h"
 #include "Engine/World.h"
+#include "History/StageEditHistorySubsystem.h"
 #include "Placement/StagePlacementToolComponent.h"
 #include "Player/ModularPlayerController.h"
 #include "Player/StageCameraPawn.h"
@@ -153,6 +154,12 @@ void UStageStatusBarWidget::BindSources()
 		Economy = EconomySubsystem;
 		EconomySubsystem->OnPurchaseCompleted.AddUniqueDynamic(this, &ThisClass::HandlePurchaseCompleted);
 	}
+
+	if (UStageEditHistorySubsystem* HistorySubsystem = UWorld::GetSubsystem<UStageEditHistorySubsystem>(GetWorld()))
+	{
+		History = HistorySubsystem;
+		HistorySubsystem->OnHistoryChanged.AddUniqueDynamic(this, &ThisClass::HandleHistoryChanged);
+	}
 }
 
 void UStageStatusBarWidget::UnbindSources()
@@ -171,11 +178,16 @@ void UStageStatusBarWidget::UnbindSources()
 	{
 		EconomySubsystem->OnPurchaseCompleted.RemoveDynamic(this, &ThisClass::HandlePurchaseCompleted);
 	}
+	if (UStageEditHistorySubsystem* HistorySubsystem = History.Get())
+	{
+		HistorySubsystem->OnHistoryChanged.RemoveDynamic(this, &ThisClass::HandleHistoryChanged);
+	}
 	BindCameraPawn(nullptr);
 
 	Controller.Reset();
 	PlacementTool.Reset();
 	Economy.Reset();
+	History.Reset();
 }
 
 void UStageStatusBarWidget::BindCameraPawn(APawn* Pawn)
@@ -274,6 +286,19 @@ void UStageStatusBarWidget::HandlePurchaseCompleted(UStageProductData* Product, 
 void UStageStatusBarWidget::HandlePossessedPawnChanged(APawn* PreviousPawn, APawn* NewPawn)
 {
 	BindCameraPawn(NewPawn);
+}
+
+void UStageStatusBarWidget::HandleHistoryChanged(EStageHistoryChange Change, const FText& Description)
+{
+	// Recording is silent (it happens on every edit); undo and redo say what they reverted, like the editor does.
+	if (Change == EStageHistoryChange::Undone)
+	{
+		ShowMessage(FText::Format(LOCTEXT("Undone", "Undo: {0}"), Description), EMessageSeverity::Info);
+	}
+	else if (Change == EStageHistoryChange::Redone)
+	{
+		ShowMessage(FText::Format(LOCTEXT("Redone", "Redo: {0}"), Description), EMessageSeverity::Info);
+	}
 }
 
 void UStageStatusBarWidget::HandleFlySpeedChanged(float NewFlySpeed)

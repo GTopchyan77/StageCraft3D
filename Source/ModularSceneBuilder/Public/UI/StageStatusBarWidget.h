@@ -5,6 +5,7 @@
 #include "CoreMinimal.h"
 #include "Blueprint/UserWidget.h"
 #include "Economy/StageEconomyTypes.h"
+#include "History/StageEditCommand.h"
 #include "Placement/StagePlacementTypes.h"
 #include "StageStatusBarWidget.generated.h"
 
@@ -18,11 +19,12 @@ namespace StageStatusBar
  * The workspace status bar along the bottom of the main window, the place for instructions and feedback instead of
  * text drawn over the viewport:
  * - left: the edit mode as a chip (SELECT / PLACE) and a hint for what a click does now;
- * - right: a short-lived message: refused requests (warning color), purchases, camera speed changes.
+ * - right: a short-lived message: refused requests (warning color), purchases, camera speed changes, undo / redo.
  *
  * A view only. It is owned by the local AModularPlayerController (CreateWidget) and binds, in NativeConstruct, to the
  * placement tool, the controller's OnRequestRejected, the economy's OnPurchaseCompleted and the camera pawn's
- * OnFlySpeedChanged; everything is unbound in NativeDestruct. No tick: the message clears on a one-shot timer.
+ * OnFlySpeedChanged and the edit history's OnHistoryChanged; everything is unbound in NativeDestruct. No tick: the message
+ * clears on a one-shot timer.
  */
 UCLASS()
 class MODULARSCENEBUILDER_API UStageStatusBarWidget : public UUserWidget
@@ -77,6 +79,9 @@ private:
 	UFUNCTION()
 	void HandleFlySpeedChanged(float NewFlySpeed);
 
+	UFUNCTION()
+	void HandleHistoryChanged(EStageHistoryChange Change, const FText& Description);
+
 	UPROPERTY(Transient)
 	TObjectPtr<class UBorder> ModeChip = nullptr;
 
@@ -93,6 +98,7 @@ private:
 	TWeakObjectPtr<class UStagePlacementToolComponent> PlacementTool;
 	TWeakObjectPtr<class UStageEconomySubsystem> Economy;
 	TWeakObjectPtr<class AStageCameraPawn> CameraPawn;
+	TWeakObjectPtr<class UStageEditHistorySubsystem> History;
 
 	FTimerHandle MessageTimer;
 };

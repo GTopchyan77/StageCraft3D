@@ -7,9 +7,14 @@
 #include "Engine/CollisionProfile.h"
 #include "Engine/GameInstance.h"
 #include "Engine/StaticMesh.h"
+#include "History/StageItemSnapshot.h"
 #include "Interaction/StageCraftCollision.h"
 #include "Interaction/StageTransformRules.h"
 #include "Materials/MaterialInterface.h"
+#include "ModularSceneBuilder.h"
+#include "Serialization/MemoryReader.h"
+#include "Serialization/MemoryWriter.h"
+#include "Serialization/ObjectAndNameAsStringProxyArchive.h"
 #include "Subsystems/StageItemSubsystem.h"
 #include "Subsystems/StageSessionSubsystem.h"
 
@@ -90,6 +95,12 @@ void AModularBaseActor::OnConstruction(const FTransform& Transform)
 void AModularBaseActor::BeginPlay()
 {
 	Super::BeginPlay();
+
+	// Restored items arrive with their old id (AssignInstanceId); everything else gets a fresh one.
+	if (!InstanceId.IsValid())
+	{
+		InstanceId = FGuid::NewGuid();
+	}
 
 	// Only the root is watched: child moves (e.g. a moving head's pan/tilt pivots) are attributes, not transform.
 	RootTransformUpdatedHandle = MeshComponent->TransformUpdated.AddUObject(this, &ThisClass::HandleRootTransformUpdated);
@@ -211,6 +222,54 @@ FText AModularBaseActor::GetInstanceLabel() const
 		return InstanceLabel;
 	}
 	return ItemData ? ItemData->DisplayName : FText::FromString(GetActorNameOrLabel());
+}
+
+void AModularBaseActor::AssignInstanceId(const FGuid& RestoredId)
+{
+	// After BeginPlay the session has registered the current id; changing it would orphan history entries.
+	if (!ensureMsgf(!HasActorBegunPlay() && RestoredId.IsValid(), TEXT("%s: AssignInstanceId is only valid with a valid id, before BeginPlay."), *GetName()))
+	{
+		return;
+	}
+	InstanceId = RestoredId;
+}
+
+FStageItemSnapshot AModularBaseActor::CaptureSnapshot() const
+{
+	FStageItemSnapshot Snapshot;
+	Snapshot.InstanceId = InstanceId;
+	Snapshot.Item = ItemData;
+	Snapshot.Transform = GetActorTransform();
+	Snapshot.DisplayName = GetInstanceLabel();
+
+	// Only SaveGame properties: the per-instance state a user can edit, not components or engine state.
+	FMemoryWriter Writer(Snapshot.SavedProperties, /*bIsPersistent*/ false);
+	FObjectAndNameAsStringProxyArchive Archive(Writer, /*bInLoadIfFindFails*/ false);
+	Archive.ArIsSaveGame = true;
+	Archive.ArNoDelta = true;
+	SerializeScriptProperties(Archive);
+	return Snapshot;
+}
+
+bool AModularBaseActor::RestoreSnapshotState(const FStageItemSnapshot& Snapshot)
+{
+	if (Snapshot.SavedProperties.IsEmpty())
+	{
+		return true;
+	}
+
+	FMemoryReader Reader(Snapshot.SavedProperties, /*bIsPersistent*/ false);
+	FObjectAndNameAsStringProxyArchive Archive(Reader, /*bInLoadIfFindFails*/ true);
+	Archive.ArIsSaveGame = true;
+	Archive.ArNoDelta = true;
+	SerializeScriptProperties(Archive);
+
+	if (Archive.IsError())
+	{
+		UE_LOG(LogStageCraft, Warning, TEXT("%s: could not read the saved state of %s; it is restored with default settings."), *GetName(), *Snapshot.DisplayName.ToString());
+		return false;
+	}
+	return true;
 }
 
 TArray<FStageParameterSection> AModularBaseActor::GetParameterSections_Implementation() const

@@ -71,7 +71,7 @@ See `STATE.md` for detailed history of completed work.
 - [ ] Place onto an existing item with a modifier (plain LMB on an item now selects it)
 - [x] Gizmo drawn on top of geometry: `M_GizmoHandle` (Disable Depth Test) + `TraceHandles` picking (STATE.md #11)
 - [ ] Local-space gizmo option
-- [ ] Undo/redo, hooking OnItemSpawned / OnItemDeleted / gizmo drag end
+- [x] Undo/redo (STATE.md #25, ADR 0003)
 - [ ] Overlay materials for hover/selected (content)
 
 ## Editor UX fixes, round 2 (STATE.md #12)
@@ -165,7 +165,7 @@ See `STATE.md` for detailed history of completed work.
 - [x] Builds (Editor, Game Dev, Game Shipping) + scripted Standalone verification (STATE.md #23)
 - [ ] Gevor, by mouse: ghost/marker look, click vs hold, Library panel, menus/sliders, hearing the cues, scale gizmo drag
 - [ ] Designer: add `UStageItemLibraryPanel` to `WBP_StageCraftHUD` (left side) so PIE has a Library too
-- [ ] Follow-ups: gizmo scale snapping, local-space gizmo, undo/redo, audio page in the Preferences panel (ADR 0001 Phase 3)
+- [ ] Follow-ups: gizmo scale snapping, local-space gizmo, audio page in the Preferences panel (ADR 0001 Phase 3)
 
 ## Phase 7b: Library redesign, stamping, status bar (requested by Gevor 2026-10-06; ADR 0002 §7, STATE.md #24)
 - [x] Stamping: Place mode + ghost stay after each placement; exit only by Esc / P / Library PLACE toggle / Edit menu; verdict re-evaluated after each stamp
@@ -178,3 +178,12 @@ See `STATE.md` for detailed history of completed work.
 - [ ] Gevor, by mouse: Library look/hover/collapse/search, PLACE toggle, stamping by real clicks, Esc/P on the real keyboard, status bar messages
 - [ ] Designer: add `UStageStatusBarWidget` (and the Library) to `WBP_StageCraftHUD` so PIE gets the status bar too
 - [ ] Follow-ups: item thumbnails (icons are empty in the test catalog, rows show initials), lock badge on locked Library items
+
+## Phase 8: Undo/redo and object snapping (requested by Gevor 2026-10-06; design: `Docs/ADR/0003-undo-redo-and-object-snapping.md`, STATE.md #25)
+- [x] Command history: `IStageEditCommand` + Place / Delete / Transform commands, `FStageCommandHistory` (depth 100), `UStageEditHistorySubsystem` (per world), `UStageEditHistoryComponent` (controller)
+- [x] Stable item ids + SaveGame snapshots; undo of delete restores through `USpawnSystemComponent::RestoreItem` (placement rules apply)
+- [x] Ctrl+Z / Ctrl+Y / Ctrl+Shift+Z (Enhanced Input chords), Edit menu History section, status bar "Undo: ..." messages
+- [x] Object snapping (`StageSnapMath`, `UStageSnappingComponent`): placement (X/Y) and gizmo Move (dragged axis), magenta guides, Snap cue, Edit > Snap to Items
+- [x] Tests `StageCraft.History.Stack`, `StageCraft.History.ItemCommands`, `StageCraft.Snap.Math`; scripted Standalone runs (STATE.md #25)
+- [ ] Gevor, by mouse/keyboard: shortcuts on the real keyboard (and not while typing in a field), mouse gizmo drag snapping + guide, Edit menu entries, status bar messages, Snap cue
+- [ ] Follow-ups: undo for non-transform parameter edits, hold-to-bypass snap key, placement snapping for Blueprint-only visuals

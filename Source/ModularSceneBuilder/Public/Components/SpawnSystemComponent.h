@@ -36,6 +36,13 @@ public:
 	class AModularBaseActor* SpawnItem(class UBaseItemData* Item, const FTransform& Transform);
 
 	/**
+	 * Undo support: recreates a removed item from its snapshot, with the same instance id and SaveGame
+	 * state, at the snapshot's transform. Validated by PlacementValidator exactly like SpawnItem, so a
+	 * restore can be refused (e.g. a session item limit). Returns null if refused or the catalog item is gone.
+	 */
+	class AModularBaseActor* RestoreItem(const struct FStageItemSnapshot& Snapshot);
+
+	/**
 	 * Destroys the target if it is a stage item (implements IInteractableInterface).
 	 * Returns false for anything else, so level geometry can never be deleted by mistake.
 	 */
@@ -54,4 +61,8 @@ public:
 	/** Fires just before the actor is destroyed, while it is still valid. */
 	UPROPERTY(BlueprintAssignable, Category = "StageCraft|Spawning")
 	FOnStageItemDeleted OnItemDeleted;
+
+private:
+	/** Validate, then spawn deferred; Restore (optional) is applied before the item data, so BeginPlay sees the restored state. */
+	class AModularBaseActor* SpawnValidated(class UBaseItemData& Item, const FTransform& Transform, const struct FStageItemSnapshot* Restore);
 };

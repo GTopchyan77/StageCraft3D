@@ -1650,10 +1650,145 @@ This reverses #23's "after a place, return to Select". The design amendment is `
   - that the status bar reads well at your resolution.
 - Status: **implemented, awaiting manual verification** of the items above.
 
-**Commit:** uncommitted (working tree).
+**Commit:** `ecc908b`.
 
 **Known issues / follow-ups**
 - **PIE has neither the Library nor the status bar** (fixed HUD). Refusals in PIE are logged and play the error cue but are not shown. Add `UStageStatusBarWidget` and `UStageItemLibraryPanel` to `WBP_StageCraftHUD` (designer step).
 - **Test catalog items have no icons,** so rows show an initial tile ("T" for every "Test …" item). Real thumbnails come from each item's `Icon`.
 - Locked items are not marked in the Library yet; a lock badge is a follow-up. Clicking one is refused with a status-bar message and the error cue.
 - STATE #23's manual checklist still applies, except "one click returns to Select", which is now stamping.
+
+## #25 — Undo/redo command history, object-to-object snapping with alignment guides (2026-10-06)
+
+**Request (Gevor).**
+1. **Undo/redo.** A Command Pattern history (an `ICommand` interface plus stacks) for Spawn, Transform (move, rotate, scale) and Delete. Shortcuts: Ctrl+Z, and Ctrl+Y or Ctrl+Shift+Z.
+2. **Object snapping.** Bounding-box snapping for placing and moving: items lock side by side or stacked onto nearby placed items, with real-time alignment guides.
+3. **Standards.** Strict Rules.md: encapsulation, `TSharedPtr` / `TObjectPtr` memory management, small functions, no per-frame tick polling.
+
+The design record, with engine facts, alternatives and rollback, is `Docs/ADR/0003-undo-redo-and-object-snapping.md`.
+
+**What changed and why**
+
+- **Command model: record after doing.**
+  - Every tool still acts through its existing validated path. Only afterwards is an `IStageEditCommand` (`GetDescription` / `Undo` / `Redo`, plain C++ held in a `TSharedRef`) recorded.
+  - There is no second execute path, so the rules are never bypassed and no tool changed its behaviour.
+  - The three commands are `FStagePlaceItemCommand`, `FStageDeleteItemCommand` and `FStageTransformItemCommand`.
+  - Transform descriptions say Move, Rotate, Scale or Transform, e.g. "Move Test Crate".
+- **Commands act only through `IStageItemEditor`** (`CaptureItem`, `RestoreItem`, `RemoveItem`, `SetItemTransform`).
+  - The live implementation is a short-lived adapter in `UStageEditHistoryComponent`; tests use an in-memory fake.
+  - `EStageCommandResult`:
+    - `Succeeded` moves the step to the other stack.
+    - `Refused` (the rules said no, already reported) leaves the stacks unchanged so the user can retry.
+    - `Invalid` (the item or its catalog asset is gone) drops the step and is reported.
+    - `NothingToDo` means the stack is empty.
+- **Stable item identity.**
+  - `AModularBaseActor::GetInstanceId()` is an `FGuid` (Transient), assigned at BeginPlay.
+  - Undoing a delete creates a new actor with the **same** id (`AssignInstanceId` is only valid before BeginPlay), so older Move steps still find it.
+  - `UStageSessionSubsystem::FindItemById` searches the existing registry (no second map), and `RegisterItem` ensures ids are unique.
+- **Snapshots.**
+  - `FStageItemSnapshot` holds the id, a soft catalog item reference, the transform, the display name, and the actor's `SaveGame` properties as bytes (label, fixture ID, DMX patch, attributes, audio settings), written with `UObject::SerializeScriptProperties` and `ArIsSaveGame`.
+  - **Restore order.** A restore writes them before `InitializeFromItemData`, so `ApplyItemData` and BeginPlay see the restored state and a fixture keeps its ID.
+  - **Re-capture before removal.** Place and Delete re-capture the snapshot just before each removal, so edits made after placing survive undo + redo.
+- **Ownership.**
+  - **`UStageEditHistorySubsystem` (`UWorldSubsystem`, Game and PIE only).** It owns `FStageCommandHistory` (pure stacks; depth 100; recording clears redo; not re-entrant) and broadcasts `OnHistoryChanged`. It is per world because the history names one level's items.
+  - **`UStageEditHistoryComponent` (on the controller).** It records `UStagePlacementToolComponent::OnItemPlaced`. It provides `DeleteItem`, which the Delete key now uses and which releases the selection first, and `RecordTransformChange`.
+  - **`USpawnSystemComponent::RestoreItem`.** It shares one spawn routine with `SpawnItem`, **including `PlacementValidator`**. Undoing a delete past a session limit is therefore refused and reported (deny by default).
+- **Recording points: one user action is one step.**
+  - a placement click;
+  - a Delete;
+  - a whole gizmo drag, recorded once from the new `AModularTransformGizmo::OnDragFinished`, which fires once per drag including drags cut short by a mode or target change;
+  - an accepted Location / Rotation / Scale edit in `RequestParameterChange`, recording the clamped value actually stored.
+  - Undo and redo never pass through these points, so they cannot record themselves.
+- **Request bridge.** `AModularPlayerController::RequestUndo` / `RequestRedo` serve the keys, the Edit menu and the console.
+  - They are ignored during a gizmo drag or RMB navigation.
+  - They report `Invalid` on `OnRequestRejected`, so the status bar shows a warning and the error cue plays.
+  - They refresh the ghost.
+- **Shortcuts (Enhanced Input chords).**
+  - The default editor context gains Ctrl (left/right) and Shift modifier actions. The mappings are Z + Ctrl + Shift → Redo, then Z + Ctrl → Undo, then Y + Ctrl → Redo.
+  - Mapping Ctrl+Shift+Z first matters: Enhanced Input injects a chord blocker into the later Z mapping, so Ctrl+Shift+Z redoes **without** also undoing. Verified below.
+  - `UndoAction` / `RedoAction` are assignable input slots like the others.
+  - Focused text fields (inspector, Library search) keep the keys for their own text undo.
+- **Object snapping.**
+  - **`StageSnapMath` (pure, tested).** Per allowed axis, the moving AABB locks onto the closest neighbour candidate within 20 cm: flush after or before (side by side, stacked), or align min / max / centre (edges and centres line up).
+    - A neighbour only counts on an axis when the boxes overlap, or are within the threshold, on both other axes, so items across the stage never pull.
+    - Results are deterministic (ties keep the first neighbour and anchor).
+    - The module also produces guide segments.
+  - **`UStageSnappingComponent` (on the controller)** supplies item bounds (colliding components only, never the gizmo), the user preference, the guide thickness (by camera distance) and `OnSnapEngaged` (plays the existing Snap cue).
+  - **Placement** (`UStagePlacementToolComponent::PlacementSnapper`).
+    - X and Y snaps are measured at the cursor's free landing point, so off-grid neighbours are reachable. Snapped axes win; other axes keep the item's grid; Z stays with the surface trace.
+    - The preview and `TryPlace` share one `ComputeLandingTransform`, so the ghost is still exactly where the item lands.
+  - **Gizmo Move** (`AModularTransformGizmo::TranslationSnapper`) snaps along the dragged axis, Z included (stack by dragging up).
+    - Neighbour boxes are cached once per drag (`OnDragStarted` → `BeginMove`, `OnDragFinished` → `EndMove`), so the per-frame drag update does no searching.
+  - **Guides.** `UStageSnapGuidesComponent` draws up to three world-space magenta lines with the always-on-top gizmo material. One is on the placement preview and one on the gizmo. It has no tick and no collision.
+  - **Preference.** Edit > **Snap to Items** (checkbox) is stored in `UStageCraftUserSettings` (`bSnapToItems`, default on) and saved on toggle. The snapping component is its only writer.
+- **UI.**
+  - The Edit menu gains a History section: "Undo Move Test Crate (Ctrl+Z)" and "Redo … (Ctrl+Y)", greyed when empty.
+  - It also gains a Snapping section.
+  - The status bar shows "Undo: …" / "Redo: …" through `OnHistoryChanged`.
+- **Dev console** (non-Shipping):
+  - `StageCraft.Edit.{History, Undo, Redo, Delete, Snap [on|off], DragGizmo <X|Y|Z> <cm>}`.
+  - `StageCraft.Edit.Key` now takes chords (`Ctrl+Z`, `Ctrl+Shift+Z`), pressed through Slate like the keyboard.
+  - `Status` reports the visible snap guide count.
+- **STATE.md housekeeping.** #24's commit line said "uncommitted"; it now carries `ecc908b`.
+
+**Files changed**
+- New, in `Source/ModularSceneBuilder`:
+  - History: `Public/History/StageItemSnapshot.h`, `StageEditCommand.h`, `StageItemCommands.h`, `StageCommandHistory.h`, `StageEditHistorySubsystem.h`, `StageEditHistoryComponent.h`; `Private/History/StageItemCommands.cpp`, `StageCommandHistory.cpp`, `StageEditHistorySubsystem.cpp`, `StageEditHistoryComponent.cpp`, `Tests/StageHistoryTests.cpp`.
+  - Snapping: `Public/Placement/StageSnapTypes.h`, `StageSnapMath.h`, `StageSnappingComponent.h`, `StageSnapGuidesComponent.h`; `Private/Placement/StageSnapMath.cpp`, `StageSnappingComponent.cpp`, `StageSnapGuidesComponent.cpp`, `Tests/StageSnapTests.cpp`.
+- Modified, in `Source/ModularSceneBuilder`:
+  - Actors: `ModularBaseActor.h/.cpp` (instance id, snapshot capture/restore), `ModularTransformGizmo.h/.cpp` (drag delegates, translation snapper, guides, dev handle position).
+  - `Components/SpawnSystemComponent.h/.cpp` (`RestoreItem`, shared validated spawn).
+  - `Subsystems/StageSessionSubsystem.h/.cpp` (`FindItemById`, id-uniqueness ensure); `Data/StageParameterTypes.h/.cpp` (`StageCraftTags::IsTransformParameter`).
+  - Placement: `StagePlacementToolComponent.h/.cpp` (`PlacementSnapper`, `ComputeLandingTransform`), `StagePlacementPreview.h/.cpp` (guides), `StagePlacementConsoleCommands.cpp`.
+  - Controller: `Player/ModularPlayerController.h/.cpp` (components, Undo/Redo actions and chords, request bridge, recording, snapping bindings).
+  - `Audio/StageEditorAudioFeedbackComponent.h/.cpp` (object-snap cue).
+  - `Settings/StageCraftUserSettings.h/.cpp` (`bSnapToItems`).
+  - `UI/StageStatusBarWidget.h/.cpp` (undo/redo messages); `Workspace/SStageWorkspaceMenuBar.cpp` (History and Snapping sections).
+- Docs: `Docs/ADR/0003-undo-redo-and-object-snapping.md` (new), `tasks/todo.md`, `STATE.md` (#24 commit hash, this entry).
+- No content assets, maps, input assets or Blueprints were changed. The guides reuse `/Game/StageCraft/Gizmo/M_GizmoHandle`.
+
+**Verification**
+- **Builds (Claude):** Editor Development, Game Development and Game Shipping all Succeeded with 0 errors and 0 warnings. The only failure on the way was a missing include, which was fixed. Shipping proves the new dev commands and `DevGetMoveHandleLocation` compile out.
+- **Automation (headless):** `StageCraft` filter, **15/15 passed**:
+  - New: `History.Stack`, `History.ItemCommands`, `Snap.Math`.
+  - **`History.Stack` covers:** LIFO, redo cleared by a new action, depth cap, Refused kept, Invalid dropped.
+  - **`History.ItemCommands` covers:**
+    - place / delete / transform undo and redo;
+    - edits surviving undo + redo;
+    - an older Move step still applying after undo of a delete;
+    - refused restore;
+    - missing item / asset → Invalid.
+  - **`Snap.Math` covers:** flush, align, inclusive threshold, relevance, stacking, closest neighbour and tie order, degenerate input, grid merge, guide geometry and engagement signature.
+  - All 12 earlier tests still pass.
+- **Standalone `-game`, scripted by Claude** (`L_StageTest`, simulated cursor, keys injected through Slate, 0 ensures in every run):
+  - **Undo/redo (`Saved/Logs/UR_Run1.log`).**
+    - Placed 2 crates → 2 steps. Moved B with the inspector-equivalent `SetLocation 0 0 50` → "Move Test Crate".
+    - **Ctrl+Z** (key path, focus `SViewport`) → B back at (-200, 200, 50).
+    - **Ctrl+Shift+Z** → redo only, ending at 3 undo / 0 redo (Ctrl+Z did not also fire).
+    - **Ctrl+Z** then **Ctrl+Y** → undo + redo.
+    - Delete → 5 items. **Ctrl+Z** → "Restored ModularBaseActor_2 at (0, 0, 50)", 6 items.
+    - Then the older "Move" undo applied to the restored actor, through the same instance id.
+    - Undo ×4 → both crates removed, the 4th = `NothingToDo`. Redo ×3 → both crates restored at their positions, the Move re-applied.
+  - **Gizmo snap (`SN_Run1.log`).** Crate A at y -100 (spans -150..-50); B at y 200.
+    - `DragGizmo Y -185` (a real handle press, 20 held frames, release) would leave a 15 cm gap. Instead B locked **flush at Y = 0**.
+    - The drag recorded exactly one "Move Test Crate" step.
+  - **Placement snap (`SN_Run4.log`, screenshot `Saved/Screenshots/WindowsEditor/ScreenShot00006.png`).** Crate A was moved off-grid to (-163, 37). The cursor was placed 10 cm from its side.
+    - With snapping on: ghost at **Y = 137 (flush)**, 1 guide drawn, and the click placed exactly there.
+    - With snapping off: grid **Y = 100**, 0 guides.
+    - The screenshot shows the magenta guide at the contact face and the ghost flush against the crate.
+  - **Stacking (`SN_Run1.log`).** The ghost over an off-grid crate landed on its top with Y aligned to it (37; the grid gives 0). With snapping off, Y = 0.
+- **Not verified (needs Gevor, by mouse and keyboard in Standalone Game):**
+  - **Shortcuts:** Ctrl+Z / Ctrl+Y / Ctrl+Shift+Z on the physical keyboard; and that they do nothing to the stage while typing in an inspector field or the Library search.
+  - **Snapping by hand:** a real mouse gizmo drag that snaps and shows the guide; guide readability at other camera distances; hearing the Snap cue when a snap engages.
+  - **Menus and status bar:** the Edit menu History labels and the Snap to Items checkbox; the "Undo: …" status messages.
+  - **Untested paths:** a restore refused by a session item limit (unit test only; no test map has a limit); undo of a fixture delete (fixture ID, patch and attributes restored), which is untested at runtime.
+- Status: **implemented, awaiting manual verification** of the items above.
+
+**Commit:** uncommitted (working tree).
+
+**Known issues / follow-ups**
+- **Undo scope.** Non-transform parameter edits (label, patch, attributes, Type swap) are not undo steps yet; they do survive undo/redo of Place/Delete through the snapshot. They would be one more command type at `RequestParameterChange`.
+- **Placement snapping needs an item `Mesh`.** Items whose visuals come only from a Blueprint snap to the grid while placing; once placed, they do snap when moved.
+- **No hold-to-bypass key.** Snapping can only be switched off with the Edit menu toggle.
+- **History is per level** (max 100 steps) and is cleared by level travel.
+- **Obsidian vault.** `S:\` is still unreachable on this machine; the design record is ADR 0003 in the repo.

@@ -20,9 +20,12 @@
 #include "Framework/Application/SlateApplication.h"
 #include "GenericPlatform/GenericPlatformInputDeviceMapper.h"
 #include "HAL/IConsoleManager.h"
+#include "History/StageEditHistoryComponent.h"
+#include "History/StageEditHistorySubsystem.h"
 #include "ModularSceneBuilder.h"
 #include "Placement/StagePlacementPreview.h"
 #include "Placement/StagePlacementToolComponent.h"
+#include "Placement/StageSnappingComponent.h"
 #include "Player/ModularPlayerController.h"
 #include "Subsystems/StageItemSubsystem.h"
 
@@ -69,7 +72,7 @@ namespace StagePlacementCommands
 		UE_LOG(LogStageCraft, Display, TEXT("StageCraft.Edit.Status: mode %s, armed %s, preview %s%s, items placed %d, gizmo %s"),
 			*UEnum::GetValueAsString(Tool->GetEditMode()), *GetNameSafe(Tool->GetArmedItem()),
 			*UEnum::GetValueAsString(Tool->GetPreviewState()),
-			Preview && Preview->IsPreviewVisible() ? *FString::Printf(TEXT(" at %s"), *Preview->GetActorLocation().ToCompactString()) : TEXT(""),
+			Preview && Preview->IsPreviewVisible() ? *FString::Printf(TEXT(" at %s, %d snap guides"), *Preview->GetActorLocation().ToCompactString(), Preview->GetVisibleSnapGuideCount()) : TEXT(""),
 			CountPlacedItems(World), Gizmo ? *UEnum::GetValueAsString(Gizmo->GetMode()) : TEXT("<none>"));
 
 		if (Selected)
@@ -216,24 +219,58 @@ namespace StagePlacementCommands
 		}));
 	}
 
+	/** "Ctrl+Shift+Z" -> LeftControl, LeftShift, Z (modifiers first, in the order a person presses them). */
+	bool ParseKeyChord(const FString& Chord, TArray<FKey>& OutKeys)
+	{
+		TArray<FString> Parts;
+		Chord.ParseIntoArray(Parts, TEXT("+"));
+		for (const FString& Part : Parts)
+		{
+			const FKey Key = Part.Equals(TEXT("Ctrl"), ESearchCase::IgnoreCase) ? EKeys::LeftControl
+				: Part.Equals(TEXT("Shift"), ESearchCase::IgnoreCase) ? EKeys::LeftShift
+				: Part.Equals(TEXT("Alt"), ESearchCase::IgnoreCase) ? EKeys::LeftAlt
+				: FKey(FName(*Part));
+			if (!Key.IsValid())
+			{
+				return false;
+			}
+			OutKeys.Add(Key);
+		}
+		return !OutKeys.IsEmpty();
+	}
+
+	FModifierKeysState MakeModifierState(TConstArrayView<FKey> HeldKeys)
+	{
+		const bool bShift = HeldKeys.Contains(EKeys::LeftShift);
+		const bool bControl = HeldKeys.Contains(EKeys::LeftControl);
+		const bool bAlt = HeldKeys.Contains(EKeys::LeftAlt);
+		return FModifierKeysState(bShift, false, bControl, false, bAlt, false, false, false, false);
+	}
+
 	void Key(const TArray<FString>& Args, UWorld* World)
 	{
-		const FKey KeyToPress(Args.IsEmpty() ? NAME_None : FName(*Args[0]));
-		if (!KeyToPress.IsValid() || !FSlateApplication::IsInitialized())
+		TArray<FKey> Keys;
+		if (Args.IsEmpty() || !ParseKeyChord(Args[0], Keys) || !FSlateApplication::IsInitialized())
 		{
-			UE_LOG(LogStageCraft, Display, TEXT("Usage: StageCraft.Edit.Key <KeyName>  (e.g. Escape, P, SpaceBar)"));
+			UE_LOG(LogStageCraft, Display, TEXT("Usage: StageCraft.Edit.Key <KeyName|Chord>  (e.g. Escape, P, SpaceBar, Ctrl+Z, Ctrl+Shift+Z)"));
 			return;
 		}
 
 		// Through Slate, like the OS would deliver it: focused widget -> game viewport -> Enhanced Input -> the action
-		// bindings. Held for a few frames, like a real tap, so Enhanced Input evaluates the press before the release.
+		// bindings. Each key goes down in order and the whole chord is held for a few frames, like a real press, so
+		// Enhanced Input evaluates the chord before anything is released.
 		FSlateApplication& Slate = FSlateApplication::Get();
 		const int32 UserIndex = Slate.GetUserIndexForKeyboard();
 		// The keyboard device, as the platform message handler reports it, so the viewport maps the key to the local player.
 		const FInputDeviceId Keyboard = IPlatformInputDeviceMapper::Get().GetDefaultInputDevice();
-		Slate.ProcessKeyDownEvent(FKeyEvent(KeyToPress, FModifierKeysState(), Keyboard, false, 0, 0, UserIndex));
+		for (int32 Index = 0; Index < Keys.Num(); ++Index)
+		{
+			const FModifierKeysState Modifiers = MakeModifierState(MakeArrayView(Keys.GetData(), Index + 1));
+			Slate.ProcessKeyDownEvent(FKeyEvent(Keys[Index], Modifiers, Keyboard, false, 0, 0, UserIndex));
+		}
+
 		int32 FramesLeft = 4;
-		FTSTicker::GetCoreTicker().AddTicker(FTickerDelegate::CreateLambda([KeyToPress, Keyboard, UserIndex, FramesLeft](float) mutable
+		FTSTicker::GetCoreTicker().AddTicker(FTickerDelegate::CreateLambda([Keys, Keyboard, UserIndex, FramesLeft](float) mutable
 		{
 			if (--FramesLeft > 0)
 			{
@@ -241,13 +278,133 @@ namespace StagePlacementCommands
 			}
 			if (FSlateApplication::IsInitialized())
 			{
-				FSlateApplication::Get().ProcessKeyUpEvent(FKeyEvent(KeyToPress, FModifierKeysState(), Keyboard, false, 0, 0, UserIndex));
+				for (int32 Index = Keys.Num() - 1; Index >= 0; --Index)
+				{
+					FSlateApplication::Get().ProcessKeyUpEvent(FKeyEvent(Keys[Index], MakeModifierState(MakeArrayView(Keys.GetData(), Index)), Keyboard, false, 0, 0, UserIndex));
+				}
 			}
 			return false;
 		}));
 		const TSharedPtr<SWidget> Focused = Slate.GetUserFocusedWidget(UserIndex);
-		UE_LOG(LogStageCraft, Display, TEXT("StageCraft.Edit.Key: pressed %s (keyboard focus: %s)."), *KeyToPress.ToString(),
+		UE_LOG(LogStageCraft, Display, TEXT("StageCraft.Edit.Key: pressed %s (keyboard focus: %s)."), *Args[0],
 			Focused.IsValid() ? *Focused->GetTypeAsString() : TEXT("none"));
+	}
+
+	void History(const TArray<FString>& Args, UWorld* World)
+	{
+		const UStageEditHistorySubsystem* HistorySubsystem = UWorld::GetSubsystem<UStageEditHistorySubsystem>(World);
+		if (!HistorySubsystem)
+		{
+			UE_LOG(LogStageCraft, Display, TEXT("StageCraft.Edit.History: no edit history in this world."));
+			return;
+		}
+		UE_LOG(LogStageCraft, Display, TEXT("StageCraft.Edit.History: %d undo (next \"%s\"), %d redo (next \"%s\")."),
+			HistorySubsystem->GetUndoCount(), *HistorySubsystem->GetUndoDescription().ToString(),
+			HistorySubsystem->GetRedoCount(), *HistorySubsystem->GetRedoDescription().ToString());
+	}
+
+	void Undo(const TArray<FString>& Args, UWorld* World)
+	{
+		if (AModularPlayerController* Controller = GetController(World))
+		{
+			UE_LOG(LogStageCraft, Display, TEXT("StageCraft.Edit.Undo: %s"), *UEnum::GetValueAsString(Controller->RequestUndo()));
+		}
+	}
+
+	void Redo(const TArray<FString>& Args, UWorld* World)
+	{
+		if (AModularPlayerController* Controller = GetController(World))
+		{
+			UE_LOG(LogStageCraft, Display, TEXT("StageCraft.Edit.Redo: %s"), *UEnum::GetValueAsString(Controller->RequestRedo()));
+		}
+	}
+
+	void Snap(const TArray<FString>& Args, UWorld* World)
+	{
+		AModularPlayerController* Controller = GetController(World);
+		UStageSnappingComponent* Snapping = Controller ? Controller->GetSnapping() : nullptr;
+		if (!Snapping)
+		{
+			return;
+		}
+		if (!Args.IsEmpty())
+		{
+			Snapping->SetSnapToItemsEnabled(Args[0].Equals(TEXT("on"), ESearchCase::IgnoreCase) || Args[0] == TEXT("1"));
+		}
+		UE_LOG(LogStageCraft, Display, TEXT("StageCraft.Edit.Snap: snap to items %s."), Snapping->IsSnapToItemsEnabled() ? TEXT("on") : TEXT("off"));
+	}
+
+	/**
+	 * A real Move-handle drag of the selection: presses at the handle's screen position, moves the simulated cursor
+	 * along the axis over several frames (Enhanced Input's held events), then releases. Snapping and history see
+	 * exactly what a mouse drag produces.
+	 */
+	void DragGizmo(const TArray<FString>& Args, UWorld* World)
+	{
+		AModularPlayerController* Controller = GetController(World);
+		AModularTransformGizmo* Gizmo = Controller ? Controller->GetGizmo() : nullptr;
+		float DistanceValue = 0.f;
+		const int32 Axis = Args.IsEmpty() ? INDEX_NONE : FString(TEXT("XYZ")).Find(Args[0].ToUpper());
+		if (!Gizmo || !Gizmo->GetTarget() || Axis == INDEX_NONE || Args[0].Len() != 1 || !ParseFloat(Args, 1, DistanceValue))
+		{
+			UE_LOG(LogStageCraft, Display, TEXT("Usage: select an item, then StageCraft.Edit.DragGizmo <X|Y|Z> <cm>"));
+			return;
+		}
+
+		Gizmo->SetMode(EGizmoMode::Translate);
+		const FVector Start = Gizmo->DevGetMoveHandleLocation(Axis);
+		const FVector End = Start + FVector(Axis == 0, Axis == 1, Axis == 2) * DistanceValue;
+		FVector2D StartScreen;
+		FVector2D EndScreen;
+		if (!Controller->ProjectWorldLocationToScreen(Start, StartScreen) || !Controller->ProjectWorldLocationToScreen(End, EndScreen))
+		{
+			UE_LOG(LogStageCraft, Display, TEXT("StageCraft.Edit.DragGizmo: the handle is not on screen."));
+			return;
+		}
+
+		Controller->DevSetSimulatedCursor(StartScreen);
+		Controller->DevSimulatePrimaryPressed();
+		if (!Gizmo->IsDragging())
+		{
+			UE_LOG(LogStageCraft, Display, TEXT("StageCraft.Edit.DragGizmo: the press at %s did not grab the %s handle."), *StartScreen.ToString(), *Args[0]);
+			Controller->DevSimulatePrimaryReleased();
+			return;
+		}
+
+		constexpr int32 Steps = 20;
+		const TWeakObjectPtr<AModularPlayerController> WeakController = Controller;
+		int32 Step = 0;
+		FTSTicker::GetCoreTicker().AddTicker(FTickerDelegate::CreateLambda([WeakController, StartScreen, EndScreen, Step](float) mutable
+		{
+			AModularPlayerController* DragController = WeakController.Get();
+			if (!DragController)
+			{
+				return false;
+			}
+			if (++Step <= Steps)
+			{
+				DragController->DevSetSimulatedCursor(FMath::Lerp(StartScreen, EndScreen, static_cast<double>(Step) / Steps));
+				DragController->DevSimulatePrimaryHeld();
+				return true;
+			}
+			DragController->DevSimulatePrimaryReleased();
+			const AActor* Selected = DragController->GetSelection()->GetSelectedActor();
+			UE_LOG(LogStageCraft, Display, TEXT("StageCraft.Edit.DragGizmo: released; %s at %s."), *GetNameSafe(Selected),
+				Selected ? *Selected->GetActorLocation().ToCompactString() : TEXT("-"));
+			return false;
+		}));
+	}
+
+	void Delete(const TArray<FString>& Args, UWorld* World)
+	{
+		AModularPlayerController* Controller = GetController(World);
+		AActor* Selected = Controller ? Controller->GetSelection()->GetSelectedActor() : nullptr;
+		if (Controller && Selected)
+		{
+			// The same path as the Delete key.
+			UE_LOG(LogStageCraft, Display, TEXT("StageCraft.Edit.Delete %s: %s"), *Selected->GetName(),
+				Controller->GetEditHistory()->DeleteItem(Selected) ? TEXT("deleted") : TEXT("not deleted"));
+		}
 	}
 
 	void GizmoMode(const TArray<FString>& Args, UWorld* World)
@@ -323,8 +480,20 @@ namespace StagePlacementCommands
 		FConsoleCommandWithWorldAndArgsDelegate::CreateStatic(&Click));
 	FAutoConsoleCommandWithWorldAndArgs HoldCommand(TEXT("StageCraft.Edit.Hold"), TEXT("[Frames=60] Holds the left button at the simulated cursor, then releases."),
 		FConsoleCommandWithWorldAndArgsDelegate::CreateStatic(&Hold));
-	FAutoConsoleCommandWithWorldAndArgs KeyCommand(TEXT("StageCraft.Edit.Key"), TEXT("<KeyName> Presses and releases a key through Slate, the same path as the keyboard (Escape, P, SpaceBar...)."),
+	FAutoConsoleCommandWithWorldAndArgs KeyCommand(TEXT("StageCraft.Edit.Key"), TEXT("<KeyName|Chord> Presses and releases a key or chord through Slate, the same path as the keyboard (Escape, P, Ctrl+Z, Ctrl+Shift+Z...)."),
 		FConsoleCommandWithWorldAndArgsDelegate::CreateStatic(&Key));
+	FAutoConsoleCommandWithWorldAndArgs HistoryCommand(TEXT("StageCraft.Edit.History"), TEXT("Logs the undo/redo stack sizes and the next steps."),
+		FConsoleCommandWithWorldAndArgsDelegate::CreateStatic(&History));
+	FAutoConsoleCommandWithWorldAndArgs UndoCommand(TEXT("StageCraft.Edit.Undo"), TEXT("Same as Edit > Undo."),
+		FConsoleCommandWithWorldAndArgsDelegate::CreateStatic(&Undo));
+	FAutoConsoleCommandWithWorldAndArgs RedoCommand(TEXT("StageCraft.Edit.Redo"), TEXT("Same as Edit > Redo."),
+		FConsoleCommandWithWorldAndArgsDelegate::CreateStatic(&Redo));
+	FAutoConsoleCommandWithWorldAndArgs SnapCommand(TEXT("StageCraft.Edit.Snap"), TEXT("[on|off] Sets or logs Snap to Items."),
+		FConsoleCommandWithWorldAndArgsDelegate::CreateStatic(&Snap));
+	FAutoConsoleCommandWithWorldAndArgs DragGizmoCommand(TEXT("StageCraft.Edit.DragGizmo"), TEXT("<X|Y|Z> <cm> Drags the selection's Move handle through the real click path."),
+		FConsoleCommandWithWorldAndArgsDelegate::CreateStatic(&DragGizmo));
+	FAutoConsoleCommandWithWorldAndArgs DeleteCommand(TEXT("StageCraft.Edit.Delete"), TEXT("Deletes the selection as an undoable step (the Delete key's path)."),
+		FConsoleCommandWithWorldAndArgsDelegate::CreateStatic(&Delete));
 	FAutoConsoleCommandWithWorldAndArgs GizmoModeCommand(TEXT("StageCraft.Edit.GizmoMode"), TEXT("[Move|Rotate|Scale] Sets the gizmo tool (no argument cycles)."),
 		FConsoleCommandWithWorldAndArgsDelegate::CreateStatic(&GizmoMode));
 	FAutoConsoleCommandWithWorldAndArgs SetLocationCommand(TEXT("StageCraft.Edit.SetLocation"), TEXT("<X> <Y> <Z> Inspector-equivalent location edit of the selection."),

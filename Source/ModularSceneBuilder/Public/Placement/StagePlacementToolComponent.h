@@ -6,6 +6,7 @@
 #include "Components/ActorComponent.h"
 #include "Components/SpawnSystemComponent.h"
 #include "Placement/StagePlacementTypes.h"
+#include "Placement/StageSnapTypes.h"
 #include "StagePlacementToolComponent.generated.h"
 
 /** Why a placement click did nothing before reaching the rules. Rule refusals are reported by the validator's owner instead. */
@@ -97,6 +98,12 @@ public:
 	 */
 	FStagePlacementValidator PreviewEvaluator;
 
+	/**
+	 * Optional object snapping of the landing point onto nearby placed items, applied identically to the
+	 * preview and the placement. Bound by the controller to UStageSnappingComponent; unbound means grid only.
+	 */
+	FStagePlacementSnapper PlacementSnapper;
+
 	UPROPERTY(BlueprintAssignable, Category = "StageCraft|Placement")
 	FOnStageEditModeChanged OnEditModeChanged;
 
@@ -125,6 +132,12 @@ protected:
 private:
 	UFUNCTION()
 	void HandleSelectedItemChanged(class UBaseItemData* NewItem, class UBaseItemData* PreviousItem);
+
+	/**
+	 * The one landing transform for Hit (grid, surface alignment, pivot offset, then object snapping), shared by
+	 * the preview and TryPlace so the ghost is exactly where the item lands. OutGuides receives the snap guides.
+	 */
+	FTransform ComputeLandingTransform(const class UBaseItemData& Item, const struct FHitResult& Hit, FStageSnapGuideList* OutGuides);
 
 	void SetEditMode(EStageEditMode NewMode);
 	void SetArmedItem(class UBaseItemData* NewItem);

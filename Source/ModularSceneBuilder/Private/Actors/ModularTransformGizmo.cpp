@@ -10,6 +10,8 @@
 #include "Interaction/StageCraftCollision.h"
 #include "Interaction/StageTransformRules.h"
 #include "Materials/MaterialInstanceDynamic.h"
+#include "Placement/StageSnapGuidesComponent.h"
+#include "Placement/StageSnapMath.h"
 #include "ProceduralMeshComponent.h"
 #include "UObject/ConstructorHelpers.h"
 
@@ -132,6 +134,10 @@ AModularTransformGizmo::AModularTransformGizmo()
 	UniformScaleComponent->SetupAttachment(GizmoRoot);
 	UniformScaleComponent->SetRelativeScale3D(FVector(UniformHandleSize / 100.0));
 	ConfigureHandle(UniformScaleComponent);
+
+	// Guides are placed in world space, so the root's camera-distance scale does not affect them.
+	SnapGuidesComponent = CreateDefaultSubobject<UStageSnapGuidesComponent>(TEXT("SnapGuides"));
+	SnapGuidesComponent->SetupAttachment(GizmoRoot);
 
 	SetActorHiddenInGame(true);
 	SetActorEnableCollision(false);
@@ -290,6 +296,7 @@ bool AModularTransformGizmo::TryBeginDrag(const FHitResult& HandleHit, const FVe
 	DragStartScale = Target->GetActorScale3D();
 	DragHandleLength = ModularTransformGizmo::ArrowShaftLength * GizmoRoot->GetComponentScale().X;
 	SetAxisHighlighted(Handle, true);
+	OnDragStarted.Broadcast(Target);
 	return true;
 }
 
@@ -316,13 +323,22 @@ void AModularTransformGizmo::UpdateDrag(const FVector& RayOrigin, const FVector&
 
 void AModularTransformGizmo::UpdateTranslateDrag(const FVector& Point)
 {
-	double Distance = (Point - DragStartPoint) | DragAxisDirection;
-	if (TranslationSnap > 0.f)
+	const double Distance = (Point - DragStartPoint) | DragAxisDirection;
+	const double GridDistance = TranslationSnap > 0.f ? FMath::GridSnap(Distance, static_cast<double>(TranslationSnap)) : Distance;
+	FVector Location = DragStartLocation + DragAxisDirection * GridDistance;
+
+	// Object snapping is measured at the unsnapped cursor position; when it engages it wins over the step grid.
+	if (TranslationSnapper.IsBound())
 	{
-		Distance = FMath::GridSnap(Distance, static_cast<double>(TranslationSnap));
+		const FStageSnapOutcome Outcome = TranslationSnapper.Execute(DragStartLocation + DragAxisDirection * Distance, StageSnapMath::AxisBit(DragAxisIndex));
+		if (Outcome.bSnapped)
+		{
+			Location = Outcome.Location;
+		}
+		SnapGuidesComponent->ShowGuides(Outcome.Guides);
 	}
 
-	Target->SetActorLocation(DragStartLocation + DragAxisDirection * Distance);
+	Target->SetActorLocation(Location);
 }
 
 void AModularTransformGizmo::UpdateRotateDrag(const FVector& Point)
@@ -382,12 +398,26 @@ FVector AModularTransformGizmo::DragDirection(int32 HandleIndex, const FVector& 
 
 void AModularTransformGizmo::EndDrag()
 {
-	if (IsDragging())
+	if (!IsDragging())
 	{
-		SetAxisHighlighted(DragAxisIndex, false);
-		DragAxisIndex = INDEX_NONE;
+		return;
 	}
+
+	SetAxisHighlighted(DragAxisIndex, false);
+	DragAxisIndex = INDEX_NONE;
+	SnapGuidesComponent->HideGuides();
+
+	// Cleared before broadcasting, so a listener that starts a new drag or changes mode sees a finished drag.
+	OnDragFinished.Broadcast(IsValid(Target) ? Target.Get() : nullptr, FTransform(DragStartRotation, DragStartLocation, DragStartScale));
 }
+
+#if !UE_BUILD_SHIPPING
+FVector AModularTransformGizmo::DevGetMoveHandleLocation(int32 Axis) const
+{
+	// The middle of the arrow shaft: well inside the handle at any camera distance.
+	return GetActorLocation() + AxisVector(FMath::Clamp(Axis, 0, 2)) * (ModularTransformGizmo::ArrowShaftLength * 0.6 * GizmoRoot->GetComponentScale().X);
+}
+#endif
 
 void AModularTransformGizmo::BuildRingMeshes()
 {

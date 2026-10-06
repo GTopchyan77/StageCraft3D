@@ -7,6 +7,7 @@
 #include "Components/SelectionComponent.h"
 #include "Engine/GameInstance.h"
 #include "ModularSceneBuilder.h"
+#include "Placement/StageSnappingComponent.h"
 #include "Player/ModularPlayerController.h"
 
 #include UE_INLINE_GENERATED_CPP_BY_NAME(StageEditorAudioFeedbackComponent)
@@ -37,6 +38,8 @@ void UStageEditorAudioFeedbackComponent::BeginPlay()
 	Placement->OnItemPlaced.AddUniqueDynamic(this, &ThisClass::HandleItemPlaced);
 	Placement->OnPlacementSnapped.AddUniqueDynamic(this, &ThisClass::HandlePlacementSnapped);
 	Placement->OnPlacementFailed.AddUniqueDynamic(this, &ThisClass::HandlePlacementFailed);
+
+	Controller->GetSnapping()->OnSnapEngaged.AddUniqueDynamic(this, &ThisClass::HandleObjectSnapEngaged);
 }
 
 void UStageEditorAudioFeedbackComponent::EndPlay(const EEndPlayReason::Type EndPlayReason)
@@ -50,6 +53,7 @@ void UStageEditorAudioFeedbackComponent::EndPlay(const EEndPlayReason::Type EndP
 		Placement->OnItemPlaced.RemoveDynamic(this, &ThisClass::HandleItemPlaced);
 		Placement->OnPlacementSnapped.RemoveDynamic(this, &ThisClass::HandlePlacementSnapped);
 		Placement->OnPlacementFailed.RemoveDynamic(this, &ThisClass::HandlePlacementFailed);
+		Controller->GetSnapping()->OnSnapEngaged.RemoveDynamic(this, &ThisClass::HandleObjectSnapEngaged);
 		Controller = nullptr;
 	}
 
@@ -71,6 +75,11 @@ void UStageEditorAudioFeedbackComponent::HandleItemPlaced(AModularBaseActor* Pla
 }
 
 void UStageEditorAudioFeedbackComponent::HandlePlacementSnapped(FVector LandingPoint)
+{
+	Play(StageCraftTags::Sound_Snap);
+}
+
+void UStageEditorAudioFeedbackComponent::HandleObjectSnapEngaged()
 {
 	Play(StageCraftTags::Sound_Snap);
 }

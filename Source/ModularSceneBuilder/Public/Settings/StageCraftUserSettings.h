@@ -42,6 +42,12 @@ public:
 	bool SetEffectsVolume(float Volume);
 	bool SetAudioMuted(bool bMuted);
 
+	/** Object snapping while placing and moving items (UStageSnappingComponent is the only writer). */
+	bool IsSnapToItemsEnabled() const { return bSnapToItems; }
+
+	/** Returns true if the stored value changed. Does not save. */
+	bool SetSnapToItemsEnabled(bool bEnabled);
+
 private:
 	void ResetAudioToDefaults();
 	void SanitizeAudio();
@@ -60,4 +66,7 @@ private:
 
 	UPROPERTY(Config)
 	int32 AudioSettingsVersion = 0;
+
+	UPROPERTY(Config)
+	bool bSnapToItems = true;
 };

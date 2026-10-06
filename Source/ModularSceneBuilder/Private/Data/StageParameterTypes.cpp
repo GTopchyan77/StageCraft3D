@@ -128,4 +128,9 @@ namespace StageCraftTags
 	UE_DEFINE_GAMEPLAY_TAG_COMMENT(Attribute_ColorC,			"StageCraft.Attribute.ColorC",			"Cyan DMX channel (1 - R).");
 	UE_DEFINE_GAMEPLAY_TAG_COMMENT(Attribute_ColorM,			"StageCraft.Attribute.ColorM",			"Magenta DMX channel (1 - G).");
 	UE_DEFINE_GAMEPLAY_TAG_COMMENT(Attribute_ColorY,			"StageCraft.Attribute.ColorY",			"Yellow DMX channel (1 - B).");
+
+	bool IsTransformParameter(const FGameplayTag& ParameterId)
+	{
+		return ParameterId == Param_Transform_Location || ParameterId == Param_Transform_Rotation || ParameterId == Param_Transform_Scale;
+	}
 }

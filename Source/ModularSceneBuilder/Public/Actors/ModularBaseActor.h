@@ -80,6 +80,29 @@ public:
 	UFUNCTION(BlueprintPure, Category = "StageCraft|Item")
 	FText GetInstanceLabel() const;
 
+	/**
+	 * Identity of this placed item for the current stage session. Undo history names items by it, so an item
+	 * that is deleted and restored is still the same item. Assigned at BeginPlay unless restored from a snapshot.
+	 * Not saved: the history is per session.
+	 */
+	const FGuid& GetInstanceId() const { return InstanceId; }
+
+	/**
+	 * Undo support: gives a spawning actor the id of the item it restores. Only valid between
+	 * SpawnActorDeferred and FinishSpawning (before BeginPlay registers the id); ignored with an ensure otherwise.
+	 */
+	void AssignInstanceId(const FGuid& RestoredId);
+
+	/** Captures id, catalog item, transform and the SaveGame properties, for restoring this item later. */
+	struct FStageItemSnapshot CaptureSnapshot() const;
+
+	/**
+	 * Writes a snapshot's SaveGame properties onto this actor. Call between SpawnActorDeferred and
+	 * InitializeFromItemData, so ApplyItemData and BeginPlay see the restored state (e.g. the fixture ID
+	 * registers unchanged). Returns false if the data could not be read; the actor then keeps its defaults.
+	 */
+	bool RestoreSnapshotState(const struct FStageItemSnapshot& Snapshot);
+
 	//~ Begin IInteractableInterface
 	virtual void OnHoverBegin_Implementation() override;
 	virtual void OnHoverEnd_Implementation() override;
@@ -147,6 +170,9 @@ private:
 	void HandleRootTransformUpdated(class USceneComponent* UpdatedComponent, EUpdateTransformFlags UpdateTransformFlags, ETeleportType Teleport);
 
 	FDelegateHandle RootTransformUpdatedHandle;
+
+	UPROPERTY(Transient, VisibleInstanceOnly, Category = "StageCraft|Item")
+	FGuid InstanceId;
 
 	UPROPERTY(Transient, VisibleInstanceOnly, Category = "StageCraft|Interaction")
 	bool bIsHovered = false;

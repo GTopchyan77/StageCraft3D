@@ -55,6 +55,7 @@ void UStagePlacementToolComponent::EndPlay(const EEndPlayReason::Type EndPlayRea
 	}
 
 	PreviewEvaluator.Unbind();
+	PlacementSnapper.Unbind();
 	Super::EndPlay(EndPlayReason);
 }
 
@@ -97,10 +98,12 @@ void UStagePlacementToolComponent::UpdateTarget(const FHitResult& Hit)
 	}
 
 	const FStageItemPlacementRules& Rules = ArmedItem->PlacementRules;
-	const FTransform ItemTransform = StagePlacementMath::ComputePlacementTransform(Rules, Hit.ImpactPoint, Hit.ImpactNormal);
+	FStageSnapGuideList Guides;
+	const FTransform ItemTransform = ComputeLandingTransform(*ArmedItem, Hit, &Guides);
 	// The snapped point on the surface, before the item's pivot offset: what the marker highlights.
 	const FVector LandingPoint = ItemTransform.GetLocation() - ItemTransform.GetRotation().RotateVector(Rules.PlacementOffset);
 
+	// Object snaps announce themselves through the snapping component; this is the grid step feedback.
 	if (StagePlacementMath::UsesGridSnapping(Rules))
 	{
 		NotifyIfSnapped(LandingPoint);
@@ -110,8 +113,32 @@ void UStagePlacementToolComponent::UpdateTarget(const FHitResult& Hit)
 	if (AStagePlacementPreview* PreviewActor = GetOrCreatePreview())
 	{
 		PreviewState = ArmedItemVerdict;
-		PreviewActor->ShowAt(ItemTransform, LandingPoint, Hit.ImpactNormal, PreviewState);
+		PreviewActor->ShowAt(ItemTransform, LandingPoint, Hit.ImpactNormal, PreviewState, Guides);
 	}
+}
+
+FTransform UStagePlacementToolComponent::ComputeLandingTransform(const UBaseItemData& Item, const FHitResult& Hit, FStageSnapGuideList* OutGuides)
+{
+	const FTransform GridTransform = StagePlacementMath::ComputePlacementTransform(Item.PlacementRules, Hit.ImpactPoint, Hit.ImpactNormal);
+	if (!PlacementSnapper.IsBound())
+	{
+		return GridTransform;
+	}
+
+	// Object snapping is measured where the cursor really is, not at the grid cell, or a neighbour off the grid could never be reached.
+	FStageItemPlacementRules FreeRules = Item.PlacementRules;
+	FreeRules.GridSize = FVector::ZeroVector;
+	const FTransform FreeTransform = StagePlacementMath::ComputePlacementTransform(FreeRules, Hit.ImpactPoint, Hit.ImpactNormal);
+
+	FStageSnapOutcome Outcome = PlacementSnapper.Execute(Item, FreeTransform, GridTransform);
+	if (OutGuides)
+	{
+		*OutGuides = MoveTemp(Outcome.Guides);
+	}
+
+	FTransform Result = GridTransform;
+	Result.SetLocation(Outcome.Location);
+	return Result;
 }
 
 void UStagePlacementToolComponent::ClearTarget()
@@ -139,7 +166,7 @@ AModularBaseActor* UStagePlacementToolComponent::TryPlace(const FHitResult& Hit)
 	}
 
 	// The exact transform the preview shows for this hit.
-	const FTransform ItemTransform = StagePlacementMath::ComputePlacementTransform(ArmedItem->PlacementRules, Hit.ImpactPoint, Hit.ImpactNormal);
+	const FTransform ItemTransform = ComputeLandingTransform(*ArmedItem, Hit, nullptr);
 	AModularBaseActor* Placed = SpawnSystem->SpawnItem(ArmedItem, ItemTransform);
 	if (!Placed)
 	{

@@ -50,6 +50,10 @@ void UStageSessionSubsystem::RegisterItem(AModularBaseActor* Item)
 		return;
 	}
 
+	// Ids are unique by construction (new at BeginPlay, or restored only when no live item has them); a clash would let undo edit the wrong item.
+	const AModularBaseActor* Existing = FindItemById(Item->GetInstanceId());
+	ensureMsgf(!Existing, TEXT("Stage session: %s registered with the instance id of %s."), *Item->GetName(), *GetNameSafe(Existing));
+
 	Items.Add(Item);
 	Item->OnParameterChanged.AddUniqueDynamic(this, &ThisClass::HandleItemParameterChanged);
 	RecomputeStats();
@@ -93,6 +97,25 @@ TArray<AModularBaseActor*> UStageSessionSubsystem::GetPlacedItems() const
 	return Result;
 }
 
+AModularBaseActor* UStageSessionSubsystem::FindItemById(const FGuid& InstanceId) const
+{
+	if (!InstanceId.IsValid())
+	{
+		return nullptr;
+	}
+
+	// Linear: a stage holds tens to hundreds of items, and lookups happen per undo step, not per frame.
+	for (const TWeakObjectPtr<AModularBaseActor>& Item : Items)
+	{
+		AModularBaseActor* Actor = Item.Get();
+		if (Actor && !Actor->IsActorBeingDestroyed() && Actor->GetInstanceId() == InstanceId)
+		{
+			return Actor;
+		}
+	}
+	return nullptr;
+}
+
 void UStageSessionSubsystem::HandleItemParameterChanged(AModularBaseActor* Item, FGameplayTag ParameterId)
 {
 	// An invalid tag means the structure changed (item type swapped), which changes power and weight.
@@ -105,8 +128,7 @@ void UStageSessionSubsystem::HandleItemParameterChanged(AModularBaseActor* Item,
 
 	// Moves arrive here from the gizmo as well as from the inspector. Attribute changes do not mark
 	// the session dirty: cue playback and DMX change them constantly without editing the stage.
-	if (ParameterId == StageCraftTags::Param_Transform_Location || ParameterId == StageCraftTags::Param_Transform_Rotation
-		|| ParameterId == StageCraftTags::Param_Transform_Scale)
+	if (StageCraftTags::IsTransformParameter(ParameterId))
 	{
 		SetDirty(true);
 	}

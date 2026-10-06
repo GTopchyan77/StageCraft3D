@@ -8,6 +8,7 @@
 #include "Engine/StaticMesh.h"
 #include "Materials/MaterialInstanceDynamic.h"
 #include "ModularSceneBuilder.h"
+#include "Placement/StageSnapGuidesComponent.h"
 #include "UObject/ConstructorHelpers.h"
 
 #include UE_INLINE_GENERATED_CPP_BY_NAME(StagePlacementPreview)
@@ -60,6 +61,9 @@ AStagePlacementPreview::AStagePlacementPreview()
 	LandingMarker->SetUsingAbsoluteRotation(true);
 	LandingMarker->SetUsingAbsoluteScale(true);
 
+	SnapGuidesComponent = CreateDefaultSubobject<UStageSnapGuidesComponent>(TEXT("SnapGuides"));
+	SnapGuidesComponent->SetupAttachment(PreviewRoot);
+
 	SetActorEnableCollision(false);
 	SetActorHiddenInGame(true);
 }
@@ -98,7 +102,7 @@ void AStagePlacementPreview::SetItem(const UBaseItemData* Item)
 	ApplyGhostMaterials();
 }
 
-void AStagePlacementPreview::ShowAt(const FTransform& ItemTransform, const FVector& LandingPoint, const FVector& SurfaceNormal, EStagePlacementPreviewState State)
+void AStagePlacementPreview::ShowAt(const FTransform& ItemTransform, const FVector& LandingPoint, const FVector& SurfaceNormal, EStagePlacementPreviewState State, TConstArrayView<FStageSnapGuide> SnapGuides)
 {
 	if (!ensureMsgf(State != EStagePlacementPreviewState::Hidden, TEXT("ShowAt needs a visible state; call HidePreview instead.")))
 	{
@@ -115,6 +119,7 @@ void AStagePlacementPreview::ShowAt(const FTransform& ItemTransform, const FVect
 	LandingMarker->MarkRenderStateDirty();
 
 	ApplyColor(State);
+	SnapGuidesComponent->ShowGuides(SnapGuides);
 	SetActorHiddenInGame(false);
 }
 
@@ -156,4 +161,9 @@ FVector AStagePlacementPreview::ComputeMarkerSize() const
 	const FVector Extent = Mesh ? Mesh->GetBounds().BoxExtent : FVector::ZeroVector;
 	const double HalfSize = FMath::Max3(Extent.X, Extent.Y, MinMarkerHalfSize);
 	return FVector(StagePlacementPreview::MarkerProjectionHalfDepth, HalfSize, HalfSize);
+}
+
+int32 AStagePlacementPreview::GetVisibleSnapGuideCount() const
+{
+	return IsPreviewVisible() ? SnapGuidesComponent->GetVisibleGuideCount() : 0;
 }

@@ -193,6 +193,9 @@ namespace StageCraftTags
 	MODULARSCENEBUILDER_API UE_DECLARE_GAMEPLAY_TAG_EXTERN(Param_Rigging_MaxPointLoad);
 	MODULARSCENEBUILDER_API UE_DECLARE_GAMEPLAY_TAG_EXTERN(Param_Rigging_Points);
 
+	/** Location, Rotation or Scale: the parameters that make up an item's world transform. */
+	MODULARSCENEBUILDER_API bool IsTransformParameter(const FGameplayTag& ParameterId);
+
 	// Fixture attributes: recordable in cues and addressable over DMX. Stored as floats in physical units.
 	MODULARSCENEBUILDER_API UE_DECLARE_GAMEPLAY_TAG_EXTERN(Attribute);
 	MODULARSCENEBUILDER_API UE_DECLARE_GAMEPLAY_TAG_EXTERN(Attribute_Dimmer);		// 0..1

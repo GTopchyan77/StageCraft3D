@@ -8,7 +8,10 @@
 #include "Framework/Application/SlateApplication.h"
 #include "Framework/MultiBox/MultiBoxBuilder.h"
 #include "GameplayTagContainer.h"
+#include "History/StageEditHistoryComponent.h"
+#include "History/StageEditHistorySubsystem.h"
 #include "Placement/StagePlacementToolComponent.h"
+#include "Placement/StageSnappingComponent.h"
 #include "Player/ModularPlayerController.h"
 #include "Widgets/Input/SEditableTextBox.h"
 #include "Widgets/Input/SSlider.h"
@@ -28,7 +31,7 @@ void SStageWorkspaceMenuBar::Construct(const FArguments& InArgs, UStageWorkspace
 	Workspace = InWorkspace;
 
 	FMenuBarBuilder MenuBar(nullptr);
-	MenuBar.AddPullDownMenu(LOCTEXT("EditMenu", "Edit"), LOCTEXT("EditMenuTip", "Select or place items, and choose the transform tool."),
+	MenuBar.AddPullDownMenu(LOCTEXT("EditMenu", "Edit"), LOCTEXT("EditMenuTip", "Undo and redo, select or place items, choose the transform tool and snapping."),
 		FNewMenuDelegate::CreateSP(this, &SStageWorkspaceMenuBar::FillEditMenu));
 	MenuBar.AddPullDownMenu(LOCTEXT("WindowMenu", "Window"), LOCTEXT("WindowMenuTip", "Open, focus or close panels."),
 		FNewMenuDelegate::CreateSP(this, &SStageWorkspaceMenuBar::FillWindowMenu));
@@ -65,6 +68,28 @@ void SStageWorkspaceMenuBar::FillEditMenu(FMenuBuilder& MenuBuilder)
 	{
 		return;
 	}
+
+	// Labels are built when the menu opens, so they name the step that would be undone right now.
+	MenuBuilder.BeginSection(TEXT("History"), LOCTEXT("HistorySection", "History"));
+	{
+		const UStageEditHistorySubsystem* History = WeakController->GetEditHistory() ? WeakController->GetEditHistory()->GetHistory() : nullptr;
+		const FText UndoName = History ? History->GetUndoDescription() : FText::GetEmpty();
+		const FText RedoName = History ? History->GetRedoDescription() : FText::GetEmpty();
+
+		MenuBuilder.AddMenuEntry(
+			UndoName.IsEmpty() ? LOCTEXT("UndoNothing", "Undo  (Ctrl+Z)") : FText::Format(LOCTEXT("UndoStep", "Undo {0}  (Ctrl+Z)"), UndoName),
+			LOCTEXT("UndoTip", "Revert the last placement, deletion or transform edit."), FSlateIcon(),
+			FUIAction(
+				FExecuteAction::CreateLambda([WeakController]() { if (WeakController.IsValid()) { WeakController->RequestUndo(); } }),
+				FCanExecuteAction::CreateLambda([bCanUndo = !UndoName.IsEmpty()]() { return bCanUndo; })));
+		MenuBuilder.AddMenuEntry(
+			RedoName.IsEmpty() ? LOCTEXT("RedoNothing", "Redo  (Ctrl+Y)") : FText::Format(LOCTEXT("RedoStep", "Redo {0}  (Ctrl+Y)"), RedoName),
+			LOCTEXT("RedoTip", "Re-apply the last undone step (also Ctrl+Shift+Z)."), FSlateIcon(),
+			FUIAction(
+				FExecuteAction::CreateLambda([WeakController]() { if (WeakController.IsValid()) { WeakController->RequestRedo(); } }),
+				FCanExecuteAction::CreateLambda([bCanRedo = !RedoName.IsEmpty()]() { return bCanRedo; })));
+	}
+	MenuBuilder.EndSection();
 
 	MenuBuilder.BeginSection(TEXT("EditMode"), LOCTEXT("ModeSection", "Mode"));
 	const auto AddModeEntry = [&MenuBuilder, WeakController](EStageEditMode Mode, const FText& Label, const FText& Tip)
@@ -113,6 +138,27 @@ void SStageWorkspaceMenuBar::FillEditMenu(FMenuBuilder& MenuBuilder)
 	AddGizmoEntry(EGizmoMode::Translate, LOCTEXT("MoveTool", "Move"));
 	AddGizmoEntry(EGizmoMode::Rotate, LOCTEXT("RotateTool", "Rotate"));
 	AddGizmoEntry(EGizmoMode::Scale, LOCTEXT("ScaleTool", "Scale"));
+	MenuBuilder.EndSection();
+
+	MenuBuilder.BeginSection(TEXT("Snapping"), LOCTEXT("SnappingSection", "Snapping"));
+	MenuBuilder.AddMenuEntry(LOCTEXT("SnapToItems", "Snap to Items"),
+		LOCTEXT("SnapToItemsTip", "While placing or moving, lock onto nearby items: side by side, stacked, or with edges and centres aligned. Guides show which faces line up."),
+		FSlateIcon(),
+		FUIAction(
+			FExecuteAction::CreateLambda([WeakController]()
+			{
+				if (UStageSnappingComponent* SnappingComponent = WeakController.IsValid() ? WeakController->GetSnapping() : nullptr)
+				{
+					SnappingComponent->SetSnapToItemsEnabled(!SnappingComponent->IsSnapToItemsEnabled());
+				}
+			}),
+			FCanExecuteAction(),
+			FIsActionChecked::CreateLambda([WeakController]()
+			{
+				const UStageSnappingComponent* SnappingComponent = WeakController.IsValid() ? WeakController->GetSnapping() : nullptr;
+				return SnappingComponent && SnappingComponent->IsSnapToItemsEnabled();
+			})),
+		NAME_None, EUserInterfaceActionType::ToggleButton);
 	MenuBuilder.EndSection();
 }
 

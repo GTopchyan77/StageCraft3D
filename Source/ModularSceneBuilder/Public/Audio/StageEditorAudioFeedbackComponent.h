@@ -10,7 +10,7 @@
 
 /**
  * Maps editor events of its owning AModularPlayerController to feedback cues, and nothing else:
- *   selection of an item -> Select, item placed -> Place, preview snapped -> Snap,
+ *   selection of an item -> Select, item placed -> Place, preview or move snapped (grid or item) -> Snap,
  *   placement failed or any request refused -> Error.
  *
  * Keeps the audio subsystem free of gameplay knowledge and the controller free of audio knowledge.
@@ -39,6 +39,9 @@ private:
 
 	UFUNCTION()
 	void HandlePlacementSnapped(FVector LandingPoint);
+
+	UFUNCTION()
+	void HandleObjectSnapEngaged();
 
 	UFUNCTION()
 	void HandlePlacementFailed(EStagePlacementFailure Reason);

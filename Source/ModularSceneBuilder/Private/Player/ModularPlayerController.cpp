@@ -21,9 +21,12 @@
 #include "InputActionValue.h"
 #include "InputMappingContext.h"
 #include "InputModifiers.h"
+#include "InputTriggers.h"
+#include "History/StageEditHistoryComponent.h"
 #include "Interaction/StageCraftCollision.h"
 #include "ModularSceneBuilder.h"
 #include "Placement/StagePlacementToolComponent.h"
+#include "Placement/StageSnappingComponent.h"
 #include "Player/StageCameraPawn.h"
 #include "Player/StageCraftGameViewportClient.h"
 #include "Subsystems/StageEconomySubsystem.h"
@@ -63,6 +66,8 @@ AModularPlayerController::AModularPlayerController()
 	Selection = CreateDefaultSubobject<USelectionComponent>(TEXT("Selection"));
 	PlacementTool = CreateDefaultSubobject<UStagePlacementToolComponent>(TEXT("PlacementTool"));
 	AudioFeedback = CreateDefaultSubobject<UStageEditorAudioFeedbackComponent>(TEXT("AudioFeedback"));
+	EditHistory = CreateDefaultSubobject<UStageEditHistoryComponent>(TEXT("EditHistory"));
+	Snapping = CreateDefaultSubobject<UStageSnappingComponent>(TEXT("Snapping"));
 	GizmoClass = AModularTransformGizmo::StaticClass();
 }
 
@@ -98,11 +103,20 @@ void AModularPlayerController::BeginPlay()
 		Gizmo = GetWorld()->SpawnActor<AModularTransformGizmo>(GizmoClass, FTransform::Identity, SpawnParams);
 	}
 
+	if (Gizmo)
+	{
+		// Drags snap onto neighbours and become one undo step each when they end.
+		Gizmo->TranslationSnapper.BindUObject(Snapping.Get(), &UStageSnappingComponent::SnapMove);
+		Gizmo->OnDragStarted.AddUniqueDynamic(this, &ThisClass::HandleGizmoDragStarted);
+		Gizmo->OnDragFinished.AddUniqueDynamic(this, &ThisClass::HandleGizmoDragFinished);
+	}
+
 	Selection->OnSelectionChanged.AddUniqueDynamic(this, &ThisClass::HandleSelectionChanged);
 
 	// Every spawn is decided by the GameMode through this controller; the preview colour asks the same rules without reporting.
 	SpawnSystem->PlacementValidator.BindUObject(this, &ThisClass::ValidatePlacement);
 	PlacementTool->PreviewEvaluator.BindUObject(this, &ThisClass::EvaluatePlacementPreview);
+	PlacementTool->PlacementSnapper.BindUObject(Snapping.Get(), &UStageSnappingComponent::SnapPlacement);
 	PlacementTool->OnEditModeChanged.AddUniqueDynamic(this, &ThisClass::HandleEditModeChanged);
 	PlacementTool->OnArmedItemChanged.AddUniqueDynamic(this, &ThisClass::HandleArmedItemChanged);
 	BindPreviewRefreshSources();
@@ -141,6 +155,7 @@ void AModularPlayerController::EndPlay(const EEndPlayReason::Type EndPlayReason)
 	Selection->OnSelectionChanged.RemoveDynamic(this, &ThisClass::HandleSelectionChanged);
 	SpawnSystem->PlacementValidator.Unbind();
 	PlacementTool->PreviewEvaluator.Unbind();
+	PlacementTool->PlacementSnapper.Unbind();
 	PlacementTool->OnEditModeChanged.RemoveDynamic(this, &ThisClass::HandleEditModeChanged);
 	PlacementTool->OnArmedItemChanged.RemoveDynamic(this, &ThisClass::HandleArmedItemChanged);
 	if (UStageEconomySubsystem* Economy = GetEconomy())
@@ -161,6 +176,9 @@ void AModularPlayerController::EndPlay(const EEndPlayReason::Type EndPlayReason)
 
 	if (Gizmo)
 	{
+		Gizmo->TranslationSnapper.Unbind();
+		Gizmo->OnDragStarted.RemoveDynamic(this, &ThisClass::HandleGizmoDragStarted);
+		Gizmo->OnDragFinished.RemoveDynamic(this, &ThisClass::HandleGizmoDragFinished);
 		Gizmo->Destroy();
 		Gizmo = nullptr;
 	}
@@ -172,7 +190,8 @@ void AModularPlayerController::SetupInputComponent()
 {
 	Super::SetupInputComponent();
 
-	if (!EditorMappingContext || !PlaceAction || !NavigateAction || !DeleteAction || !CancelAction || !ToggleGizmoModeAction || !TogglePlaceModeAction)
+	if (!EditorMappingContext || !PlaceAction || !NavigateAction || !DeleteAction || !CancelAction || !ToggleGizmoModeAction || !TogglePlaceModeAction
+		|| !UndoAction || !RedoAction)
 	{
 		BuildDefaultInputMapping();
 	}
@@ -208,6 +227,8 @@ void AModularPlayerController::SetupInputComponent()
 	EnhancedInput->BindAction(CancelAction, ETriggerEvent::Started, this, &ThisClass::HandleCancel);
 	EnhancedInput->BindAction(ToggleGizmoModeAction, ETriggerEvent::Started, this, &ThisClass::HandleToggleGizmoMode);
 	EnhancedInput->BindAction(TogglePlaceModeAction, ETriggerEvent::Started, this, &ThisClass::HandleTogglePlaceMode);
+	EnhancedInput->BindAction(UndoAction, ETriggerEvent::Started, this, &ThisClass::HandleUndo);
+	EnhancedInput->BindAction(RedoAction, ETriggerEvent::Started, this, &ThisClass::HandleRedo);
 
 	// Always mapped. Look and move act only while NavigateAction is held; speed (wheel) acts any time.
 	EnhancedInput->BindAction(CameraLookAction, ETriggerEvent::Triggered, this, &ThisClass::HandleCameraLook);
@@ -243,16 +264,53 @@ void AModularPlayerController::BuildDefaultInputMapping()
 	{
 		TogglePlaceModeAction = NewObject<UInputAction>(this, TEXT("IA_TogglePlaceMode_Default"));
 	}
+	if (!UndoAction)
+	{
+		UndoAction = NewObject<UInputAction>(this, TEXT("IA_Undo_Default"));
+	}
+	if (!RedoAction)
+	{
+		RedoAction = NewObject<UInputAction>(this, TEXT("IA_Redo_Default"));
+	}
 
 	// A fresh context, because an assigned one cannot be trusted to map actions it was not authored with.
-	// P is free in the camera context (which maps W/A/S/D/Q/E), so it is never consumed by navigation.
+	// P, Z and Y are free in the camera context (which maps W/A/S/D/Q/E), so they are never consumed by navigation.
 	EditorMappingContext = NewObject<UInputMappingContext>(this, TEXT("IMC_StageEditor_Default"));
+	MapUndoRedoChords(*EditorMappingContext);
 	EditorMappingContext->MapKey(PlaceAction, EKeys::LeftMouseButton);
 	EditorMappingContext->MapKey(NavigateAction, EKeys::RightMouseButton);
 	EditorMappingContext->MapKey(DeleteAction, EKeys::Delete);
 	EditorMappingContext->MapKey(CancelAction, EKeys::Escape);
 	EditorMappingContext->MapKey(ToggleGizmoModeAction, EKeys::SpaceBar);
 	EditorMappingContext->MapKey(TogglePlaceModeAction, EKeys::P);
+}
+
+void AModularPlayerController::MapUndoRedoChords(UInputMappingContext& Context)
+{
+	// Modifier keys are actions of their own, used only as chords. They come first so their state is
+	// evaluated before the chorded keys in the same frame.
+	UInputAction* ControlChord = NewObject<UInputAction>(&Context, TEXT("IA_ModifierControl_Default"));
+	UInputAction* ShiftChord = NewObject<UInputAction>(&Context, TEXT("IA_ModifierShift_Default"));
+	Context.MapKey(ControlChord, EKeys::LeftControl);
+	Context.MapKey(ControlChord, EKeys::RightControl);
+	Context.MapKey(ShiftChord, EKeys::LeftShift);
+	Context.MapKey(ShiftChord, EKeys::RightShift);
+
+	const auto AddChord = [&Context](FEnhancedActionKeyMapping& Mapping, const UInputAction* Chord)
+	{
+		UInputTriggerChordAction* Trigger = NewObject<UInputTriggerChordAction>(&Context);
+		Trigger->ChordAction = Chord;
+		Mapping.Triggers.Add(Trigger);
+	};
+
+	// Ctrl+Shift+Z is mapped before Ctrl+Z on purpose: Enhanced Input then blocks the later Z mapping
+	// while the earlier chorded one triggers (IEnhancedInputSubsystemInterface::InjectChordBlockers),
+	// so Ctrl+Shift+Z redoes without also undoing.
+	FEnhancedActionKeyMapping& RedoShiftZ = Context.MapKey(RedoAction, EKeys::Z);
+	AddChord(RedoShiftZ, ControlChord);
+	AddChord(RedoShiftZ, ShiftChord);
+	AddChord(Context.MapKey(UndoAction, EKeys::Z), ControlChord);
+	AddChord(Context.MapKey(RedoAction, EKeys::Y), ControlChord);
 }
 
 void AModularPlayerController::BuildDefaultCameraMapping()
@@ -512,10 +570,33 @@ void AModularPlayerController::HandleDelete()
 		return;
 	}
 
-	// Released before destruction rather than via OnDestroyed, so the gizmo and inspector never
-	// observe a selected actor that is being torn down.
-	Selection->ClearSelection();
-	SpawnSystem->TryDeleteActor(Target);
+	// One undoable step; the history component releases the selection before the actor is torn down.
+	EditHistory->DeleteItem(Target);
+}
+
+void AModularPlayerController::HandleUndo()
+{
+	RequestUndo();
+}
+
+void AModularPlayerController::HandleRedo()
+{
+	RequestRedo();
+}
+
+void AModularPlayerController::HandleGizmoDragStarted(AActor* Target)
+{
+	if (Target)
+	{
+		Snapping->BeginMove(*Target);
+	}
+}
+
+void AModularPlayerController::HandleGizmoDragFinished(AActor* Target, const FTransform& StartTransform)
+{
+	Snapping->EndMove();
+	// The whole drag is one step, however many frames it took.
+	EditHistory->RecordTransformChange(Target, StartTransform);
 }
 
 void AModularPlayerController::HandleCancel()
@@ -759,13 +840,54 @@ FStageEconomyResultInfo AModularPlayerController::RequestParameterChange(UObject
 		return Verdict;
 	}
 
+	// Transform edits are undoable; the value actually stored (after clamping) is what gets recorded.
+	AActor* TransformTarget = StageCraftTags::IsTransformParameter(ParameterId) ? Cast<AActor>(Target) : nullptr;
+	const FTransform TransformBefore = TransformTarget ? TransformTarget->GetActorTransform() : FTransform::Identity;
+
 	// A value the target cannot take (wrong type, read-only id) is not a rule violation, so it is
 	// returned but not reported; the panel snaps back on read-back anyway.
 	if (!Session->ApplyParameterChange(Target, ParameterId, Value))
 	{
 		return FStageEconomyResultInfo::Fail(EStageEconomyResult::InvalidRequest, LOCTEXT("NotAccepted", "The value was not accepted."));
 	}
+
+	if (TransformTarget)
+	{
+		EditHistory->RecordTransformChange(TransformTarget, TransformBefore);
+	}
 	return FStageEconomyResultInfo::Ok();
+}
+
+EStageCommandResult AModularPlayerController::RequestUndo()
+{
+	return RequestHistoryStep(/*bUndo*/ true);
+}
+
+EStageCommandResult AModularPlayerController::RequestRedo()
+{
+	return RequestHistoryStep(/*bUndo*/ false);
+}
+
+EStageCommandResult AModularPlayerController::RequestHistoryStep(bool bUndo)
+{
+	// Mid-drag the gizmo owns the target's transform; reverting it underneath would fight the drag.
+	if (bIsNavigatingCamera || IsGizmoDragging())
+	{
+		return EStageCommandResult::NothingToDo;
+	}
+
+	const EStageCommandResult Result = bUndo ? EditHistory->Undo() : EditHistory->Redo();
+	if (Result == EStageCommandResult::Invalid)
+	{
+		// Refusals were reported by the placement validator; a step that can never apply is reported here, then dropped.
+		ReportRejection(FStageEconomyResultInfo::Fail(EStageEconomyResult::InvalidRequest, bUndo
+			? LOCTEXT("UndoInvalid", "That step can no longer be undone: its item no longer exists.")
+			: LOCTEXT("RedoInvalid", "That step can no longer be redone: its item no longer exists.")));
+	}
+
+	// The ghost may have been resting on an item that just appeared, moved or disappeared.
+	RequestPreviewRefresh();
+	return Result;
 }
 
 FStageEconomyResultInfo AModularPlayerController::RequestPurchase(UStageProductData* Product)

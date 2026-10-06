@@ -21,6 +21,7 @@ void UStageCraftUserSettings::SetToDefaults()
 {
 	Super::SetToDefaults();
 	ResetAudioToDefaults();
+	bSnapToItems = true;
 }
 
 void UStageCraftUserSettings::LoadSettings(bool bForceReload)
@@ -54,6 +55,13 @@ bool UStageCraftUserSettings::SetAudioMuted(bool bMuted)
 {
 	const bool bChanged = bAudioMuted != bMuted;
 	bAudioMuted = bMuted;
+	return bChanged;
+}
+
+bool UStageCraftUserSettings::SetSnapToItemsEnabled(bool bEnabled)
+{
+	const bool bChanged = bSnapToItems != bEnabled;
+	bSnapToItems = bEnabled;
 	return bChanged;
 }
 

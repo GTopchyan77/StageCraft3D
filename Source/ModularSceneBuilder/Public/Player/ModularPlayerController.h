@@ -6,6 +6,7 @@
 #include "GameFramework/PlayerController.h"
 #include "Data/StageParameterTypes.h"
 #include "Economy/StageEconomyTypes.h"
+#include "History/StageEditCommand.h"
 #include "Placement/StagePlacementTypes.h"
 #include "ModularPlayerController.generated.h"
 
@@ -17,7 +18,8 @@ DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FOnStageRequestRejected, const FStag
  *   UStagePlacementToolComponent (edit mode, ghost preview, single-click placement),
  *   USpawnSystemComponent (spawn/delete executor), USelectionComponent (selection),
  *   AModularTransformGizmo (move/rotate/scale), AStageCameraPawn (fly camera),
- *   UStageEditorAudioFeedbackComponent (feedback cues).
+ *   UStageEditorAudioFeedbackComponent (feedback cues), UStageEditHistoryComponent (undo/redo),
+ *   UStageSnappingComponent (object snapping for placement and gizmo moves).
  *
  * Mouse buttons have exclusive jobs, as in the Unreal Editor viewport:
  *  - Left, Place mode: places exactly one armed item where the ghost shows it; Place mode stays active for the next copy.
@@ -31,7 +33,8 @@ DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FOnStageRequestRejected, const FStag
  *  - Wheel: fly speed, with or without the right button held. It scales every fly axis alike.
  *
  * Keys: P toggles Place mode, Esc leaves Place mode (or, in Select mode, deselects and disarms),
- * Delete removes the selected item, Space cycles the gizmo Move -> Rotate -> Scale.
+ * Delete removes the selected item, Space cycles the gizmo Move -> Rotate -> Scale, Ctrl+Z undoes and
+ * Ctrl+Y / Ctrl+Shift+Z redo (text fields keep these keys while they have focus).
  *
  * The placement preview follows the cursor without any tick: cursor moves (viewport client), camera
  * moves (pawn root) and view rotation (SetControlRotation) request one coalesced trace on the next tick,
@@ -64,6 +67,12 @@ public:
 
 	UFUNCTION(BlueprintPure, Category = "StageCraft")
 	class AModularTransformGizmo* GetGizmo() const { return Gizmo; }
+
+	UFUNCTION(BlueprintPure, Category = "StageCraft")
+	class UStageEditHistoryComponent* GetEditHistory() const { return EditHistory; }
+
+	UFUNCTION(BlueprintPure, Category = "StageCraft")
+	class UStageSnappingComponent* GetSnapping() const { return Snapping; }
 
 	UFUNCTION(BlueprintPure, Category = "StageCraft|UI")
 	class UUserWidget* GetHUDWidget() const { return HUDWidget; }
@@ -121,6 +130,18 @@ public:
 	 */
 	void DecorateParameterSections(const UObject* Target, TArray<FStageParameterSection>& Sections) const;
 
+	/**
+	 * Reverts the latest placement, deletion or transform edit (Ctrl+Z, Edit menu). Ignored while a gizmo
+	 * drag or camera navigation is in progress. A step the rules refuse now (e.g. restoring an item past the
+	 * session limit) stays in the history and is reported like any refused request.
+	 */
+	UFUNCTION(BlueprintCallable, Category = "StageCraft|Requests")
+	EStageCommandResult RequestUndo();
+
+	/** Re-applies the latest undone step (Ctrl+Y or Ctrl+Shift+Z, Edit menu). Same guards as RequestUndo. */
+	UFUNCTION(BlueprintCallable, Category = "StageCraft|Requests")
+	EStageCommandResult RequestRedo();
+
 	/** Every refused request (UI toasts, shop prompts, error cue). */
 	UPROPERTY(BlueprintAssignable, Category = "StageCraft|Requests")
 	FOnStageRequestRejected OnRequestRejected;
@@ -153,6 +174,12 @@ protected:
 
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Components")
 	TObjectPtr<class UStageEditorAudioFeedbackComponent> AudioFeedback = nullptr;
+
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Components")
+	TObjectPtr<class UStageEditHistoryComponent> EditHistory = nullptr;
+
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Components")
+	TObjectPtr<class UStageSnappingComponent> Snapping = nullptr;
 
 	/** Spawned once for the local player and re-targeted on every selection change. */
 	UPROPERTY(EditDefaultsOnly, Category = "StageCraft|Gizmo")
@@ -192,6 +219,14 @@ protected:
 	UPROPERTY(EditDefaultsOnly, Category = "StageCraft|Input")
 	TObjectPtr<class UInputAction> TogglePlaceModeAction = nullptr;
 
+	/** Undo (Ctrl+Z). An assigned action must be mapped with its own Ctrl chord in EditorMappingContext. */
+	UPROPERTY(EditDefaultsOnly, Category = "StageCraft|Input")
+	TObjectPtr<class UInputAction> UndoAction = nullptr;
+
+	/** Redo (Ctrl+Y and Ctrl+Shift+Z). An assigned action must be mapped with its own chords in EditorMappingContext. */
+	UPROPERTY(EditDefaultsOnly, Category = "StageCraft|Input")
+	TObjectPtr<class UInputAction> RedoAction = nullptr;
+
 	UPROPERTY(EditDefaultsOnly, Category = "StageCraft|Input")
 	int32 MappingContextPriority = 0;
 
@@ -228,6 +263,7 @@ protected:
 private:
 	void BuildDefaultInputMapping();
 	void BuildDefaultCameraMapping();
+	void MapUndoRedoChords(class UInputMappingContext& Context);
 
 	UFUNCTION()
 	void HandleSelectionChanged(AActor* NewSelection, AActor* PreviousSelection);
@@ -260,6 +296,17 @@ private:
 	void HandleCancel();
 	void HandleToggleGizmoMode();
 	void HandleTogglePlaceMode();
+	void HandleUndo();
+	void HandleRedo();
+
+	UFUNCTION()
+	void HandleGizmoDragStarted(AActor* Target);
+
+	UFUNCTION()
+	void HandleGizmoDragFinished(AActor* Target, const FTransform& StartTransform);
+
+	/** Shared by undo and redo: input guards, the step itself, and reporting a step that can never apply. */
+	EStageCommandResult RequestHistoryStep(bool bUndo);
 
 	void HandleCameraLook(const struct FInputActionValue& Value);
 	void HandleCameraMove(const struct FInputActionValue& Value);

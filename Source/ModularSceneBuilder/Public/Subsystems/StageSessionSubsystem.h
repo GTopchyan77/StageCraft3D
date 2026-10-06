@@ -53,6 +53,9 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "StageCraft|Session")
 	TArray<class AModularBaseActor*> GetPlacedItems() const;
 
+	/** The live placed item with this instance id (AModularBaseActor::GetInstanceId), or null. */
+	class AModularBaseActor* FindItemById(const FGuid& InstanceId) const;
+
 	UFUNCTION(BlueprintPure, Category = "StageCraft|Session")
 	const FStageSessionStats& GetStats() const { return Stats; }
 
