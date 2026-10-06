@@ -97,6 +97,7 @@ namespace StageCraftTags
 	UE_DEFINE_GAMEPLAY_TAG_COMMENT(Param_Info_Power,			"StageCraft.Param.Info.Power",			"Power draw in W (read-only).");
 	UE_DEFINE_GAMEPLAY_TAG_COMMENT(Param_Transform_Location,	"StageCraft.Param.Transform.Location",	"World location in cm.");
 	UE_DEFINE_GAMEPLAY_TAG_COMMENT(Param_Transform_Rotation,	"StageCraft.Param.Transform.Rotation",	"World rotation in degrees.");
+	UE_DEFINE_GAMEPLAY_TAG_COMMENT(Param_Transform_Scale,		"StageCraft.Param.Transform.Scale",		"Per-axis scale, clamped to StageTransformRules limits.");
 	UE_DEFINE_GAMEPLAY_TAG_COMMENT(Param_Patch_FixtureId,		"StageCraft.Param.Patch.FixtureId",		"Console fixture ID.");
 	UE_DEFINE_GAMEPLAY_TAG_COMMENT(Param_Patch_Universe,		"StageCraft.Param.Patch.Universe",		"DMX universe (0 = unpatched).");
 	UE_DEFINE_GAMEPLAY_TAG_COMMENT(Param_Patch_Address,			"StageCraft.Param.Patch.Address",		"DMX start address 1..512.");

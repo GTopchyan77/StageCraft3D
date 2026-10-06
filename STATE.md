@@ -545,7 +545,7 @@ This entry makes the Phase 5 core (#9) visible and usable in PIE: a working Gran
 - **Editor viewport:** screenshots confirm the volumetric beams (white up, blue tilted) and that the fixture meshes and floor are present.
 - **Not yet verified by Gevor.** Still open: gizmo drag with live Transform rows, the Color R/G/B edit, text-label edit, and selecting the speaker and truss (Audio / Rigging sections). The Phase 4 checklist (#8) is still open too.
 
-**Commit:** uncommitted (working tree)
+**Commit:** `b74f523`
 
 **Known issues / follow-ups**
 - **Level-placed items need a construction rerun.** Setting `ItemData` on a level-placed actor through the MCP tool doesn't rerun construction. The actor showed defaults until the level was reloaded (OnConstruction runs on load). In the editor Details panel this is not an issue. Consider applying ItemData in `PostEditChangeProperty` explicitly for scripted edits.
@@ -686,7 +686,7 @@ Two UX problems made the tool feel unlike a professional editor. The camera coul
   6. Alt-tab while holding RMB, then come back: the cursor is visible and LMB works.
   7. Push a selected crate into the floor: the gizmo stays visible and grabbable.
 
-**Commit:** uncommitted (working tree)
+**Commit:** `364686c` (together with #13)
 
 **Known issues / follow-ups**
 - Esc stops PIE in the editor. Rebind the PIE stop key or test Cancel in Standalone. The real catalog UI should also offer a "pointer / no item" button.
@@ -748,7 +748,7 @@ Gevor reported that the camera still felt clunky, especially when moving vertica
   5. **No interference:** quick RMB clicks never select, place or delete. LMB does nothing while RMB is held. RMB does nothing during an LMB gizmo drag.
   6. **Delete:** select an item, press Delete; it is removed, and LMB places again immediately.
 
-**Commit:** uncommitted (working tree, together with #12)
+**Commit:** `364686c` (together with #12)
 
 **Known issues / follow-ups**
 - **Tuning:** `RotationSmoothing`, `MovementSmoothing`, `LookSensitivity` and `FlySpeed` are on `AStageCameraPawn`. Set them in a BP subclass, then point `DefaultPawnClass` at it.
@@ -1211,7 +1211,7 @@ UStageParameterViewWidget  (abstract)       UStageParameterControlWidget  (abstr
 
 **Verification:** documentation only, so there is no build or PIE test. Checked that Rules.md keeps CRLF line endings and `git diff --check` is clean.
 
-**Commit:** uncommitted (working tree)
+**Commit:** `e827b5c`
 
 **Known issues / follow-ups**
 - The "MCP Tools — Use Them" section still lists the older UnrealClaude tool names (`get_level_actors`, `blueprint_modify`, …). The connected server is `ue5-ngg` (`ue5_*` tools). It was not changed because it was out of scope.
@@ -1250,7 +1250,7 @@ This entry covers the design only. No code was written.
 
 **Verification:** design only, so nothing to build or test. Engine claims were checked in `C:/Program Files/Epic Games/UE_5.8/Engine/Source`. The ADR marks the ones not yet confirmed as Phase 0 spike items.
 
-**Commit:** uncommitted (working tree)
+**Commit:** `86bc1b7` (together with #21)
 
 **Known issues / follow-ups**
 - Waiting on Gevor to approve the ADR decisions before the Phase 0 spike.
@@ -1318,7 +1318,7 @@ Verdict: **GO** (ADR §8). The code is the start of Phase 1, not throwaway.
   6. Resize the main window by hand.
   7. Quick PIE check that the HUD is unchanged.
 
-**Commit:** uncommitted (working tree, branch `spike/dockable-workspace`). #19 and #20 are also uncommitted on this branch.
+**Commit:** `86bc1b7` (spike merged to `main`, together with #20)
 
 **Known issues / follow-ups**
 - The viewport tab shows a close button, though closing it is refused. Floating windows have no title.
@@ -1410,10 +1410,154 @@ The Phase 0 spike (#21) is the base. Design details and the reasons for each ref
   - PIE quick check: the subsystem is not created in the editor, so the HUD should be unchanged.
 - Status: **implemented, awaiting manual verification** of the items above.
 
-**Commit:** uncommitted (working tree).
+**Commit:** `aed9e9c`
 
 **Known issues / follow-ups**
 - The Obsidian vault (`S:\`) is still unreachable on this machine. The design record is ADR §9 in the repo.
 - Still open from the ADR: viewport-overlay HUD layer, fullscreen routing through the workspace, viewport tab close button (closing is refused but the button shows), DPI rule for overlays (Phase 5).
 - A built-in "Dual Monitor" layout and panel icons are deferred to Phase 5 (they need monitor-aware built-ins and the dock style set).
 - The frame-cost measurement from #21 is still a single sample.
+
+---
+
+## #23 — Placement mode (ghost + landing marker), Move/Rotate/Scale editing, audio manager (2026-10-06)
+
+**Request (Gevor).** Editor-grade placement and layout planning, in three parts:
+- A Placement Mode toggle, with a ghost of the item picked from the library that follows the cursor, and a highlighted landing spot. One click places exactly one object; holding the button must not keep spawning.
+- Placed objects are selectable but never follow the mouse when clicked. Transforms are edited explicitly: Move, Rotate, Scale, a gizmo, and numeric XYZ applied on Enter.
+- A central audio manager for selection, placement, snapping and error sounds, with Master volume, Effects volume and Mute in settings and UI.
+
+The design record, with engine facts, alternatives and rollback, is `Docs/ADR/0002-placement-and-audio.md`.
+
+**What changed and why**
+
+- **Root cause of "holding spawns".** `USpawnSystemComponent` had a stroke mode (`EStageItemPlacementMode::Continuous`, the default for props) that kept stamping on held LMB. The mode enum, the `PlacementRules.PlacementMode` field, the stroke API and the light-placement validation warning are removed. `USpawnSystemComponent` is now a stateless executor: `SpawnItem(Item, Transform)` (still validated by `PlacementValidator`) and `TryDeleteActor`.
+- **Placement tool.**
+  - `UStagePlacementToolComponent` sits on the controller and owns:
+    - `EStageEditMode { Select, Place }`;
+    - the armed item, cached from `UStageItemSubsystem::OnSelectedItemChanged`;
+    - `EStagePlacementPreviewState { Hidden, Valid, Refused }`.
+  - **One shared transform.** The preview and the spawn both use `StagePlacementMath::ComputePlacementTransform` (pure: grid snap, normal alignment, pivot offset), so the ghost is the exact landing transform.
+  - **After a place:** the ghost hides and the mode returns to Select. The new item is selectable but not auto-selected.
+  - **Events:** `OnEditModeChanged`, `OnArmedItemChanged`, `OnItemPlaced`, `OnPlacementSnapped` (the landing point moved to another grid point), `OnPlacementFailed` (no item / no surface).
+  - **Preview colour** comes from the GameMode rules without reporting: a locked item shows red, and the click is still validated.
+- **`AStagePlacementPreview`** has no tick and no collision.
+  - **Ghost:** the item's mesh with `M_PlacementGhost` (translucent unlit, fresnel edge, `GhostColor`).
+  - **Marker:** a decal ring (`M_PlacementMarker`, `MarkerColor`) at the snapped landing point, aligned to the surface and sized to the footprint.
+  - Missing materials degrade gracefully with one log line each.
+- **Controller input (`AModularPlayerController`).**
+  - **Handlers take a viewport position.** Enhanced Input reads the cursor once; the same handlers serve the dev simulation.
+  - **Place mode:** a press calls `TryPlace`. A miss gives the "no surface" error cue.
+  - **Select mode:** gizmo handle > select item > deselect. It never places, and a selected item never follows the mouse.
+  - **Held LMB** only continues a gizmo drag.
+  - **The ghost follows without a tick.** It refreshes on these events, coalesced into one `SetTimerForNextTick` trace (at most one per frame, only in Place mode):
+    - new `UStageCraftGameViewportClient::OnCursorMoved` (`MouseMove`/`CapturedMouseMove`);
+    - the camera pawn root's `TransformUpdated`;
+    - a `SetControlRotation` override (the fly camera turns through it);
+    - mode and armed-item changes.
+  - **Keys:**
+    - **P** toggles Place mode (new `TogglePlaceModeAction`).
+    - **Esc** leaves Place mode first; a second Esc deselects and disarms.
+    - **Space** cycles Move → Rotate → Scale.
+    - Entering Place mode clears the selection.
+  - **`RequestPlaceItem(Item)`** is the Library entry point: rules check (a refusal is reported and plays the error cue), then `SelectItem`, then `EnterPlaceMode`.
+- **Transform editing.**
+  - **Gizmo Scale mode:** axis shafts with cube heads, plus a centre cube for uniform scale. Dragging one handle length doubles the scale.
+  - **One clamp.** `StageTransformRules` (pure) clamps scale to [0.01, 100] and repairs NaN to 1, for both the gizmo and the inspector.
+  - **Inspector:** a new `StageCraft.Param.Transform.Scale` row in the base actor's Transform section. Numeric Location / Rotation / Scale XYZ apply on Enter through the validated `RequestParameterChange`, then read back.
+  - **Session:** scale edits mark the session dirty.
+- **Item Library panel.**
+  - `UStageItemLibraryPanel` and `UStageItemLibraryEntry` are C++ widgets that build a default tree in code, so no WBP is needed (a WBP can restyle them through `BindWidgetOptional`).
+  - Items are grouped by category with icons, and the armed item is highlighted. A click calls `RequestPlaceItem`.
+  - Registered as `StageCraft.Panel.Library` / `DA_Panel_Library` and docked on the left in the Default layout.
+- **Audio.**
+  - **`UStageAudioSubsystem`** (GameInstance) is the single API: `PlayCue(Tag)`, Master/Effects/Mute setters and getters, and `OnAudioSettingsChanged`.
+    - **Master and Mute** are a transient `USoundMix` override on the project's default (Master) sound class. It is pushed once per audio device, re-applied after each map load, and popped on shutdown so PIE never leaves the editor muted. `SetTransientPrimaryVolume` was rejected: the engine resets it on world cleanup and camera fades.
+    - **Effects** is a per-play gain on cues.
+  - **Persistence.** `UStageCraftUserSettings : UGameUserSettings` (ADR 0001's planned preferences class, introduced early) stores the values in `GameUserSettings.ini`. Its setters clamp and loading sanitises, and saves are debounced to 1 s.
+  - **Cue table.** `UStageAudioDeveloperSettings` (Project Settings > Game > StageCraft Audio) maps `StageCraft.Sound.{Select, Place, Snap, Error}` to `SFX_*`, each with a level and a retrigger interval.
+  - **Feedback.** `UStageEditorAudioFeedbackComponent` (controller) maps selection / placed / snapped / failed / refused events to cues.
+- **Workspace menu bar.**
+  - New **Edit** menu: Select / Place mode, and the Move / Rotate / Scale tool, as radio entries.
+  - New **Audio** menu: Mute All, plus Master and Effects sliders that apply live and read back.
+- **Content (generated by scripts in the repo; the editor's MCP bridge was attached to another project).**
+  - `Scripts/Content/make_feedback_wavs.ps1` synthesises four WAVs.
+  - `Scripts/Content/create_placement_audio_content.py`, run headless through `UnrealEditor-Cmd -run=pythonscript`, builds the materials, imports the sounds and creates `DA_Panel_Library`.
+  - `PythonScriptPlugin` is enabled for the Editor target only.
+- **Dev console** (non-Shipping):
+  - `StageCraft.Edit.{Status, Arm, PlaceMode, PointerAt, PointerAtActor, ReleasePointer, Click, Hold, GizmoMode, SetLocation, SetScale}` drive the real click handlers at a simulated cursor.
+  - `StageCraft.Audio.{Status, Master, Effects, Mute, Play}`.
+- **STATE.md housekeeping.** The stale "uncommitted" lines in #10, #12, #13, #19, #20, #21 and #22 now carry their commit hashes (`b74f523`, `364686c`, `e827b5c`, `86bc1b7`, `aed9e9c`).
+
+**Files changed**
+- New, in `Source/ModularSceneBuilder`:
+  - Placement: `Public/Placement/StagePlacementTypes.h`, `StagePlacementMath.h`, `StagePlacementPreview.h`, `StagePlacementToolComponent.h`, and `Private/Placement/StagePlacementMath.cpp`, `StagePlacementPreview.cpp`, `StagePlacementToolComponent.cpp`, `StagePlacementConsoleCommands.cpp`, `Tests/StagePlacementTests.cpp`.
+  - Audio: `Public/Audio/StageAudioTypes.h`, `StageAudioDeveloperSettings.h`, `StageAudioSubsystem.h`, `StageEditorAudioFeedbackComponent.h`, and `Private/Audio/StageAudioTypes.cpp`, `StageAudioSubsystem.cpp`, `StageEditorAudioFeedbackComponent.cpp`, `StageAudioConsoleCommands.cpp`.
+  - Settings: `Public/Settings/StageCraftUserSettings.h`, `Private/Settings/StageCraftUserSettings.cpp`.
+  - `Public/Interaction/StageTransformRules.h`.
+  - UI: `Public/UI/StageItemLibraryPanel.h`, `Private/UI/StageItemLibraryPanel.cpp`.
+- Modified, in `Source/ModularSceneBuilder`:
+  - Player: `ModularPlayerController.h/.cpp`, `StageCraftGameViewportClient.h/.cpp`.
+  - `Components/SpawnSystemComponent.h/.cpp`.
+  - Actors: `ModularTransformGizmo.h/.cpp`, `ModularBaseActor.cpp`.
+  - Data: `StageItemTypes.h`, `BaseItemData.h/.cpp`, `AudioEquipmentData.cpp`, `LightingFixtureData.cpp`, `StageTrussData.cpp`, `StageParameterTypes.h/.cpp`.
+  - `Subsystems/StageSessionSubsystem.cpp`.
+  - Workspace: `StageWorkspaceTypes.h/.cpp`, `StageWorkspaceShell.cpp`, `SStageWorkspaceMenuBar.h/.cpp`.
+  - `ModularSceneBuilder.Build.cs` (private `DeveloperSettings`).
+- Content (new):
+  - `Content/StageCraft/Placement/M_PlacementGhost`, `M_PlacementMarker`
+  - `Content/StageCraft/Audio/Feedback/SFX_Select`, `SFX_Place`, `SFX_Snap`, `SFX_Error`
+  - `Content/StageCraft/UI/Panels/DA_Panel_Library`
+- Config:
+  - `Config/DefaultEngine.ini`: `GameUserSettingsClassName`.
+  - `Config/DefaultGame.ini`: the StageCraft Audio cue table, plus `DirectoriesToAlwaysCook` for `/Game/StageCraft/Audio` and `/Game/StageCraft/Placement`.
+  - `ModularSceneBuilder.uproject`: `PythonScriptPlugin`, Editor only.
+- Scripts: `Scripts/Content/make_feedback_wavs.ps1`, `Scripts/Content/create_placement_audio_content.py`.
+- Docs: `Docs/ADR/0002-placement-and-audio.md` (new), `tasks/todo.md`, `STATE.md`.
+
+**Verification**
+- **Builds:** Editor Development, Game Development and Game Shipping, all with 0 errors and 0 warnings. Shipping proves the `StageCraft.Edit.*` / `StageCraft.Audio.*` dev commands and the simulation hooks are compiled out.
+- **Automation (headless): 10/10 passed.**
+  - New:
+    - `StageCraft.Placement.Math` (snap incl. negatives, zero grid, offset, normal alignment, zero normal)
+    - `StageCraft.Placement.ToolModes` (mode transitions, idempotency, no place in Select mode or without an item, a failed place keeps Place mode)
+    - `StageCraft.Gizmo.ScaleRules` (drag factor, floor, NaN, clamp)
+    - `StageCraft.Audio.Math` (clamp, mute wins, cue gain)
+    - `StageCraft.Audio.UserSettings` (clamping setters, change reporting, `SetToDefaults`)
+  - Existing: `StageCraft.Workspace.LayoutStore.*` (5) still pass.
+- **Content:** a headless Python check confirmed:
+  - `DA_Panel_Library` has tag `StageCraft.Panel.Library` → `StageItemLibraryPanel`;
+  - `M_PlacementGhost` is translucent unlit, `M_PlacementMarker` is a translucent deferred decal;
+  - the four SFX run 0.02–0.25 s.
+- **Standalone Game, tested by Claude** (scripted, simulated cursor, logs `Saved/Logs/PL_Run1.log`, `PL_Run2.log`):
+  1. Workspace Reset → Library panel docked. Arm `DA_Test_Crate` → Place mode, preview Valid at the snapped point (-300, 0, 50).
+     - Cursor moved one cell → Snap cue, preview at (-300, 100, 50).
+     - Click → exactly one crate at the previewed transform, Place cue, back to Select, ghost hidden.
+     - `PlaceMode on` + **Hold for 90 frames → exactly +1 item** (5 → 6).
+     - Click on the placed crate in Select mode → selected + Select cue. After the cursor moves away, its location is unchanged.
+     - `SetScale 2 3 0.001` → (2, 3, 0.01); `SetScale 500 1 1` → (100, 1, 1) (clamped). Gizmo Scale → cycle → Move.
+     - Arm the locked `DA_MovingHead_Wash_Test` → refused (Locked), toast + Error cue, nothing armed.
+     - Audio: Master 0.5 + Mute → `ListSoundClassVolumes` Master 0.00. Unmute → 0.50. Effects 0.8. Debounced save wrote `[/Script/ModularSceneBuilder.StageCraftUserSettings]` to `Saved/Config/.../GameUserSettings.ini`.
+     - Close → session saved, 0 ensures.
+  2. Restart → preferences reloaded (0.50 / 0.80), Master class at 0.50 at startup, Library restored from the session.
+     - Click on empty sky in Place mode → Error cue, nothing placed, still in Place mode.
+     - `open L_StageTest` → Master class still 0.50, new controller works (arm light, place it).
+     - Audio reset to 1.0 / 1.0 at the end.
+- **Not verified** (needs Gevor, by mouse, in Standalone Game):
+  - How the ghost and decal marker look on the stage (colours, size, the decal on uneven decks). OS screenshots were not taken; Claude did not steal focus.
+  - That a real mouse move drives the ghost (`OnCursorMoved`; the scripted runs used the simulated cursor). The same for real click versus hold, and flying with RMB in Place mode (the ghost follows the camera).
+  - The Library panel's look and clicks, the Edit and Audio menus, the sliders while dragging, and hearing the cues.
+  - Dragging the scale gizmo (axis and centre), and Space cycling the visible handles.
+  - The inspector Scale row (Enter applies, out-of-range snaps back).
+  - P / Esc in the real keyboard path.
+- Status: **implemented, awaiting manual verification** of the items above.
+
+**Commit:** uncommitted (working tree).
+
+**Known issues / follow-ups**
+- **PIE has no Library panel.** `WBP_StageCraftHUD` needs a `UStageItemLibraryPanel` dropped into its left side (designer task). In PIE, `StageCraft.Edit.Arm <Item>` or `BP_StageTestArmer` still arm items, then P enters Place mode.
+- **Behaviour changes to retest.** In Select mode, a click on empty ground no longer places (use P or the Library), and "hold LMB to paint props" is gone by design. The old PIE checklists (#3, #8) mention painting, so read those steps as one click = one item.
+- **Committed while focus moves.** The inspector spin boxes also commit when focus moves away (Unreal Editor behaviour), not only on Enter.
+- **Not built yet:** gizmo scale snapping, local-space gizmo, undo/redo (hook `OnItemPlaced` / `OnItemDeleted` / gizmo drag end), shift-click to keep placing, and a Preferences panel page for audio (ADR 0001 Phase 3).
+- **Ghost limits.** The ghost shows only the item's `Mesh`. Fixtures whose yoke/head are separate meshes show their base only.
+- **Obsidian vault.** `S:\` is still unreachable on this machine. The design record is ADR 0002 in the repo.

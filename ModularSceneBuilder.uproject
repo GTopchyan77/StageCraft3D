@@ -19,6 +19,13 @@
 			]
 		},
 		{
+			"Name": "PythonScriptPlugin",
+			"Enabled": true,
+			"TargetAllowList": [
+				"Editor"
+			]
+		},
+		{
 			"Name": "UnrealNGGMCP",
 			"Enabled": true,
 			"TargetAllowList": [

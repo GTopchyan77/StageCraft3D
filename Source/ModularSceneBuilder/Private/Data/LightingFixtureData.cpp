@@ -73,7 +73,6 @@ ULightingFixtureData::ULightingFixtureData()
 	ItemType = EStageItemType::Light;
 	ActorClass = ALightingFixtureActor::StaticClass();
 	CategoryTag = StageCraftTags::Category_Lighting_MovingHead;
-	PlacementRules.PlacementMode = EStageItemPlacementMode::Single;
 	Specs.WeightKg = 20.f;
 	Specs.PowerDrawWatts = 450.f;
 

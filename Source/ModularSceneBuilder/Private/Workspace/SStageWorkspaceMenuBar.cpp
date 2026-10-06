@@ -2,30 +2,154 @@
 
 #include "Workspace/SStageWorkspaceMenuBar.h"
 
+#include "Actors/ModularTransformGizmo.h"
+#include "Audio/StageAudioSubsystem.h"
+#include "Engine/GameInstance.h"
 #include "Framework/Application/SlateApplication.h"
 #include "Framework/MultiBox/MultiBoxBuilder.h"
 #include "GameplayTagContainer.h"
+#include "Placement/StagePlacementToolComponent.h"
+#include "Player/ModularPlayerController.h"
 #include "Widgets/Input/SEditableTextBox.h"
+#include "Widgets/Input/SSlider.h"
 #include "Widgets/Layout/SBox.h"
 #include "Workspace/StageLayoutStore.h"
 #include "Workspace/StageWorkspaceSubsystem.h"
 
 #define LOCTEXT_NAMESPACE "StageWorkspaceMenuBar"
 
+namespace StageWorkspaceMenuBar
+{
+	constexpr float SliderWidth = 160.f;
+}
+
 void SStageWorkspaceMenuBar::Construct(const FArguments& InArgs, UStageWorkspaceSubsystem* InWorkspace)
 {
 	Workspace = InWorkspace;
 
 	FMenuBarBuilder MenuBar(nullptr);
+	MenuBar.AddPullDownMenu(LOCTEXT("EditMenu", "Edit"), LOCTEXT("EditMenuTip", "Select or place items, and choose the transform tool."),
+		FNewMenuDelegate::CreateSP(this, &SStageWorkspaceMenuBar::FillEditMenu));
 	MenuBar.AddPullDownMenu(LOCTEXT("WindowMenu", "Window"), LOCTEXT("WindowMenuTip", "Open, focus or close panels."),
 		FNewMenuDelegate::CreateSP(this, &SStageWorkspaceMenuBar::FillWindowMenu));
 	MenuBar.AddPullDownMenu(LOCTEXT("LayoutMenu", "Layout"), LOCTEXT("LayoutMenuTip", "Load, save and delete workspace layouts."),
 		FNewMenuDelegate::CreateSP(this, &SStageWorkspaceMenuBar::FillLayoutMenu));
+	MenuBar.AddPullDownMenu(LOCTEXT("AudioMenu", "Audio"), LOCTEXT("AudioMenuTip", "Master and effects volume, mute."),
+		FNewMenuDelegate::CreateSP(this, &SStageWorkspaceMenuBar::FillAudioMenu));
 
 	ChildSlot
 	[
 		MenuBar.MakeWidget()
 	];
+}
+
+AModularPlayerController* SStageWorkspaceMenuBar::GetStageController() const
+{
+	const UStageWorkspaceSubsystem* WorkspacePtr = Workspace.Get();
+	const UGameInstance* GameInstance = WorkspacePtr ? WorkspacePtr->GetGameInstance() : nullptr;
+	return GameInstance ? Cast<AModularPlayerController>(GameInstance->GetFirstLocalPlayerController()) : nullptr;
+}
+
+UStageAudioSubsystem* SStageWorkspaceMenuBar::GetAudio() const
+{
+	const UStageWorkspaceSubsystem* WorkspacePtr = Workspace.Get();
+	const UGameInstance* GameInstance = WorkspacePtr ? WorkspacePtr->GetGameInstance() : nullptr;
+	return GameInstance ? GameInstance->GetSubsystem<UStageAudioSubsystem>() : nullptr;
+}
+
+void SStageWorkspaceMenuBar::FillEditMenu(FMenuBuilder& MenuBuilder)
+{
+	// Weak: the controller is replaced on level travel while this menu bar lives on.
+	const TWeakObjectPtr<AModularPlayerController> WeakController = GetStageController();
+	if (!WeakController.IsValid())
+	{
+		return;
+	}
+
+	MenuBuilder.BeginSection(TEXT("EditMode"), LOCTEXT("ModeSection", "Mode"));
+	const auto AddModeEntry = [&MenuBuilder, WeakController](EStageEditMode Mode, const FText& Label, const FText& Tip)
+	{
+		MenuBuilder.AddMenuEntry(Label, Tip, FSlateIcon(),
+			FUIAction(
+				FExecuteAction::CreateLambda([WeakController, Mode]()
+				{
+					if (UStagePlacementToolComponent* Tool = WeakController.IsValid() ? WeakController->GetPlacementTool() : nullptr)
+					{
+						Mode == EStageEditMode::Place ? Tool->EnterPlaceMode() : Tool->EnterSelectMode();
+					}
+				}),
+				FCanExecuteAction(),
+				FIsActionChecked::CreateLambda([WeakController, Mode]()
+				{
+					const UStagePlacementToolComponent* Tool = WeakController.IsValid() ? WeakController->GetPlacementTool() : nullptr;
+					return Tool && Tool->GetEditMode() == Mode;
+				})),
+			NAME_None, EUserInterfaceActionType::RadioButton);
+	};
+	AddModeEntry(EStageEditMode::Select, LOCTEXT("SelectMode", "Select"), LOCTEXT("SelectModeTip", "Click items to select them; edit with the gizmo or the Inspector."));
+	AddModeEntry(EStageEditMode::Place, LOCTEXT("PlaceMode", "Place  (P)"), LOCTEXT("PlaceModeTip", "Show the armed Library item under the cursor; one click places one item."));
+	MenuBuilder.EndSection();
+
+	MenuBuilder.BeginSection(TEXT("TransformTool"), LOCTEXT("TransformSection", "Transform Tool  (Space cycles)"));
+	const auto AddGizmoEntry = [&MenuBuilder, WeakController](EGizmoMode GizmoMode, const FText& Label)
+	{
+		MenuBuilder.AddMenuEntry(Label, FText::GetEmpty(), FSlateIcon(),
+			FUIAction(
+				FExecuteAction::CreateLambda([WeakController, GizmoMode]()
+				{
+					if (AModularTransformGizmo* Gizmo = WeakController.IsValid() ? WeakController->GetGizmo() : nullptr)
+					{
+						Gizmo->SetMode(GizmoMode);
+					}
+				}),
+				FCanExecuteAction(),
+				FIsActionChecked::CreateLambda([WeakController, GizmoMode]()
+				{
+					const AModularTransformGizmo* Gizmo = WeakController.IsValid() ? WeakController->GetGizmo() : nullptr;
+					return Gizmo && Gizmo->GetMode() == GizmoMode;
+				})),
+			NAME_None, EUserInterfaceActionType::RadioButton);
+	};
+	AddGizmoEntry(EGizmoMode::Translate, LOCTEXT("MoveTool", "Move"));
+	AddGizmoEntry(EGizmoMode::Rotate, LOCTEXT("RotateTool", "Rotate"));
+	AddGizmoEntry(EGizmoMode::Scale, LOCTEXT("ScaleTool", "Scale"));
+	MenuBuilder.EndSection();
+}
+
+void SStageWorkspaceMenuBar::FillAudioMenu(FMenuBuilder& MenuBuilder)
+{
+	const TWeakObjectPtr<UStageAudioSubsystem> WeakAudio = GetAudio();
+	if (!WeakAudio.IsValid())
+	{
+		return;
+	}
+
+	MenuBuilder.AddMenuEntry(
+		LOCTEXT("Mute", "Mute All"),
+		LOCTEXT("MuteTip", "Silence every sound. Volumes are kept for when you unmute."),
+		FSlateIcon(),
+		FUIAction(
+			FExecuteAction::CreateLambda([WeakAudio]() { if (WeakAudio.IsValid()) { WeakAudio->ToggleMute(); } }),
+			FCanExecuteAction(),
+			FIsActionChecked::CreateLambda([WeakAudio]() { return WeakAudio.IsValid() && WeakAudio->IsMuted(); })),
+		NAME_None, EUserInterfaceActionType::ToggleButton);
+
+	// Sliders apply live through the subsystem's clamping setters and always show the stored value back.
+	const auto MakeVolumeSlider = [WeakAudio](float (UStageAudioSubsystem::*Getter)() const, void (UStageAudioSubsystem::*Setter)(float))
+	{
+		return SNew(SBox)
+			.WidthOverride(StageWorkspaceMenuBar::SliderWidth)
+			[
+				SNew(SSlider)
+				.Value_Lambda([WeakAudio, Getter]() { return WeakAudio.IsValid() ? (WeakAudio.Get()->*Getter)() : 0.f; })
+				.OnValueChanged_Lambda([WeakAudio, Setter](float NewValue) { if (WeakAudio.IsValid()) { (WeakAudio.Get()->*Setter)(NewValue); } })
+			];
+	};
+
+	MenuBuilder.BeginSection(TEXT("Volume"), LOCTEXT("VolumeSection", "Volume"));
+	MenuBuilder.AddWidget(MakeVolumeSlider(&UStageAudioSubsystem::GetMasterVolume, &UStageAudioSubsystem::SetMasterVolume), LOCTEXT("Master", "Master"));
+	MenuBuilder.AddWidget(MakeVolumeSlider(&UStageAudioSubsystem::GetEffectsVolume, &UStageAudioSubsystem::SetEffectsVolume), LOCTEXT("Effects", "Effects"));
+	MenuBuilder.EndSection();
 }
 
 void SStageWorkspaceMenuBar::FillWindowMenu(FMenuBuilder& MenuBuilder)

@@ -21,24 +21,15 @@ enum class EStageItemType : uint8
 	Audio			UMETA(DisplayName = "Audio"),
 };
 
-/** How the spawn system places an item while the placement input is held. */
-UENUM(BlueprintType)
-enum class EStageItemPlacementMode : uint8
-{
-	/** One instance per click. */
-	Single			UMETA(DisplayName = "Single Click"),
-	/** Keeps stamping instances onto free grid cells while the input is held. */
-	Continuous		UMETA(DisplayName = "Continuous (Hold)"),
-};
-
-/** Grid snapping and surface placement rules consumed by the spawn system (Phase 3). */
+/**
+ * Grid snapping and surface placement rules, applied by StagePlacementMath to both the placement
+ * preview and the spawn, so the preview always shows the exact landing transform.
+ * Every placement is one instance per click; there is deliberately no hold-to-paint mode.
+ */
 USTRUCT(BlueprintType)
 struct MODULARSCENEBUILDER_API FStageItemPlacementRules
 {
 	GENERATED_BODY()
-
-	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Placement")
-	EStageItemPlacementMode PlacementMode = EStageItemPlacementMode::Continuous;
 
 	/** Snap cell size in cm. Zero on an axis disables snapping on that axis. */
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Placement", meta = (ClampMin = "0.0", Units = "cm"))

@@ -151,3 +151,18 @@ See `STATE.md` for detailed history of completed work.
 - [ ] Phase 3 preferences: `UStageCraftUserSettings`, Preferences panel (General, Layout, Viewport, Graphics)
 - [ ] Phase 4 key bindings: IMCs to assets with player-mappable keys, `UEnhancedInputUserSettings`, Keyboard page
 - [ ] Phase 5 polish: Slate style from `UStageCraftUITheme`, overlay DPI rule, per-monitor fullscreen viewport
+
+## Phase 7 — Placement mode, transform editing, audio (requested by Gevor 2026-10-06; design: `Docs/ADR/0002-placement-and-audio.md`, STATE.md #23)
+- [x] `StagePlacementMath` (pure transform rules) + `USpawnSystemComponent` reduced to a stateless spawn/delete executor; continuous placement (`EStageItemPlacementMode`) removed
+- [x] `UStagePlacementToolComponent` (Select/Place mode, armed item, preview state, single-click place, snap/fail events) + `AStagePlacementPreview` (ghost mesh + landing decal)
+- [x] Controller: screen-position input handlers, Place-mode click routing, hold never spawns, event-driven preview refresh (viewport `OnCursorMoved` + camera moves, coalesced to next tick), P / Esc / Space keys, `RequestPlaceItem`
+- [x] Gizmo Scale mode (axis + uniform) and Space cycling; inspector Scale row with clamping
+- [x] `UStageItemLibraryPanel` + `Panel.Library` + `DA_Panel_Library`, docked left in the Default layout
+- [x] Audio: `UStageAudioSubsystem`, `UStageCraftUserSettings` (master/effects/mute, persisted), `UStageAudioDeveloperSettings` (cue map), `UStageEditorAudioFeedbackComponent`
+- [x] Menu bar: Edit (modes) and Audio (mute, sliders) menus; console commands `StageCraft.Edit.*`, `StageCraft.Audio.*`
+- [x] Content via Python commandlet: `M_PlacementGhost`, `M_PlacementMarker`, `SFX_*` feedback sounds, `DA_Panel_Library`
+- [x] Automation tests `StageCraft.Placement.*`, `StageCraft.Audio.*`, `StageCraft.Gizmo.*`
+- [x] Builds (Editor, Game Dev, Game Shipping) + scripted Standalone verification (STATE.md #23)
+- [ ] Gevor, by mouse: ghost/marker look, click vs hold, Library panel, menus/sliders, hearing the cues, scale gizmo drag
+- [ ] Designer: add `UStageItemLibraryPanel` to `WBP_StageCraftHUD` (left side) so PIE has a Library too
+- [ ] Follow-ups: gizmo scale snapping, local-space gizmo, shift-click to keep placing, undo/redo, audio page in the Preferences panel (ADR 0001 Phase 3)

@@ -3,7 +3,9 @@
 #include "Player/ModularPlayerController.h"
 
 #include "Actors/ModularTransformGizmo.h"
+#include "Audio/StageEditorAudioFeedbackComponent.h"
 #include "Blueprint/UserWidget.h"
+#include "Components/SceneComponent.h"
 #include "Components/SelectionComponent.h"
 #include "Components/SpawnSystemComponent.h"
 #include "EnhancedInputComponent.h"
@@ -21,11 +23,13 @@
 #include "InputModifiers.h"
 #include "Interaction/StageCraftCollision.h"
 #include "ModularSceneBuilder.h"
+#include "Placement/StagePlacementToolComponent.h"
 #include "Player/StageCameraPawn.h"
 #include "Player/StageCraftGameViewportClient.h"
 #include "Subsystems/StageEconomySubsystem.h"
 #include "Subsystems/StageItemSubsystem.h"
 #include "Subsystems/StageSessionSubsystem.h"
+#include "TimerManager.h"
 #include "Workspace/StageWorkspaceSubsystem.h"
 
 #include UE_INLINE_GENERATED_CPP_BY_NAME(ModularPlayerController)
@@ -57,6 +61,8 @@ AModularPlayerController::AModularPlayerController()
 
 	SpawnSystem = CreateDefaultSubobject<USpawnSystemComponent>(TEXT("SpawnSystem"));
 	Selection = CreateDefaultSubobject<USelectionComponent>(TEXT("Selection"));
+	PlacementTool = CreateDefaultSubobject<UStagePlacementToolComponent>(TEXT("PlacementTool"));
+	AudioFeedback = CreateDefaultSubobject<UStageEditorAudioFeedbackComponent>(TEXT("AudioFeedback"));
 	GizmoClass = AModularTransformGizmo::StaticClass();
 }
 
@@ -78,7 +84,7 @@ void AModularPlayerController::BeginPlay()
 
 	if (!Cast<UStageCraftGameViewportClient>(GetWorld()->GetGameViewport()))
 	{
-		UE_LOG(LogStageCraft, Warning, TEXT("%s: GameViewportClientClassName is not StageCraftGameViewportClient; RMB navigation will turn the view but cannot hide or capture the cursor."), *GetName());
+		UE_LOG(LogStageCraft, Warning, TEXT("%s: GameViewportClientClassName is not StageCraftGameViewportClient; RMB navigation will turn the view but cannot hide or capture the cursor, and the placement preview only follows camera moves."), *GetName());
 	}
 
 	// Engine look input stays off: the view is owned by AStageCameraPawn, which sets the control rotation itself.
@@ -92,10 +98,15 @@ void AModularPlayerController::BeginPlay()
 		Gizmo = GetWorld()->SpawnActor<AModularTransformGizmo>(GizmoClass, FTransform::Identity, SpawnParams);
 	}
 
-	Selection->OnSelectionChanged.AddDynamic(this, &ThisClass::HandleSelectionChanged);
+	Selection->OnSelectionChanged.AddUniqueDynamic(this, &ThisClass::HandleSelectionChanged);
 
-	// Every spawn, including each stamp of a stroke, is decided by the GameMode through this controller.
+	// Every spawn is decided by the GameMode through this controller; the preview colour asks the same rules without reporting.
 	SpawnSystem->PlacementValidator.BindUObject(this, &ThisClass::ValidatePlacement);
+	PlacementTool->PreviewEvaluator.BindUObject(this, &ThisClass::EvaluatePlacementPreview);
+	PlacementTool->OnEditModeChanged.AddUniqueDynamic(this, &ThisClass::HandleEditModeChanged);
+	PlacementTool->OnArmedItemChanged.AddUniqueDynamic(this, &ThisClass::HandleArmedItemChanged);
+	BindPreviewRefreshSources();
+
 	if (UStageEconomySubsystem* Economy = GetEconomy())
 	{
 		Economy->OnPurchaseCompleted.AddUniqueDynamic(this, &ThisClass::HandlePurchaseCompleted);
@@ -123,8 +134,15 @@ void AModularPlayerController::EndPlay(const EEndPlayReason::Type EndPlayReason)
 {
 	bIsNavigatingCamera = false;
 
+	UnbindPreviewRefreshSources();
+	GetWorldTimerManager().ClearAllTimersForObject(this);
+	bPreviewRefreshQueued = false;
+
 	Selection->OnSelectionChanged.RemoveDynamic(this, &ThisClass::HandleSelectionChanged);
 	SpawnSystem->PlacementValidator.Unbind();
+	PlacementTool->PreviewEvaluator.Unbind();
+	PlacementTool->OnEditModeChanged.RemoveDynamic(this, &ThisClass::HandleEditModeChanged);
+	PlacementTool->OnArmedItemChanged.RemoveDynamic(this, &ThisClass::HandleArmedItemChanged);
 	if (UStageEconomySubsystem* Economy = GetEconomy())
 	{
 		Economy->OnPurchaseCompleted.RemoveDynamic(this, &ThisClass::HandlePurchaseCompleted);
@@ -154,7 +172,7 @@ void AModularPlayerController::SetupInputComponent()
 {
 	Super::SetupInputComponent();
 
-	if (!EditorMappingContext || !PlaceAction || !NavigateAction || !DeleteAction || !CancelAction || !ToggleGizmoModeAction)
+	if (!EditorMappingContext || !PlaceAction || !NavigateAction || !DeleteAction || !CancelAction || !ToggleGizmoModeAction || !TogglePlaceModeAction)
 	{
 		BuildDefaultInputMapping();
 	}
@@ -178,6 +196,7 @@ void AModularPlayerController::SetupInputComponent()
 	}
 
 	// With no explicit trigger, Started fires on press, Triggered every frame while held, Completed on release.
+	// Only Started can place; Triggered only continues a gizmo drag.
 	EnhancedInput->BindAction(PlaceAction, ETriggerEvent::Started, this, &ThisClass::HandlePrimaryStarted);
 	EnhancedInput->BindAction(PlaceAction, ETriggerEvent::Triggered, this, &ThisClass::HandlePrimaryTriggered);
 	EnhancedInput->BindAction(PlaceAction, ETriggerEvent::Completed, this, &ThisClass::HandlePrimaryCompleted);
@@ -188,6 +207,7 @@ void AModularPlayerController::SetupInputComponent()
 	EnhancedInput->BindAction(DeleteAction, ETriggerEvent::Started, this, &ThisClass::HandleDelete);
 	EnhancedInput->BindAction(CancelAction, ETriggerEvent::Started, this, &ThisClass::HandleCancel);
 	EnhancedInput->BindAction(ToggleGizmoModeAction, ETriggerEvent::Started, this, &ThisClass::HandleToggleGizmoMode);
+	EnhancedInput->BindAction(TogglePlaceModeAction, ETriggerEvent::Started, this, &ThisClass::HandleTogglePlaceMode);
 
 	// Always mapped. Look and move act only while NavigateAction is held; speed (wheel) acts any time.
 	EnhancedInput->BindAction(CameraLookAction, ETriggerEvent::Triggered, this, &ThisClass::HandleCameraLook);
@@ -197,7 +217,7 @@ void AModularPlayerController::SetupInputComponent()
 
 void AModularPlayerController::BuildDefaultInputMapping()
 {
-	UE_LOG(LogStageCraft, Log, TEXT("%s: input assets not fully assigned, using built-in LMB/RMB/Delete/Esc/Space mapping."), *GetName());
+	UE_LOG(LogStageCraft, Log, TEXT("%s: input assets not fully assigned, using built-in LMB/RMB/Delete/Esc/Space/P mapping."), *GetName());
 
 	if (!PlaceAction)
 	{
@@ -219,14 +239,20 @@ void AModularPlayerController::BuildDefaultInputMapping()
 	{
 		ToggleGizmoModeAction = NewObject<UInputAction>(this, TEXT("IA_ToggleGizmoMode_Default"));
 	}
+	if (!TogglePlaceModeAction)
+	{
+		TogglePlaceModeAction = NewObject<UInputAction>(this, TEXT("IA_TogglePlaceMode_Default"));
+	}
 
 	// A fresh context, because an assigned one cannot be trusted to map actions it was not authored with.
+	// P is free in the camera context (which maps W/A/S/D/Q/E), so it is never consumed by navigation.
 	EditorMappingContext = NewObject<UInputMappingContext>(this, TEXT("IMC_StageEditor_Default"));
 	EditorMappingContext->MapKey(PlaceAction, EKeys::LeftMouseButton);
 	EditorMappingContext->MapKey(NavigateAction, EKeys::RightMouseButton);
 	EditorMappingContext->MapKey(DeleteAction, EKeys::Delete);
 	EditorMappingContext->MapKey(CancelAction, EKeys::Escape);
 	EditorMappingContext->MapKey(ToggleGizmoModeAction, EKeys::SpaceBar);
+	EditorMappingContext->MapKey(TogglePlaceModeAction, EKeys::P);
 }
 
 void AModularPlayerController::BuildDefaultCameraMapping()
@@ -258,7 +284,7 @@ void AModularPlayerController::BuildDefaultCameraMapping()
 	Context->MapKey(CameraSpeedAction, EKeys::MouseWheelAxis);
 
 	// A digital key yields (1,0,0); swizzle routes it onto Y (right) or Z (up), negate flips the direction.
-	// Space/Ctrl are not mapped: Space toggles the gizmo and Ctrl is reserved for multi-select.
+	// Space/Ctrl are not mapped: Space cycles the gizmo and Ctrl is reserved for multi-select.
 	MapAxisKey(Context, CameraMoveAction, EKeys::W);
 	MapAxisKey(Context, CameraMoveAction, EKeys::S, {}, /*bNegate*/ true);
 	MapAxisKey(Context, CameraMoveAction, EKeys::D, EInputAxisSwizzle::YXZ);
@@ -275,27 +301,81 @@ void AModularPlayerController::HandleSelectionChanged(AActor* NewSelection, AAct
 	}
 }
 
+void AModularPlayerController::HandleEditModeChanged(EStageEditMode NewMode, EStageEditMode PreviousMode)
+{
+	if (NewMode == EStageEditMode::Place)
+	{
+		// Placing and transforming are separate tools: the gizmo hides while the ghost is out.
+		Selection->ClearSelection();
+		RequestPreviewRefresh();
+	}
+}
+
+void AModularPlayerController::HandleArmedItemChanged(UBaseItemData* ArmedItem)
+{
+	RequestPreviewRefresh();
+}
+
+// --- Traces ---
+
+bool AModularPlayerController::GetCursorViewportPosition(FVector2D& OutPosition) const
+{
+#if !UE_BUILD_SHIPPING
+	if (SimulatedCursor.IsSet())
+	{
+		OutPosition = SimulatedCursor.GetValue();
+		return true;
+	}
+#endif
+	float X = 0.f;
+	float Y = 0.f;
+	if (!GetMousePosition(X, Y))
+	{
+		return false;
+	}
+	OutPosition = FVector2D(X, Y);
+	return true;
+}
+
+bool AModularPlayerController::GetRayAt(const FVector2D& ViewportPosition, FVector& OutOrigin, FVector& OutDirection) const
+{
+	return DeprojectScreenPositionToWorld(ViewportPosition.X, ViewportPosition.Y, OutOrigin, OutDirection);
+}
+
+bool AModularPlayerController::GetPlacementHitAt(const FVector2D& ViewportPosition, FHitResult& OutHit) const
+{
+	return GetHitResultAtScreenPosition(ViewportPosition, PlacementTraceChannel, /*bTraceComplex*/ false, OutHit);
+}
+
+bool AModularPlayerController::GetStageItemHitAt(const FVector2D& ViewportPosition, FHitResult& OutHit) const
+{
+	return GetHitResultAtScreenPosition(ViewportPosition, StageItemTraceChannel, /*bTraceComplex*/ false, OutHit);
+}
+
+bool AModularPlayerController::GetGizmoHitAt(const FVector2D& ViewportPosition, FHitResult& OutHit) const
+{
+	FVector RayOrigin, RayDirection;
+	return Gizmo
+		&& GetRayAt(ViewportPosition, RayOrigin, RayDirection)
+		&& Gizmo->TraceHandles(RayOrigin, RayDirection, OutHit);
+}
+
 bool AModularPlayerController::GetPlacementHitUnderCursor(FHitResult& OutHit) const
 {
-	return GetHitResultUnderCursor(PlacementTraceChannel, false, OutHit);
+	FVector2D Position;
+	return GetCursorViewportPosition(Position) && GetPlacementHitAt(Position, OutHit);
 }
 
 bool AModularPlayerController::GetStageItemHitUnderCursor(FHitResult& OutHit) const
 {
-	return GetHitResultUnderCursor(StageItemTraceChannel, false, OutHit);
+	FVector2D Position;
+	return GetCursorViewportPosition(Position) && GetStageItemHitAt(Position, OutHit);
 }
 
 bool AModularPlayerController::GetGizmoHitUnderCursor(FHitResult& OutHit) const
 {
-	FVector RayOrigin, RayDirection;
-	return Gizmo
-		&& GetCursorRay(RayOrigin, RayDirection)
-		&& Gizmo->TraceHandles(RayOrigin, RayDirection, OutHit);
-}
-
-bool AModularPlayerController::GetCursorRay(FVector& OutOrigin, FVector& OutDirection) const
-{
-	return DeprojectMousePositionToWorld(OutOrigin, OutDirection);
+	FVector2D Position;
+	return GetCursorViewportPosition(Position) && GetGizmoHitAt(Position, OutHit);
 }
 
 AStageCameraPawn* AModularPlayerController::GetCameraPawn() const
@@ -303,12 +383,38 @@ AStageCameraPawn* AModularPlayerController::GetCameraPawn() const
 	return Cast<AStageCameraPawn>(GetPawn());
 }
 
-bool AModularPlayerController::IsPrimaryInteractionActive() const
+bool AModularPlayerController::IsGizmoDragging() const
 {
-	return (Gizmo && Gizmo->IsDragging()) || SpawnSystem->IsPlacementStrokeActive();
+	return Gizmo && Gizmo->IsDragging();
 }
 
+// --- Primary button ---
+
 void AModularPlayerController::HandlePrimaryStarted()
+{
+	FVector2D Position;
+	if (GetCursorViewportPosition(Position))
+	{
+		HandlePrimaryPressedAt(Position);
+	}
+}
+
+void AModularPlayerController::HandlePrimaryTriggered()
+{
+	// Per-frame work only while a gizmo drag is in progress; an idle hold costs nothing and never places.
+	FVector2D Position;
+	if (IsGizmoDragging() && GetCursorViewportPosition(Position))
+	{
+		HandlePrimaryHeldAt(Position);
+	}
+}
+
+void AModularPlayerController::HandlePrimaryCompleted()
+{
+	HandlePrimaryReleased();
+}
+
+void AModularPlayerController::HandlePrimaryPressedAt(const FVector2D& ViewportPosition)
 {
 	// The cursor is hidden and frozen while flying; a left click there has no meaningful target.
 	if (bIsNavigatingCamera)
@@ -316,62 +422,71 @@ void AModularPlayerController::HandlePrimaryStarted()
 		return;
 	}
 
-	if (TryBeginGizmoDrag())
+	if (PlacementTool->IsPlaceMode())
 	{
-		return;
-	}
-
-	FHitResult ItemHit;
-	if (GetStageItemHitUnderCursor(ItemHit) && Selection->SelectActor(ItemHit.GetActor()))
-	{
-		return;
-	}
-
-	Selection->ClearSelection();
-
-	FHitResult PlacementHit;
-	if (GetPlacementHitUnderCursor(PlacementHit))
-	{
-		SpawnSystem->BeginPlacement(PlacementHit);
-	}
-}
-
-void AModularPlayerController::HandlePrimaryTriggered()
-{
-	// Per-frame work only while something is actually being dragged; an idle hold costs nothing.
-	if (Gizmo && Gizmo->IsDragging())
-	{
-		FVector RayOrigin, RayDirection;
-		if (GetCursorRay(RayOrigin, RayDirection))
-		{
-			Gizmo->UpdateDrag(RayOrigin, RayDirection);
-		}
-		return;
-	}
-
-	if (SpawnSystem->IsPlacementStrokeActive())
-	{
+		// A miss is passed on as an empty hit, so the tool reports "no surface" (error cue) instead of silence.
 		FHitResult Hit;
-		if (GetPlacementHitUnderCursor(Hit))
-		{
-			SpawnSystem->UpdatePlacement(Hit);
-		}
+		GetPlacementHitAt(ViewportPosition, Hit);
+		PlacementTool->TryPlace(Hit);
+		return;
+	}
+
+	if (TryBeginGizmoDragAt(ViewportPosition))
+	{
+		return;
+	}
+
+	SelectOrDeselectAt(ViewportPosition);
+}
+
+void AModularPlayerController::HandlePrimaryHeldAt(const FVector2D& ViewportPosition)
+{
+	FVector RayOrigin, RayDirection;
+	if (IsGizmoDragging() && GetRayAt(ViewportPosition, RayOrigin, RayDirection))
+	{
+		Gizmo->UpdateDrag(RayOrigin, RayDirection);
 	}
 }
 
-void AModularPlayerController::HandlePrimaryCompleted()
+void AModularPlayerController::HandlePrimaryReleased()
 {
 	if (Gizmo)
 	{
 		Gizmo->EndDrag();
 	}
-	SpawnSystem->EndPlacement();
 }
+
+void AModularPlayerController::SelectOrDeselectAt(const FVector2D& ViewportPosition)
+{
+	// Selecting never moves the item: only an explicit gizmo handle drag or a numeric edit does.
+	FHitResult ItemHit;
+	if (GetStageItemHitAt(ViewportPosition, ItemHit) && Selection->SelectActor(ItemHit.GetActor()))
+	{
+		return;
+	}
+	Selection->ClearSelection();
+}
+
+bool AModularPlayerController::TryBeginGizmoDragAt(const FVector2D& ViewportPosition)
+{
+	if (!Gizmo || !Gizmo->GetTarget())
+	{
+		return false;
+	}
+
+	FHitResult GizmoHit;
+	FVector RayOrigin, RayDirection;
+	return GetGizmoHitAt(ViewportPosition, GizmoHit)
+		&& GetRayAt(ViewportPosition, RayOrigin, RayDirection)
+		&& Gizmo->TryBeginDrag(GizmoHit, RayOrigin, RayDirection);
+}
+
+// --- Keys ---
 
 void AModularPlayerController::HandleNavigateStarted()
 {
-	// Turning the view mid-drag would drag the target or paint along the camera path.
-	if (IsPrimaryInteractionActive())
+	// Turning the view mid-drag would drag the target along the camera path.
+	if (IsGizmoDragging())
 	{
 		return;
 	}
@@ -388,7 +503,7 @@ void AModularPlayerController::HandleNavigateCompleted()
 void AModularPlayerController::HandleDelete()
 {
 	AActor* Target = Selection->GetSelectedActor();
-	if (!Target || bIsNavigatingCamera || IsPrimaryInteractionActive())
+	if (!Target || bIsNavigatingCamera || IsGizmoDragging())
 	{
 		return;
 	}
@@ -406,6 +521,13 @@ void AModularPlayerController::HandleCancel()
 		return;
 	}
 
+	// One level at a time: first leave Place mode (the item stays armed for P), then clear everything.
+	if (PlacementTool->IsPlaceMode())
+	{
+		PlacementTool->EnterSelectMode();
+		return;
+	}
+
 	Selection->ClearSelection();
 
 	if (UStageItemSubsystem* ItemSubsystem = GetGameInstance() ? GetGameInstance()->GetSubsystem<UStageItemSubsystem>() : nullptr)
@@ -413,6 +535,25 @@ void AModularPlayerController::HandleCancel()
 		ItemSubsystem->ClearSelection();
 	}
 }
+
+void AModularPlayerController::HandleToggleGizmoMode()
+{
+	if (Gizmo && !IsGizmoDragging())
+	{
+		Gizmo->CycleMode();
+	}
+}
+
+void AModularPlayerController::HandleTogglePlaceMode()
+{
+	if (bIsNavigatingCamera || IsGizmoDragging())
+	{
+		return;
+	}
+	PlacementTool->TogglePlaceMode();
+}
+
+// --- Camera ---
 
 void AModularPlayerController::HandleCameraLook(const FInputActionValue& Value)
 {
@@ -459,27 +600,132 @@ void AModularPlayerController::HandleCameraSpeed(const FInputActionValue& Value)
 #endif
 }
 
-void AModularPlayerController::HandleToggleGizmoMode()
+void AModularPlayerController::SetControlRotation(const FRotator& NewRotation)
 {
-	if (Gizmo)
+	Super::SetControlRotation(NewRotation);
+	RequestPreviewRefresh();
+}
+
+// --- Placement preview refresh ---
+
+void AModularPlayerController::BindPreviewRefreshSources()
+{
+	if (UStageCraftGameViewportClient* ViewportClient = Cast<UStageCraftGameViewportClient>(GetWorld()->GetGameViewport()))
 	{
-		Gizmo->ToggleMode();
+		BoundViewportClient = ViewportClient;
+		CursorMovedHandle = ViewportClient->OnCursorMoved.AddUObject(this, &ThisClass::HandleCursorMoved);
+	}
+
+	OnPossessedPawnChanged.AddUniqueDynamic(this, &ThisClass::HandlePossessedPawnChanged);
+	BindCameraPawn(GetPawn());
+}
+
+void AModularPlayerController::UnbindPreviewRefreshSources()
+{
+	if (UStageCraftGameViewportClient* ViewportClient = BoundViewportClient.Get())
+	{
+		ViewportClient->OnCursorMoved.Remove(CursorMovedHandle);
+	}
+	BoundViewportClient.Reset();
+	CursorMovedHandle.Reset();
+
+	OnPossessedPawnChanged.RemoveDynamic(this, &ThisClass::HandlePossessedPawnChanged);
+	BindCameraPawn(nullptr);
+}
+
+void AModularPlayerController::HandlePossessedPawnChanged(APawn* PreviousPawn, APawn* NewPawn)
+{
+	BindCameraPawn(NewPawn);
+}
+
+void AModularPlayerController::BindCameraPawn(APawn* NewPawn)
+{
+	if (USceneComponent* PreviousRoot = BoundCameraRoot.Get())
+	{
+		PreviousRoot->TransformUpdated.Remove(CameraTransformHandle);
+	}
+	BoundCameraRoot.Reset();
+	CameraTransformHandle.Reset();
+
+	if (USceneComponent* NewRoot = NewPawn ? NewPawn->GetRootComponent() : nullptr)
+	{
+		BoundCameraRoot = NewRoot;
+		CameraTransformHandle = NewRoot->TransformUpdated.AddUObject(this, &ThisClass::HandleCameraTransformUpdated);
 	}
 }
 
-bool AModularPlayerController::TryBeginGizmoDrag()
+void AModularPlayerController::HandleCursorMoved()
 {
-	if (!Gizmo || !Gizmo->GetTarget())
+	RequestPreviewRefresh();
+}
+
+void AModularPlayerController::HandleCameraTransformUpdated(USceneComponent* UpdatedComponent, EUpdateTransformFlags UpdateTransformFlags, ETeleportType Teleport)
+{
+	RequestPreviewRefresh();
+}
+
+void AModularPlayerController::RequestPreviewRefresh()
+{
+	// Several sources can fire in one frame (cursor, camera move, camera turn): one trace on the next tick
+	// covers them all, and runs after the camera has settled for this frame.
+	if (bPreviewRefreshQueued || !PlacementTool || !PlacementTool->IsPlaceMode() || !GetWorld())
 	{
-		return false;
+		return;
+	}
+	bPreviewRefreshQueued = true;
+	GetWorldTimerManager().SetTimerForNextTick(this, &ThisClass::RefreshPlacementPreview);
+}
+
+void AModularPlayerController::RefreshPlacementPreview()
+{
+	bPreviewRefreshQueued = false;
+	if (!PlacementTool->IsPlaceMode())
+	{
+		return;
 	}
 
-	FHitResult GizmoHit;
-	FVector RayOrigin, RayDirection;
-	return GetGizmoHitUnderCursor(GizmoHit)
-		&& GetCursorRay(RayOrigin, RayDirection)
-		&& Gizmo->TryBeginDrag(GizmoHit, RayOrigin, RayDirection);
+	FVector2D Position;
+	FHitResult Hit;
+	if (GetCursorViewportPosition(Position) && GetPlacementHitAt(Position, Hit))
+	{
+		PlacementTool->UpdateTarget(Hit);
+	}
+	else
+	{
+		PlacementTool->ClearTarget();
+	}
 }
+
+// --- Development simulation ---
+
+#if !UE_BUILD_SHIPPING
+void AModularPlayerController::DevSetSimulatedCursor(const FVector2D& ViewportPosition)
+{
+	SimulatedCursor = ViewportPosition;
+	RequestPreviewRefresh();
+}
+
+void AModularPlayerController::DevClearSimulatedCursor()
+{
+	SimulatedCursor.Reset();
+	RequestPreviewRefresh();
+}
+
+void AModularPlayerController::DevSimulatePrimaryPressed()
+{
+	HandlePrimaryStarted();
+}
+
+void AModularPlayerController::DevSimulatePrimaryHeld()
+{
+	HandlePrimaryTriggered();
+}
+
+void AModularPlayerController::DevSimulatePrimaryReleased()
+{
+	HandlePrimaryCompleted();
+}
+#endif
 
 // --- Request bridge ---
 
@@ -572,6 +818,35 @@ FStageEconomyResultInfo AModularPlayerController::ValidatePlacement(const UBaseI
 		ReportRejection(Result);
 	}
 	return Result;
+}
+
+FStageEconomyResultInfo AModularPlayerController::EvaluatePlacementPreview(const UBaseItemData& Item)
+{
+	// Same rules as a commit, without reporting: hovering a locked item must not raise toasts or error cues.
+	return CanPlaceItem(&Item);
+}
+
+FStageEconomyResultInfo AModularPlayerController::RequestPlaceItem(UBaseItemData* Item)
+{
+	UStageItemSubsystem* ItemSubsystem = GetGameInstance() ? GetGameInstance()->GetSubsystem<UStageItemSubsystem>() : nullptr;
+	if (!Item || !ItemSubsystem)
+	{
+		const FStageEconomyResultInfo Result = FStageEconomyResultInfo::Fail(EStageEconomyResult::InvalidRequest,
+			LOCTEXT("NoItemToPlace", "There is no item to place."));
+		ReportRejection(Result);
+		return Result;
+	}
+
+	const FStageEconomyResultInfo Verdict = ValidatePlacement(*Item);
+	if (!Verdict.IsSuccess())
+	{
+		return Verdict;
+	}
+
+	// Arming streams the item's spawn assets; the ghost appears when OnArmedItemChanged fires.
+	ItemSubsystem->SelectItem(Item);
+	PlacementTool->EnterPlaceMode();
+	return Verdict;
 }
 
 void AModularPlayerController::ReportRejection(const FStageEconomyResultInfo& Result)

@@ -65,7 +65,12 @@ TSharedRef<FTabManager::FLayout> FStageWorkspaceShell::MakeDefaultLayout()
 			FTabManager::NewPrimaryArea()->SetOrientation(Orient_Horizontal)
 			->Split
 			(
-				FTabManager::NewSplitter()->SetOrientation(Orient_Vertical)->SetSizeCoefficient(0.76f)
+				FTabManager::NewStack()->SetSizeCoefficient(0.16f)
+				->AddTab(ToTabId(StageCraftTags::Panel_Library), ETabState::OpenedTab)
+			)
+			->Split
+			(
+				FTabManager::NewSplitter()->SetOrientation(Orient_Vertical)->SetSizeCoefficient(0.62f)
 				->Split
 				(
 					FTabManager::NewStack()->SetSizeCoefficient(0.74f)
@@ -79,7 +84,7 @@ TSharedRef<FTabManager::FLayout> FStageWorkspaceShell::MakeDefaultLayout()
 			)
 			->Split
 			(
-				FTabManager::NewStack()->SetSizeCoefficient(0.24f)
+				FTabManager::NewStack()->SetSizeCoefficient(0.22f)
 				->AddTab(ToTabId(StageCraftTags::Panel_Inspector), ETabState::OpenedTab)
 			)
 		);

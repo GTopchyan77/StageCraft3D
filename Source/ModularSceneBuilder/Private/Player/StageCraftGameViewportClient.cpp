@@ -48,3 +48,15 @@ void UStageCraftGameViewportClient::LostFocus(FViewport* InViewport)
 	bOtherMouseButtonDown = false;
 	Super::LostFocus(InViewport);
 }
+
+void UStageCraftGameViewportClient::MouseMove(FViewport* InViewport, int32 X, int32 Y)
+{
+	Super::MouseMove(InViewport, X, Y);
+	OnCursorMoved.Broadcast();
+}
+
+void UStageCraftGameViewportClient::CapturedMouseMove(FViewport* InViewport, int32 X, int32 Y)
+{
+	Super::CapturedMouseMove(InViewport, X, Y);
+	OnCursorMoved.Broadcast();
+}

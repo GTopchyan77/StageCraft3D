@@ -105,7 +105,8 @@ void UStageSessionSubsystem::HandleItemParameterChanged(AModularBaseActor* Item,
 
 	// Moves arrive here from the gizmo as well as from the inspector. Attribute changes do not mark
 	// the session dirty: cue playback and DMX change them constantly without editing the stage.
-	if (ParameterId == StageCraftTags::Param_Transform_Location || ParameterId == StageCraftTags::Param_Transform_Rotation)
+	if (ParameterId == StageCraftTags::Param_Transform_Location || ParameterId == StageCraftTags::Param_Transform_Rotation
+		|| ParameterId == StageCraftTags::Param_Transform_Scale)
 	{
 		SetDirty(true);
 	}

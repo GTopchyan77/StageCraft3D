@@ -8,6 +8,7 @@
 #include "Engine/StaticMesh.h"
 #include "GameFramework/PlayerController.h"
 #include "Interaction/StageCraftCollision.h"
+#include "Interaction/StageTransformRules.h"
 #include "Materials/MaterialInstanceDynamic.h"
 #include "ProceduralMeshComponent.h"
 #include "UObject/ConstructorHelpers.h"
@@ -25,6 +26,8 @@ namespace ModularTransformGizmo
 	constexpr double RingTubeRadius = 3.0;
 	constexpr int32 RingSegments = 48;
 	constexpr int32 RingTubeSegments = 8;
+	constexpr double ScaleHeadSize = 14.0;
+	constexpr double UniformHandleSize = 18.0;
 
 	const FName GizmoColorParameter(TEXT("GizmoColor"));
 
@@ -71,9 +74,11 @@ AModularTransformGizmo::AModularTransformGizmo()
 
 	static ConstructorHelpers::FObjectFinder<UStaticMesh> CylinderMesh(TEXT("/Engine/BasicShapes/Cylinder.Cylinder"));
 	static ConstructorHelpers::FObjectFinder<UStaticMesh> ConeMesh(TEXT("/Engine/BasicShapes/Cone.Cone"));
+	static ConstructorHelpers::FObjectFinder<UStaticMesh> CubeMesh(TEXT("/Engine/BasicShapes/Cube.Cube"));
 	static ConstructorHelpers::FObjectFinder<UMaterialInterface> OnTopMaterial(TEXT("/Game/StageCraft/Gizmo/M_GizmoHandle.M_GizmoHandle"));
 	ArrowShaftMesh = CylinderMesh.Object;
 	ArrowHeadMesh = ConeMesh.Object;
+	ScaleHandleMesh = CubeMesh.Object;
 	HandleMaterial = OnTopMaterial.Object;
 	if (!HandleMaterial)
 	{
@@ -114,7 +119,19 @@ AModularTransformGizmo::AModularTransformGizmo()
 		Ring->bUseComplexAsSimpleCollision = true;
 		ConfigureHandle(Ring);
 		RingComponents[Axis] = Ring;
+
+		UStaticMeshComponent* ScaleHead = CreateDefaultSubobject<UStaticMeshComponent>(*FString::Printf(TEXT("ScaleHead%d"), Axis));
+		ScaleHead->SetupAttachment(GizmoRoot);
+		ScaleHead->SetRelativeLocationAndRotation(Direction * (ArrowShaftLength + ScaleHeadSize * 0.5), AxisRotation);
+		ScaleHead->SetRelativeScale3D(FVector(ScaleHeadSize / 100.0));
+		ConfigureHandle(ScaleHead);
+		ScaleHeadComponents[Axis] = ScaleHead;
 	}
+
+	UniformScaleComponent = CreateDefaultSubobject<UStaticMeshComponent>(TEXT("UniformScale"));
+	UniformScaleComponent->SetupAttachment(GizmoRoot);
+	UniformScaleComponent->SetRelativeScale3D(FVector(UniformHandleSize / 100.0));
+	ConfigureHandle(UniformScaleComponent);
 
 	SetActorHiddenInGame(true);
 	SetActorEnableCollision(false);
@@ -134,7 +151,15 @@ void AModularTransformGizmo::BeginPlay()
 
 		ShaftComponents[Axis]->SetMaterial(0, AxisMaterials[Axis]);
 		HeadComponents[Axis]->SetMaterial(0, AxisMaterials[Axis]);
+
+		ScaleHeadComponents[Axis]->SetStaticMesh(ScaleHandleMesh);
+		ScaleHeadComponents[Axis]->SetMaterial(0, AxisMaterials[Axis]);
 	}
+
+	AxisMaterials[UniformHandleIndex] = UMaterialInstanceDynamic::Create(HandleMaterial, this);
+	SetAxisHighlighted(UniformHandleIndex, false);
+	UniformScaleComponent->SetStaticMesh(ScaleHandleMesh);
+	UniformScaleComponent->SetMaterial(0, AxisMaterials[UniformHandleIndex]);
 
 	// Ring materials are assigned per section inside BuildRingMeshes.
 	BuildRingMeshes();
@@ -208,9 +233,14 @@ void AModularTransformGizmo::SetMode(EGizmoMode NewMode)
 	OnModeChanged.Broadcast(Mode);
 }
 
-void AModularTransformGizmo::ToggleMode()
+void AModularTransformGizmo::CycleMode()
 {
-	SetMode(Mode == EGizmoMode::Translate ? EGizmoMode::Rotate : EGizmoMode::Translate);
+	switch (Mode)
+	{
+	case EGizmoMode::Translate:	SetMode(EGizmoMode::Rotate);	break;
+	case EGizmoMode::Rotate:	SetMode(EGizmoMode::Scale);		break;
+	case EGizmoMode::Scale:		SetMode(EGizmoMode::Translate);	break;
+	}
 }
 
 bool AModularTransformGizmo::TryBeginDrag(const FHitResult& HandleHit, const FVector& RayOrigin, const FVector& RayDirection)
@@ -220,23 +250,27 @@ bool AModularTransformGizmo::TryBeginDrag(const FHitResult& HandleHit, const FVe
 		return false;
 	}
 
-	const int32 Axis = FindHandleAxis(HandleHit.GetComponent());
-	if (Axis == INDEX_NONE)
+	const int32 Handle = FindHandleAxis(HandleHit.GetComponent());
+	if (Handle == INDEX_NONE)
 	{
 		return false;
 	}
 
-	const FVector AxisDir = AxisVector(Axis);
 	const FVector Pivot = Target->GetActorLocation();
-	FVector PlaneNormal = AxisDir;
-
-	if (Mode == EGizmoMode::Translate)
+	const FVector Direction = DragDirection(Handle, RayDirection);
+	if (Direction.IsZero())
 	{
-		// Plane containing the axis and facing the camera as much as possible, for a stable projection.
-		PlaneNormal = RayDirection - (RayDirection | AxisDir) * AxisDir;
+		return false; // Looking straight down the axis: movement along it is not observable.
+	}
+
+	FVector PlaneNormal = Direction;
+	if (Mode != EGizmoMode::Rotate)
+	{
+		// Plane containing the drag direction and facing the camera as much as possible, for a stable projection.
+		PlaneNormal = RayDirection - (RayDirection | Direction) * Direction;
 		if (!PlaneNormal.Normalize(UE_KINDA_SMALL_NUMBER))
 		{
-			return false; // Looking straight down the axis: movement along it is not observable.
+			return false;
 		}
 	}
 
@@ -248,11 +282,14 @@ bool AModularTransformGizmo::TryBeginDrag(const FHitResult& HandleHit, const FVe
 		return false;
 	}
 
-	DragAxisIndex = Axis;
+	DragAxisIndex = Handle;
+	DragAxisDirection = Direction;
 	DragStartPoint = StartPoint;
 	DragStartLocation = Pivot;
 	DragStartRotation = Target->GetActorQuat();
-	SetAxisHighlighted(Axis, true);
+	DragStartScale = Target->GetActorScale3D();
+	DragHandleLength = ModularTransformGizmo::ArrowShaftLength * GizmoRoot->GetComponentScale().X;
+	SetAxisHighlighted(Handle, true);
 	return true;
 }
 
@@ -269,36 +306,78 @@ void AModularTransformGizmo::UpdateDrag(const FVector& RayOrigin, const FVector&
 		return;
 	}
 
-	const FVector AxisDir = AxisVector(DragAxisIndex);
-
-	if (Mode == EGizmoMode::Translate)
+	switch (Mode)
 	{
-		double Distance = (Point - DragStartPoint) | AxisDir;
-		if (TranslationSnap > 0.f)
-		{
-			Distance = FMath::GridSnap(Distance, static_cast<double>(TranslationSnap));
-		}
+	case EGizmoMode::Translate:	UpdateTranslateDrag(Point);	break;
+	case EGizmoMode::Rotate:	UpdateRotateDrag(Point);	break;
+	case EGizmoMode::Scale:		UpdateScaleDrag(Point);		break;
+	}
+}
 
-		Target->SetActorLocation(DragStartLocation + AxisDir * Distance);
+void AModularTransformGizmo::UpdateTranslateDrag(const FVector& Point)
+{
+	double Distance = (Point - DragStartPoint) | DragAxisDirection;
+	if (TranslationSnap > 0.f)
+	{
+		Distance = FMath::GridSnap(Distance, static_cast<double>(TranslationSnap));
+	}
+
+	Target->SetActorLocation(DragStartLocation + DragAxisDirection * Distance);
+}
+
+void AModularTransformGizmo::UpdateRotateDrag(const FVector& Point)
+{
+	const FVector From = DragStartPoint - DragStartLocation;
+	const FVector To = Point - DragStartLocation;
+	if (From.IsNearlyZero() || To.IsNearlyZero())
+	{
+		return;
+	}
+
+	// Signed angle from the grab point to the cursor, measured around the axis.
+	double AngleDegrees = FMath::RadiansToDegrees(FMath::Atan2((From ^ To) | DragAxisDirection, From | To));
+	if (RotationSnapDegrees > 0.f)
+	{
+		AngleDegrees = FMath::GridSnap(AngleDegrees, static_cast<double>(RotationSnapDegrees));
+	}
+
+	Target->SetActorRotation(FQuat(DragAxisDirection, FMath::DegreesToRadians(AngleDegrees)) * DragStartRotation);
+}
+
+void AModularTransformGizmo::UpdateScaleDrag(const FVector& Point)
+{
+	const double Distance = (Point - DragStartPoint) | DragAxisDirection;
+	const double Factor = StageTransformRules::ComputeDragScaleFactor(Distance, DragHandleLength);
+
+	FVector NewScale = DragStartScale;
+	if (DragAxisIndex == UniformHandleIndex)
+	{
+		NewScale *= Factor;
 	}
 	else
 	{
-		const FVector From = DragStartPoint - DragStartLocation;
-		const FVector To = Point - DragStartLocation;
-		if (From.IsNearlyZero() || To.IsNearlyZero())
-		{
-			return;
-		}
-
-		// Signed angle from the grab point to the cursor, measured around the axis.
-		double AngleDegrees = FMath::RadiansToDegrees(FMath::Atan2((From ^ To) | AxisDir, From | To));
-		if (RotationSnapDegrees > 0.f)
-		{
-			AngleDegrees = FMath::GridSnap(AngleDegrees, static_cast<double>(RotationSnapDegrees));
-		}
-
-		Target->SetActorRotation(FQuat(AxisDir, FMath::DegreesToRadians(AngleDegrees)) * DragStartRotation);
+		NewScale[DragAxisIndex] *= Factor;
 	}
+
+	Target->SetActorScale3D(StageTransformRules::ClampScale(NewScale));
+}
+
+FVector AModularTransformGizmo::DragDirection(int32 HandleIndex, const FVector& RayDirection) const
+{
+	if (HandleIndex != UniformHandleIndex)
+	{
+		return AxisVector(HandleIndex);
+	}
+
+	// Uniform scale: dragging "up the screen" grows. World up projected onto the camera-facing plane.
+	FVector ScreenUp = FVector::UpVector - (FVector::UpVector | RayDirection) * RayDirection;
+	if (!ScreenUp.Normalize(UE_KINDA_SMALL_NUMBER))
+	{
+		// Looking straight down: use world X as "up the screen" instead.
+		ScreenUp = FVector::XAxisVector - (FVector::XAxisVector | RayDirection) * RayDirection;
+		ScreenUp.Normalize(UE_KINDA_SMALL_NUMBER);
+	}
+	return ScreenUp;
 }
 
 void AModularTransformGizmo::EndDrag()
@@ -368,21 +447,28 @@ void AModularTransformGizmo::BuildRingMeshes()
 void AModularTransformGizmo::ApplyModeVisibility()
 {
 	const bool bTranslate = Mode == EGizmoMode::Translate;
+	const bool bRotate = Mode == EGizmoMode::Rotate;
+	const bool bScale = Mode == EGizmoMode::Scale;
 
 	for (int32 Axis = 0; Axis < 3; ++Axis)
 	{
-		ModularTransformGizmo::SetHandleActive(ShaftComponents[Axis], bTranslate);
+		ModularTransformGizmo::SetHandleActive(ShaftComponents[Axis], bTranslate || bScale);
 		ModularTransformGizmo::SetHandleActive(HeadComponents[Axis], bTranslate);
-		ModularTransformGizmo::SetHandleActive(RingComponents[Axis], !bTranslate);
+		ModularTransformGizmo::SetHandleActive(ScaleHeadComponents[Axis], bScale);
+		ModularTransformGizmo::SetHandleActive(RingComponents[Axis], bRotate);
 	}
+	ModularTransformGizmo::SetHandleActive(UniformScaleComponent, bScale);
 }
 
-void AModularTransformGizmo::SetAxisHighlighted(int32 AxisIndex, bool bHighlighted)
+void AModularTransformGizmo::SetAxisHighlighted(int32 HandleIndex, bool bHighlighted)
 {
-	if (AxisMaterials[AxisIndex])
+	if (!ensure(HandleIndex >= 0 && HandleIndex <= UniformHandleIndex) || !AxisMaterials[HandleIndex])
 	{
-		AxisMaterials[AxisIndex]->SetVectorParameterValue(ModularTransformGizmo::GizmoColorParameter, bHighlighted ? ActiveAxisColor : AxisColors[AxisIndex]);
+		return;
 	}
+
+	const FLinearColor& IdleColor = HandleIndex == UniformHandleIndex ? UniformScaleColor : AxisColors[HandleIndex];
+	AxisMaterials[HandleIndex]->SetVectorParameterValue(ModularTransformGizmo::GizmoColorParameter, bHighlighted ? ActiveAxisColor : IdleColor);
 }
 
 void AModularTransformGizmo::UpdateScreenScale()
@@ -404,14 +490,25 @@ int32 AModularTransformGizmo::FindHandleAxis(const UPrimitiveComponent* Componen
 		return INDEX_NONE;
 	}
 
-	const bool bTranslate = Mode == EGizmoMode::Translate;
+	if (Mode == EGizmoMode::Scale && Component == UniformScaleComponent)
+	{
+		return UniformHandleIndex;
+	}
+
 	for (int32 Axis = 0; Axis < 3; ++Axis)
 	{
-		const bool bIsArrow = Component == ShaftComponents[Axis] || Component == HeadComponents[Axis];
-		const bool bIsRing = Component == RingComponents[Axis];
-		if ((bTranslate && bIsArrow) || (!bTranslate && bIsRing))
+		const bool bIsShaft = Component == ShaftComponents[Axis];
+		switch (Mode)
 		{
-			return Axis;
+		case EGizmoMode::Translate:
+			if (bIsShaft || Component == HeadComponents[Axis]) { return Axis; }
+			break;
+		case EGizmoMode::Rotate:
+			if (Component == RingComponents[Axis]) { return Axis; }
+			break;
+		case EGizmoMode::Scale:
+			if (bIsShaft || Component == ScaleHeadComponents[Axis]) { return Axis; }
+			break;
 		}
 	}
 	return INDEX_NONE;
@@ -457,7 +554,9 @@ bool AModularTransformGizmo::TraceHandles(const FVector& RayOrigin, const FVecto
 		TestHandle(ShaftComponents[Axis]);
 		TestHandle(HeadComponents[Axis]);
 		TestHandle(RingComponents[Axis]);
+		TestHandle(ScaleHeadComponents[Axis]);
 	}
+	TestHandle(UniformScaleComponent);
 	return bHit;
 }
 

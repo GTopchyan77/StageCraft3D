@@ -17,7 +17,6 @@ UStageTrussData::UStageTrussData()
 	ItemType = EStageItemType::Truss;
 	ActorClass = AStageTrussActor::StaticClass();
 	CategoryTag = StageCraftTags::Category_Truss_Straight;
-	PlacementRules.PlacementMode = EStageItemPlacementMode::Single;
 	PlacementRules.GridSize = FVector(50.0, 50.0, 0.0);
 	Specs.WeightKg = 14.f;
 }

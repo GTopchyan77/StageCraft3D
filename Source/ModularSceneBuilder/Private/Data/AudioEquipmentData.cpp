@@ -17,7 +17,6 @@ UAudioEquipmentData::UAudioEquipmentData()
 	ItemType = EStageItemType::Audio;
 	ActorClass = AAudioEquipmentActor::StaticClass();
 	CategoryTag = StageCraftTags::Category_Audio_LineArray;
-	PlacementRules.PlacementMode = EStageItemPlacementMode::Single;
 	Specs.WeightKg = 60.f;
 }
 

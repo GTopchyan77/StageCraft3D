@@ -6,6 +6,7 @@
 #include "GameFramework/PlayerController.h"
 #include "Data/StageParameterTypes.h"
 #include "Economy/StageEconomyTypes.h"
+#include "Placement/StagePlacementTypes.h"
 #include "ModularPlayerController.generated.h"
 
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FOnStageRequestRejected, const FStageEconomyResultInfo&, Result);
@@ -13,24 +14,32 @@ DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FOnStageRequestRejected, const FStag
 /**
  * Stage editing controller. Its only jobs are Enhanced Input, cursor tracing and deciding which
  * system an input belongs to; the actual work lives in focused components/actors:
- *   USpawnSystemComponent (place/delete), USelectionComponent (selection), AModularTransformGizmo
- *   (transform), AStageCameraPawn (fly camera motion and smoothing).
+ *   UStagePlacementToolComponent (edit mode, ghost preview, single-click placement),
+ *   USpawnSystemComponent (spawn/delete executor), USelectionComponent (selection),
+ *   AModularTransformGizmo (move/rotate/scale), AStageCameraPawn (fly camera),
+ *   UStageEditorAudioFeedbackComponent (feedback cues).
  *
  * Mouse buttons have exclusive jobs, as in the Unreal Editor viewport:
- *  - Left: gizmo handle (drag) > placed item (select) > empty surface (deselect, then place if a
- *    catalog item is armed). Ignored entirely while the right button is held.
+ *  - Left, Place mode: places exactly one armed item where the ghost shows it, then returns to Select mode.
+ *    Holding the button never places more.
+ *  - Left, Select mode: gizmo handle (drag) > placed item (select; it never follows the mouse) > empty
+ *    (deselect). Ignored entirely while the right button is held.
  *  - Right: navigation only. While held: mouse = look, W/S = forward/back along the view, A/D =
  *    strafe, E/Q = straight up/down world Z. It never selects, places or deletes, and is ignored
  *    while a left-button drag is in progress. Cursor hide/capture/restore is done by
  *    UStageCraftGameViewportClient, so this class never changes the input mode mid-press.
  *  - Wheel: fly speed, with or without the right button held. It scales every fly axis alike.
  *
- * Keys: Delete removes the selected item, Esc deselects and disarms the catalog item, Space toggles
- * the gizmo between translate and rotate.
+ * Keys: P toggles Place mode, Esc leaves Place mode (or, in Select mode, deselects and disarms),
+ * Delete removes the selected item, Space cycles the gizmo Move -> Rotate -> Scale.
+ *
+ * The placement preview follows the cursor without any tick: cursor moves (viewport client), camera
+ * moves (pawn root) and view rotation (SetControlRotation) request one coalesced trace on the next tick,
+ * and only while in Place mode.
  *
  * Request bridge: widgets never write to the game directly. Parameter edits, purchases and
- * placements go through RequestParameterChange / RequestPurchase / the spawn component's
- * PlacementValidator, which ask the GameMode (rules + ownership) and only then let the
+ * placements go through RequestParameterChange / RequestPurchase / RequestPlaceItem and the spawn
+ * component's PlacementValidator, which ask the GameMode (rules + ownership) and only then let the
  * session or economy subsystem apply them. Refusals are broadcast on OnRequestRejected.
  *
  * Input assets are designer-assignable in a Blueprint subclass. If any slot is empty, an equivalent
@@ -49,6 +58,9 @@ public:
 
 	UFUNCTION(BlueprintPure, Category = "StageCraft")
 	class USelectionComponent* GetSelection() const { return Selection; }
+
+	UFUNCTION(BlueprintPure, Category = "StageCraft")
+	class UStagePlacementToolComponent* GetPlacementTool() const { return PlacementTool; }
 
 	UFUNCTION(BlueprintPure, Category = "StageCraft")
 	class AModularTransformGizmo* GetGizmo() const { return Gizmo; }
@@ -75,6 +87,11 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "StageCraft|Trace")
 	bool GetGizmoHitUnderCursor(FHitResult& OutHit) const;
 
+	//~ Begin AController Interface
+	/** Also refreshes the placement preview: the fly camera turns the view through here. */
+	virtual void SetControlRotation(const FRotator& NewRotation) override;
+	//~ End AController Interface
+
 	// --- Request bridge (UI -> GameMode rules -> subsystems) ---
 
 	/** Validates with the GameMode, then applies through the session. The single write path for UI edits. */
@@ -84,6 +101,14 @@ public:
 	/** Starts a purchase. The result is the validation outcome; completion is reported on OnRequestRejected (failure) or the economy's OnPurchaseCompleted. */
 	UFUNCTION(BlueprintCallable, Category = "StageCraft|Requests")
 	FStageEconomyResultInfo RequestPurchase(class UStageProductData* Product);
+
+	/**
+	 * Library entry point: arms Item (its spawn assets stream in first) and enters Place mode, so the
+	 * ghost follows the cursor as soon as the item is ready. Refused (and reported) when the rules do not
+	 * allow placing Item now, e.g. it is locked. Placing still validates again on the click.
+	 */
+	UFUNCTION(BlueprintCallable, Category = "StageCraft|Requests")
+	FStageEconomyResultInfo RequestPlaceItem(class UBaseItemData* Item);
 
 	/** Whether Item may be placed now (for graying out catalog entries). */
 	UFUNCTION(BlueprintCallable, Category = "StageCraft|Requests")
@@ -96,9 +121,19 @@ public:
 	 */
 	void DecorateParameterSections(const UObject* Target, TArray<FStageParameterSection>& Sections) const;
 
-	/** Every refused request (UI toasts, shop prompts). */
+	/** Every refused request (UI toasts, shop prompts, error cue). */
 	UPROPERTY(BlueprintAssignable, Category = "StageCraft|Requests")
 	FOnStageRequestRejected OnRequestRejected;
+
+#if !UE_BUILD_SHIPPING
+	// Development verification only (StageCraft.Edit.* console commands): drive the same handlers as
+	// the mouse, at a simulated cursor position in viewport pixels. Compiled out of Shipping.
+	void DevSetSimulatedCursor(const FVector2D& ViewportPosition);
+	void DevClearSimulatedCursor();
+	void DevSimulatePrimaryPressed();
+	void DevSimulatePrimaryHeld();
+	void DevSimulatePrimaryReleased();
+#endif
 
 protected:
 	//~ Begin APlayerController Interface
@@ -112,6 +147,12 @@ protected:
 
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Components")
 	TObjectPtr<class USelectionComponent> Selection = nullptr;
+
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Components")
+	TObjectPtr<class UStagePlacementToolComponent> PlacementTool = nullptr;
+
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Components")
+	TObjectPtr<class UStageEditorAudioFeedbackComponent> AudioFeedback = nullptr;
 
 	/** Spawned once for the local player and re-targeted on every selection change. */
 	UPROPERTY(EditDefaultsOnly, Category = "StageCraft|Gizmo")
@@ -127,7 +168,7 @@ protected:
 	UPROPERTY(EditDefaultsOnly, Category = "StageCraft|Input")
 	TObjectPtr<class UInputMappingContext> EditorMappingContext = nullptr;
 
-	/** Primary click: gizmo drag, select, or place (see class comment). Continuous items paint while held. */
+	/** Primary click: place (Place mode) or gizmo drag / select (Select mode). Holding never places more. */
 	UPROPERTY(EditDefaultsOnly, Category = "StageCraft|Input")
 	TObjectPtr<class UInputAction> PlaceAction = nullptr;
 
@@ -139,13 +180,17 @@ protected:
 	UPROPERTY(EditDefaultsOnly, Category = "StageCraft|Input")
 	TObjectPtr<class UInputAction> DeleteAction = nullptr;
 
-	/** Backs out of everything: clears the actor selection and disarms the catalog item (Esc). */
+	/** Backs out one level: leaves Place mode, or clears the selection and disarms the catalog item (Esc). */
 	UPROPERTY(EditDefaultsOnly, Category = "StageCraft|Input")
 	TObjectPtr<class UInputAction> CancelAction = nullptr;
 
-	/** Switches the gizmo between translate and rotate (Space). */
+	/** Cycles the gizmo Move -> Rotate -> Scale (Space). */
 	UPROPERTY(EditDefaultsOnly, Category = "StageCraft|Input")
 	TObjectPtr<class UInputAction> ToggleGizmoModeAction = nullptr;
+
+	/** Toggles Place mode (P). */
+	UPROPERTY(EditDefaultsOnly, Category = "StageCraft|Input")
+	TObjectPtr<class UInputAction> TogglePlaceModeAction = nullptr;
 
 	UPROPERTY(EditDefaultsOnly, Category = "StageCraft|Input")
 	int32 MappingContextPriority = 0;
@@ -190,11 +235,22 @@ private:
 	UFUNCTION()
 	void HandlePurchaseCompleted(class UStageProductData* Product, FStageEconomyResultInfo Result);
 
+	UFUNCTION()
+	void HandleEditModeChanged(EStageEditMode NewMode, EStageEditMode PreviousMode);
+
+	UFUNCTION()
+	void HandleArmedItemChanged(class UBaseItemData* ArmedItem);
+
+	UFUNCTION()
+	void HandlePossessedPawnChanged(APawn* PreviousPawn, APawn* NewPawn);
+
 	FStageEconomyResultInfo ValidatePlacement(const class UBaseItemData& Item);
+	FStageEconomyResultInfo EvaluatePlacementPreview(const class UBaseItemData& Item);
 	void ReportRejection(const FStageEconomyResultInfo& Result);
 	class AStageCraftGameModeBase* GetStageGameMode() const;
 	class UStageEconomySubsystem* GetEconomy() const;
 
+	// Enhanced Input handlers: read the cursor once and forward to the position-based handlers below.
 	void HandlePrimaryStarted();
 	void HandlePrimaryTriggered();
 	void HandlePrimaryCompleted();
@@ -203,17 +259,37 @@ private:
 	void HandleDelete();
 	void HandleCancel();
 	void HandleToggleGizmoMode();
+	void HandleTogglePlaceMode();
 
 	void HandleCameraLook(const struct FInputActionValue& Value);
 	void HandleCameraMove(const struct FInputActionValue& Value);
 	void HandleCameraSpeed(const struct FInputActionValue& Value);
 
+	// Position-based handlers, shared by real input and the dev simulation.
+	void HandlePrimaryPressedAt(const FVector2D& ViewportPosition);
+	void HandlePrimaryHeldAt(const FVector2D& ViewportPosition);
+	void HandlePrimaryReleased();
+	void SelectOrDeselectAt(const FVector2D& ViewportPosition);
+
+	// Placement preview: event-driven, coalesced to one trace per frame.
+	void BindPreviewRefreshSources();
+	void UnbindPreviewRefreshSources();
+	void BindCameraPawn(APawn* NewPawn);
+	void HandleCursorMoved();
+	void HandleCameraTransformUpdated(class USceneComponent* UpdatedComponent, EUpdateTransformFlags UpdateTransformFlags, ETeleportType Teleport);
+	void RequestPreviewRefresh();
+	void RefreshPlacementPreview();
+
 	/** The fly camera, or null when a different pawn is possessed (navigation is then a no-op). */
 	class AStageCameraPawn* GetCameraPawn() const;
 
-	bool IsPrimaryInteractionActive() const;
-	bool TryBeginGizmoDrag();
-	bool GetCursorRay(FVector& OutOrigin, FVector& OutDirection) const;
+	bool IsGizmoDragging() const;
+	bool TryBeginGizmoDragAt(const FVector2D& ViewportPosition);
+	bool GetCursorViewportPosition(FVector2D& OutPosition) const;
+	bool GetRayAt(const FVector2D& ViewportPosition, FVector& OutOrigin, FVector& OutDirection) const;
+	bool GetPlacementHitAt(const FVector2D& ViewportPosition, FHitResult& OutHit) const;
+	bool GetStageItemHitAt(const FVector2D& ViewportPosition, FHitResult& OutHit) const;
+	bool GetGizmoHitAt(const FVector2D& ViewportPosition, FHitResult& OutHit) const;
 
 	UPROPERTY(Transient)
 	TObjectPtr<class AModularTransformGizmo> Gizmo = nullptr;
@@ -221,5 +297,15 @@ private:
 	UPROPERTY(Transient)
 	TObjectPtr<class UUserWidget> HUDWidget = nullptr;
 
+	TWeakObjectPtr<class UStageCraftGameViewportClient> BoundViewportClient;
+	TWeakObjectPtr<class USceneComponent> BoundCameraRoot;
+	FDelegateHandle CursorMovedHandle;
+	FDelegateHandle CameraTransformHandle;
+
 	bool bIsNavigatingCamera = false;
+	bool bPreviewRefreshQueued = false;
+
+#if !UE_BUILD_SHIPPING
+	TOptional<FVector2D> SimulatedCursor;
+#endif
 };

@@ -9,14 +9,15 @@
 UENUM(BlueprintType)
 enum class EGizmoMode : uint8
 {
-	Translate,
+	Translate	UMETA(DisplayName = "Move"),
 	Rotate,
+	Scale,
 };
 
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FOnGizmoModeChanged, EGizmoMode, NewMode);
 
 /**
- * World-space translate/rotate gizmo for one target actor.
+ * World-space move/rotate/scale gizmo for one target actor.
  *
  * Operates on plain AActor transforms, so it never depends on concrete item classes. It rides
  * along with the target via attachment (absolute rotation/scale keep the handles world-aligned)
@@ -25,8 +26,11 @@ DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FOnGizmoModeChanged, EGizmoMode, New
  * Handles render on top of all scene geometry (HandleMaterial has depth testing disabled) and are
  * picked with TraceHandles, which tests only the handle components, so a gizmo buried inside another
  * mesh stays both visible and grabbable. Handles block only the StageCraft "Gizmo" trace channel, so
- * they never interfere with placement, selection or deletion traces. Arrows use engine BasicShapes; rotation rings are
- * generated procedurally because the engine ships no runtime torus mesh.
+ * they never interfere with placement, selection or deletion traces. Arrows and scale cubes use engine BasicShapes;
+ * rotation rings are generated procedurally because the engine ships no runtime torus mesh.
+ *
+ * Scale handles are the axis shafts with cube heads (one axis) plus a centre cube (uniform). Scale results
+ * are clamped by StageTransformRules, the same limits the inspector applies.
  *
  * Ticks only while attached, to keep a constant on-screen size.
  */
@@ -51,9 +55,9 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "StageCraft|Gizmo")
 	void SetMode(EGizmoMode NewMode);
 
-	/** Space-bar behaviour: switches between Translate and Rotate, like the Unreal Editor's W/E. */
+	/** Space-bar behaviour: Move -> Rotate -> Scale -> Move, like cycling the Unreal Editor's W/E/R. */
 	UFUNCTION(BlueprintCallable, Category = "StageCraft|Gizmo")
-	void ToggleMode();
+	void CycleMode();
 
 	UFUNCTION(BlueprintPure, Category = "StageCraft|Gizmo")
 	EGizmoMode GetMode() const { return Mode; }
@@ -67,7 +71,7 @@ public:
 	 */
 	bool TryBeginDrag(const FHitResult& HandleHit, const FVector& RayOrigin, const FVector& RayDirection);
 
-	/** Moves/rotates the target to follow the cursor ray. No-op when not dragging. */
+	/** Moves/rotates/scales the target to follow the cursor ray. No-op when not dragging. */
 	void UpdateDrag(const FVector& RayOrigin, const FVector& RayDirection);
 
 	UFUNCTION(BlueprintCallable, Category = "StageCraft|Gizmo")
@@ -106,6 +110,10 @@ protected:
 	UPROPERTY(EditDefaultsOnly, Category = "StageCraft|Gizmo|Appearance")
 	TObjectPtr<class UStaticMesh> ArrowHeadMesh = nullptr;
 
+	/** Head of the scale handles and the uniform-scale centre handle. */
+	UPROPERTY(EditDefaultsOnly, Category = "StageCraft|Gizmo|Appearance")
+	TObjectPtr<class UStaticMesh> ScaleHandleMesh = nullptr;
+
 	/**
 	 * Must expose a "GizmoColor" vector parameter. The default, /Game/StageCraft/Gizmo/M_GizmoHandle, is
 	 * unlit translucent with Disable Depth Test, so handles are never hidden by meshes. Any replacement
@@ -116,6 +124,9 @@ protected:
 
 	UPROPERTY(EditDefaultsOnly, Category = "StageCraft|Gizmo|Appearance")
 	FLinearColor AxisColors[3] = { FLinearColor(0.9f, 0.1f, 0.1f), FLinearColor(0.1f, 0.8f, 0.1f), FLinearColor(0.1f, 0.3f, 1.0f) };
+
+	UPROPERTY(EditDefaultsOnly, Category = "StageCraft|Gizmo|Appearance")
+	FLinearColor UniformScaleColor = FLinearColor(0.85f, 0.85f, 0.85f);
 
 	UPROPERTY(EditDefaultsOnly, Category = "StageCraft|Gizmo|Appearance")
 	FLinearColor ActiveAxisColor = FLinearColor(1.0f, 0.85f, 0.0f);
@@ -132,14 +143,32 @@ protected:
 	UPROPERTY(VisibleAnywhere, Category = "Components")
 	TObjectPtr<class UProceduralMeshComponent> RingComponents[3];
 
+	UPROPERTY(VisibleAnywhere, Category = "Components")
+	TObjectPtr<class UStaticMeshComponent> ScaleHeadComponents[3];
+
+	UPROPERTY(VisibleAnywhere, Category = "Components")
+	TObjectPtr<class UStaticMeshComponent> UniformScaleComponent = nullptr;
+
 private:
+	/** Handle index of the centre cube; 0..2 are the X/Y/Z axes. */
+	static constexpr int32 UniformHandleIndex = 3;
+
 	void BuildRingMeshes();
 	void ApplyModeVisibility();
-	void SetAxisHighlighted(int32 AxisIndex, bool bHighlighted);
+	void SetAxisHighlighted(int32 HandleIndex, bool bHighlighted);
 	void UpdateScreenScale();
+	void UpdateTranslateDrag(const FVector& Point);
+	void UpdateRotateDrag(const FVector& Point);
+	void UpdateScaleDrag(const FVector& Point);
 
-	/** Axis index (0 = X, 1 = Y, 2 = Z) owning the component, or INDEX_NONE if it is not a visible handle of this gizmo. */
+	/**
+	 * Handle index (0 = X, 1 = Y, 2 = Z, UniformHandleIndex = centre cube) owning the component, or
+	 * INDEX_NONE if it is not a visible handle of the current mode.
+	 */
 	int32 FindHandleAxis(const UPrimitiveComponent* Component) const;
+
+	/** Direction a drag on HandleIndex is measured along. The uniform handle uses the camera-facing plane's up. */
+	FVector DragDirection(int32 HandleIndex, const FVector& RayDirection) const;
 
 	/** Cursor ray vs. the plane captured at drag start. */
 	bool IntersectDragPlane(const FVector& RayOrigin, const FVector& RayDirection, FVector& OutPoint) const;
@@ -149,8 +178,9 @@ private:
 	UPROPERTY(Transient)
 	TObjectPtr<class AActor> Target = nullptr;
 
+	/** One per handle index: X, Y, Z, uniform. */
 	UPROPERTY(Transient)
-	TObjectPtr<class UMaterialInstanceDynamic> AxisMaterials[3];
+	TObjectPtr<class UMaterialInstanceDynamic> AxisMaterials[4];
 
 	EGizmoMode Mode = EGizmoMode::Translate;
 
@@ -160,4 +190,8 @@ private:
 	FVector DragStartPoint = FVector::ZeroVector;
 	FVector DragStartLocation = FVector::ZeroVector;
 	FQuat DragStartRotation = FQuat::Identity;
+	FVector DragStartScale = FVector::OneVector;
+	FVector DragAxisDirection = FVector::ZeroVector;
+	/** World length of a scale handle at drag start: the reference for "drag one handle length = 2x". */
+	double DragHandleLength = 0.0;
 };

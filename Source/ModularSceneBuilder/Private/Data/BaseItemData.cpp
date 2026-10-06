@@ -56,11 +56,6 @@ EDataValidationResult UBaseItemData::IsDataValid(FDataValidationContext& Context
 		Context.AddWarning(FText::Format(LOCTEXT("MissingCategory", "{0}: CategoryTag is not set; the item will not appear under any catalog tab."), FText::FromName(GetFName())));
 	}
 
-	if (IsLight() && PlacementRules.PlacementMode == EStageItemPlacementMode::Continuous)
-	{
-		Context.AddWarning(FText::Format(LOCTEXT("ContinuousLight", "{0}: Lights are expected to use Single placement; continuous stamping creates many dynamic lights."), FText::FromName(GetFName())));
-	}
-
 	// A gate with a non-entitlement tag could never be owned, so the item would be locked forever.
 	if (RequiredEntitlement.IsValid() && !RequiredEntitlement.MatchesTag(StageCraftTags::Entitlement))
 	{
@@ -78,17 +73,6 @@ EDataValidationResult UBaseItemData::IsDataValid(FDataValidationContext& Context
 	}
 
 	return Result == EDataValidationResult::NotValidated ? EDataValidationResult::Valid : Result;
-}
-
-void UBaseItemData::PostEditChangeProperty(FPropertyChangedEvent& PropertyChangedEvent)
-{
-	Super::PostEditChangeProperty(PropertyChangedEvent);
-
-	// Sensible default: lights are placed one at a time. Designers can still override afterwards.
-	if (PropertyChangedEvent.GetMemberPropertyName() == GET_MEMBER_NAME_CHECKED(UBaseItemData, ItemType) && IsLight())
-	{
-		PlacementRules.PlacementMode = EStageItemPlacementMode::Single;
-	}
 }
 
 #endif // WITH_EDITOR

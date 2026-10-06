@@ -34,7 +34,6 @@ public:
 	virtual FPrimaryAssetId GetPrimaryAssetId() const override;
 #if WITH_EDITOR
 	virtual EDataValidationResult IsDataValid(class FDataValidationContext& Context) const override;
-	virtual void PostEditChangeProperty(FPropertyChangedEvent& PropertyChangedEvent) override;
 #endif
 	//~ End UObject Interface
 

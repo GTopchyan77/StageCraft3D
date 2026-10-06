@@ -8,6 +8,7 @@
 #include "Engine/GameInstance.h"
 #include "Engine/StaticMesh.h"
 #include "Interaction/StageCraftCollision.h"
+#include "Interaction/StageTransformRules.h"
 #include "Materials/MaterialInterface.h"
 #include "Subsystems/StageItemSubsystem.h"
 #include "Subsystems/StageSessionSubsystem.h"
@@ -271,6 +272,9 @@ void AModularBaseActor::GatherParameterSections(TArray<FStageParameterSection>& 
 		.Display(1.0, LOCTEXT("Cm", "cm"), 1.0);
 	Transform.Add(StageCraftTags::Param_Transform_Rotation, LOCTEXT("Rotation", "Rotation"), FStageParameterValue::MakeRotator(GetActorRotation()))
 		.Display(1.0, LOCTEXT("Deg", "°"), 1.0);
+	Transform.Add(StageCraftTags::Param_Transform_Scale, LOCTEXT("Scale", "Scale"), FStageParameterValue::MakeVector(GetActorScale3D()))
+		.Range(StageTransformRules::MinScale, StageTransformRules::MaxScale)
+		.Display(1.0, LOCTEXT("Times", "×"), 0.01);
 }
 
 bool AModularBaseActor::ReadParameter(const FGameplayTag& ParameterId, FStageParameterValue& OutValue) const
@@ -295,6 +299,11 @@ bool AModularBaseActor::ReadParameter(const FGameplayTag& ParameterId, FStagePar
 	if (ParameterId == StageCraftTags::Param_Transform_Rotation)
 	{
 		OutValue = FStageParameterValue::MakeRotator(GetActorRotation());
+		return true;
+	}
+	if (ParameterId == StageCraftTags::Param_Transform_Scale)
+	{
+		OutValue = FStageParameterValue::MakeVector(GetActorScale3D());
 		return true;
 	}
 	return false;
@@ -334,6 +343,12 @@ bool AModularBaseActor::WriteParameter(const FGameplayTag& ParameterId, const FS
 		SetActorRotation(Value.Rotator);
 		return true;
 	}
+	if (ParameterId == StageCraftTags::Param_Transform_Scale && Value.Type == EStageParameterType::Vector)
+	{
+		// Same limits as the gizmo; an out-of-range entry is clamped and the field reads the clamped value back.
+		SetActorScale3D(StageTransformRules::ClampScale(Value.Vector));
+		return true;
+	}
 	return false;
 }
 
@@ -346,6 +361,7 @@ void AModularBaseActor::HandleRootTransformUpdated(USceneComponent* UpdatedCompo
 {
 	NotifyParameterChanged(StageCraftTags::Param_Transform_Location);
 	NotifyParameterChanged(StageCraftTags::Param_Transform_Rotation);
+	NotifyParameterChanged(StageCraftTags::Param_Transform_Scale);
 }
 
 #undef LOCTEXT_NAMESPACE

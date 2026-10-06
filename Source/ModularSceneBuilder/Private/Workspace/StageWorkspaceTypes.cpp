@@ -12,4 +12,5 @@ namespace StageCraftTags
 	UE_DEFINE_GAMEPLAY_TAG_COMMENT(Panel_Viewport,	"StageCraft.Panel.Viewport",	"The 3D game viewport. Cannot be closed; can be floated to another monitor.");
 	UE_DEFINE_GAMEPLAY_TAG_COMMENT(Panel_Inspector,	"StageCraft.Panel.Inspector",	"Parameter inspector for the selected item.");
 	UE_DEFINE_GAMEPLAY_TAG_COMMENT(Panel_FaderBank,	"StageCraft.Panel.FaderBank",	"Fader and encoder bank for the selected item.");
+	UE_DEFINE_GAMEPLAY_TAG_COMMENT(Panel_Library,		"StageCraft.Panel.Library",		"Item library: pick a catalog item to place.");
 }
