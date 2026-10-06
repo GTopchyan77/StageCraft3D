@@ -2006,3 +2006,635 @@ You may still run `git add`, `git status`, `git diff`, `git log`, and any
 other read-only or staging git commands freely. Only `git commit` requires
 Gevor to run it by hand — and by extension, `git push` must never happen
 without an explicit, separate go-ahead from him at the time.
+
+---
+
+# Senior++ Extensions — Final Hardening Layer
+
+The following rules extend the standard above. They are intentionally stricter where the existing project rules are not specific enough to prevent production failures.
+
+### 49. Rule Precedence & Conflict Resolution
+
+When rules conflict, apply this order:
+
+1. Unreal Engine / platform correctness and documented engine constraints
+2. Security, data integrity, and authoritative state
+3. Explicit project-specific architecture rules
+4. This Senior++ engineering standard
+5. Existing local conventions
+6. Developer preference
+
+More specific project rules override generic rules, but the reason must be documented when the exception is non-obvious.
+
+Never resolve a contradiction by silently choosing whichever rule is easier to implement.
+
+If a change requires breaking an architectural rule:
+
+- Stop
+- Identify the conflict
+- Explain the trade-off
+- Record an ADR when the decision is non-trivial
+- Update the relevant project documentation if the new rule becomes permanent
+
+---
+
+### 50. Unreal Object Model, GC & Outer Rules
+
+Treat Unreal object lifetime as a first-class architectural concern.
+
+- Understand whether an object is a UObject, Actor, Component, asset, subsystem, or non-UObject value.
+- Do not confuse `Outer` with ownership in the C++ RAII sense.
+- Do not rely on `Outer` alone as proof that an object will remain valid for a desired lifetime.
+- Do not manually manage UObject memory with `delete`.
+- UObject references that must participate in GC must use appropriate reflected references.
+- Do not retain stale UObject pointers after destruction or level transitions.
+- Validate weak references at the point of use.
+- Do not assume an object being non-null means it is still usable.
+- Understand the distinction between:
+  - C++ lifetime
+  - UObject lifetime
+  - Actor lifecycle
+  - World lifetime
+  - Subsystem lifetime
+  - Asset lifetime
+- Avoid storing transient runtime objects inside long-lived systems without an explicit lifetime policy.
+- Avoid creating UObject instances with an inappropriate `Outer` merely to make them easy to access.
+- Every dynamically created UObject must have a deliberate creation, ownership, and destruction/lifetime strategy.
+
+---
+
+### 51. Network Role vs Ownership Rules
+
+Never confuse network authority, network role, and ownership.
+
+Before implementing multiplayer logic, explicitly identify:
+
+- Server/client context
+- Local control
+- Actor ownership
+- Controller ownership
+- Authority
+- Replication relevance
+- Connection ownership
+
+Do not assume:
+
+- `IsLocallyControlled()` means server authority.
+- Owning an Actor means owning all replicated state.
+- Being the instigator means owning the target.
+- Being the PlayerController means being authoritative.
+
+RPC routing must follow the actual ownership contract of the Actor on which the RPC is declared.
+
+Damage, inventory, movement-sensitive gameplay, purchases, permissions, and other authoritative state must be applied by the correct authority boundary.
+
+---
+
+### 52. Replication State-Machine Rules
+
+Replicated properties are part of a distributed state machine.
+
+For every replicated system define:
+
+- Initial state
+- Authoritative state
+- Client-visible state
+- State transitions
+- Replication trigger
+- Reconciliation behavior
+- Invalid/out-of-order state behavior
+
+Rules:
+
+- Do not assume replication order between unrelated Actors or properties.
+- Do not make correctness depend on a specific packet arriving before another unless the protocol explicitly guarantees it.
+- Avoid using RPCs as a substitute for persistent replicated state.
+- Prefer replicated state for durable state and RPCs for commands/events where appropriate.
+- Client presentation must tolerate temporary incomplete state.
+- Replication callbacks must be safe during initialization and teardown.
+- Do not replicate data that can be deterministically derived on the receiving side unless there is a measured reason.
+
+---
+
+### 53. C++ Lifetime, RAII & Value Semantics
+
+Use standard C++ lifetime discipline for non-UObject code.
+
+- Prefer RAII.
+- Prefer the Rule of Zero.
+- Define special member functions only when ownership or resource semantics require them.
+- If a type owns a resource, make ownership explicit.
+- Avoid raw owning pointers.
+- Prefer value semantics for small, self-contained data.
+- Prefer move semantics when transferring expensive non-UObject resources.
+- Do not create unnecessary copies of large objects.
+- Pass read-only large values by `const&` when appropriate.
+- Return values by value when it provides clear ownership and modern C++ can elide/move the result.
+- Do not return references or pointers to local variables or temporary state.
+- Do not store references whose lifetime is not guaranteed.
+- Use `std::unique_ptr` for non-UObject exclusive ownership where Unreal containers/types do not provide the appropriate abstraction.
+
+---
+
+### 54. Determinism & Reproducibility
+
+Systems that affect gameplay, simulation, save data, procedural generation, or tests must be deterministic where the design requires it.
+
+- Avoid hidden dependence on iteration order when order matters.
+- Do not rely on unspecified container ordering.
+- Seed random generation explicitly when reproducibility is required.
+- Avoid time-dependent logic in deterministic tests.
+- Make simulation inputs explicit.
+- Avoid reading mutable global state from deterministic calculations.
+- Multiplayer-sensitive calculations must have an explicit authority/reconciliation strategy.
+- Bug reports involving state divergence should capture enough input/state information to reproduce the issue.
+
+---
+
+### 55. Data Validation & Invariants
+
+Data entering a system must be validated at its trust boundary.
+
+Validate:
+
+- External data
+- Save data
+- Asset configuration
+- Designer-authored values
+- Network input
+- User input
+- Imported files
+- JSON/XML/CSV data
+- Console/debug commands
+
+Validation must enforce invariants, not merely check for null pointers.
+
+Examples of invariants:
+
+- Value ranges
+- Unique identifiers
+- Required references
+- Valid enum/state combinations
+- Non-negative quantities
+- Ownership relationships
+- Compatible asset types
+- Version compatibility
+
+Invalid data must not silently enter authoritative runtime state.
+
+---
+
+### 56. Editor Transactions, Undo/Redo & Asset Safety
+
+Editor tooling must behave correctly as editor tooling, not merely as runtime code executed in the editor.
+
+When modifying editor-owned assets or properties:
+
+- Use appropriate transaction/undo support where required.
+- Respect object modification/dirty-state semantics.
+- Do not silently modify user assets without an explicit operation.
+- Avoid destructive editor operations without confirmation when appropriate.
+- Do not assume PIE and editor-world object lifetimes are identical.
+- Distinguish editor world, PIE world, preview world, and runtime world where relevant.
+- Editor utilities must not leak editor-only references into runtime systems.
+- Validate that changes survive save/reload when persistence is part of the feature.
+
+---
+
+### 57. Asset Management & Cooking Rules
+
+Asset references must respect loading and packaging behavior.
+
+- Prefer soft references when hard references would unnecessarily increase load/cook dependencies.
+- Do not use soft references merely as a style preference when immediate guaranteed availability is required.
+- Understand when an asset is loaded, unloaded, cooked, or stripped.
+- Do not assume an asset available in the Editor is available in a packaged build.
+- Validate Asset Manager rules for dynamically discovered assets.
+- Runtime asset loading must have failure handling.
+- Do not introduce hidden hard references that unnecessarily increase memory or package size.
+- Test relevant systems in a packaged build when cooking/asset discovery is part of the behavior.
+
+---
+
+### 58. Gameplay Tags & Identification
+
+Use structured identifiers instead of fragile string comparisons for gameplay concepts.
+
+Prefer Gameplay Tags for:
+
+- Categories
+- Entitlements
+- Capabilities
+- Gameplay state labels
+- Feature flags where appropriate
+
+Avoid hardcoded string comparisons for gameplay identity when a typed/tagged representation exists.
+
+Rules:
+
+- Tags must have a clear naming convention.
+- Do not create duplicate semantic tags.
+- Do not rely on parent/child tag relationships unless the intended matching operation supports them.
+- Use exact matching when exact ownership/entitlement is required.
+- Keep tag names stable when they are persisted or externally referenced.
+
+---
+
+### 59. Resource & Handle Management
+
+Every externally acquired resource must have a lifetime strategy.
+
+This includes:
+
+- File handles
+- Network handles
+- Timer handles
+- Delegate bindings
+- Async task handles
+- Asset streaming requests
+- Input bindings
+- Component registrations
+- Subsystem registrations
+
+Rules:
+
+- Store handles when cancellation/removal is required.
+- Release resources at the correct lifecycle boundary.
+- Do not rely on process shutdown for normal cleanup.
+- Do not register repeatedly without unregistering.
+- Make cleanup idempotent where practical.
+
+---
+
+### 60. Idempotency & Re-entrancy
+
+Operations that can be triggered repeatedly must define whether they are:
+
+- Idempotent
+- One-shot
+- Restartable
+- Toggle-based
+- Queue-based
+
+Examples:
+
+- Initialization
+- Widget creation
+- Delegate binding
+- Timer setup
+- Purchase requests
+- Save operations
+- Level setup
+- Registration
+
+Rules:
+
+- Repeated initialization must not create duplicate state.
+- Repeated cleanup must not crash.
+- Repeated requests must have defined semantics.
+- Toggle functions must not depend on accidental current state unless that is their explicit contract.
+- Avoid re-entrant callbacks that mutate the same collection/state being iterated unless the design explicitly supports it.
+
+---
+
+### 61. Iteration & Mutation Safety
+
+Never mutate a collection in a way that invalidates the current iteration unless the API explicitly supports it.
+
+Rules:
+
+- Define whether callbacks may mutate the collection being iterated.
+- Prefer deferred structural changes when callbacks can trigger mutations.
+- Do not keep indices across mutations without a stability guarantee.
+- Do not retain references into containers across operations that may reallocate them.
+- For UI/gameplay rebuilds triggered by callbacks, prefer deferred rebuilds when immediate mutation would invalidate active iteration or event dispatch.
+
+---
+
+### 62. Hot Path Rules
+
+Identify hot paths before optimizing them.
+
+Hot paths may include:
+
+- Tick/update loops
+- Physics callbacks
+- Replication processing
+- Rendering-related updates
+- Large collection iteration
+- Input processing
+- Frequently called Blueprint/C++ boundaries
+
+Rules:
+
+- Avoid unnecessary allocations.
+- Avoid expensive logging.
+- Avoid repeated reflection.
+- Avoid unnecessary dynamic dispatch where profiling shows it matters.
+- Avoid repeated asset lookup.
+- Avoid repeated world queries.
+- Prefer contiguous data where appropriate.
+- Measure before and after optimization.
+
+Do not apply hot-path rules to ordinary code without evidence that it is hot.
+
+---
+
+### 63. Memory & Allocation Discipline
+
+Memory behavior is part of system design.
+
+- Understand ownership before allocation.
+- Avoid allocation in frequently executed paths when avoidable.
+- Reserve dynamic containers when size is predictable.
+- Avoid temporary large containers.
+- Avoid unnecessary string construction in hot paths.
+- Avoid converting between containers without reason.
+- Prefer lightweight identifiers over large object copies where appropriate.
+- Do not optimize allocation behavior based solely on intuition; measure when it materially affects performance.
+
+---
+
+### 64. Configuration & Feature Flags
+
+Feature flags must have explicit ownership and lifecycle.
+
+- Do not scatter feature checks throughout unrelated systems.
+- Prefer a centralized configuration source.
+- Feature flags must have documented defaults.
+- Temporary flags must have an owner and removal plan.
+- Shipping builds must not accidentally expose development-only controls.
+- Security-sensitive features must not rely solely on client-side flags.
+
+---
+
+### 65. Shipping & Build-Configuration Safety
+
+Development functionality must never accidentally become production functionality.
+
+Explicitly classify:
+
+- Editor-only
+- Development-only
+- Test-only
+- Shipping-safe
+
+Rules:
+
+- Compile out development-only cheats where appropriate.
+- Verify Shipping builds when changing security-sensitive or dev-only code.
+- Do not expose debug console commands to production unintentionally.
+- Do not ship verbose diagnostics without justification.
+- Do not depend on assertions as the only runtime validation for production input.
+
+---
+
+### 66. Security Boundary Rules
+
+Security-sensitive decisions must occur at a trusted authority.
+
+Client-side mechanisms such as:
+
+- Hashes
+- Obfuscation
+- Hidden variables
+- UI restrictions
+- Local validation
+
+must not be treated as authoritative security.
+
+For anything involving real value, permissions, entitlements, purchases, or competitive gameplay:
+
+- Validate on the trusted side.
+- Treat client data as untrusted.
+- Use authenticated protocols/backends where required.
+- Use cryptographically appropriate integrity mechanisms when integrity is actually a security requirement.
+- Do not describe a salted local hash as tamper-proof security.
+
+---
+
+### 67. Observability & Failure Context
+
+When a production failure occurs, the system should provide enough context to answer:
+
+- What happened?
+- Which object/system initiated it?
+- What state existed before it?
+- What authority/thread was active?
+- What input caused it?
+- What dependency was missing/invalid?
+- What operation failed?
+
+Logs and diagnostics must be actionable without requiring the original developer to be present.
+
+Avoid logging private/sensitive data merely for convenience.
+
+---
+
+### 68. Risk-Based Verification
+
+Verification depth must match change risk.
+
+### Low-risk
+
+Examples:
+
+- Rename
+- Comment
+- Local formatting
+
+Verify compilation and relevant static checks.
+
+### Medium-risk
+
+Examples:
+
+- Gameplay logic
+- UI state flow
+- Serialization changes
+- New subsystem behavior
+
+Verify build + focused runtime/integration tests + relevant failure paths.
+
+### High-risk
+
+Examples:
+
+- Networking
+- Economy/security
+- Save migration
+- Core architecture
+- Async/concurrency
+- Performance-critical systems
+- Destructive editor tooling
+
+Require deeper verification, regression testing, and explicit review of affected boundaries.
+
+Never apply the same shallow verification process to every change.
+
+---
+
+### 69. Change-Surface Control
+
+Before modifying code, identify the expected change surface.
+
+Prefer:
+
+- Minimal files
+- Minimal APIs
+- Minimal dependencies
+- Minimal behavioral changes
+
+If implementation requires touching many unrelated systems, stop and reassess the architecture.
+
+A large diff is not automatically bad, but a large diff for a small requirement is a strong architectural warning.
+
+Do not refactor unrelated code during a focused bug fix unless the unrelated code is the root cause.
+
+---
+
+### 70. Regression Protection
+
+Every non-trivial bug fix should answer:
+
+- What caused the bug?
+- Why did existing code allow it?
+- What prevents recurrence?
+- What test or verification proves the fix?
+
+Prefer a regression test for bugs that can be reproduced deterministically.
+
+If a regression test is impractical, document the exact manual verification procedure.
+
+Never rely solely on "it worked once in PIE."
+
+---
+
+### 71. Architecture Decision Rules
+
+Architectural decisions must be explicit when they affect multiple systems.
+
+An ADR should be considered for:
+
+- New subsystem boundaries
+- New module dependencies
+- New persistence formats
+- Networking architecture changes
+- Major Blueprint/C++ boundary changes
+- New global state
+- New third-party/backend integration
+- Significant performance architecture
+
+An ADR should record:
+
+1. Problem
+2. Decision
+3. Alternatives considered
+4. Consequences
+5. Migration/rollback considerations
+
+---
+
+### 72. Final Senior++ Gate
+
+Before a non-trivial change is considered complete, answer all of the following:
+
+#### Architecture
+
+- What owns the state?
+- What is the source of truth?
+- Is the responsibility in the correct class/module?
+- Did the change introduce unnecessary coupling?
+
+#### Lifetime
+
+- When is the object created?
+- When is it valid?
+- When can it be destroyed?
+- What happens during teardown?
+
+#### State
+
+- What states exist?
+- Which transitions are legal?
+- What happens on invalid transitions?
+
+#### Networking
+
+- Who has authority?
+- Who owns the Actor?
+- Who sends the request?
+- Who applies the authoritative mutation?
+- What happens if packets arrive late or out of order?
+
+#### Blueprint
+
+- Is Blueprint exposure intentional?
+- Can Blueprint misuse the API?
+- Does correctness depend on undocumented Blueprint setup?
+
+#### Performance
+
+- Is this on a hot path?
+- What is the measured cost?
+- Is polling necessary?
+- Are allocations/repeated queries justified?
+
+#### Reliability
+
+- What happens if a dependency is missing?
+- What happens if the Actor is destroyed?
+- What happens if initialization happens twice?
+- What happens if cleanup happens twice?
+- What happens after level transition?
+
+#### Verification
+
+- How was correctness proven?
+- Which failure cases were tested?
+- Is there a regression test?
+- Was the appropriate build configuration verified?
+
+#### Maintainability
+
+- Can another senior engineer understand this without the original author?
+- Is the solution simpler than the alternatives?
+- Did we fix the root cause rather than suppressing the symptom?
+
+If important answers are unknown, the implementation is not finished.
+
+---
+
+# Final Standard
+
+The project standard is the combination of:
+
+1. Project-specific architecture and security rules
+2. Unreal Engine workflow rules
+3. Senior++ C++ engineering rules
+4. AI execution and verification rules
+5. Production readiness gates
+6. Risk-based testing
+
+The objective is not maximal abstraction, maximal performance, or maximal code volume.
+
+> **The objective is the smallest system that remains correct, explicit, safe, testable, diagnosable, maintainable, and performant under real Unreal Engine lifecycle, editor, packaged-build, multiplayer, and production conditions.**
+
+Never confuse:
+
+- Compiles with correct
+- Non-null with valid
+- Local control with authority
+- Ownership with lifetime
+- Editor behavior with packaged behavior
+- Client validation with security
+- A passing happy path with robustness
+- A workaround with a fix
+- More abstraction with better architecture
+- More code with more quality
+
+The final question is always:
+
+> **Can we explain why this design is correct, prove that it works, and predict how it behaves when dependencies disappear, state changes, clients disagree, objects are destroyed, the level changes, or production load increases?**
+
+If the answer is no, the work is not Senior++ yet.

@@ -113,8 +113,10 @@ void UStageCraftGameEngine::RestoreMainWindowViewport()
 	MainWindowHost.Reset();
 	GameViewportWidget = SceneViewportWidget;
 
+	// After the main window closed, UGameEngine::OnGameWindowClosed has already released SceneViewport (GameEngine.cpp:768-780).
+	// The widget then has no viewport interface, and the app is quitting, so there is nothing to hand back or register.
 	const TSharedPtr<SWindow> Window = GameViewportWindow.Pin();
-	if (Window.IsValid() && SceneViewportWidget.IsValid())
+	if (Window.IsValid() && SceneViewportWidget.IsValid() && SceneViewport.IsValid())
 	{
 		Window->SetContent(SceneViewportWidget.ToSharedRef());
 		if (FSlateApplication::IsInitialized())

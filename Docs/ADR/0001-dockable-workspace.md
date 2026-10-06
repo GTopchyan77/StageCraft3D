@@ -240,3 +240,43 @@ Caveats:
 - Alt+Enter / F11 fullscreen with a floated viewport.
 - Closing a floating window that holds the viewport with its OS close button.
 - Resizing the main window by hand (F8).
+
+## 9. Phase 1 implementation: window manager and layout persistence (2026-10-06)
+
+Gevor's "Phase 1: Core Window Manager & Workspace Layout System" covers ADR Phase 1 (shell) and Phase 2 (layouts) together. The spike code is the base. The rows below record where the implementation refines §3, and why.
+
+### 9.1 New engine facts
+
+| # | Fact | Source | Consequence |
+|---|---|---|---|
+| F15 | Slate destroys child windows before their parent (`FSlateApplication::RequestDestroyWindow`, children queued first). When the user closes the main window, every floating panel window is already gone before `OnWindowBeingDestroyed`, `SWindow::OnWindowClosed` (the engine's quit hook) or `Deinitialize` run. | `SlateApplication.cpp:2423-2457` | Saving the layout at shutdown would record an arrangement with no floating windows. The final save happens in the main window's `RequestDestroyWindowOverride`, which runs before anything is destroyed. The engine does not use that override on its game window. The OS close path goes through it too (`FSlateApplication::OnWindowClose` → `SWindow::RequestDestroyWindow`). |
+| F16 | Slate requests a deferred layout save (5 s ticker, coalesced) on tab relocate, open and close, and on splitter or stack resize. It does **not** request one when an OS window is moved. | `TabManager.cpp:1103-1125, 3130-3147`; `SDockingSplitter.cpp:47`; `SDockingTabStack.cpp:1636` | The live arrangement autosaves from `SetOnPersistLayout`. Window moves are captured by the next autosave or by the final save on close. |
+| F17 | Floating panel windows are saved as `Placement_Specified` and divided by the DPI scale at their position. They are restored without any check that they are on a monitor. Only the global tab manager's `Placement_ParentSpecified` main area gets an off-screen fallback. Our panel tab manager saves its main area as `Placement_NoWindow`. | `SDockingArea.cpp:19-55`; `TabManager.cpp:2170-2290, 1062-1075` | We save and clamp the main window rectangle ourselves, in physical pixels. Floating window rectangles are clamped inside the Slate JSON against each monitor's work area divided by its DPI scale. |
+
+### 9.2 Refinements to §3
+
+- **Panel definitions.**
+  - `UStagePanelDefinition`'s primary asset ID **name is its panel tag**. The Asset Manager scan alone tells the workspace which panels exist, so it registers dock tab spawners before any definition loads. A saved layout therefore never drops a panel whose definition is still streaming. A duplicate tag is reported by the Asset Manager as a duplicate primary asset ID.
+  - Definitions and their `UI` bundle (the widget class) load asynchronously at startup. Until then, a panel tab shows "Loading…" and its label is the tag's last segment. Both update when the bundle arrives.
+- **The viewport is built in, not a definition.** There is exactly one game viewport, so `EStagePanelKind` and per-panel multi-instance flags were not added (§2: no abstraction without a recurring need). The icon field is deferred to the Phase 5 style work.
+- **Named layouts are snapshots, and the live arrangement is the session.**
+  - `Saved/StageCraft/Workspace/Layouts/<Name>.json` is written only by an explicit "Save Layout As".
+  - `Saved/StageCraft/Workspace/Session.json` is the live arrangement. It is autosaved and restored on launch, and it remembers which layout it is based on.
+  - §3.4 saved edits back into the active user layout. That would silently overwrite a layout the user meant to keep, so it was not done. "Save Layout As" pre-fills the active layout's name, so saving changes is one Enter.
+- **One panel layout version key.** Every panel `FLayout` is named `StageCraft_Workspace_v1` (`FStageWorkspaceShell::PanelLayoutVersion`). The user-facing name lives in our wrapper. Bumping the key invalidates incompatible saved layouts: they are moved to `.bak` and the Default layout is used.
+- **Layout names** are 1–64 characters: letters, digits, space, `-`, `_` and brackets, with no leading or trailing space and no Windows device names. Built-in names ("Default", "Viewport Only") are reserved. The name is the file name, so it cannot escape the folder.
+- **Writes.**
+  - "Save Layout As" writes synchronously, because the caller needs the result. The files are a few KB.
+  - Autosaves run on `UE::Tasks`, capturing only strings. Each one waits for the previous, so two writes never race.
+  - Every write goes to `<file>.tmp` first and is then moved over the target, so a crash never leaves a truncated layout.
+  - The final save on close waits for any pending write, writes synchronously, and seals the session. Windows that are being destroyed are never captured.
+- **Menu bar view** (`SStageWorkspaceMenuBar`, Slate). It has a Window menu (panel toggles, Reset Layout) and a Layout menu (built-ins, user layouts, Save Layout As with inline errors, Delete). Menus are built from the subsystem's getters when they open and commit through its validated operations. It holds no state, binds no delegates and does not poll.
+- **The main window rectangle** comes only from user layouts and the session, never from built-ins. It is applied only in windowed mode; fullscreen modes are owned by `UGameUserSettings`.
+
+### 9.3 Public API added (contracts in `StageWorkspaceSubsystem.h`)
+
+- **Panels:** `GetAvailablePanels`, `GetPanelDisplayName`, `ClosePanel`.
+- **Layouts:** `ApplyLayout`, `SaveCurrentLayoutAs`, `DeleteLayout`, `GetBuiltInLayouts`, `GetUserLayouts`, `IsBuiltInLayout`, `GetActiveLayoutName`.
+- **Delegates:** `OnLayoutApplied`, `OnLayoutsChanged`.
+
+Every layout operation returns `EStageLayoutResult` and logs failures with the layout name. A UMG view binds the same way as the inspector: read once, bind the delegates, commit through these calls.

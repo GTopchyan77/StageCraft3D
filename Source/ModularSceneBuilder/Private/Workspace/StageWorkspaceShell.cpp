@@ -4,43 +4,24 @@
 
 #include "Framework/Application/SlateApplication.h"
 #include "Framework/Docking/TabManager.h"
+#include "GenericPlatform/GenericWindow.h"
 #include "Widgets/Docking/SDockTab.h"
+#include "Widgets/SBoxPanel.h"
 #include "Widgets/SNullWidget.h"
 #include "Widgets/SViewport.h"
 #include "Widgets/SWindow.h"
 
 #define LOCTEXT_NAMESPACE "StageWorkspaceShell"
 
+const FName FStageWorkspaceShell::PanelLayoutVersion(TEXT("StageCraft_Workspace_v1"));
+
 namespace StageWorkspaceShell
 {
 	/** Slate tab type of the single major tab that hosts the panel tab manager. Internal to the shell; never saved in panel layouts. */
 	const FName WorkspaceTabId(TEXT("StageCraft.Workspace"));
 
-	/** Slate's layout version keys. Bump one whenever its structure changes, so stale saved layouts are not restored. */
+	/** Version key of the root layout (one hidden Workspace tab). Never saved. */
 	const FName RootLayoutName(TEXT("StageCraft_Root_v1"));
-	const FName DefaultPanelLayoutName(TEXT("StageCraft_Workspace_v1"));
-
-	FTabId ToTabId(const FGameplayTag& PanelTag)
-	{
-		return FTabId(PanelTag.GetTagName());
-	}
-
-	FText GetPanelLabel(const FGameplayTag& PanelTag)
-	{
-		if (PanelTag == StageCraftTags::Panel_Viewport)
-		{
-			return LOCTEXT("ViewportLabel", "Viewport");
-		}
-		if (PanelTag == StageCraftTags::Panel_Inspector)
-		{
-			return LOCTEXT("InspectorLabel", "Inspector");
-		}
-		if (PanelTag == StageCraftTags::Panel_FaderBank)
-		{
-			return LOCTEXT("FaderBankLabel", "Faders");
-		}
-		return FText::FromName(PanelTag.GetTagName());
-	}
 }
 
 FStageWorkspaceShell::FStageWorkspaceShell(const TSharedRef<SWindow>& InMainWindow, const TSharedRef<SViewport>& InViewportWidget, FStageWorkspaceShellCallbacks InCallbacks)
@@ -48,23 +29,37 @@ FStageWorkspaceShell::FStageWorkspaceShell(const TSharedRef<SWindow>& InMainWind
 	, ViewportWidget(InViewportWidget)
 	, Callbacks(MoveTemp(InCallbacks))
 {
+	check(Callbacks.GetWidgetPanels);
+	check(Callbacks.GetPanelLabel);
 	check(Callbacks.CreatePanelContent);
 	check(Callbacks.PanelHostChanged);
+	check(Callbacks.LayoutChanged);
+	check(Callbacks.MainWindowClosing);
 	check(Callbacks.SetMainWindowContent);
 	check(Callbacks.RestoreMainWindowViewport);
 }
 
-TArray<FGameplayTag> FStageWorkspaceShell::GetKnownPanels()
+FTabId FStageWorkspaceShell::ToTabId(const FGameplayTag& PanelTag)
 {
-	return { StageCraftTags::Panel_Viewport, StageCraftTags::Panel_Inspector, StageCraftTags::Panel_FaderBank };
+	return FTabId(PanelTag.GetTagName());
+}
+
+TArray<FGameplayTag> FStageWorkspaceShell::GetPanels() const
+{
+	TArray<FGameplayTag> Panels = Callbacks.GetWidgetPanels();
+	Panels.Remove(StageCraftTags::Panel_Viewport);
+	Panels.Insert(StageCraftTags::Panel_Viewport, 0);
+	return Panels;
+}
+
+TSharedRef<FTabManager::FLayout> FStageWorkspaceShell::NewPanelLayout()
+{
+	return FTabManager::NewLayout(PanelLayoutVersion);
 }
 
 TSharedRef<FTabManager::FLayout> FStageWorkspaceShell::MakeDefaultLayout()
 {
-	using namespace StageWorkspaceShell;
-
-	// Viewport top-left, faders below it, inspector on the right: the same arrangement as the fixed HUD.
-	return FTabManager::NewLayout(DefaultPanelLayoutName)
+	return NewPanelLayout()
 		->AddArea
 		(
 			FTabManager::NewPrimaryArea()->SetOrientation(Orient_Horizontal)
@@ -90,7 +85,17 @@ TSharedRef<FTabManager::FLayout> FStageWorkspaceShell::MakeDefaultLayout()
 		);
 }
 
-void FStageWorkspaceShell::Install(const TSharedRef<FTabManager::FLayout>& PanelLayout)
+TSharedRef<FTabManager::FLayout> FStageWorkspaceShell::MakeViewportOnlyLayout()
+{
+	return NewPanelLayout()
+		->AddArea
+		(
+			FTabManager::NewPrimaryArea()
+			->Split(FTabManager::NewStack()->AddTab(ToTabId(StageCraftTags::Panel_Viewport), ETabState::OpenedTab))
+		);
+}
+
+void FStageWorkspaceShell::Install(const TSharedRef<FTabManager::FLayout>& PanelLayout, const TSharedRef<SWidget>& MenuBar)
 {
 	using namespace StageWorkspaceShell;
 
@@ -111,7 +116,13 @@ void FStageWorkspaceShell::Install(const TSharedRef<FTabManager::FLayout>& Panel
 	GlobalTabManager->RegisterNomadTabSpawner(WorkspaceTabId, FOnSpawnTab::CreateSP(this, &FStageWorkspaceShell::SpawnWorkspaceTab))
 		.SetDisplayName(LOCTEXT("WorkspaceLabel", "StageCraft"));
 
+	// Slate destroys child windows before their parent, so by the time anything else hears about the app closing,
+	// the floating panel windows are gone. This is the last point where the whole layout can be captured.
+	// The engine does not use this override on its game window (it binds SetOnWindowClosed, GameEngine.cpp:247).
+	Window->SetRequestDestroyWindowOverride(FRequestDestroyWindowOverride::CreateSP(this, &FStageWorkspaceShell::HandleMainWindowCloseRequested));
+
 	bInstalled = true;
+	MenuBarWidget = MenuBar;
 	PendingPanelLayout = PanelLayout;
 
 	const TSharedRef<FTabManager::FLayout> RootLayout = FTabManager::NewLayout(RootLayoutName)
@@ -143,6 +154,11 @@ void FStageWorkspaceShell::Shutdown()
 
 	if (FSlateApplication::IsInitialized())
 	{
+		if (const TSharedPtr<SWindow> Window = MainWindow.Pin())
+		{
+			Window->SetRequestDestroyWindowOverride(FRequestDestroyWindowOverride());
+		}
+
 		TGuardValue<bool> RestoreGuard(bRestoringLayout, true);
 		TearDownPanels();
 		FGlobalTabmanager::Get()->UnregisterNomadTabSpawner(StageWorkspaceShell::WorkspaceTabId);
@@ -153,6 +169,7 @@ void FStageWorkspaceShell::Shutdown()
 
 	PanelTabManager.Reset();
 	PendingPanelLayout.Reset();
+	MenuBarWidget.Reset();
 	ReportedHosts.Reset();
 }
 
@@ -161,7 +178,7 @@ void FStageWorkspaceShell::ApplyLayout(const TSharedRef<FTabManager::FLayout>& P
 	const TSharedPtr<SDockTab> Tab = WorkspaceTab.Pin();
 	if (!bInstalled || !Tab.IsValid())
 	{
-		UE_LOG(LogStageWorkspace, Warning, TEXT("ApplyLayout '%s' ignored: the workspace is not installed."), *PanelLayout->GetLayoutName().ToString());
+		UE_LOG(LogStageWorkspace, Warning, TEXT("ApplyLayout ignored: the workspace is not installed."));
 		return;
 	}
 
@@ -170,10 +187,57 @@ void FStageWorkspaceShell::ApplyLayout(const TSharedRef<FTabManager::FLayout>& P
 		TGuardValue<bool> RestoreGuard(bRestoringLayout, true);
 		TearDownPanels();
 		CreatePanelTabManager(Tab.ToSharedRef());
-		Tab->SetContent(RestorePanels(PanelLayout, MainWindow.Pin()));
+		Tab->SetContent(BuildWorkspaceContent(PanelLayout));
 	}
 	SyncReportedHosts();
 	HandleViewportMoved();
+}
+
+TSharedPtr<FTabManager::FLayout> FStageWorkspaceShell::CaptureLayout() const
+{
+	return bInstalled && PanelTabManager.IsValid() ? PanelTabManager->PersistLayout().ToSharedPtr() : nullptr;
+}
+
+TOptional<FStageWindowPlacement> FStageWorkspaceShell::GetMainWindowPlacement() const
+{
+	const TSharedPtr<SWindow> Window = MainWindow.Pin();
+	if (!Window.IsValid() || !Window->GetNativeWindow().IsValid())
+	{
+		return {};
+	}
+
+	FStageWindowPlacement Placement;
+	Placement.bMaximized = Window->IsWindowMaximized();
+	Placement.Position = Window->GetPositionInScreen();
+	Placement.Size = Window->GetSizeInScreen();
+
+	// A maximized window's live rect is the whole monitor. Save the rect it returns to instead.
+	int32 X = 0, Y = 0, Width = 0, Height = 0;
+	if (Placement.bMaximized && ConstCastSharedPtr<FGenericWindow>(Window->GetNativeWindow())->GetRestoredDimensions(X, Y, Width, Height) && Width > 0 && Height > 0)
+	{
+		Placement.Position = FVector2D(X, Y);
+		Placement.Size = FVector2D(Width, Height);
+	}
+	return Placement;
+}
+
+void FStageWorkspaceShell::ApplyMainWindowPlacement(const FStageWindowPlacement& Placement)
+{
+	const TSharedPtr<SWindow> Window = MainWindow.Pin();
+	if (!Window.IsValid() || Window->GetWindowMode() != EWindowMode::Windowed)
+	{
+		return;
+	}
+	// The engine's resize-to-resolution handling is removed while the viewport can dock (ADR F8), so this never becomes the saved resolution.
+	if (Window->IsWindowMaximized())
+	{
+		Window->Restore();
+	}
+	Window->ReshapeWindow(Placement.Position, Placement.Size);
+	if (Placement.bMaximized)
+	{
+		Window->Maximize();
+	}
 }
 
 TSharedRef<SDockTab> FStageWorkspaceShell::SpawnWorkspaceTab(const FSpawnTabArgs& Args)
@@ -186,10 +250,26 @@ TSharedRef<SDockTab> FStageWorkspaceShell::SpawnWorkspaceTab(const FSpawnTabArgs
 
 	WorkspaceTab = Tab;
 	CreatePanelTabManager(Tab);
-
-	const TSharedRef<FTabManager::FLayout> Layout = PendingPanelLayout.IsValid() ? PendingPanelLayout.ToSharedRef() : MakeDefaultLayout();
-	Tab->SetContent(RestorePanels(Layout, MainWindow.Pin()));
+	Tab->SetContent(BuildWorkspaceContent(PendingPanelLayout.IsValid() ? PendingPanelLayout.ToSharedRef() : MakeDefaultLayout()));
 	return Tab;
+}
+
+TSharedRef<SWidget> FStageWorkspaceShell::BuildWorkspaceContent(const TSharedRef<FTabManager::FLayout>& PanelLayout)
+{
+	const TSharedPtr<SWidget> PanelArea = PanelTabManager->RestoreFrom(PanelLayout, MainWindow.Pin(), false, EOutputCanBeNullptr::Never);
+	UE_LOG(LogStageWorkspace, Log, TEXT("Panel layout '%s' restored."), *PanelLayout->GetLayoutName().ToString());
+
+	return SNew(SVerticalBox)
+		+ SVerticalBox::Slot()
+		.AutoHeight()
+		[
+			MenuBarWidget.IsValid() ? MenuBarWidget.ToSharedRef() : SNullWidget::NullWidget
+		]
+		+ SVerticalBox::Slot()
+		.FillHeight(1.f)
+		[
+			PanelArea.IsValid() ? PanelArea.ToSharedRef() : SNullWidget::NullWidget
+		];
 }
 
 void FStageWorkspaceShell::TearDownPanels()
@@ -202,7 +282,7 @@ void FStageWorkspaceShell::TearDownPanels()
 	// Collect the floating panel windows before their tabs go away.
 	TSet<TSharedRef<SWindow>> FloatingWindows;
 	const TSharedPtr<SWindow> Main = MainWindow.Pin();
-	for (const FGameplayTag& PanelTag : GetKnownPanels())
+	for (const FGameplayTag& PanelTag : GetPanels())
 	{
 		if (const TSharedPtr<SDockTab> Tab = FindLiveTab(PanelTag))
 		{
@@ -228,49 +308,52 @@ void FStageWorkspaceShell::TearDownPanels()
 
 void FStageWorkspaceShell::CreatePanelTabManager(const TSharedRef<SDockTab>& InWorkspaceTab)
 {
-	using namespace StageWorkspaceShell;
-
 	PanelTabManager = FGlobalTabmanager::Get()->NewTabManager(InWorkspaceTab);
-	PanelTabManager->SetOnPersistLayout(FTabManager::FOnPersistLayout()); // persistence is ours (ADR §3.4)
+	// Slate calls this a few seconds after any arrangement change; the subsystem decides what to save (ADR §3.4).
+	PanelTabManager->SetOnPersistLayout(FTabManager::FOnPersistLayout::CreateSP(this, &FStageWorkspaceShell::HandlePersistLayout));
+	RegisterPanelSpawners();
+}
 
-	PanelTabManager->RegisterTabSpawner(StageCraftTags::Panel_Viewport.GetTag().GetTagName(), FOnSpawnTab::CreateSP(this, &FStageWorkspaceShell::SpawnViewportTab))
-		.SetDisplayName(GetPanelLabel(StageCraftTags::Panel_Viewport));
-
-	for (const FGameplayTag& PanelTag : GetKnownPanels())
+void FStageWorkspaceShell::RegisterPanelSpawners()
+{
+	if (!PanelTabManager.IsValid())
 	{
-		if (PanelTag == StageCraftTags::Panel_Viewport)
+		return;
+	}
+
+	for (const FGameplayTag& PanelTag : GetPanels())
+	{
+		const FName TabId = PanelTag.GetTagName();
+		if (PanelTabManager->HasTabSpawner(TabId))
 		{
 			continue;
 		}
-		PanelTabManager->RegisterTabSpawner(PanelTag.GetTagName(), FOnSpawnTab::CreateSP(this, &FStageWorkspaceShell::SpawnWidgetPanelTab, PanelTag))
-			.SetDisplayName(GetPanelLabel(PanelTag));
-	}
-}
 
-TSharedRef<SWidget> FStageWorkspaceShell::RestorePanels(const TSharedRef<FTabManager::FLayout>& PanelLayout, const TSharedPtr<SWindow>& OwnerWindow)
-{
-	const TSharedPtr<SWidget> PanelArea = PanelTabManager->RestoreFrom(PanelLayout, OwnerWindow, false, EOutputCanBeNullptr::Never);
-	UE_LOG(LogStageWorkspace, Log, TEXT("Panel layout '%s' restored."), *PanelLayout->GetLayoutName().ToString());
-	return PanelArea.IsValid() ? PanelArea.ToSharedRef() : SNullWidget::NullWidget;
+		const FOnSpawnTab Spawner = PanelTag == StageCraftTags::Panel_Viewport
+			? FOnSpawnTab::CreateSP(this, &FStageWorkspaceShell::SpawnViewportTab)
+			: FOnSpawnTab::CreateSP(this, &FStageWorkspaceShell::SpawnWidgetPanelTab, PanelTag);
+		PanelTabManager->RegisterTabSpawner(TabId, Spawner)
+			.SetDisplayName(Callbacks.GetPanelLabel(PanelTag));
+	}
 }
 
 void FStageWorkspaceShell::SyncReportedHosts()
 {
 	// Re-sync the derived host map from Slate without reporting: a restore is not a user action.
 	ReportedHosts.Reset();
-	for (const FGameplayTag& PanelTag : GetKnownPanels())
+	TStringBuilder<256> Summary;
+	for (const FGameplayTag& PanelTag : GetPanels())
 	{
-		ReportedHosts.Add(PanelTag, GetPanelHost(PanelTag));
+		const EStagePanelHost Host = GetPanelHost(PanelTag);
+		ReportedHosts.Add(PanelTag, Host);
+		Summary.Appendf(TEXT("%s%s %s"), Summary.Len() > 0 ? TEXT(", ") : TEXT(""), *PanelTag.ToString(), *UEnum::GetDisplayValueAsText(Host).ToString());
 	}
-	UE_LOG(LogStageWorkspace, Log, TEXT("Panels: Viewport %s, Inspector %s, Faders %s."),
-		*UEnum::GetValueAsString(ReportedHosts[StageCraftTags::Panel_Viewport]),
-		*UEnum::GetValueAsString(ReportedHosts[StageCraftTags::Panel_Inspector]),
-		*UEnum::GetValueAsString(ReportedHosts[StageCraftTags::Panel_FaderBank]));
+	UE_LOG(LogStageWorkspace, Log, TEXT("Panels: %s."), Summary.ToString());
 }
 
 void FStageWorkspaceShell::RefreshPanelContent()
 {
-	for (const FGameplayTag& PanelTag : GetKnownPanels())
+	for (const FGameplayTag& PanelTag : GetPanels())
 	{
 		if (PanelTag == StageCraftTags::Panel_Viewport)
 		{
@@ -285,11 +368,17 @@ void FStageWorkspaceShell::RefreshPanelContent()
 
 bool FStageWorkspaceShell::OpenPanel(const FGameplayTag& PanelTag)
 {
-	if (!bInstalled || !PanelTabManager.IsValid() || !GetKnownPanels().Contains(PanelTag))
+	if (!bInstalled || !PanelTabManager.IsValid() || !PanelTabManager->HasTabSpawner(PanelTag.GetTagName()))
 	{
 		return false;
 	}
-	return PanelTabManager->TryInvokeTab(StageWorkspaceShell::ToTabId(PanelTag)).IsValid();
+	return PanelTabManager->TryInvokeTab(ToTabId(PanelTag)).IsValid();
+}
+
+bool FStageWorkspaceShell::ClosePanel(const FGameplayTag& PanelTag)
+{
+	const TSharedPtr<SDockTab> Tab = PanelTag != StageCraftTags::Panel_Viewport ? FindLiveTab(PanelTag) : nullptr;
+	return Tab.IsValid() && Tab->RequestCloseTab();
 }
 
 EStagePanelHost FStageWorkspaceShell::GetPanelHost(const FGameplayTag& PanelTag) const
@@ -317,7 +406,7 @@ TSharedPtr<SWindow> FStageWorkspaceShell::GetViewportWindow() const
 
 TSharedPtr<SDockTab> FStageWorkspaceShell::FindLiveTab(const FGameplayTag& PanelTag) const
 {
-	return bInstalled && PanelTabManager.IsValid() ? PanelTabManager->FindExistingLiveTab(StageWorkspaceShell::ToTabId(PanelTag)) : nullptr;
+	return bInstalled && PanelTabManager.IsValid() ? PanelTabManager->FindExistingLiveTab(ToTabId(PanelTag)) : nullptr;
 }
 
 TSharedRef<SDockTab> FStageWorkspaceShell::SpawnViewportTab(const FSpawnTabArgs& Args)
@@ -327,7 +416,7 @@ TSharedRef<SDockTab> FStageWorkspaceShell::SpawnViewportTab(const FSpawnTabArgs&
 
 	return SNew(SDockTab)
 		.TabRole(ETabRole::PanelTab)
-		.Label(StageWorkspaceShell::GetPanelLabel(PanelTag))
+		.Label(Callbacks.GetPanelLabel(PanelTag))
 		// The viewport is the app. It can move anywhere but never disappear (ADR §3.5).
 		.OnCanCloseTab_Lambda([]() { return false; })
 		.OnTabRelocated(FSimpleDelegate::CreateSP(this, &FStageWorkspaceShell::HandleTabRelocated, PanelTag))
@@ -339,9 +428,17 @@ TSharedRef<SDockTab> FStageWorkspaceShell::SpawnViewportTab(const FSpawnTabArgs&
 
 TSharedRef<SDockTab> FStageWorkspaceShell::SpawnWidgetPanelTab(const FSpawnTabArgs& Args, FGameplayTag PanelTag)
 {
+	// Read live: a definition that is still loading at spawn gets its real name once it arrives.
+	const TWeakPtr<FStageWorkspaceShell> WeakThis = AsWeak();
+	const TAttribute<FText> Label = TAttribute<FText>::CreateLambda([WeakThis, PanelTag]()
+	{
+		const TSharedPtr<FStageWorkspaceShell> This = WeakThis.Pin();
+		return This.IsValid() ? This->Callbacks.GetPanelLabel(PanelTag) : FText::GetEmpty();
+	});
+
 	return SNew(SDockTab)
 		.TabRole(ETabRole::PanelTab)
-		.Label(StageWorkspaceShell::GetPanelLabel(PanelTag))
+		.Label(Label)
 		.OnTabRelocated(FSimpleDelegate::CreateSP(this, &FStageWorkspaceShell::HandleTabRelocated, PanelTag))
 		.OnTabClosed(SDockTab::FOnTabClosedCallback::CreateSP(this, &FStageWorkspaceShell::HandleTabClosed, PanelTag))
 		[
@@ -367,6 +464,26 @@ void FStageWorkspaceShell::HandleTabClosed(TSharedRef<SDockTab> Tab, FGameplayTa
 	{
 		NotifyHostChanged(PanelTag, EStagePanelHost::Closed);
 	}
+}
+
+void FStageWorkspaceShell::HandlePersistLayout(const TSharedRef<FTabManager::FLayout>& Layout)
+{
+	// Restores request a deferred save too. That save carries the restored arrangement, so it is harmless, but only the live manager's saves count.
+	if (bInstalled && !bRestoringLayout)
+	{
+		Callbacks.LayoutChanged();
+	}
+}
+
+void FStageWorkspaceShell::HandleMainWindowCloseRequested(const TSharedRef<SWindow>& Window)
+{
+	if (bInstalled)
+	{
+		Callbacks.MainWindowClosing();
+	}
+	// Continue exactly as without the override (SWindow::RequestDestroyWindow). UGameEngine::OnGameWindowClosed then quits.
+	Window->SetRequestDestroyWindowOverride(FRequestDestroyWindowOverride());
+	FSlateApplication::Get().RequestDestroyWindow(Window);
 }
 
 void FStageWorkspaceShell::HandleViewportMoved()

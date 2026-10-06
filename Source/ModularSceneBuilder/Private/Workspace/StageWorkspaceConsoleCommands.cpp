@@ -1,6 +1,6 @@
 // Copyright Epic Games, Inc. All Rights Reserved.
 
-// Development console commands for the dockable workspace (Docs/ADR/0001-dockable-workspace.md, Phase 0).
+// Development console commands for the dockable workspace (Docs/ADR/0001-dockable-workspace.md).
 // They drive layouts and probe the viewport from the console so docking behaviour can be verified from
 // logs, without a mouse. Run in Standalone Game. Compiled out of Shipping.
 
@@ -81,7 +81,7 @@ namespace StageWorkspaceCommands
 		if (TSharedPtr<FStageWorkspaceShell> Shell = (Workspace && Workspace->IsWorkspaceActive()) ? Workspace->GetShellForDiagnostics() : nullptr)
 		{
 			UE_LOG(LogStageWorkspace, Display, TEXT("  Viewport window: %s"), *DescribeWindow(Shell->GetViewportWindow()));
-			for (const FGameplayTag& PanelTag : FStageWorkspaceShell::GetKnownPanels())
+			for (const FGameplayTag& PanelTag : Workspace->GetAvailablePanels())
 			{
 				UE_LOG(LogStageWorkspace, Display, TEXT("  %s: %s"), *PanelTag.ToString(), *UEnum::GetValueAsString(Shell->GetPanelHost(PanelTag)));
 			}
@@ -120,7 +120,7 @@ namespace StageWorkspaceCommands
 		UE_LOG(LogStageWorkspace, Display, TEXT("FloatViewport: monitor index %d of %d ('%s'), work area (%d, %d)-(%d, %d)."), MonitorIndex, Metrics.MonitorInfo.Num(),
 			*Metrics.MonitorInfo[MonitorIndex].Name, WorkArea.Left, WorkArea.Top, WorkArea.Right, WorkArea.Bottom);
 
-		const TSharedRef<FTabManager::FLayout> Layout = FTabManager::NewLayout(TEXT("StageCraft_Workspace_SpikeFloat_v1"))
+		const TSharedRef<FTabManager::FLayout> Layout = FStageWorkspaceShell::NewPanelLayout()
 			->AddArea
 			(
 				FTabManager::NewPrimaryArea()->SetOrientation(Orient_Horizontal)
@@ -153,7 +153,7 @@ namespace StageWorkspaceCommands
 		{
 			return;
 		}
-		Shell->ApplyLayout(FTabManager::NewLayout(TEXT("StageCraft_Workspace_SpikeViewportOnly_v1"))
+		Shell->ApplyLayout(FStageWorkspaceShell::NewPanelLayout()
 			->AddArea
 			(
 				FTabManager::NewPrimaryArea()
@@ -170,7 +170,7 @@ namespace StageWorkspaceCommands
 		{
 			return;
 		}
-		const TSharedRef<FTabManager::FLayout> Layout = FTabManager::NewLayout(TEXT("StageCraft_Workspace_SpikeUnknown_v1"))
+		const TSharedRef<FTabManager::FLayout> Layout = FStageWorkspaceShell::NewPanelLayout()
 			->AddArea
 			(
 				FTabManager::NewPrimaryArea()->SetOrientation(Orient_Horizontal)
@@ -249,6 +249,89 @@ namespace StageWorkspaceCommands
 		}), Seconds);
 	}
 
+	/** The layout name is the whole argument list, so names with spaces need no quoting. */
+	FString JoinArgs(const TArray<FString>& Args)
+	{
+		return FString::Join(Args, TEXT(" "));
+	}
+
+	FGameplayTag ParsePanelTag(const TArray<FString>& Args)
+	{
+		return Args.IsEmpty() ? FGameplayTag() : FGameplayTag::RequestGameplayTag(FName(*Args[0]), /*ErrorIfNotFound*/ false);
+	}
+
+	void OpenPanel(const TArray<FString>& Args, UWorld* World)
+	{
+		UStageWorkspaceSubsystem* Workspace = GetWorkspace(World);
+		const FGameplayTag PanelTag = ParsePanelTag(Args);
+		UE_LOG(LogStageWorkspace, Display, TEXT("OpenPanel %s: %s"), *PanelTag.ToString(), Workspace && Workspace->OpenPanel(PanelTag) ? TEXT("ok") : TEXT("refused"));
+	}
+
+	void ClosePanel(const TArray<FString>& Args, UWorld* World)
+	{
+		UStageWorkspaceSubsystem* Workspace = GetWorkspace(World);
+		const FGameplayTag PanelTag = ParsePanelTag(Args);
+		UE_LOG(LogStageWorkspace, Display, TEXT("ClosePanel %s: %s"), *PanelTag.ToString(), Workspace && Workspace->ClosePanel(PanelTag) ? TEXT("ok") : TEXT("refused"));
+	}
+
+	void SaveLayout(const TArray<FString>& Args, UWorld* World)
+	{
+		UStageWorkspaceSubsystem* Workspace = GetWorkspace(World);
+		const EStageLayoutResult Result = Workspace ? Workspace->SaveCurrentLayoutAs(JoinArgs(Args)) : EStageLayoutResult::WorkspaceInactive;
+		UE_LOG(LogStageWorkspace, Display, TEXT("SaveLayout '%s': %s"), *JoinArgs(Args), *UEnum::GetValueAsString(Result));
+	}
+
+	void LoadLayout(const TArray<FString>& Args, UWorld* World)
+	{
+		UStageWorkspaceSubsystem* Workspace = GetWorkspace(World);
+		const EStageLayoutResult Result = Workspace ? Workspace->ApplyLayout(JoinArgs(Args)) : EStageLayoutResult::WorkspaceInactive;
+		UE_LOG(LogStageWorkspace, Display, TEXT("LoadLayout '%s': %s"), *JoinArgs(Args), *UEnum::GetValueAsString(Result));
+		Status(Args, World);
+	}
+
+	void DeleteLayout(const TArray<FString>& Args, UWorld* World)
+	{
+		UStageWorkspaceSubsystem* Workspace = GetWorkspace(World);
+		const EStageLayoutResult Result = Workspace ? Workspace->DeleteLayout(JoinArgs(Args)) : EStageLayoutResult::WorkspaceInactive;
+		UE_LOG(LogStageWorkspace, Display, TEXT("DeleteLayout '%s': %s"), *JoinArgs(Args), *UEnum::GetValueAsString(Result));
+	}
+
+	void ListLayouts(const TArray<FString>& Args, UWorld* World)
+	{
+		const UStageWorkspaceSubsystem* Workspace = GetWorkspace(World);
+		if (!Workspace)
+		{
+			return;
+		}
+		UE_LOG(LogStageWorkspace, Display, TEXT("Active layout: '%s'. Built-in: %s. User: %s."), *Workspace->GetActiveLayoutName(),
+			*FString::Join(Workspace->GetBuiltInLayouts(), TEXT(", ")), *FString::Join(Workspace->GetUserLayouts(), TEXT(", ")));
+	}
+
+	/** Closes the main window exactly as its OS close button does (SWindow::RequestDestroyWindow), which quits the app. */
+	void CloseMainWindow(const TArray<FString>& Args, UWorld* World)
+	{
+		const UGameEngine* GameEngine = Cast<UGameEngine>(GEngine);
+		if (const TSharedPtr<SWindow> Window = GameEngine ? GameEngine->GameViewportWindow.Pin() : nullptr)
+		{
+			UE_LOG(LogStageWorkspace, Display, TEXT("CloseMainWindow: requesting destroy of %s."), *DescribeWindow(Window));
+			Window->RequestDestroyWindow();
+		}
+	}
+
+	FAutoConsoleCommandWithWorldAndArgs CloseMainWindowCommand(TEXT("StageCraft.Workspace.CloseMainWindow"), TEXT("Closes the main window like its OS close button (quits)."),
+		FConsoleCommandWithWorldAndArgsDelegate::CreateStatic(&CloseMainWindow));
+	FAutoConsoleCommandWithWorldAndArgs OpenPanelCommand(TEXT("StageCraft.Workspace.OpenPanel"), TEXT("<PanelTag> Opens or focuses a panel."),
+		FConsoleCommandWithWorldAndArgsDelegate::CreateStatic(&OpenPanel));
+	FAutoConsoleCommandWithWorldAndArgs ClosePanelCommand(TEXT("StageCraft.Workspace.ClosePanel"), TEXT("<PanelTag> Closes a panel (not the viewport)."),
+		FConsoleCommandWithWorldAndArgsDelegate::CreateStatic(&ClosePanel));
+	FAutoConsoleCommandWithWorldAndArgs SaveLayoutCommand(TEXT("StageCraft.Workspace.SaveLayout"), TEXT("<Name> Saves the current arrangement as a user layout."),
+		FConsoleCommandWithWorldAndArgsDelegate::CreateStatic(&SaveLayout));
+	FAutoConsoleCommandWithWorldAndArgs LoadLayoutCommand(TEXT("StageCraft.Workspace.LoadLayout"), TEXT("<Name> Applies a built-in or user layout."),
+		FConsoleCommandWithWorldAndArgsDelegate::CreateStatic(&LoadLayout));
+	FAutoConsoleCommandWithWorldAndArgs DeleteLayoutCommand(TEXT("StageCraft.Workspace.DeleteLayout"), TEXT("<Name> Deletes a user layout."),
+		FConsoleCommandWithWorldAndArgsDelegate::CreateStatic(&DeleteLayout));
+	FAutoConsoleCommandWithWorldAndArgs ListLayoutsCommand(TEXT("StageCraft.Workspace.ListLayouts"), TEXT("Logs the active, built-in and user layouts."),
+		FConsoleCommandWithWorldAndArgsDelegate::CreateStatic(&ListLayouts));
 	FAutoConsoleCommandWithWorldAndArgs DelayCommand(TEXT("StageCraft.Workspace.Delay"), TEXT("<Seconds> <Command...> Runs a console command later (test scripting)."),
 		FConsoleCommandWithWorldAndArgsDelegate::CreateStatic(&Delay));
 	FAutoConsoleCommandWithWorldAndArgs StatusCommand(TEXT("StageCraft.Workspace.Status"), TEXT("Logs workspace state, windows, viewport size and saved resolution."),

@@ -5,16 +5,29 @@
 #include "CoreMinimal.h"
 #include "Framework/Docking/TabManager.h"
 #include "GameplayTagContainer.h"
+#include "Workspace/StageLayoutStore.h"
 #include "Workspace/StageWorkspaceTypes.h"
 
 /** Callbacks the shell needs from its owner. Bound by UStageWorkspaceSubsystem with weak captures. */
 struct FStageWorkspaceShellCallbacks
 {
+	/** Every widget panel the shell may spawn (not the built-in viewport). Read whenever spawners are registered. */
+	TFunction<TArray<FGameplayTag>()> GetWidgetPanels;
+
+	/** Tab label of a panel. Read live by the tab, so it updates when a definition finishes loading. */
+	TFunction<FText(const FGameplayTag& PanelTag)> GetPanelLabel;
+
 	/** Builds the content of a widget panel. Called on spawn and on RefreshPanelContent. Must not return null. */
 	TFunction<TSharedRef<class SWidget>(const FGameplayTag& PanelTag)> CreatePanelContent;
 
 	/** A panel was docked, floated or closed. Not called while a layout is being restored. */
 	TFunction<void(const FGameplayTag& PanelTag, EStagePanelHost NewHost, EStagePanelHost PreviousHost)> PanelHostChanged;
+
+	/** The user changed the arrangement (split, tab move, resize, open, close). Slate defers this by a few seconds and coalesces it. */
+	TFunction<void()> LayoutChanged;
+
+	/** The user is closing the main window, which quits the app (ADR F7). Every window still exists, so the layout can be captured here. */
+	TFunction<void()> MainWindowClosing;
 
 	/** Makes the widget the main window's content (UStageCraftGameEngine::SetMainWindowContent). */
 	TFunction<void(const TSharedRef<class SWidget>& Content)> SetMainWindowContent;
@@ -26,8 +39,8 @@ struct FStageWorkspaceShellCallbacks
 /**
  * All Slate for the workspace, structured the way Slate expects standalone apps to be (Trace Insights, the level editor):
  * - The global tab manager's primary area in the main window holds one major tab, the Workspace, with its tab well hidden.
- * - The Workspace tab owns a panel tab manager. Panels (viewport, inspector, faders) are panel tabs in it.
- *   Panel layouts, splits, tab stacks and floating panel windows all belong to that manager.
+ * - The Workspace tab shows the menu bar above a panel area owned by a panel tab manager. Panels (viewport, inspector,
+ *   faders...) are panel tabs in it. Panel layouts, splits, tab stacks and floating panel windows all belong to that manager.
  * - The viewport panel hosts the engine's game SViewport.
  *
  * Ownership: created and owned (shared) by UStageWorkspaceSubsystem. Slate holds only weak references back
@@ -39,32 +52,61 @@ struct FStageWorkspaceShellCallbacks
 class FStageWorkspaceShell : public TSharedFromThis<FStageWorkspaceShell>
 {
 public:
+	/** Name of every panel FLayout. It versions the panel structure: bump it when tab IDs or nesting rules change incompatibly, and saved layouts fall back to the default. */
+	static const FName PanelLayoutVersion;
+
 	FStageWorkspaceShell(const TSharedRef<class SWindow>& InMainWindow, const TSharedRef<class SViewport>& InViewportWidget, FStageWorkspaceShellCallbacks InCallbacks);
 
-	/** Installs the Workspace in the main window with PanelLayout as its panel arrangement. Call once, before anything else. */
-	void Install(const TSharedRef<FTabManager::FLayout>& PanelLayout);
+	/** Installs the Workspace in the main window with PanelLayout as its panel arrangement and MenuBar above it. Call once, before anything else. */
+	void Install(const TSharedRef<FTabManager::FLayout>& PanelLayout, const TSharedRef<class SWidget>& MenuBar);
 
 	/** Closes every panel and floating window and gives the main window back its bare viewport. Safe to call twice. */
 	void Shutdown();
 
+	bool IsInstalled() const { return bInstalled; }
+
 	/** Closes every panel and floating panel window, then restores PanelLayout. */
 	void ApplyLayout(const TSharedRef<FTabManager::FLayout>& PanelLayout);
+
+	/** The live panel arrangement, including floating window rectangles. Null when not installed. */
+	TSharedPtr<FTabManager::FLayout> CaptureLayout() const;
+
+	/** The main window's restored rectangle (the rectangle it returns to when un-maximized), and whether it is maximized. */
+	TOptional<FStageWindowPlacement> GetMainWindowPlacement() const;
+
+	/** Moves and resizes the main window. Ignored in fullscreen modes, where the window size is the display mode (UGameUserSettings). */
+	void ApplyMainWindowPlacement(const FStageWindowPlacement& Placement);
+
+	/** Registers a spawner for every panel that does not have one yet, e.g. when panel definitions are discovered after Install. */
+	void RegisterPanelSpawners();
 
 	/** Rebuilds the content of every open widget panel, e.g. for a new local controller after level travel. */
 	void RefreshPanelContent();
 
-	/** Opens (or brings to front) a panel. Returns false for an unknown panel. */
+	/** Opens (or brings to front) a panel. Returns false for a panel without a spawner. */
 	bool OpenPanel(const FGameplayTag& PanelTag);
+
+	/** Closes a widget panel. Returns false for the viewport (it cannot close) or a panel that is not open. */
+	bool ClosePanel(const FGameplayTag& PanelTag);
 
 	EStagePanelHost GetPanelHost(const FGameplayTag& PanelTag) const;
 
 	/** The OS window that currently shows the 3D viewport, or null before Install. */
 	TSharedPtr<class SWindow> GetViewportWindow() const;
 
+	/** Every panel this shell can spawn, viewport first. */
+	TArray<FGameplayTag> GetPanels() const;
+
+	/** Viewport left, faders below it, inspector on the right: the arrangement of the fixed HUD. */
 	static TSharedRef<FTabManager::FLayout> MakeDefaultLayout();
 
-	/** Every panel this shell can spawn, viewport first. */
-	static TArray<FGameplayTag> GetKnownPanels();
+	/** Only the viewport, filling the main window. Other panels stay available from the Window menu. */
+	static TSharedRef<FTabManager::FLayout> MakeViewportOnlyLayout();
+
+	/** An empty panel layout with the current PanelLayoutVersion. Every panel layout must start here. */
+	static TSharedRef<FTabManager::FLayout> NewPanelLayout();
+
+	static FTabId ToTabId(const FGameplayTag& PanelTag);
 
 private:
 	TSharedRef<class SDockTab> SpawnWorkspaceTab(const FSpawnTabArgs& Args);
@@ -81,10 +123,14 @@ private:
 	 */
 	void TearDownPanels();
 
-	TSharedRef<class SWidget> RestorePanels(const TSharedRef<FTabManager::FLayout>& PanelLayout, const TSharedPtr<class SWindow>& OwnerWindow);
+	/** The Workspace tab's content: the menu bar above the restored panel area. */
+	TSharedRef<class SWidget> BuildWorkspaceContent(const TSharedRef<FTabManager::FLayout>& PanelLayout);
+
 	void SyncReportedHosts();
 	void HandleTabRelocated(FGameplayTag PanelTag);
 	void HandleTabClosed(TSharedRef<class SDockTab> Tab, FGameplayTag PanelTag);
+	void HandlePersistLayout(const TSharedRef<FTabManager::FLayout>& Layout);
+	void HandleMainWindowCloseRequested(const TSharedRef<class SWindow>& Window);
 	void HandleViewportMoved();
 	void NotifyHostChanged(const FGameplayTag& PanelTag, EStagePanelHost NewHost);
 	TSharedPtr<class SDockTab> FindLiveTab(const FGameplayTag& PanelTag) const;
@@ -92,6 +138,9 @@ private:
 	TWeakPtr<class SWindow> MainWindow;
 	TWeakPtr<class SViewport> ViewportWidget;
 	FStageWorkspaceShellCallbacks Callbacks;
+
+	/** Shown above the panels. Owned here so it survives layout changes. */
+	TSharedPtr<class SWidget> MenuBarWidget;
 
 	/** The major tab in the main window. Owns PanelTabManager. */
 	TWeakPtr<class SDockTab> WorkspaceTab;

@@ -32,6 +32,25 @@ enum class EStagePanelHost : uint8
 	FloatingWindow
 };
 
+/** Outcome of a layout operation (apply, save, delete). Every failure is logged by the workspace with the layout name. */
+UENUM(BlueprintType)
+enum class EStageLayoutResult : uint8
+{
+	Success,
+	/** The workspace is not installed (editor, PIE, -StageDirectViewport, or not started yet). */
+	WorkspaceInactive,
+	/** Empty, too long, or contains characters that are not allowed in a file name. */
+	InvalidName,
+	/** The name belongs to a built-in layout, which cannot be overwritten or deleted. */
+	ReservedName,
+	NotFound,
+	/** The file could not be read or parsed. It was renamed to .bak and kept. */
+	Corrupt,
+	/** The file was written by an incompatible version. It was renamed to .bak and kept. */
+	VersionMismatch,
+	WriteFailed
+};
+
 /** Native tags so C++ identifies panels without string literals. A panel's tag name is also its Slate tab ID. */
 namespace StageCraftTags
 {

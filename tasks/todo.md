@@ -136,8 +136,18 @@ See `STATE.md` for detailed history of completed work.
 - [x] Gevor approved the ADR decisions (Standalone/packaged-only workspace, PIE keeps the current HUD; UMG panels in Slate dock tabs; existing view-binding pattern)
 - [x] Phase 0 spike on `spike/dockable-workspace`: GO (ADR §8, STATE.md #21). Verified by Claude in Standalone Game: docked viewport + panels, float to monitor 3, cursor picking docked and floated, unknown tab on restore, reset, level travel, saved resolution untouched; +0.32 ms GPU at 1600x900
 - [ ] Gevor, by mouse in Standalone Game (Play > Standalone Game): drag-split/re-dock/tear-off tabs, move the floating viewport between monitors, RMB fly + gizmo + Delete in a floated viewport, Alt+Enter/F11 with a floated viewport, OS-close a floating viewport window, resize the main window
-- [ ] Phase 1 shell. Already in the spike: `UStageCraftGameEngine`, `UStageWorkspaceSubsystem`, `FStageWorkspaceShell`, `StageCraft.Panel.*` tags, Viewport/Inspector/Fader panels, default layout, controller register/unregister. Remaining: `UStagePanelDefinition` assets (replace the interim config classes, async load), Window menu, viewport-overlay HUD layer, hide the viewport tab's close button, floating window titles, fullscreen routing
-- [ ] Phase 2 layouts: `FStageLayoutStore`, Save As/Load/Reset, restore on launch, monitor clamping, automation tests
+- [ ] **Phase 1 as requested by Gevor 2026-10-06 ("Core Window Manager & Workspace Layout System") = ADR Phase 1 shell + ADR Phase 2 layouts.** The spike code is the base. Plan (ADR §9):
+  - [x] `UStagePanelDefinition` (`StagePanel` primary asset, ID name = panel tag, widget class in the `UI` bundle, async load); replaces the interim `InspectorPanelClass`/`FaderBankPanelClass` config
+  - [x] Shell: spawners from the subsystem's panel list (idempotent), tab labels from definitions, menu bar slot, `CaptureLayout`, main-window placement capture/apply, persist hook, main-window close snapshot (`RequestDestroyWindowOverride`)
+  - [x] `FStageLayoutStore` (pure): versioned JSON file, name validation, list/save/load/delete, corrupt/version mismatch -> `.bak`, clamp main + floating windows to monitor work areas
+  - [x] Subsystem API: `ClosePanel`, `GetAvailablePanels`, `GetPanelDisplayName`, `ApplyLayout`, `SaveCurrentLayoutAs`, `DeleteLayout`, `GetBuiltInLayouts`/`GetUserLayouts`, `GetActiveLayoutName`; `OnLayoutApplied`, `OnLayoutsChanged`; session autosave (deferred, async write) + restore on launch
+  - [x] `SStageWorkspaceMenuBar` view: Window (panel toggles, Reset Layout) and Layout (built-ins, user layouts, Save As, Delete) menus; reads state when opened, commits through the subsystem
+  - [x] Console commands: `OpenPanel`, `ClosePanel`, `SaveLayout`, `LoadLayout`, `DeleteLayout`, `ListLayouts`
+  - [x] Automation tests `StageCraft.Workspace.LayoutStore.*`
+  - [x] Data assets `DA_Panel_Inspector`, `DA_Panel_FaderBank`; AssetManager `StagePanel` scan entry
+  - [x] Build Editor + Game (Development, Shipping), run tests, scripted Standalone verification (save, restart, restored; corrupt file; off-screen clamp; level travel). STATE.md #22
+  - [ ] Gevor, by mouse in Standalone Game: menu bar visuals, Window/Layout menus (toggle, Reset, Save As + inline error, Delete), drag tabs/windows then restart restores, maximized main window round-trip (STATE.md #22)
+  - Left for later phases: viewport-overlay HUD layer, fullscreen routing, viewport tab close button, floating window titles (ADR Phase 5)
 - [ ] Phase 3 preferences: `UStageCraftUserSettings`, Preferences panel (General, Layout, Viewport, Graphics)
 - [ ] Phase 4 key bindings: IMCs to assets with player-mappable keys, `UEnhancedInputUserSettings`, Keyboard page
 - [ ] Phase 5 polish: Slate style from `UStageCraftUITheme`, overlay DPI rule, per-monitor fullscreen viewport

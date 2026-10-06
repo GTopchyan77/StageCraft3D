@@ -1327,3 +1327,93 @@ Verdict: **GO** (ADR §8). The code is the start of Phase 1, not throwaway.
 - Panel widget classes are interim config soft references, loaded synchronously. `UStagePanelDefinition` assets with async loading come in Phase 1. The classes are cooked today only because `WBP_StageCraftHUD` references them.
 - The frame-cost measurement is a single sample. Repeat at 4K and with several runs.
 - Nothing is persisted yet. Layout files come in Phase 2.
+
+---
+
+## #22 — Phase 1: core window manager and workspace layout system (2026-10-06)
+
+**Request (Gevor).** "Phase 1: Core Window Manager & Workspace Layout System" for Standalone mode, meaning ADR 0001's Phase 1 (shell) and Phase 2 (layouts) together:
+- a C++ window manager for docking, undocking, tabs and floating windows;
+- custom layouts saved to disk and restored (panel positions, sizes, active tabs);
+- panels bound to backend systems through the existing view pattern, with no new plugins.
+
+The Phase 0 spike (#21) is the base. Design details and the reasons for each refinement are in `Docs/ADR/0001-dockable-workspace.md` §9.
+
+**What changed and why**
+
+- **Panels are data.** `UStagePanelDefinition` is a `StagePanel` primary asset under `/Game/StageCraft/UI/Panels`.
+  - Its primary asset ID name is the panel tag. The workspace registers dock-tab spawners from the Asset Manager scan alone, so a saved layout never drops a panel whose definition is still loading.
+  - Definitions and their widget class (`UI` bundle) load asynchronously. Until they arrive, tabs show "Loading…" and their label updates when they do.
+  - This replaces the interim `InspectorPanelClass` / `FaderBankPanelClass` config, which is removed. Adding a panel is now a tag plus an asset, with no code.
+  - The viewport stays a built-in panel.
+- **Layouts persist.** `FStageLayoutStore` is pure C++ with no world or Slate.
+  - Named user layouts go to `Saved/StageCraft/Workspace/Layouts/<Name>.json` and are written only by "Save Layout As".
+  - The live arrangement is `Session.json`. It is autosaved (Slate's deferred persist hook, with the write on a `UE::Tasks` background task) and restored on launch.
+  - The JSON is versioned: `FormatVersion` plus the panel layout key `StageCraft_Workspace_v1`. Writes are atomic (`.tmp`, then move).
+  - A corrupt or incompatible file is renamed to `.bak`, never deleted, and the Default layout is used.
+  - Names are validated (1–64 safe characters, no path escape or device names). Built-in names ("Default", "Viewport Only") are reserved.
+- **Monitor clamping.**
+  - The main window rect is saved and applied in physical pixels, in windowed mode only.
+  - Floating panel windows are clamped inside Slate's JSON against work areas divided by DPI scale, because that is how Slate saves them (ADR F17).
+  - A window whose monitor is gone moves to the primary monitor.
+- **Final save happens before anything is destroyed** (ADR F15). Slate destroys child windows before their parent, so by `Deinitialize` the floating windows are gone. The shell hooks the main window's `RequestDestroyWindowOverride`, which both the OS close button and Alt+F4 go through. It saves there and seals the session. The `quit`/`exit` path still saves in `Deinitialize`, while the windows are alive.
+- **Window manager API** (`UStageWorkspaceSubsystem`, BlueprintCallable, contracts in the header):
+  - Panels: `GetAvailablePanels`, `GetPanelDisplayName`, `OpenPanel`, `ClosePanel`, `GetPanelHost`.
+  - Layouts: `ApplyLayout`, `SaveCurrentLayoutAs`, `DeleteLayout`, `ResetToDefaultLayout`, `GetBuiltInLayouts`, `GetUserLayouts`, `IsBuiltInLayout`, `GetActiveLayoutName`.
+  - Every layout operation returns `EStageLayoutResult`.
+  - Delegates: `OnPanelHostChanged`, `OnLayoutApplied`, `OnLayoutsChanged`.
+- **View binding.** `SStageWorkspaceMenuBar` sits above the panels in the main window.
+  - Window menu: panel toggles with check state, Reset Layout.
+  - Layout menu: built-ins, user layouts with the active one marked, Save Layout As (inline name box pre-filled with the active user layout, errors shown on the box), Delete Layout.
+  - It is stateless and built from the getters when a menu opens. It commits only through the validated subsystem API. No tick and no polling.
+  - The UMG panels keep their existing binding: `UStageParameterViewWidget` through the controller's request bridge.
+- **Fix in spike code.** `UStageCraftGameEngine::RestoreMainWindowViewport` re-registered the game viewport after `UGameEngine::OnGameWindowClosed` had released `SceneViewport`. That ensured at `SlateApplication.cpp:2547` whenever the main window was closed with the workspace installed. It now only hands the viewport back while `SceneViewport` is valid. Root cause: the spike never closed the main window with the workspace installed.
+- **Dev console commands** (non-Shipping): `StageCraft.Workspace.OpenPanel` / `ClosePanel <Tag>`, `SaveLayout` / `LoadLayout` / `DeleteLayout <Name>`, `ListLayouts`, `CloseMainWindow` (same call as the OS close button). Existing commands use the shared panel layout key.
+
+**Files changed**
+- New, in `Source/ModularSceneBuilder`:
+  - `Public/Workspace/StagePanelDefinition.h`, `Private/Workspace/StagePanelDefinition.cpp`
+  - `Private/Workspace/StageLayoutStore.h/.cpp`
+  - `Private/Workspace/SStageWorkspaceMenuBar.h/.cpp`
+  - `Private/Workspace/Tests/StageLayoutStoreTests.cpp`
+- Modified:
+  - `Public/Workspace/StageWorkspaceSubsystem.h`, `Private/Workspace/StageWorkspaceSubsystem.cpp` (no longer `Config=Game`)
+  - `Private/Workspace/StageWorkspaceShell.h/.cpp`
+  - `Public/Workspace/StageWorkspaceTypes.h` (`EStageLayoutResult`)
+  - `Private/Workspace/StageCraftGameEngine.cpp`
+  - `Private/Workspace/StageWorkspaceConsoleCommands.cpp`
+  - `ModularSceneBuilder.Build.cs` (private `Json`)
+- Content (new): `Content/StageCraft/UI/Panels/DA_Panel_Inspector.uasset` (→ `WBP_StageInspectorPanel`, "Inspector") and `DA_Panel_FaderBank.uasset` (→ `WBP_StageFaderBank`, "Faders").
+- Config: `Config/DefaultGame.ini` gains the `StagePanel` AssetManager scan entry (AlwaysCook). The interim `[/Script/ModularSceneBuilder.StageWorkspaceSubsystem]` section is removed.
+- Docs: `Docs/ADR/0001-dockable-workspace.md` §9 (F15–F17, refinements, API), `tasks/todo.md`, `STATE.md`.
+
+**Verification**
+- **Builds:** Editor, Game Development and Game Shipping all compile clean (0 errors, 0 warnings).
+- **Automation:** `StageCraft.Workspace.LayoutStore.*` ran headless, 5/5 passed:
+  - RoundTrip
+  - BadFiles (not JSON, empty, missing fields, bad main window, future format and old panel version → `.bak`)
+  - Names
+  - ListAndDelete
+  - ClampToMonitors (unplugged monitor, far off-screen and oversized, straddling, DPI-scaled Slate units)
+- **Standalone Game, tested by Claude** (scripted with `-ExecCmds`, 3 monitors, logs `Saved/Logs/WS_Run1-4.log`):
+  1. First launch, no session. Default layout; both definitions loaded. Float viewport to monitor 3, close Faders, Save As "Float Test", Load Default, Load "Float Test" (floating viewport and closed Faders restored). Save As "Default" → ReservedName. "../bad" → InvalidName. `CloseMainWindow` → session saved with the floating window and the closed tab. `GSystemResolution` / saved resolution unchanged.
+  2. Restart. Restored from the session (floating viewport window, now titled "Viewport"; Faders closed). Picking in the floated viewport: MATCH. Level travel (`open L_StageTest`) kept the layout. Faders reopened. Close: no ensure (the fix above).
+  3. Session edited off-screen (main window X=20000, floating X=30000). Both clamped onto the primary monitor (320 / 640). The `quit` path saved the session in `Deinitialize`.
+  4. Corrupt `Session.json` → `.bak` and Default. User layout with FormatVersion 7 → VersionMismatch, `.bak`, dropped from the list, current arrangement kept. Delete "Default" → ReservedName. Delete missing → NotFound.
+  - No ensures, warnings or crashes in runs 2–4. Run 1's ensure is the one fixed above.
+- **Not verified** (needs Gevor, by mouse, in Standalone Game):
+  - Visual check of the menu bar. An OS screenshot was blocked by another window on that monitor, and Claude did not steal focus.
+  - Window menu toggles and Reset Layout; Layout menu Save As (Enter, inline error on a bad name) and Delete.
+  - Dragging tabs and windows, then restart restores them. This includes moving a floating window without any tab change, which is saved only on close (F16).
+  - Maximized main window round-trip.
+  - The #21 checklist (drag split/re-dock/tear-off, RMB fly, gizmo and Delete in a floated viewport, Alt+Enter/F11, OS-close of a floating viewport window, manual resize of the main window).
+  - PIE quick check: the subsystem is not created in the editor, so the HUD should be unchanged.
+- Status: **implemented, awaiting manual verification** of the items above.
+
+**Commit:** uncommitted (working tree).
+
+**Known issues / follow-ups**
+- The Obsidian vault (`S:\`) is still unreachable on this machine. The design record is ADR §9 in the repo.
+- Still open from the ADR: viewport-overlay HUD layer, fullscreen routing through the workspace, viewport tab close button (closing is refused but the button shows), DPI rule for overlays (Phase 5).
+- A built-in "Dual Monitor" layout and panel icons are deferred to Phase 5 (they need monitor-aware built-ins and the dock style set).
+- The frame-cost measurement from #21 is still a single sample.
