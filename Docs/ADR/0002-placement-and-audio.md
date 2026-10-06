@@ -43,7 +43,7 @@ What existed before:
   - `EStagePlacementPreviewState { Hidden, Valid, Refused }`;
   - the last landing point.
 - **Pushed in by the controller:** `UpdateTarget` / `ClearTarget` (cursor hits) and `TryPlace` (a click). The component never traces.
-- **After a successful place:** the mode returns to Select and the ghost hides. The new actor is selectable but **not** auto-selected, so the Place cue is not followed by a Select cue.
+- **After a successful place:** ~~the mode returns to Select and the ghost hides~~ *superseded by §7 (stamping): Place mode and the ghost stay active.* The new actor is selectable but **not** auto-selected, so the Place cue is not followed by a Select cue.
 - **Delegates:** `OnEditModeChanged`, `OnArmedItemChanged`, `OnItemPlaced`, `OnPlacementSnapped` (the landing point moved to another grid point, grid items only) and `OnPlacementFailed` (`NoItemArmed`, `NoSurface`). Rule refusals are reported by the validator's owner, the controller, through `OnRequestRejected`.
 - **Preview colour is display, not permission.** It comes from `PreviewEvaluator` (the same GameMode rules, not reported). Every commit is validated again.
 
@@ -117,7 +117,7 @@ The editor's MCP bridge was attached to another project, so content is generated
 
 ## 4. Alternatives rejected
 
-- **Keep `Continuous` as an opt-in mode.** It contradicts "one click = exactly one object". Repeat placement is P again or the Library.
+- **Keep `Continuous` as an opt-in mode.** It contradicts "one click = exactly one object". Repeat placement is now stamping (§7): one item per click, never per held frame.
 - **Tick the controller to move the ghost.** That polls every frame even when idle. Events plus a next-tick coalesce give the same smoothness at zero idle cost.
 - **Spawn a real item actor as the ghost.** Items register with the session and show control in `BeginPlay`, so a preview actor would show up as a placed fixture.
 - **Transient primary volume for Master** (P1).
@@ -137,3 +137,36 @@ The editor's MCP bridge was attached to another project, so content is generated
 
 - **Placement.** Revert the controller, tool, preview and spawn changes. Old data assets keep working because the field is gone, not renamed.
 - **Audio.** Remove `GameUserSettingsClassName` and the subsystem. Engine settings fall back to defaults.
+
+## 7. Amendment (2026-10-06, STATE.md #24): stamping, Library redesign, status bar
+
+**Problem.**
+- After the first round, Gevor asked for a stamping workflow: place several copies without re-entering Place mode each time.
+- The Library looked unstyled: default light UMG buttons and a raw hint line.
+- Feedback was drawn over the viewport with `AddOnScreenDebugMessage`: refusals, purchases and camera speed.
+
+**Decisions.**
+- **Stamping.**
+  - `TryPlace` no longer leaves Place mode. Place mode and the ghost stay until an explicit exit: Esc, P, the Library's PLACE toggle, or the Edit menu.
+  - Each click still places exactly one item, and holding still places only the item of its press.
+  - After a stamp, the tool re-evaluates the armed item's verdict, because a session limit may now be reached. The controller re-traces so the ghost lands on the new surface (stacking) with the fresh colour.
+- **Library redesign** (`UStageItemLibraryPanel`, still code-built, still overridable by a WBP through `BindWidgetOptional`):
+  - Toolbar: title, item count, and a PLACE toggle that mirrors `OnEditModeChanged`.
+  - A search field (`StageItemLibrary::MatchesSearch`, unit-tested).
+  - Collapsible category groups (`UStageItemLibraryCategory`) with visible counts.
+  - Rows: a thumbnail tile, name and type, with a selection outline on the armed item.
+  - All colours come from `UStageCraftUITheme`: the assigned asset, or the palette's class defaults. Shared builders are in `StageCraftWidgetStyle`.
+- **Tool buttons never take keyboard focus** (`UStageToolButton`). Clicking a Library item leaves focus in the viewport, so Esc and P work immediately.
+- **Workspace status bar** (`UStageStatusBarWidget`, created by the workspace subsystem for the local controller, shown under the panels):
+  - Left: a mode chip and a context hint (`StageStatusBar::MakeHint`, unit-tested).
+  - Right: a 4 s message for refusals (`OnRequestRejected`), purchases (`OnPurchaseCompleted`) and fly speed (`OnFlySpeedChanged`).
+  - The three `AddOnScreenDebugMessage` calls in the controller are removed.
+- **Keyboard focus follows the viewport.**
+  - Every viewport move (layout apply, reset, float, dock) left Slate's focus path running through the destroyed tabs, so keys reached nothing until the viewport was clicked.
+  - `FStageWorkspaceShell::HandleViewportMoved` now clears and re-sets user focus to the game viewport. Re-setting alone is a no-op, because Slate skips a focus change to the already-focused widget.
+
+**Consequences.**
+- **PIE has neither the Library nor the status bar** (fixed HUD, ADR 0001 §5). PIE refusals are logged and play the error cue, but are not shown until the HUD WBP adds `UStageStatusBarWidget` / `UStageItemLibraryPanel`.
+- **Dev tooling** (non-Shipping):
+  - `StageCraft.Edit.Key <Key>` injects a key through Slate with the platform keyboard device, which is the real input path.
+  - `StageCraft.Workspace.Screenshot` saves the whole window with its panels. Engine `shot showui` does not reach the viewport client from `GEngine->Exec`.

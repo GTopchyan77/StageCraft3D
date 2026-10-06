@@ -26,6 +26,10 @@ DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FOnStagePlacementFailed, EStagePlace
  * The placement tool of one local player: owns the edit mode (Select / Place), the armed catalog item
  * and the placement preview, and turns one Place-mode click into exactly one spawned item.
  *
+ * Stamping workflow: Place mode and the ghost stay active after each placement, so every further click places
+ * another copy. Only an explicit exit (EnterSelectMode / TogglePlaceMode: Esc, P, the Library toggle, the Edit menu)
+ * returns to Select. Holding the button never places more than the one item of its press.
+ *
  * Like USpawnSystemComponent it knows nothing about input or tracing: the owning controller pushes
  * cursor hits (UpdateTarget / ClearTarget) whenever the cursor or camera moves, and calls TryPlace on a
  * click. Nothing ticks or polls; the armed item is cached from UStageItemSubsystem::OnSelectedItemChanged.
@@ -81,8 +85,9 @@ public:
 	void ClearTarget();
 
 	/**
-	 * Place-mode click: spawns exactly one armed item at Hit's landing transform. On success the preview
-	 * hides and the mode returns to Select. Returns the placed actor, or null if nothing was placed.
+	 * Place-mode click: spawns exactly one armed item at Hit's landing transform. Place mode and the preview stay
+	 * active (stamping), and the preview's verdict is re-evaluated in case the placement used up a session limit.
+	 * Returns the placed actor, or null if nothing was placed (the mode is unchanged either way).
 	 */
 	class AModularBaseActor* TryPlace(const struct FHitResult& Hit);
 

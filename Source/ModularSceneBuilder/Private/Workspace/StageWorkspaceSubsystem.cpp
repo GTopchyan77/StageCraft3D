@@ -11,6 +11,7 @@
 #include "HAL/PlatformApplicationMisc.h"
 #include "Misc/Paths.h"
 #include "Player/ModularPlayerController.h"
+#include "UI/StageStatusBarWidget.h"
 #include "Widgets/SNullWidget.h"
 #include "Widgets/SViewport.h"
 #include "Widgets/SWindow.h"
@@ -172,6 +173,11 @@ void UStageWorkspaceSubsystem::InstallIfSupported()
 	{
 		UStageWorkspaceSubsystem* Self = WeakThis.Get();
 		return Self ? Self->CreatePanelContent(PanelTag) : SNullWidget::NullWidget;
+	};
+	Callbacks.CreateStatusBarContent = [WeakThis]() -> TSharedRef<SWidget>
+	{
+		UStageWorkspaceSubsystem* Self = WeakThis.Get();
+		return Self ? Self->CreateStatusBarContent() : SNullWidget::NullWidget;
 	};
 	Callbacks.PanelHostChanged = [WeakThis](const FGameplayTag& PanelTag, EStagePanelHost NewHost, EStagePanelHost PreviousHost)
 	{
@@ -368,6 +374,15 @@ TSharedRef<SWidget> UStageWorkspaceSubsystem::CreatePanelContent(const FGameplay
 		[
 			SNew(STextBlock).Text(Message)
 		];
+}
+
+TSharedRef<SWidget> UStageWorkspaceSubsystem::CreateStatusBarContent()
+{
+	// Owned by the controller like the panels, so it reaches the placement tool and the request bridge through
+	// GetOwningPlayer; the slot keeps it alive through TakeWidget and drops it when the controller changes.
+	AModularPlayerController* Controller = LocalController.Get();
+	UStageStatusBarWidget* StatusBar = Controller ? CreateWidget<UStageStatusBarWidget>(Controller, UStageStatusBarWidget::StaticClass()) : nullptr;
+	return StatusBar ? StatusBar->TakeWidget() : SNullWidget::NullWidget;
 }
 
 bool UStageWorkspaceSubsystem::OpenPanel(FGameplayTag PanelTag)

@@ -20,6 +20,7 @@
 #include "HAL/IConsoleManager.h"
 #include "Player/ModularPlayerController.h"
 #include "Slate/SceneViewport.h"
+#include "UnrealClient.h"
 #include "Widgets/SWindow.h"
 #include "Workspace/StageWorkspaceShell.h"
 #include "Workspace/StageWorkspaceSubsystem.h"
@@ -143,6 +144,13 @@ namespace StageWorkspaceCommands
 			Workspace->ResetToDefaultLayout();
 		}
 		Status(Args, World);
+	}
+
+	/** The whole main window as Slate draws it (panels, status bar, viewport), saved under Saved/Screenshots. "shot showui" does not reach the viewport client from GEngine->Exec. */
+	void Screenshot(const TArray<FString>& Args, UWorld* World)
+	{
+		FScreenshotRequest::RequestScreenshot(FString(), /*bShowUI*/ true, /*bAddFilenameSuffix*/ true);
+		UE_LOG(LogStageWorkspace, Display, TEXT("Screenshot requested (next frame, Saved/Screenshots)."));
 	}
 
 	/** Only the viewport, filling the main window: the like-for-like comparison against -StageDirectViewport for frame-cost measurements. */
@@ -340,6 +348,8 @@ namespace StageWorkspaceCommands
 		FConsoleCommandWithWorldAndArgsDelegate::CreateStatic(&FloatViewport));
 	FAutoConsoleCommandWithWorldAndArgs ResetCommand(TEXT("StageCraft.Workspace.Reset"), TEXT("Restores the default layout."),
 		FConsoleCommandWithWorldAndArgsDelegate::CreateStatic(&Reset));
+	FAutoConsoleCommandWithWorldAndArgs ScreenshotCommand(TEXT("StageCraft.Workspace.Screenshot"), TEXT("Saves the main window, with all panels, to Saved/Screenshots."),
+		FConsoleCommandWithWorldAndArgsDelegate::CreateStatic(&Screenshot));
 	FAutoConsoleCommandWithWorldAndArgs ViewportOnlyCommand(TEXT("StageCraft.Workspace.ViewportOnly"), TEXT("Shows only the viewport, filling the main window (profiling comparison)."),
 		FConsoleCommandWithWorldAndArgsDelegate::CreateStatic(&ViewportOnly));
 	FAutoConsoleCommandWithWorldAndArgs UnknownTabCommand(TEXT("StageCraft.Workspace.TestUnknownTab"), TEXT("Restores a layout that names a panel which does not exist."),

@@ -8,7 +8,7 @@
 /**
  * What the primary mouse button does in the stage viewport. Exactly one mode is active per local player.
  * Select: gizmo handle drag > select item > deselect. Never places and never moves an item on a plain click.
- * Place: one click places exactly one instance of the armed catalog item, then the mode returns to Select.
+ * Place: each click places exactly one instance of the armed catalog item, and the mode stays active (stamping) until Esc / P / the Library toggle.
  */
 UENUM(BlueprintType)
 enum class EStageEditMode : uint8

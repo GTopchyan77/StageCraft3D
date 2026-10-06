@@ -20,7 +20,7 @@ DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FOnStageRequestRejected, const FStag
  *   UStageEditorAudioFeedbackComponent (feedback cues).
  *
  * Mouse buttons have exclusive jobs, as in the Unreal Editor viewport:
- *  - Left, Place mode: places exactly one armed item where the ghost shows it, then returns to Select mode.
+ *  - Left, Place mode: places exactly one armed item where the ghost shows it; Place mode stays active for the next copy.
  *    Holding the button never places more.
  *  - Left, Select mode: gizmo handle (drag) > placed item (select; it never follows the mouse) > empty
  *    (deselect). Ignored entirely while the right button is held.

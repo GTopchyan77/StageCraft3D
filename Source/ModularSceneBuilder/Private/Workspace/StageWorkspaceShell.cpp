@@ -6,6 +6,7 @@
 #include "Framework/Docking/TabManager.h"
 #include "GenericPlatform/GenericWindow.h"
 #include "Widgets/Docking/SDockTab.h"
+#include "Widgets/Layout/SBox.h"
 #include "Widgets/SBoxPanel.h"
 #include "Widgets/SNullWidget.h"
 #include "Widgets/SViewport.h"
@@ -175,6 +176,7 @@ void FStageWorkspaceShell::Shutdown()
 	PanelTabManager.Reset();
 	PendingPanelLayout.Reset();
 	MenuBarWidget.Reset();
+	StatusBarSlot.Reset();
 	ReportedHosts.Reset();
 }
 
@@ -274,7 +276,20 @@ TSharedRef<SWidget> FStageWorkspaceShell::BuildWorkspaceContent(const TSharedRef
 		.FillHeight(1.f)
 		[
 			PanelArea.IsValid() ? PanelArea.ToSharedRef() : SNullWidget::NullWidget
+		]
+		+ SVerticalBox::Slot()
+		.AutoHeight()
+		[
+			SAssignNew(StatusBarSlot, SBox)
+			[
+				MakeStatusBarContent()
+			]
 		];
+}
+
+TSharedRef<SWidget> FStageWorkspaceShell::MakeStatusBarContent() const
+{
+	return Callbacks.CreateStatusBarContent ? Callbacks.CreateStatusBarContent() : SNullWidget::NullWidget;
 }
 
 void FStageWorkspaceShell::TearDownPanels()
@@ -368,6 +383,10 @@ void FStageWorkspaceShell::RefreshPanelContent()
 		{
 			Tab->SetContent(Callbacks.CreatePanelContent(PanelTag));
 		}
+	}
+	if (StatusBarSlot.IsValid())
+	{
+		StatusBarSlot->SetContent(MakeStatusBarContent());
 	}
 }
 
@@ -503,7 +522,17 @@ void FStageWorkspaceShell::HandleViewportMoved()
 	// so registration must follow the viewport into its new window (SlateApplication.cpp:2524-2551, ADR F6).
 	FSlateApplication::Get().RegisterGameViewport(Viewport.ToSharedRef());
 
+	// Re-parenting leaves each user's keyboard focus path running through the destroyed tabs, so key presses
+	// (Esc, P, Space) would reach nothing until the viewport is clicked. Focusing the viewport alone is not enough:
+	// Slate skips a focus change to the widget that is already focused (SlateApplication.cpp, SetUserFocus), so the
+	// stale path is cleared first and then rebuilt through the viewport's new parents.
 	const TSharedPtr<SWindow> Window = GetViewportWindow();
+	if (Window.IsValid())
+	{
+		FSlateApplication::Get().ClearAllUserFocus(EFocusCause::SetDirectly);
+		FSlateApplication::Get().SetAllUserFocusToGameViewport(EFocusCause::SetDirectly);
+	}
+
 	UE_LOG(LogStageWorkspace, Log, TEXT("Viewport is now in window '%s' (%s)."),
 		Window.IsValid() ? *Window->GetTitle().ToString() : TEXT("<none>"),
 		!Window.IsValid() ? TEXT("not shown") : Window == MainWindow.Pin() ? TEXT("main") : TEXT("floating"));

@@ -1552,7 +1552,7 @@ The design record, with engine facts, alternatives and rollback, is `Docs/ADR/00
   - P / Esc in the real keyboard path.
 - Status: **implemented, awaiting manual verification** of the items above.
 
-**Commit:** uncommitted (working tree).
+**Commit:** `9ec2c13`.
 
 **Known issues / follow-ups**
 - **PIE has no Library panel.** `WBP_StageCraftHUD` needs a `UStageItemLibraryPanel` dropped into its left side (designer task). In PIE, `StageCraft.Edit.Arm <Item>` or `BP_StageTestArmer` still arm items, then P enters Place mode.
@@ -1561,3 +1561,99 @@ The design record, with engine facts, alternatives and rollback, is `Docs/ADR/00
 - **Not built yet:** gizmo scale snapping, local-space gizmo, undo/redo (hook `OnItemPlaced` / `OnItemDeleted` / gizmo drag end), shift-click to keep placing, and a Preferences panel page for audio (ADR 0001 Phase 3).
 - **Ghost limits.** The ghost shows only the item's `Mesh`. Fixtures whose yoke/head are separate meshes show their base only.
 - **Obsidian vault.** `S:\` is still unreachable on this machine. The design record is ADR 0002 in the repo.
+
+## #24 — Library panel redesign, stamping placement, workspace status bar, viewport keyboard focus fix (2026-10-06)
+
+**Request (Gevor).** A UI/UX pass on placement to match the dark GrandMA3 / Unreal Editor look of the Inspector and Fader panels:
+1. **Library.** Replace the raw floating text and the plain unstyled buttons on the left with a professional, dockable asset-library panel: themed borders and margins, category collapsers, hover states and typography. Hints should sit in tooltips and a status bar, not across the viewport.
+2. **Stamping.** In Place mode with an item armed, each click places a copy and **stays** in Place mode with the ghost. Esc or the Place toggle explicitly returns to Select (Move / Rotate / Scale).
+3. Rules.md standards: delegates, validated paths, explicit ownership, no tick or polling.
+
+This reverses #23's "after a place, return to Select". The design amendment is `Docs/ADR/0002-placement-and-audio.md` §7.
+
+**What changed and why**
+
+- **Stamping** (`UStagePlacementToolComponent::TryPlace`).
+  - A successful place no longer calls `EnterSelectMode`. Place mode and the ghost stay until an explicit exit (Esc, P, the Library PLACE toggle, the Edit menu).
+  - Each click is still exactly one item, and a held button still places only the item of its press: the 90-frame hold test placed +1.
+  - After each stamp:
+    - The armed item's verdict is re-evaluated, because a session limit may now be reached and the ghost must turn red.
+    - `LastLandingPoint` resets, so the ghost moving onto the new item does not play the Snap cue on top of the Place cue.
+    - The controller requests a preview refresh, so the ghost immediately shows where the next click lands. With the cursor still over the new item, that is on top of it (stacking, WYSIWYG).
+- **Library panel redesign** (`UStageItemLibraryPanel`, still code-built, still overridable by a WBP via `BindWidgetOptional`):
+  - **Toolbar:** "LIBRARY", an item count, and a **PLACE P** toggle. The toggle is solid amber while in Place mode and outlined otherwise. It follows `OnEditModeChanged` (push) and calls `TogglePlaceMode`.
+  - **Search field:** filters by every word, matching the item name or category. It only changes visibility and never rebuilds. The rule is `StageItemLibrary::MatchesSearch` (pure, tested).
+  - **Category groups:** new `UStageItemLibraryCategory`. Each has a chevron, an uppercase name and a visible count, and collapses on click. The collapsed state is kept across catalog rebuilds. A group with no matches hides, and while searching every matching group shows its items.
+  - **Rows:** a thumbnail tile (the icon, or the item's initial when it has none), the name, and the item type below it. Hover and press surfaces come from the theme. The armed item gets a selection-blue outline and a bold name. The tooltip gives the description plus how stamping works.
+  - "Loading library…" / "No items match …" show as an italic empty state instead of a raw status line.
+  - **Theme:** every colour comes from `UStageCraftUITheme` (the panel's `Theme`, or the palette class defaults, which are the authored look), so the Library matches the Inspector and Faders. The shared builders (flat button, rounded box, input field, scroll bar, fonts, Starship icons) are in `Private/UI/StageCraftWidgetStyle.h/.cpp`.
+- **`UStageToolButton`** (new, a `UButton` that is never keyboard-focusable). It is used for Library rows, category headers and the PLACE toggle. A plain UMG button takes keyboard focus on click, so pressing Esc or P right after picking an item would go to the panel instead of the game. Focusability can only be set before the Slate widget exists, hence a subclass.
+- **Workspace status bar** (new `UStageStatusBarWidget`, under the panels in the main window):
+  - Left: a **SELECT / PLACE** chip and a context hint (`StageStatusBar::MakeHint`, pure and tested), e.g. "Placing Test Crate: each click places a copy · Esc or P: finish".
+  - Right: a message that clears after 4 s (one-shot timer): refusals in warning red (`OnRequestRejected`), purchases (`UStageEconomySubsystem::OnPurchaseCompleted`) and camera speed (`AStageCameraPawn::OnFlySpeedChanged`, re-bound on `OnPossessedPawnChanged`).
+  - It is a view only: owned by the local controller, every delegate bound in `NativeConstruct` and unbound in `NativeDestruct`.
+  - The shell holds an `SBox` slot filled through a new `CreateStatusBarContent` callback and refreshed with the panels (`RefreshPanelContent`), so a new controller after travel gets a fresh bar.
+- **No more text over the viewport.** The controller's three `AddOnScreenDebugMessage` calls (camera speed, purchase, refusal) are removed. Their information is in the status bar, and refusals still play the error cue. (The red "Video memory has been exhausted" line seen in test screenshots is the engine's own non-Shipping warning, caused by sharing the GPU with another open editor. It is not project code.)
+- **Bug found and fixed: keyboard dead after any layout change.**
+  - **Symptom.** After `Workspace.Reset`, loading a layout, or floating or docking the viewport, Esc, P and Space did nothing until the viewport was clicked. Found with the injected-key test below; it predates this task (Phase 1, #22).
+  - **Root cause.** Re-parenting the viewport into new tabs leaves Slate's per-user focus path running through the destroyed tabs. Key routing walks that path and reaches nothing. Simply setting focus to the viewport again is a no-op, because Slate skips a focus change to the widget that is already focused (`FSlateApplication::SetUserFocus`, "Focus Has Not Changed").
+  - **Fix.** `FStageWorkspaceShell::HandleViewportMoved`, which every viewport move already passes through, now clears all user focus and then focuses the game viewport, rebuilding the path through its new parents.
+- **Wording.** The Edit menu tooltip, `StagePlacementTypes.h` and the controller and tool header docs describe stamping instead of "one click, back to Select".
+- **Dev tooling** (non-Shipping, compiled out):
+  - `StageCraft.Edit.Key <Key>` injects a key through `FSlateApplication` with the platform's default keyboard device and holds it for 4 frames. It follows the OS route (focused widget → viewport → Enhanced Input → action bindings) and logs the focused widget.
+  - `StageCraft.Workspace.Screenshot` saves the whole window with panels to `Saved/Screenshots`. Engine `shot showui` does not reach the viewport client from `GEngine->Exec`, which is what `Delay` uses.
+
+**Files changed**
+- New:
+  - `Source/ModularSceneBuilder/Public/UI/StageStatusBarWidget.h`, `Private/UI/StageStatusBarWidget.cpp`
+  - `Public/UI/StageToolButton.h`, `Private/UI/StageToolButton.cpp`
+  - `Private/UI/StageCraftWidgetStyle.h/.cpp`
+  - `Private/UI/Tests/StageUITests.cpp`
+- Rewritten: `Public/UI/StageItemLibraryPanel.h`, `Private/UI/StageItemLibraryPanel.cpp`. `StatusText` is renamed to `EmptyStateText`; no WBP used it.
+- Modified:
+  - Placement: `Private/Placement/StagePlacementToolComponent.cpp`, `Public/Placement/StagePlacementToolComponent.h`, `Public/Placement/StagePlacementTypes.h`, `Private/Placement/StagePlacementConsoleCommands.cpp`
+  - Controller: `Private/Player/ModularPlayerController.cpp`, `Public/Player/ModularPlayerController.h`
+  - Workspace: `Private/Workspace/StageWorkspaceShell.h/.cpp`, `Private/Workspace/StageWorkspaceSubsystem.cpp`, `Public/Workspace/StageWorkspaceSubsystem.h`, `Private/Workspace/SStageWorkspaceMenuBar.cpp`, `Private/Workspace/StageWorkspaceConsoleCommands.cpp`
+- Docs: `Docs/ADR/0002-placement-and-audio.md` (§3.1 superseded note, §4 wording, §7 amendment), `tasks/todo.md` (Phase 7b; shop item reworded), `STATE.md` (#23 commit hash `9ec2c13`, this entry).
+- No content assets, maps, input assets or Blueprints were changed. `DA_Panel_Library` still points at `UStageItemLibraryPanel`.
+
+**Verification**
+- **Build note.** The open editor belongs to a different project (Kmidden), and its Live Coding session holds the engine-wide `UnrealEditor.exe` mutex that UBT checks. Builds therefore ran with `-NoHotReloadFromIDE`, which skips only that check; none of this project's DLLs are loaded there.
+- **Builds (Claude):** Editor Development, Game Development and Game Shipping all Succeeded with 0 errors and 0 warnings. The final incremental builds include the snap-cue fix, and Shipping proves the new dev commands compile out.
+- **Automation (headless):** `StageCraft` filter, 12/12 passed (rerun after the last change):
+  - the new `UI.LibrarySearch` and `UI.StatusHint`;
+  - `Placement.Math`, `Placement.ToolModes`, `Gizmo.ScaleRules`, `Audio.Math`, `Audio.UserSettings`;
+  - 5× `Workspace.LayoutStore`.
+- **Standalone `-game`, scripted** (`Saved/Logs/UI24_Run7.log`, screenshots by `StageCraft.Workspace.Screenshot`). The Default layout was reset first, the exact case that used to kill the keyboard.
+  - **Stamping:**
+    - Arm Test Crate → Place.
+    - 3 clicks at different points plus a 90-frame hold: items 4 → 8 (+1 per click, +1 for the hold). Mode stayed Place throughout.
+    - After each stamp the ghost re-landed on the new crate (Z 97.35).
+  - **Esc and P through the real key path:**
+    - Esc → Place to Select (ghost hidden).
+    - P → Select to Place, and P again → Place to Select.
+    - Esc in Select clears the armed item (`armed None`).
+    - After `FloatViewport`, P → Place; after `Reset`, Esc → Select.
+    - Before the focus fix, every one of these key presses was lost after the Reset (Run6). Without a Reset they worked (Diag2), which isolated the cause.
+  - **Refusal:** arming the locked Moving Head Wash → refused + error cue. The screenshot shows "Test Moving Head Wash is locked. Unlock it in the shop." in red at the right of the status bar, and nothing over the viewport.
+  - **Screenshots checked by Claude:**
+    - Place: dark Library with toolbar, count, lit PLACE toggle, search, collapsible groups with counts, armed row outlined, ghost on the stage, PLACE chip and hint.
+    - Select: ghost gone, toggle outlined, SELECT chip with "P: place Test Crate".
+    - Refusal: the message on the status bar.
+  - **Snap-cue fix** (`UI24_Run8.log`): each stamp plays exactly one Place cue, and Snap plays only when the pointer moves to a new grid point; before the fix every stamp was followed by a Snap. Esc after the Reset → Select.
+- **Not verified by Claude (needs Gevor, by mouse and keyboard in Standalone Game via RunEditor.bat → Play → Standalone Game):**
+  - hover and press feel of rows and headers; collapsing and expanding a category; typing in the search field;
+  - clicking the PLACE toggle;
+  - stamping with real mouse clicks;
+  - Esc and P on the physical keyboard right after clicking a Library item;
+  - the camera-speed message when scrolling the wheel;
+  - that the status bar reads well at your resolution.
+- Status: **implemented, awaiting manual verification** of the items above.
+
+**Commit:** uncommitted (working tree).
+
+**Known issues / follow-ups**
+- **PIE has neither the Library nor the status bar** (fixed HUD). Refusals in PIE are logged and play the error cue but are not shown. Add `UStageStatusBarWidget` and `UStageItemLibraryPanel` to `WBP_StageCraftHUD` (designer step).
+- **Test catalog items have no icons,** so rows show an initial tile ("T" for every "Test …" item). Real thumbnails come from each item's `Icon`.
+- Locked items are not marked in the Library yet; a lock badge is a follow-up. Clicking one is refused with a status-bar message and the error cue.
+- STATE #23's manual checklist still applies, except "one click returns to Select", which is now stamping.

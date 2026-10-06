@@ -87,7 +87,7 @@ void SStageWorkspaceMenuBar::FillEditMenu(FMenuBuilder& MenuBuilder)
 			NAME_None, EUserInterfaceActionType::RadioButton);
 	};
 	AddModeEntry(EStageEditMode::Select, LOCTEXT("SelectMode", "Select"), LOCTEXT("SelectModeTip", "Click items to select them; edit with the gizmo or the Inspector."));
-	AddModeEntry(EStageEditMode::Place, LOCTEXT("PlaceMode", "Place  (P)"), LOCTEXT("PlaceModeTip", "Show the armed Library item under the cursor; one click places one item."));
+	AddModeEntry(EStageEditMode::Place, LOCTEXT("PlaceMode", "Place  (P)"), LOCTEXT("PlaceModeTip", "Show the armed Library item under the cursor; every click places a copy until you leave Place mode (Esc or P)."));
 	MenuBuilder.EndSection();
 
 	MenuBuilder.BeginSection(TEXT("TransformTool"), LOCTEXT("TransformSection", "Transform Tool  (Space cycles)"));

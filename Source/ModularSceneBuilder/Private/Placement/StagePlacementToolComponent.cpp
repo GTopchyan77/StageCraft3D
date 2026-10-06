@@ -147,8 +147,11 @@ AModularBaseActor* UStagePlacementToolComponent::TryPlace(const FHitResult& Hit)
 		return nullptr;
 	}
 
-	// One click, one item: the ghost goes away and the next click selects again.
-	EnterSelectMode();
+	// Stamping: Place mode and the ghost stay until the user leaves explicitly (Esc, P, the Library toggle).
+	// The placement may have used up a session limit, so the verdict the ghost shows is refreshed now.
+	EvaluateArmedItem();
+	// The next preview lands on the new item; that jump is not a snap the user made, so it must not play the snap cue.
+	LastLandingPoint.Reset();
 	OnItemPlaced.Broadcast(Placed);
 	return Placed;
 }

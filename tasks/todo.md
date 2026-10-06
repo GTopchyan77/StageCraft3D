@@ -126,7 +126,7 @@ See `STATE.md` for detailed history of completed work.
 - [x] Editor / Game / Shipping builds clean; in-PIE economy test passes (locks, purchase, forged product, funds, parameter lock, power rule, travel, persistence, tamper)
 - [x] Rules.md architecture + economy security section
 - [ ] Manual check (Gevor): STATE.md #18 checklist
-- [ ] Shop widget + wallet readout + rejection toast (replace on-screen debug messages)
+- [ ] Shop widget + wallet readout (refusals and purchases now show in the workspace status bar, STATE.md #24)
 - [ ] Lock badges / Unlock buttons in the catalog
 - [ ] Session-limit check on Type swap; parameter display names in lock messages
 - [ ] Server-authoritative commerce backend + RPC requests when multi-user/marketplace starts
@@ -165,4 +165,16 @@ See `STATE.md` for detailed history of completed work.
 - [x] Builds (Editor, Game Dev, Game Shipping) + scripted Standalone verification (STATE.md #23)
 - [ ] Gevor, by mouse: ghost/marker look, click vs hold, Library panel, menus/sliders, hearing the cues, scale gizmo drag
 - [ ] Designer: add `UStageItemLibraryPanel` to `WBP_StageCraftHUD` (left side) so PIE has a Library too
-- [ ] Follow-ups: gizmo scale snapping, local-space gizmo, shift-click to keep placing, undo/redo, audio page in the Preferences panel (ADR 0001 Phase 3)
+- [ ] Follow-ups: gizmo scale snapping, local-space gizmo, undo/redo, audio page in the Preferences panel (ADR 0001 Phase 3)
+
+## Phase 7b: Library redesign, stamping, status bar (requested by Gevor 2026-10-06; ADR 0002 §7, STATE.md #24)
+- [x] Stamping: Place mode + ghost stay after each placement; exit only by Esc / P / Library PLACE toggle / Edit menu; verdict re-evaluated after each stamp
+- [x] Library panel restyled from `UStageCraftUITheme`: toolbar (title, count, PLACE toggle), search, collapsible categories, themed rows with armed outline
+- [x] `UStageToolButton` (never takes keyboard focus) for Library buttons
+- [x] Workspace status bar (`UStageStatusBarWidget`): mode chip + hint, timed messages; viewport `AddOnScreenDebugMessage` feedback removed
+- [x] Keyboard focus restored to the viewport after every layout change / viewport move (fixes keys going nowhere after Reset / float / dock)
+- [x] Tests `StageCraft.UI.LibrarySearch`, `StageCraft.UI.StatusHint`; dev `StageCraft.Edit.Key`, `StageCraft.Workspace.Screenshot`
+- [x] Builds + scripted Standalone verification with screenshots (STATE.md #24)
+- [ ] Gevor, by mouse: Library look/hover/collapse/search, PLACE toggle, stamping by real clicks, Esc/P on the real keyboard, status bar messages
+- [ ] Designer: add `UStageStatusBarWidget` (and the Library) to `WBP_StageCraftHUD` so PIE gets the status bar too
+- [ ] Follow-ups: item thumbnails (icons are empty in the test catalog, rows show initials), lock badge on locked Library items

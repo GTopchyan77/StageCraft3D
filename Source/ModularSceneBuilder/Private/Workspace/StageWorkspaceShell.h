@@ -20,6 +20,9 @@ struct FStageWorkspaceShellCallbacks
 	/** Builds the content of a widget panel. Called on spawn and on RefreshPanelContent. Must not return null. */
 	TFunction<TSharedRef<class SWidget>(const FGameplayTag& PanelTag)> CreatePanelContent;
 
+	/** Builds the status bar under the panels. Called on install and on RefreshPanelContent. Must not return null. */
+	TFunction<TSharedRef<class SWidget>()> CreateStatusBarContent;
+
 	/** A panel was docked, floated or closed. Not called while a layout is being restored. */
 	TFunction<void(const FGameplayTag& PanelTag, EStagePanelHost NewHost, EStagePanelHost PreviousHost)> PanelHostChanged;
 
@@ -80,7 +83,7 @@ public:
 	/** Registers a spawner for every panel that does not have one yet, e.g. when panel definitions are discovered after Install. */
 	void RegisterPanelSpawners();
 
-	/** Rebuilds the content of every open widget panel, e.g. for a new local controller after level travel. */
+	/** Rebuilds the content of every open widget panel and the status bar, e.g. for a new local controller after level travel. */
 	void RefreshPanelContent();
 
 	/** Opens (or brings to front) a panel. Returns false for a panel without a spawner. */
@@ -123,7 +126,10 @@ private:
 	 */
 	void TearDownPanels();
 
-	/** The Workspace tab's content: the menu bar above the restored panel area. */
+	/** The owner's status bar, or nothing when the owner does not provide one. */
+	TSharedRef<class SWidget> MakeStatusBarContent() const;
+
+	/** The Workspace tab's content: the menu bar, the restored panel area and the status bar. */
 	TSharedRef<class SWidget> BuildWorkspaceContent(const TSharedRef<FTabManager::FLayout>& PanelLayout);
 
 	void SyncReportedHosts();
@@ -141,6 +147,9 @@ private:
 
 	/** Shown above the panels. Owned here so it survives layout changes. */
 	TSharedPtr<class SWidget> MenuBarWidget;
+
+	/** Holds the status bar below the panels. Owned here so its content can be replaced for a new controller. */
+	TSharedPtr<class SBox> StatusBarSlot;
 
 	/** The major tab in the main window. Owns PanelTabManager. */
 	TWeakPtr<class SDockTab> WorkspaceTab;

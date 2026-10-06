@@ -427,7 +427,11 @@ void AModularPlayerController::HandlePrimaryPressedAt(const FVector2D& ViewportP
 		// A miss is passed on as an empty hit, so the tool reports "no surface" (error cue) instead of silence.
 		FHitResult Hit;
 		GetPlacementHitAt(ViewportPosition, Hit);
-		PlacementTool->TryPlace(Hit);
+		if (PlacementTool->TryPlace(Hit))
+		{
+			// Stamping keeps the ghost out: re-trace so it lands on the new surface (the placed item) and shows the fresh verdict.
+			RequestPreviewRefresh();
+		}
 		return;
 	}
 
@@ -588,16 +592,8 @@ void AModularPlayerController::HandleCameraSpeed(const FInputActionValue& Value)
 		return;
 	}
 
-	const float NewSpeed = CameraPawn->AdjustFlySpeed(Steps);
-
-#if !UE_BUILD_SHIPPING
-	// Interim readout until the HUD binds AStageCameraPawn::OnFlySpeedChanged; a fixed key replaces the previous line.
-	if (GEngine)
-	{
-		GEngine->AddOnScreenDebugMessage(static_cast<uint64>(GetUniqueID()), 1.5f, FColor(120, 200, 255),
-			FString::Printf(TEXT("Camera speed: %.2f m/s  |  look x%.2f"), NewSpeed / 100.f, CameraPawn->GetLookSpeedScale()));
-	}
-#endif
+	// The status bar shows the new speed through AStageCameraPawn::OnFlySpeedChanged.
+	CameraPawn->AdjustFlySpeed(Steps);
 }
 
 void AModularPlayerController::SetControlRotation(const FRotator& NewRotation)
@@ -793,13 +789,8 @@ void AModularPlayerController::HandlePurchaseCompleted(UStageProductData* Produc
 		return;
 	}
 
+	// The status bar announces it (UStageStatusBarWidget binds UStageEconomySubsystem::OnPurchaseCompleted).
 	UE_LOG(LogStageCraft, Log, TEXT("%s: purchased %s."), *GetName(), *GetNameSafe(Product));
-	// Interim feedback until a shop widget binds UStageEconomySubsystem::OnPurchaseCompleted.
-	if (GEngine && Product)
-	{
-		GEngine->AddOnScreenDebugMessage(static_cast<uint64>(GetUniqueID()) + 1, 3.f, FColor(120, 230, 140),
-			FText::Format(LOCTEXT("Purchased", "Purchased {0}"), Product->DisplayName).ToString());
-	}
 }
 
 FStageEconomyResultInfo AModularPlayerController::CanPlaceItem(const UBaseItemData* Item) const
@@ -854,11 +845,7 @@ void AModularPlayerController::ReportRejection(const FStageEconomyResultInfo& Re
 	UE_LOG(LogStageCraft, Log, TEXT("%s: request refused (%s): %s"), *GetName(),
 		*UEnum::GetValueAsString(Result.Code), *Result.Message.ToString());
 
-	// Interim feedback until a HUD toast binds OnRequestRejected. One key, so repeats replace each other.
-	if (GEngine && IsLocalController())
-	{
-		GEngine->AddOnScreenDebugMessage(static_cast<uint64>(GetUniqueID()) + 1, 3.f, FColor(255, 170, 90), Result.Message.ToString());
-	}
+	// Shown by the workspace status bar (UStageStatusBarWidget) and answered with the error cue; nothing is drawn over the viewport.
 	OnRequestRejected.Broadcast(Result);
 }
 

@@ -149,6 +149,10 @@ private:
 	void LoadPanelCatalog();
 	void HandlePanelCatalogLoaded();
 	TSharedRef<class SWidget> CreatePanelContent(const FGameplayTag& PanelTag);
+
+	/** The status bar for the local controller (UStageStatusBarWidget), or nothing until one registers. */
+	TSharedRef<class SWidget> CreateStatusBarContent();
+
 	void HandlePanelHostChanged(const FGameplayTag& PanelTag, EStagePanelHost NewHost, EStagePanelHost PreviousHost);
 
 	/** Clamps, validates and applies a saved layout. Corrupt when Slate cannot read its panel layout. */

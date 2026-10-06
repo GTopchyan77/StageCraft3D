@@ -17,6 +17,8 @@
 #include "Engine/GameInstance.h"
 #include "Engine/World.h"
 #include "EngineUtils.h"
+#include "Framework/Application/SlateApplication.h"
+#include "GenericPlatform/GenericPlatformInputDeviceMapper.h"
 #include "HAL/IConsoleManager.h"
 #include "ModularSceneBuilder.h"
 #include "Placement/StagePlacementPreview.h"
@@ -214,6 +216,40 @@ namespace StagePlacementCommands
 		}));
 	}
 
+	void Key(const TArray<FString>& Args, UWorld* World)
+	{
+		const FKey KeyToPress(Args.IsEmpty() ? NAME_None : FName(*Args[0]));
+		if (!KeyToPress.IsValid() || !FSlateApplication::IsInitialized())
+		{
+			UE_LOG(LogStageCraft, Display, TEXT("Usage: StageCraft.Edit.Key <KeyName>  (e.g. Escape, P, SpaceBar)"));
+			return;
+		}
+
+		// Through Slate, like the OS would deliver it: focused widget -> game viewport -> Enhanced Input -> the action
+		// bindings. Held for a few frames, like a real tap, so Enhanced Input evaluates the press before the release.
+		FSlateApplication& Slate = FSlateApplication::Get();
+		const int32 UserIndex = Slate.GetUserIndexForKeyboard();
+		// The keyboard device, as the platform message handler reports it, so the viewport maps the key to the local player.
+		const FInputDeviceId Keyboard = IPlatformInputDeviceMapper::Get().GetDefaultInputDevice();
+		Slate.ProcessKeyDownEvent(FKeyEvent(KeyToPress, FModifierKeysState(), Keyboard, false, 0, 0, UserIndex));
+		int32 FramesLeft = 4;
+		FTSTicker::GetCoreTicker().AddTicker(FTickerDelegate::CreateLambda([KeyToPress, Keyboard, UserIndex, FramesLeft](float) mutable
+		{
+			if (--FramesLeft > 0)
+			{
+				return true;
+			}
+			if (FSlateApplication::IsInitialized())
+			{
+				FSlateApplication::Get().ProcessKeyUpEvent(FKeyEvent(KeyToPress, FModifierKeysState(), Keyboard, false, 0, 0, UserIndex));
+			}
+			return false;
+		}));
+		const TSharedPtr<SWidget> Focused = Slate.GetUserFocusedWidget(UserIndex);
+		UE_LOG(LogStageCraft, Display, TEXT("StageCraft.Edit.Key: pressed %s (keyboard focus: %s)."), *KeyToPress.ToString(),
+			Focused.IsValid() ? *Focused->GetTypeAsString() : TEXT("none"));
+	}
+
 	void GizmoMode(const TArray<FString>& Args, UWorld* World)
 	{
 		AModularPlayerController* Controller = GetController(World);
@@ -287,6 +323,8 @@ namespace StagePlacementCommands
 		FConsoleCommandWithWorldAndArgsDelegate::CreateStatic(&Click));
 	FAutoConsoleCommandWithWorldAndArgs HoldCommand(TEXT("StageCraft.Edit.Hold"), TEXT("[Frames=60] Holds the left button at the simulated cursor, then releases."),
 		FConsoleCommandWithWorldAndArgsDelegate::CreateStatic(&Hold));
+	FAutoConsoleCommandWithWorldAndArgs KeyCommand(TEXT("StageCraft.Edit.Key"), TEXT("<KeyName> Presses and releases a key through Slate, the same path as the keyboard (Escape, P, SpaceBar...)."),
+		FConsoleCommandWithWorldAndArgsDelegate::CreateStatic(&Key));
 	FAutoConsoleCommandWithWorldAndArgs GizmoModeCommand(TEXT("StageCraft.Edit.GizmoMode"), TEXT("[Move|Rotate|Scale] Sets the gizmo tool (no argument cycles)."),
 		FConsoleCommandWithWorldAndArgsDelegate::CreateStatic(&GizmoMode));
 	FAutoConsoleCommandWithWorldAndArgs SetLocationCommand(TEXT("StageCraft.Edit.SetLocation"), TEXT("<X> <Y> <Z> Inspector-equivalent location edit of the selection."),
