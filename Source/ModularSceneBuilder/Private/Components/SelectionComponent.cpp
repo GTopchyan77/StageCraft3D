@@ -18,53 +18,126 @@ void USelectionComponent::EndPlay(const EEndPlayReason::Type EndPlayReason)
 	Super::EndPlay(EndPlayReason);
 }
 
-bool USelectionComponent::SelectActor(AActor* Target)
+bool USelectionComponent::IsSelectable(const AActor* Actor)
 {
 	// An actor already being destroyed would be selected after its OnDestroyed fired, leaving a dangling selection.
-	if (!IsValid(Target) || Target->IsActorBeingDestroyed() || !Target->Implements<UInteractableInterface>())
+	return IsValid(Actor) && !Actor->IsActorBeingDestroyed() && Actor->Implements<UInteractableInterface>();
+}
+
+bool USelectionComponent::SelectActor(AActor* Target)
+{
+	if (!IsSelectable(Target))
+	{
+		return false;
+	}
+	ApplySelection({ Target });
+	return true;
+}
+
+bool USelectionComponent::ToggleActorSelection(AActor* Target)
+{
+	if (!IsSelectable(Target))
 	{
 		return false;
 	}
 
-	SetSelection(Target);
-	return true;
+	TArray<AActor*> NewSelection = GetSelectedActors();
+	const bool bWasSelected = NewSelection.Remove(Target) > 0;
+	if (!bWasSelected)
+	{
+		NewSelection.Add(Target);
+	}
+	ApplySelection(NewSelection);
+	return !bWasSelected;
+}
+
+void USelectionComponent::DeselectActor(AActor* Target)
+{
+	TArray<AActor*> NewSelection = GetSelectedActors();
+	if (Target && NewSelection.Remove(Target) > 0)
+	{
+		ApplySelection(NewSelection);
+	}
+}
+
+void USelectionComponent::SelectActors(const TArray<AActor*>& Targets)
+{
+	TArray<AActor*> NewSelection;
+	NewSelection.Reserve(Targets.Num());
+	for (AActor* Target : Targets)
+	{
+		if (IsSelectable(Target))
+		{
+			NewSelection.AddUnique(Target);
+		}
+	}
+	ApplySelection(NewSelection);
 }
 
 void USelectionComponent::ClearSelection()
 {
-	SetSelection(nullptr);
+	ApplySelection({});
 }
 
-void USelectionComponent::SetSelection(AActor* NewSelection)
+TArray<AActor*> USelectionComponent::GetSelectedActors() const
 {
-	if (NewSelection == SelectedActor)
+	TArray<AActor*> Result;
+	Result.Reserve(SelectedActors.Num());
+	for (const TObjectPtr<AActor>& Actor : SelectedActors)
+	{
+		Result.Add(Actor.Get());
+	}
+	return Result;
+}
+
+bool USelectionComponent::IsActorSelected(const AActor* Actor) const
+{
+	return Actor && SelectedActors.Contains(Actor);
+}
+
+void USelectionComponent::ApplySelection(const TArray<AActor*>& NewSelection)
+{
+	const TArray<AActor*> PreviousSelection = GetSelectedActors();
+	if (PreviousSelection == NewSelection)
 	{
 		return;
 	}
 
-	AActor* PreviousSelection = SelectedActor;
+	AActor* PreviousPrimary = GetSelectedActor();
 
-	if (PreviousSelection)
+	// The stored set changes before any callback runs, so a listener that reads the selection sees the final state.
+	SelectedActors.Reset(NewSelection.Num());
+	for (AActor* Actor : NewSelection)
 	{
-		PreviousSelection->OnDestroyed.RemoveDynamic(this, &ThisClass::HandleSelectedActorDestroyed);
-		IInteractableInterface::Execute_OnDeselect(PreviousSelection);
+		SelectedActors.Add(Actor);
 	}
 
-	SelectedActor = NewSelection;
-
-	if (SelectedActor)
+	for (AActor* Actor : PreviousSelection)
 	{
-		SelectedActor->OnDestroyed.AddDynamic(this, &ThisClass::HandleSelectedActorDestroyed);
-		IInteractableInterface::Execute_OnSelect(SelectedActor);
+		if (!NewSelection.Contains(Actor) && Actor)
+		{
+			Actor->OnDestroyed.RemoveDynamic(this, &ThisClass::HandleSelectedActorDestroyed);
+			IInteractableInterface::Execute_OnDeselect(Actor);
+		}
+	}
+	for (AActor* Actor : NewSelection)
+	{
+		if (!PreviousSelection.Contains(Actor))
+		{
+			Actor->OnDestroyed.AddUniqueDynamic(this, &ThisClass::HandleSelectedActorDestroyed);
+			IInteractableInterface::Execute_OnSelect(Actor);
+		}
 	}
 
-	OnSelectionChanged.Broadcast(SelectedActor, PreviousSelection);
+	AActor* NewPrimary = GetSelectedActor();
+	if (NewPrimary != PreviousPrimary)
+	{
+		OnSelectionChanged.Broadcast(NewPrimary, PreviousPrimary);
+	}
+	OnSelectionSetChanged.Broadcast(SelectedActors.Num());
 }
 
 void USelectionComponent::HandleSelectedActorDestroyed(AActor* DestroyedActor)
 {
-	if (DestroyedActor == SelectedActor)
-	{
-		ClearSelection();
-	}
+	DeselectActor(DestroyedActor);
 }

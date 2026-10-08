@@ -84,6 +84,59 @@ namespace StagePlacementCommands
 		{
 			UE_LOG(LogStageCraft, Display, TEXT("StageCraft.Edit.Status: nothing selected"));
 		}
+
+		// Every item of a multi-selection, primary last, with its transform: group moves are checked from these lines.
+		const TArray<AActor*> SelectedSet = Controller->GetSelection()->GetSelectedActors();
+		if (SelectedSet.Num() > 1)
+		{
+			for (int32 Index = 0; Index < SelectedSet.Num(); ++Index)
+			{
+				const AActor* Item = SelectedSet[Index];
+				UE_LOG(LogStageCraft, Display, TEXT("StageCraft.Edit.Status:   [%d/%d]%s %s at %s rot %s scale %s"), Index + 1, SelectedSet.Num(),
+					Index == SelectedSet.Num() - 1 ? TEXT(" primary") : TEXT(""), *GetNameSafe(Item),
+					Item ? *Item->GetActorLocation().ToCompactString() : TEXT("-"), Item ? *Item->GetActorRotation().ToCompactString() : TEXT("-"),
+					Item ? *Item->GetActorScale3D().ToCompactString() : TEXT("-"));
+			}
+		}
+	}
+
+	void ListItems(const TArray<FString>& Args, UWorld* World)
+	{
+		for (TActorIterator<AModularBaseActor> It(World); It; ++It)
+		{
+			if (!It->IsActorBeingDestroyed())
+			{
+				UE_LOG(LogStageCraft, Display, TEXT("StageCraft.Edit.Items: %s \"%s\" (%s) id %s at %s rot %s scale %s%s"), *It->GetName(),
+					*It->GetInstanceLabel().ToString(), *GetNameSafe(It->GetItemData()), *It->GetInstanceId().ToString(EGuidFormats::Short),
+					*It->GetActorLocation().ToCompactString(), *It->GetActorRotation().ToCompactString(), *It->GetActorScale3D().ToCompactString(),
+					It->IsSelected() ? TEXT(" [selected]") : TEXT(""));
+			}
+		}
+	}
+
+	void SelectAll(const TArray<FString>& Args, UWorld* World)
+	{
+		if (AModularPlayerController* Controller = GetController(World))
+		{
+			Controller->RequestSelectAll();
+			UE_LOG(LogStageCraft, Display, TEXT("StageCraft.Edit.SelectAll: %d selected."), Controller->GetSelection()->GetSelectionCount());
+		}
+	}
+
+	void ClearStage(const TArray<FString>& Args, UWorld* World)
+	{
+		AModularPlayerController* Controller = GetController(World);
+		if (!Controller)
+		{
+			return;
+		}
+		// The menu asks the user; the console asks for the word, so a stray command can never wipe the stage.
+		if (Args.IsEmpty() || !Args[0].Equals(TEXT("confirm"), ESearchCase::IgnoreCase))
+		{
+			UE_LOG(LogStageCraft, Display, TEXT("Usage: StageCraft.Edit.ClearStage confirm  (removes every placed item as one undoable step)"));
+			return;
+		}
+		UE_LOG(LogStageCraft, Display, TEXT("StageCraft.Edit.ClearStage: removed %d items."), Controller->RequestClearStage());
 	}
 
 	void Arm(const TArray<FString>& Args, UWorld* World)
@@ -182,7 +235,9 @@ namespace StagePlacementCommands
 	{
 		if (AModularPlayerController* Controller = GetController(World))
 		{
-			Controller->DevSimulatePrimaryPressed();
+			// "ctrl" is the Ctrl+Click path: toggle the item in the selection.
+			const bool bToggle = !Args.IsEmpty() && Args[0].Equals(TEXT("ctrl"), ESearchCase::IgnoreCase);
+			Controller->DevSimulatePrimaryPressed(bToggle ? EStageSelectionClick::Toggle : EStageSelectionClick::Replace);
 			Controller->DevSimulatePrimaryReleased();
 		}
 	}
@@ -397,13 +452,10 @@ namespace StagePlacementCommands
 
 	void Delete(const TArray<FString>& Args, UWorld* World)
 	{
-		AModularPlayerController* Controller = GetController(World);
-		AActor* Selected = Controller ? Controller->GetSelection()->GetSelectedActor() : nullptr;
-		if (Controller && Selected)
+		if (AModularPlayerController* Controller = GetController(World))
 		{
-			// The same path as the Delete key.
-			UE_LOG(LogStageCraft, Display, TEXT("StageCraft.Edit.Delete %s: %s"), *Selected->GetName(),
-				Controller->GetEditHistory()->DeleteItem(Selected) ? TEXT("deleted") : TEXT("not deleted"));
+			// The same path as the Delete key: every selected item, one undo step.
+			UE_LOG(LogStageCraft, Display, TEXT("StageCraft.Edit.Delete: deleted %d items."), Controller->RequestDeleteSelection());
 		}
 	}
 
@@ -476,8 +528,14 @@ namespace StagePlacementCommands
 		FConsoleCommandWithWorldAndArgsDelegate::CreateStatic(&PointerAtActor));
 	FAutoConsoleCommandWithWorldAndArgs ReleasePointerCommand(TEXT("StageCraft.Edit.ReleasePointer"), TEXT("Returns cursor control to the mouse."),
 		FConsoleCommandWithWorldAndArgsDelegate::CreateStatic(&ReleasePointer));
-	FAutoConsoleCommandWithWorldAndArgs ClickCommand(TEXT("StageCraft.Edit.Click"), TEXT("Left click (press + release) at the simulated cursor."),
+	FAutoConsoleCommandWithWorldAndArgs ClickCommand(TEXT("StageCraft.Edit.Click"), TEXT("[ctrl] Left click (press + release) at the simulated cursor; ctrl = Ctrl+Click (toggle selection)."),
 		FConsoleCommandWithWorldAndArgsDelegate::CreateStatic(&Click));
+	FAutoConsoleCommandWithWorldAndArgs ItemsCommand(TEXT("StageCraft.Edit.Items"), TEXT("Logs every placed item with label, catalog item, instance id and transform."),
+		FConsoleCommandWithWorldAndArgsDelegate::CreateStatic(&ListItems));
+	FAutoConsoleCommandWithWorldAndArgs SelectAllCommand(TEXT("StageCraft.Edit.SelectAll"), TEXT("Same as Edit > Select All."),
+		FConsoleCommandWithWorldAndArgsDelegate::CreateStatic(&SelectAll));
+	FAutoConsoleCommandWithWorldAndArgs ClearStageCommand(TEXT("StageCraft.Edit.ClearStage"), TEXT("confirm  Same as Edit > Clear Stage (one undoable step)."),
+		FConsoleCommandWithWorldAndArgsDelegate::CreateStatic(&ClearStage));
 	FAutoConsoleCommandWithWorldAndArgs HoldCommand(TEXT("StageCraft.Edit.Hold"), TEXT("[Frames=60] Holds the left button at the simulated cursor, then releases."),
 		FConsoleCommandWithWorldAndArgsDelegate::CreateStatic(&Hold));
 	FAutoConsoleCommandWithWorldAndArgs KeyCommand(TEXT("StageCraft.Edit.Key"), TEXT("<KeyName|Chord> Presses and releases a key or chord through Slate, the same path as the keyboard (Escape, P, Ctrl+Z, Ctrl+Shift+Z...)."),

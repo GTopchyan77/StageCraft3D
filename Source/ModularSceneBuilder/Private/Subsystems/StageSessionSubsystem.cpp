@@ -210,8 +210,17 @@ void UStageSessionSubsystem::MarkClean()
 	SetDirty(false);
 }
 
+void UStageSessionSubsystem::SetSceneName(const FString& InSceneName)
+{
+	SceneName = InSceneName;
+}
+
 void UStageSessionSubsystem::SetDirty(bool bNewDirty)
 {
+	if (bNewDirty)
+	{
+		++EditSerial;
+	}
 	if (bDirty != bNewDirty)
 	{
 		bDirty = bNewDirty;

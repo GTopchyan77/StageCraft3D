@@ -9,7 +9,7 @@
 #include "Workspace/StageWorkspaceTypes.h"
 
 /**
- * The workspace's Edit, Window, Layout and Audio menus, shown above the panels in the main window.
+ * The workspace's File, Edit, Render, Window, Layout and Audio menus, shown above the panels in the main window.
  *
  * A view in the project's binding pattern:
  * - It holds no state of its own. Menus are built from the subsystem's getters each time they open, so there is nothing to keep in sync and no polling.
@@ -27,7 +27,13 @@ public:
 	void Construct(const FArguments& InArgs, class UStageWorkspaceSubsystem* InWorkspace);
 
 private:
+	void FillFileMenu(class FMenuBuilder& MenuBuilder);
+	void FillSaveSceneAsMenu(class FMenuBuilder& MenuBuilder);
+	void FillOpenSceneMenu(class FMenuBuilder& MenuBuilder);
+	void FillDeleteSceneMenu(class FMenuBuilder& MenuBuilder);
+	void FillRenderMenu(class FMenuBuilder& MenuBuilder);
 	void FillEditMenu(class FMenuBuilder& MenuBuilder);
+	void FillSelectionSection(class FMenuBuilder& MenuBuilder, const TWeakObjectPtr<class AModularPlayerController>& WeakController);
 	void FillWindowMenu(class FMenuBuilder& MenuBuilder);
 	void FillLayoutMenu(class FMenuBuilder& MenuBuilder);
 	void FillSaveAsMenu(class FMenuBuilder& MenuBuilder);
@@ -39,9 +45,12 @@ private:
 	class UStageAudioSubsystem* GetAudio() const;
 
 	void TogglePanel(FGameplayTag PanelTag);
+	void ShowPanel(FGameplayTag PanelTag);
 	void ApplyLayout(FString LayoutName);
 	void DeleteLayout(FString LayoutName);
 	void HandleSaveAsCommitted(const FText& Text, ETextCommit::Type CommitType);
+	void HandleSaveSceneAsCommitted(const FText& Text, ETextCommit::Type CommitType);
+	static void OpenFolder(const FString& Directory);
 
 	static FText DescribeResult(EStageLayoutResult Result);
 
@@ -49,4 +58,10 @@ private:
 
 	/** The Save As name box of the open menu. Only valid while that submenu is open. */
 	TWeakPtr<class SEditableTextBox> SaveAsTextBox;
+
+	/** The scene Save As name box of the open menu. Only valid while that submenu is open. */
+	TWeakPtr<class SEditableTextBox> SaveSceneAsTextBox;
+
+	/** A scene name the user was warned exists; a second Enter on the same name replaces it. */
+	FString PendingSceneOverwrite;
 };

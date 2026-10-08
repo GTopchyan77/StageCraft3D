@@ -7,6 +7,7 @@
 #include "Components/SpawnSystemComponent.h"
 #include "Data/BaseItemData.h"
 #include "Engine/World.h"
+#include "History/StageBatchCommand.h"
 #include "History/StageEditHistorySubsystem.h"
 #include "History/StageItemCommands.h"
 #include "History/StageItemSnapshot.h"
@@ -22,10 +23,7 @@ namespace StageEditHistory
 	/** Removal shared by Delete and by undo/redo: the selection lets go first, so the gizmo and inspector never see a dying actor. */
 	bool RemoveStageItem(AActor& Target, USpawnSystemComponent& SpawnSystem, USelectionComponent& Selection)
 	{
-		if (Selection.GetSelectedActor() == &Target)
-		{
-			Selection.ClearSelection();
-		}
+		Selection.DeselectActor(&Target);
 		return SpawnSystem.TryDeleteActor(&Target);
 	}
 
@@ -152,38 +150,104 @@ void UStageEditHistoryComponent::HandleItemPlaced(AModularBaseActor* PlacedActor
 	}
 }
 
+void UStageEditHistoryComponent::RecordAsOneStep(TArray<TSharedRef<IStageEditCommand>> Commands, const FText& BatchDescription) const
+{
+	if (Commands.Num() == 1)
+	{
+		Record(Commands[0]);
+	}
+	else if (Commands.Num() > 1)
+	{
+		Record(MakeShared<FStageBatchCommand>(BatchDescription, MoveTemp(Commands)));
+	}
+}
+
 bool UStageEditHistoryComponent::DeleteItem(AActor* Target)
 {
-	AModularBaseActor* Item = Cast<AModularBaseActor>(Target);
-	if (!IsValid(Item) || Item->IsActorBeingDestroyed() || !SpawnSystem || !Selection)
+	return DeleteItems({ Target }) == 1;
+}
+
+int32 UStageEditHistoryComponent::DeleteItems(const TArray<AActor*>& Targets)
+{
+	return DeleteAsOneStep(Targets, [](int32 Count)
 	{
-		return false;
+		return FText::Format(NSLOCTEXT("StageEditHistory", "DeleteItems", "Delete {0} items"), FText::AsNumber(Count));
+	});
+}
+
+int32 UStageEditHistoryComponent::ClearStage()
+{
+	const UStageSessionSubsystem* Session = UWorld::GetSubsystem<UStageSessionSubsystem>(GetWorld());
+	if (!Session)
+	{
+		return 0;
 	}
 
-	// Captured while the actor is intact; undo brings back exactly this.
-	FStageItemSnapshot Snapshot = Item->CaptureSnapshot();
-	if (!StageEditHistory::RemoveStageItem(*Item, *SpawnSystem, *Selection))
+	const TArray<AModularBaseActor*> PlacedItems = Session->GetPlacedItems();
+	const int32 Removed = DeleteAsOneStep(TArray<AActor*>(PlacedItems), [](int32 Count)
 	{
-		return false;
+		return FText::Format(NSLOCTEXT("StageEditHistory", "ClearStage", "Clear Stage ({0} items)"), FText::AsNumber(Count));
+	});
+	UE_LOG(LogStageCraft, Log, TEXT("%s: cleared the stage (%d of %d items removed)."), *GetNameSafe(GetOwner()), Removed, PlacedItems.Num());
+	return Removed;
+}
+
+int32 UStageEditHistoryComponent::DeleteAsOneStep(const TArray<AActor*>& Targets, TFunctionRef<FText(int32)> MakeBatchDescription)
+{
+	if (!SpawnSystem || !Selection)
+	{
+		return 0;
 	}
 
-	Record(MakeShared<FStageDeleteItemCommand>(MoveTemp(Snapshot)));
-	return true;
+	TArray<TSharedRef<IStageEditCommand>> Commands;
+	Commands.Reserve(Targets.Num());
+	for (AActor* Target : Targets)
+	{
+		AModularBaseActor* Item = Cast<AModularBaseActor>(Target);
+		if (!IsValid(Item) || Item->IsActorBeingDestroyed())
+		{
+			continue;
+		}
+
+		// Captured while the actor is intact; undo brings back exactly this.
+		FStageItemSnapshot Snapshot = Item->CaptureSnapshot();
+		if (StageEditHistory::RemoveStageItem(*Item, *SpawnSystem, *Selection))
+		{
+			Commands.Add(MakeShared<FStageDeleteItemCommand>(MoveTemp(Snapshot)));
+		}
+	}
+
+	const int32 Deleted = Commands.Num();
+	RecordAsOneStep(MoveTemp(Commands), MakeBatchDescription(Deleted));
+	return Deleted;
 }
 
 void UStageEditHistoryComponent::RecordTransformChange(AActor* Target, const FTransform& Before)
 {
-	const AModularBaseActor* Item = Cast<AModularBaseActor>(Target);
-	if (!IsValid(Item))
+	const FStageTransformChange Change{ Target, Before };
+	RecordTransformChanges(MakeArrayView(&Change, 1));
+}
+
+void UStageEditHistoryComponent::RecordTransformChanges(TConstArrayView<FStageTransformChange> Changes)
+{
+	TArray<TSharedRef<IStageEditCommand>> Commands;
+	for (const FStageTransformChange& Change : Changes)
 	{
-		return;
+		const AModularBaseActor* Item = Cast<AModularBaseActor>(Change.Item.Get());
+		if (!IsValid(Item))
+		{
+			continue;
+		}
+
+		const FTransform After = Item->GetActorTransform();
+		if (FStageTransformItemCommand::IsMeaningfulChange(Change.Before, After))
+		{
+			Commands.Add(MakeShared<FStageTransformItemCommand>(Item->GetInstanceId(), Item->GetInstanceLabel(), Change.Before, After));
+		}
 	}
 
-	const FTransform After = Item->GetActorTransform();
-	if (FStageTransformItemCommand::IsMeaningfulChange(Before, After))
-	{
-		Record(MakeShared<FStageTransformItemCommand>(Item->GetInstanceId(), Item->GetInstanceLabel(), Before, After));
-	}
+	const int32 Count = Commands.Num();
+	RecordAsOneStep(MoveTemp(Commands), FText::Format(NSLOCTEXT("StageEditHistory", "TransformItems", "Transform {0} items"), FText::AsNumber(Count)));
 }
 
 EStageCommandResult UStageEditHistoryComponent::Undo()

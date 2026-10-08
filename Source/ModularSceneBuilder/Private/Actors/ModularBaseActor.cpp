@@ -154,8 +154,18 @@ void AModularBaseActor::ApplyItemData(const UBaseItemData& Data)
 
 void AModularBaseActor::UpdateHighlight()
 {
-	UMaterialInterface* Overlay = bIsSelected ? SelectedOverlayMaterial.Get() : (bIsHovered ? HoverOverlayMaterial.Get() : nullptr);
+	UMaterialInterface* Overlay = bHighlightSuppressed ? nullptr
+		: (bIsSelected ? SelectedOverlayMaterial.Get() : (bIsHovered ? HoverOverlayMaterial.Get() : nullptr));
 	MeshComponent->SetOverlayMaterial(Overlay);
+}
+
+void AModularBaseActor::SetHighlightSuppressed(bool bSuppressed)
+{
+	if (bHighlightSuppressed != bSuppressed)
+	{
+		bHighlightSuppressed = bSuppressed;
+		UpdateHighlight();
+	}
 }
 
 void AModularBaseActor::OnHoverBegin_Implementation()

@@ -54,6 +54,13 @@ bool FStageStatusHintTest::RunTest(const FString& Parameters)
 	const FString Selecting = MakeHint(EStageEditMode::Select, Crate).ToString();
 	TestTrue(TEXT("Select hint offers P for the armed item"), Selecting.Contains(TEXT("P: place Crate")));
 	TestFalse(TEXT("Select hint without item does not offer P"), MakeHint(EStageEditMode::Select, FText::GetEmpty()).ToString().Contains(TEXT("P: place")));
+	TestTrue(TEXT("Select hint teaches Ctrl+Click"), Selecting.Contains(TEXT("Ctrl+Click")));
+
+	const FString Group = MakeHint(EStageEditMode::Select, Crate, 3).ToString();
+	TestTrue(TEXT("Group hint counts the selection"), Group.Contains(TEXT("3 items selected")));
+	TestTrue(TEXT("Group hint names group delete"), Group.Contains(TEXT("Delete")));
+	TestFalse(TEXT("One selected item reads like a single selection"), MakeHint(EStageEditMode::Select, Crate, 1).ToString().Contains(TEXT("items selected")));
+	TestTrue(TEXT("Place mode ignores the selection count"), MakeHint(EStageEditMode::Place, Crate, 3).ToString().Contains(TEXT("Placing")));
 	return true;
 }
 

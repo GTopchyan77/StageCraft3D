@@ -49,8 +49,11 @@ public:
 	 */
 	FStageSnapOutcome SnapPlacement(const class UBaseItemData& Item, const FTransform& FreeTransform, const FTransform& GridTransform);
 
-	/** Starts a move of Moving: caches its bounds and its neighbours'. Call when a drag begins. */
-	void BeginMove(const AActor& Moving);
+	/**
+	 * Starts a move of Moving: caches its bounds and its neighbours'. Call when a drag begins. MovingWith are items
+	 * that move along with it (the rest of a multi-selection); they are not neighbours, because they travel too.
+	 */
+	void BeginMove(const AActor& Moving, TConstArrayView<const AActor*> MovingWith = {});
 
 	/** Snaps the moving item's ProposedLocation along the axes in AxisMask. Returns ProposedLocation outside a move. */
 	FStageSnapOutcome SnapMove(const FVector& ProposedLocation, uint8 AxisMask);
@@ -76,7 +79,7 @@ protected:
 	double GuideThicknessPerCm = 0.004;
 
 private:
-	void GatherNeighbourBounds(const AActor* Exclude, TArray<FBox>& OutBounds) const;
+	void GatherNeighbourBounds(TConstArrayView<const AActor*> Exclude, TArray<FBox>& OutBounds) const;
 	void AddGuides(const StageSnapMath::FSnapResult& Snap, const FBox& SnappedBox, TConstArrayView<FBox> Neighbours, FStageSnapGuideList& OutGuides) const;
 	void NoteEngagement(const StageSnapMath::FSnapResult& Snap);
 	double ComputeGuideThickness(const FVector& At) const;

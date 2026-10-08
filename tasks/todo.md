@@ -49,10 +49,10 @@ See `STATE.md` for detailed history of completed work.
 - [ ] Strobe clock in `UShowControlSubsystem` (one tick for all strobing fixtures)
 - [ ] Beam visual: cone mesh/material driven by Zoom and Dimmer; laser fixture actor (Niagara)
 - [ ] `StageCraftDMX` module: bridge over the DMX Engine plugin (`DMXProtocol`, Art-Net + sACN ports), enabled via the uproject
-- [ ] Show file save/load (`USaveGame`: placed items, instance `SaveGame` properties, cue list)
+- [~] Show file save/load: stage scenes done (STATE.md #26, JSON scene files with items, transforms, ids, SaveGame state); cue list not saved yet
 - [ ] Rigging: snap fixtures to truss `RiggingPoints`, truss-to-truss `Connectors`, load per point against the safe working load
 - [ ] Audio: coverage cone visualisation, line array hang builder (splay chaining)
-- [ ] Multi-select + group edit in the inspector (MA-style "selection" of many fixtures)
+- [~] Multi-select done (Ctrl+Click, group gizmo and numeric transforms, batch delete; STATE.md #26); group edit of non-transform inspector parameters still open
 
 ### 5.4 Verification (Gevor)
 - [x] (Claude, automated PIE) Select Spot 102: the inspector shows Info/Transform/Patch/Dimmer/Position/Color/Beam with live values; Dimmer 25 dims the beam
@@ -187,3 +187,13 @@ See `STATE.md` for detailed history of completed work.
 - [x] Tests `StageCraft.History.Stack`, `StageCraft.History.ItemCommands`, `StageCraft.Snap.Math`; scripted Standalone runs (STATE.md #25)
 - [ ] Gevor, by mouse/keyboard: shortcuts on the real keyboard (and not while typing in a field), mouse gizmo drag snapping + guide, Edit menu entries, status bar messages, Snap cue
 - [ ] Follow-ups: undo for non-transform parameter edits, hold-to-bypass snap key, placement snapping for Blueprint-only visuals
+
+## Phase 9 — Multi-selection, Clear Stage, scene files, renders (STATE.md #26, ADR 0004)
+- [x] Selection set with Ctrl+Click toggle, Select All, group gizmo and numeric transforms, batch delete as one undo step
+- [x] Clear Stage with confirmation submenu, undoable
+- [x] Scene save / load / delete (async, validated JSON), File menu
+- [x] Render subsystem + Render panel (presets, AA, post, watermark), Render menu, status bar
+- [x] Editor / Game / Shipping builds clean; 20/20 automation; scripted Standalone runs R26_Run1-6
+- [ ] Manual verification (Gevor): STATE.md #26 "Not verified" list
+- [ ] Render banding in wide gradients: compare with viewport at the same framing; HDR capture + dithered quantisation
+- [ ] Render cancel button; group edit of non-transform parameters; save cue list with scenes

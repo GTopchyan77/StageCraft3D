@@ -1784,7 +1784,7 @@ The design record, with engine facts, alternatives and rollback, is `Docs/ADR/00
   - **Untested paths:** a restore refused by a session item limit (unit test only; no test map has a limit); undo of a fixture delete (fixture ID, patch and attributes restored), which is untested at runtime.
 - Status: **implemented, awaiting manual verification** of the items above.
 
-**Commit:** uncommitted (working tree).
+**Commit:** `1ff9177`.
 
 **Known issues / follow-ups**
 - **Undo scope.** Non-transform parameter edits (label, patch, attributes, Type swap) are not undo steps yet; they do survive undo/redo of Place/Delete through the snapshot. They would be one more command type at `RequestParameterChange`.
@@ -1792,3 +1792,133 @@ The design record, with engine facts, alternatives and rollback, is `Docs/ADR/00
 - **No hold-to-bypass key.** Snapping can only be switched off with the Edit menu toggle.
 - **History is per level** (max 100 steps) and is cleared by level travel.
 - **Obsidian vault.** `S:\` is still unreachable on this machine; the design record is ADR 0003 in the repo.
+
+## #26 — Multi-selection and batch edits, Clear Stage, scene save/load, render subsystem and panel (2026-10-08)
+
+**Request (Gevor).** A milestone in four parts, under Rules.md:
+1. **Batch selection.** Ctrl+Click multi-select; Delete removes the selected item(s); deletion and transforms act on the whole selection.
+2. **Clear All.** Remove every placed item, with a safety check against accidental wipes.
+3. **Save / load.** Serialize the stage (item classes, transforms, instance ids, metadata) to disk, with UI to save and reload at runtime.
+4. **Render.** A render subsystem and panel: 4K / 1080p / square presets, anti-aliasing and post-processing options, optional watermark, one-click non-blocking renders into a project folder.
+
+The design record, with verified engine facts, alternatives, measurements and rollback, is `Docs/ADR/0004-selection-scenes-and-rendering.md`.
+
+**What changed and why**
+
+- **Selection set** (`USelectionComponent`).
+  - An ordered set; the last entry is the primary (gizmo target, inspector subject). One private mutation path (`ApplySelection`) keeps overlays, destroy bindings and notifications consistent.
+  - New: `ToggleActorSelection` (Ctrl+Click), `DeselectActor`, `SelectActors`, `GetSelectedActors`, `GetSelectionCount`, `IsActorSelected`, and `OnSelectionSetChanged(Count)`. `OnSelectionChanged` keeps its meaning for the primary, so the inspector, gizmo and audio feedback are unchanged.
+  - Controller: Ctrl (read from Slate's modifier state) turns a click on an item into a toggle; Ctrl+Click on empty space keeps the selection.
+- **Group transforms.**
+  - `StageGroupTransform::ApplyLeaderChange` (pure): followers move by the leader's offset, orbit its pivot by its rotation, and scale in place by its ratio (shared clamp).
+  - `UStageGroupTransformComponent` (controller) applies it during a gizmo drag and around a numeric Location / Rotation / Scale edit of a selected item, so both tools move the group.
+  - Snapping ignores followers as neighbours (`UStageSnappingComponent::BeginMove(Leader, MovingWith)`).
+- **One action, one undo step.** `FStageBatchCommand` is all or nothing: a part-way failure reverts what it applied. `UStageEditHistoryComponent::DeleteItems`, `ClearStage` and `RecordTransformChanges` record one step ("Delete 2 items", "Clear Stage (4 items)", "Transform 2 items"). `UStageEditHistorySubsystem::ClearHistory` serves loads.
+- **Clear Stage.** Edit > Clear Stage... opens a confirmation submenu with the item count; the clear is undoable; the console form needs `confirm`. It removes every stage item, including level-authored ones (never level geometry).
+- **Edit menu.** New Selection section: Select All, Deselect All, Delete N Selected Items, Clear Stage....
+- **Scene files.**
+  - `UStageSceneComponent` (controller): async save and load (`UE::Tasks` + `AsyncTask(GameThread)`, weakly held component, one operation at a time), delete, list.
+  - `FStageSceneStore`: JSON format v1 in `Saved/StageCraft/Scenes/<Name>.json` (GUID, catalog path, label, location, quaternion, scale, base64 SaveGame state), atomic writes, and validation of untrusted files (structure, version, item cap, ids, paths, finite and in-range transforms, state size; scale clamped; duplicate ids repaired; damaged files left untouched).
+  - Loading replaces the stage through `USpawnSystemComponent::RestoreItem`, so the placement rules and entitlements decide; refusals are counted silently and summarised. It keeps instance ids, accepts only catalog items, clears the undo history and marks the session clean.
+  - `UStageSessionSubsystem` gains the scene name and an edit serial; a save marks the session clean only if nothing was edited while it wrote.
+  - `AModularBaseActor` instance ids are now persisted by scene files (doc comment updated).
+  - New **File** menu: the scene name and unsaved state, Save, Save Scene As... (warns before replacing another scene), Open Scene (asks before discarding unsaved changes), Delete Scene (confirm submenu), Open Scenes Folder.
+- **Render subsystem** (`UStageRenderSubsystem`, world subsystem).
+  - A job runs Capturing → Reading → Encoding: a transient scene capture of the player camera renders a few warm-up frames, the image is read back through a GPU readback polled on the render thread, and a worker filters (supersampling), compresses and atomically writes the PNG to `Saved/Renders`.
+  - The capture matches the viewport's lighting: Lumen GI and reflections are overridden on, and temporal AA is enabled with a persistent view state. Scene captures default both off.
+  - The gizmo, the placement ghost and selection/hover overlays (`AModularBaseActor::SetHighlightSuppressed`) are left out of the image.
+  - Settings: resolution (4K 3840x2160, 1080p, Square 2160x2160), anti-aliasing (Off, FXAA, Temporal, Supersampled), post-processing (Clean, Standard, Cinematic), watermark footer (scene, date, size, item count). Stored in `UStageCraftUserSettings`; the subsystem is the only writer.
+  - Supersampling never renders more than one 4K frame of pixels (see Verification for why).
+  - One job at a time; cancelled with its world; nothing ticks while idle.
+- **Render UI.**
+  - `UStageRenderPanel`: code-built and themed; `StageCraft.Panel.Render` / `DA_Panel_Render`; a second tab next to the Inspector in the Default layout. It has `UStageChoiceButton` segmented options, a summary, RENDER IMAGE, status and Open Folder.
+  - New **Render** menu: Render Image, Render Settings..., Open Renders Folder.
+  - The status bar shows a selection-aware hint, scene save/load results and render progress/results.
+- **Dev console** (non-Shipping):
+  - `StageCraft.Edit.{Click [ctrl], Items, SelectAll, ClearStage confirm}`; `Delete` now acts on the whole selection.
+  - `StageCraft.Scene.{Status, Save, Load, Delete}`.
+  - `StageCraft.Render [4K|HD|Square] [Off|FXAA|Temporal|Super] [Clean|Standard|Cinematic] [wm|nowm]` and `StageCraft.Render.Status`.
+- **STATE.md housekeeping.** #25's commit line said "uncommitted"; it now carries `1ff9177`.
+
+**Files changed**
+- New, in `Source/ModularSceneBuilder`:
+  - `Public/Interaction/StageGroupTransform.h`, `Private/Interaction/StageGroupTransform.cpp`
+  - `Public/Components/StageGroupTransformComponent.h`, `Private/Components/StageGroupTransformComponent.cpp`
+  - `Public/History/StageBatchCommand.h`, `Private/History/StageBatchCommand.cpp`
+  - `Public/Scene/StageSceneTypes.h`, `StageSceneComponent.h`; `Private/Scene/StageSceneStore.h/.cpp`, `StageSceneComponent.cpp`, `StageSceneConsoleCommands.cpp`, `Tests/StageSceneStoreTests.cpp`
+  - `Public/Render/StageRenderTypes.h`, `StageRenderSubsystem.h`; `Private/Render/StageRenderTypes.cpp`, `StageRenderSubsystem.cpp`, `Tests/StageRenderTests.cpp`
+  - `Public/UI/StageRenderPanel.h`, `Private/UI/StageRenderPanel.cpp`
+- Modified, in `Source/ModularSceneBuilder`:
+  - `ModularSceneBuilder.Build.cs` (private `RenderCore`, `RHI`, `ImageCore`)
+  - `Components/SelectionComponent.h/.cpp` (rewritten as a set)
+  - `Player/ModularPlayerController.h/.cpp` (Ctrl+Click, group edits, the Delete / SelectAll / ClearStage / Save / Load / DeleteScene / Render requests, scene and group components)
+  - `History/StageEditHistoryComponent.h/.cpp`, `StageEditHistorySubsystem.h/.cpp`
+  - `Placement/StageSnappingComponent.h/.cpp` (`MovingWith`), `StagePlacementToolComponent.h` (`GetPreviewActor`), `Private/Placement/StagePlacementConsoleCommands.cpp`
+  - `Subsystems/StageSessionSubsystem.h/.cpp` (scene name, edit serial)
+  - `Actors/ModularBaseActor.h/.cpp` (`SetHighlightSuppressed`, id doc)
+  - `Settings/StageCraftUserSettings.h/.cpp` (render settings)
+  - `UI/StageStatusBarWidget.h/.cpp`, `UI/StageToolButton.h/.cpp` (`UStageChoiceButton`), `Private/UI/Tests/StageUITests.cpp`
+  - `Workspace/StageWorkspaceTypes.h/.cpp` (`Panel_Render`), `Private/Workspace/StageWorkspaceShell.cpp` (Default layout), `Private/Workspace/SStageWorkspaceMenuBar.h/.cpp` (File, Render, Edit Selection)
+  - `Private/History/Tests/StageHistoryTests.cpp` (batch tests)
+- Content (new): `Content/StageCraft/UI/Panels/DA_Panel_Render.uasset`, made headless by `Scripts/Content/create_render_panel_content.py`; its tag reads back as `StageCraft.Panel.Render`.
+- Scripts (new): `Scripts/Content/create_render_panel_content.py`.
+- Docs: `Docs/ADR/0004-selection-scenes-and-rendering.md` (new), `tasks/todo.md`, `STATE.md` (#25 commit hash, this entry).
+- No maps, input assets or Blueprints were changed.
+
+**Verification**
+- **Build note.** The Kmidden editor was open (Live Coding mutex), so builds used `-NoHotReloadFromIDE`; its MCP bridge was not used.
+- **Builds (Claude):** Editor Development, Game Development and Game Shipping all Succeeded with 0 errors and 0 warnings. Shipping proves the new dev console commands compile out.
+- **Automation (headless):** `StageCraft` filter, **20/20 passed**, rerun after the supersampling-budget change. New:
+  - `Selection.GroupTransform`: move, orbit, in-place scale, clamp, zero-scale axis, determinism.
+  - `History.Batch`: group delete undo/redo, all-or-nothing rollback on a part-way refusal, group move, missing member → Invalid.
+  - `Scene.Format`: round trip (ids, transforms, state bytes, label), corrupt / wrong format / future version, 8 kinds of damaged items dropped one by one, oversized state, clamping, duplicate ids, item cap.
+  - `Scene.Files`: names, list filtering and order, atomic save, load, missing, invalid name, damaged file kept, delete.
+  - `Render.Rules`: presets, supersample budget, internal sizes, warm-up frames, file names, watermark text, sanitising.
+  - `UI.StatusHint` extended for multi-selection.
+- **Standalone `-game`, scripted by Claude** (`L_StageTest`, simulated cursor; logs `Saved/Logs/R26_Run1`-`Run6.log`; 0 ensures, 0 errors):
+  - **Run1:** the Default layout has the Render tab; 4 panel definitions loaded. The screenshot shows the Render panel, the File/Render menus and the Ctrl+Click hint.
+  - **Run2, selection and batch:**
+    - Click Spot 101, Ctrl+Click Spot 102 → 2 selected (primary Spot 102). The status bar reads "2 items selected: the gizmo moves them together · Delete: remove all · Ctrl+Click: add / remove" (screenshot).
+    - Gizmo drag X → both moved +98.6 cm, recorded as one step "Transform 2 items"; undo/redo move both.
+    - Numeric Location on the primary (+101.4, +100, +100) → the follower moved by the same delta. Scale 2 → the follower is scaled 2 in place. Two undos restore both.
+    - Ctrl+Click toggles Spot 101 out and back in. Delete → "deleted 2 items", one step "Delete 2 items"; undo restores both with the same instance ids.
+    - Select All → 4. `ClearStage` without `confirm` → usage only; with `confirm` → 4 removed as "Clear Stage (4 items)"; undo restores all 4 with their ids.
+  - **Run2, scenes:** Save "Run26 A" → file written, session clean. Clear → unsaved. Load → 4 items with their saved ids and transforms, history cleared, clean. Loading a missing scene and saving as "bad/name" are refused with messages.
+  - **Run3:** after a restart, Load "Run26 A" replaced the level's 4 items with the saved 4 (same ids, moved positions). The file is readable JSON with tagged property state.
+  - **Renders** (RTX 3060 Ti 8 GB, shared with the open Kmidden editor). Job is total time; frame time is the average game frame while the job ran:
+
+    | Preset | Internal | Job | Frame time |
+    |---|---|---|---|
+    | 1080p Temporal Standard | 1920x1080 | 1.33 s | ~20 ms |
+    | Square FXAA Clean | 2160x2160 | 0.69 s | ~6 ms |
+    | 1080p Supersampled Cinematic | 3840x2160 | 2.17 s | ~28 ms |
+    | 4K Supersampled Cinematic (after the budget fix) | 3840x2160 | 2.80 s | ~13 ms |
+    | 4K Temporal Standard | 3840x2160 | 1.75 s | ~9 ms |
+    | Square Supersampled Clean | 2880x2880 | 1.27 s | ~11 ms |
+    | 1080p Off | 1920x1080 | 0.34 s | ~7 ms |
+
+    - About 50 frames ran during a 0.3 s 4K PNG encode, so the encode does not block the game thread.
+    - A second render during a job was refused ("A render is already in progress."). Closing the window mid-job cancelled it cleanly.
+    - **Bug found and fixed:** with the first supersampling budget (20 MP), 4K Supersampled Cinematic rendered at 5962x3354, ran out of video memory and dropped the app to ~1 fps (16 frames in 18 s). The budget is now one 4K frame (8.3 MP); the same preset then took 2.8 s at ~13 ms per frame.
+    - **Images checked by Claude:** the gizmo and selection overlay are absent although Spot 102 was selected; colours and gamma match the viewport; the image is opaque. The watermark footer reads e.g. "StageCraft 3D · Run26 A · 2026-10-08 17:46 · 1920×1080 · 4 items". The footer text was undersized at first; it is now sized from its measured height (Run6).
+- **Not verified (needs Gevor, by mouse and keyboard, Standalone Game via RunEditor.bat):**
+  - Physical Ctrl+Click on items (only the simulated path was driven).
+  - A real mouse gizmo drag of a group, and rotating a group with the gizmo (the orbit is unit-tested, not driven at runtime).
+  - The File, Edit (Selection, Clear Stage confirm) and Render menus by mouse; the Save As overwrite warning; Open Scene's "discard unsaved changes" submenu.
+  - Render panel clicks, Open Folder, and the status bar messages at your resolution.
+  - Renders on another GPU.
+  - Loading a scene that contains locked items (the refusal summary is not exercised: the test level has no locked items placed).
+- Status: **implemented, awaiting manual verification** of the items above.
+
+**Commit:** uncommitted (working tree).
+
+**Known issues / follow-ups**
+- **Banding in renders.** Wide smooth gradients (beam cones, back wall) band visibly in the Square framing, independent of Clean/Standard and of supersampling (A/B in Run5).
+  - The root cause is not established. Candidates: the 8-bit LDR capture path (no tonemapper dither), or the capture view's volumetric fog.
+  - Next step: compare with a viewport screenshot at the same framing, then capture HDR and quantise with dithering on the worker.
+- **No cancel button** for a running render (jobs take 0.3-3 s at the current budget).
+- **Group edits are not rule-checked per follower** (same as gizmo moves). Non-transform inspector edits apply to the primary only.
+- **No keyboard shortcuts** for Select All or Save: A and S belong to the higher-priority camera context.
+- **PIE has no File/Edit/Render menus or Render panel** (fixed HUD); the console commands work there.
+- **Square renders** keep the camera's horizontal field of view.
+- **Obsidian vault.** `S:\` is still unreachable on this machine; the design record is ADR 0004 in the repo.

@@ -13,4 +13,5 @@ namespace StageCraftTags
 	UE_DEFINE_GAMEPLAY_TAG_COMMENT(Panel_Inspector,	"StageCraft.Panel.Inspector",	"Parameter inspector for the selected item.");
 	UE_DEFINE_GAMEPLAY_TAG_COMMENT(Panel_FaderBank,	"StageCraft.Panel.FaderBank",	"Fader and encoder bank for the selected item.");
 	UE_DEFINE_GAMEPLAY_TAG_COMMENT(Panel_Library,		"StageCraft.Panel.Library",		"Item library: pick a catalog item to place.");
+	UE_DEFINE_GAMEPLAY_TAG_COMMENT(Panel_Render,		"StageCraft.Panel.Render",		"Render panel: high-resolution stills of the current view.");
 }

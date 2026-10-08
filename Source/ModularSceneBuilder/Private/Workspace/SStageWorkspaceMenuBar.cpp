@@ -4,6 +4,9 @@
 
 #include "Actors/ModularTransformGizmo.h"
 #include "Audio/StageAudioSubsystem.h"
+#include "HAL/FileManager.h"
+#include "HAL/PlatformProcess.h"
+#include "Components/SelectionComponent.h"
 #include "Engine/GameInstance.h"
 #include "Framework/Application/SlateApplication.h"
 #include "Framework/MultiBox/MultiBoxBuilder.h"
@@ -13,9 +16,14 @@
 #include "Placement/StagePlacementToolComponent.h"
 #include "Placement/StageSnappingComponent.h"
 #include "Player/ModularPlayerController.h"
+#include "Render/StageRenderSubsystem.h"
+#include "Scene/StageSceneComponent.h"
+#include "Scene/StageSceneStore.h"
+#include "Subsystems/StageSessionSubsystem.h"
 #include "Widgets/Input/SEditableTextBox.h"
 #include "Widgets/Input/SSlider.h"
 #include "Widgets/Layout/SBox.h"
+#include "Widgets/Text/STextBlock.h"
 #include "Workspace/StageLayoutStore.h"
 #include "Workspace/StageWorkspaceSubsystem.h"
 
@@ -31,8 +39,12 @@ void SStageWorkspaceMenuBar::Construct(const FArguments& InArgs, UStageWorkspace
 	Workspace = InWorkspace;
 
 	FMenuBarBuilder MenuBar(nullptr);
-	MenuBar.AddPullDownMenu(LOCTEXT("EditMenu", "Edit"), LOCTEXT("EditMenuTip", "Undo and redo, select or place items, choose the transform tool and snapping."),
+	MenuBar.AddPullDownMenu(LOCTEXT("FileMenu", "File"), LOCTEXT("FileMenuTip", "Save the stage as a scene, open or delete saved scenes."),
+		FNewMenuDelegate::CreateSP(this, &SStageWorkspaceMenuBar::FillFileMenu));
+	MenuBar.AddPullDownMenu(LOCTEXT("EditMenu", "Edit"), LOCTEXT("EditMenuTip", "Undo and redo, select, delete or clear items, place items, choose the transform tool and snapping."),
 		FNewMenuDelegate::CreateSP(this, &SStageWorkspaceMenuBar::FillEditMenu));
+	MenuBar.AddPullDownMenu(LOCTEXT("RenderMenu", "Render"), LOCTEXT("RenderMenuTip", "Render high-resolution stills of the current view."),
+		FNewMenuDelegate::CreateSP(this, &SStageWorkspaceMenuBar::FillRenderMenu));
 	MenuBar.AddPullDownMenu(LOCTEXT("WindowMenu", "Window"), LOCTEXT("WindowMenuTip", "Open, focus or close panels."),
 		FNewMenuDelegate::CreateSP(this, &SStageWorkspaceMenuBar::FillWindowMenu));
 	MenuBar.AddPullDownMenu(LOCTEXT("LayoutMenu", "Layout"), LOCTEXT("LayoutMenuTip", "Load, save and delete workspace layouts."),
@@ -58,6 +70,191 @@ UStageAudioSubsystem* SStageWorkspaceMenuBar::GetAudio() const
 	const UStageWorkspaceSubsystem* WorkspacePtr = Workspace.Get();
 	const UGameInstance* GameInstance = WorkspacePtr ? WorkspacePtr->GetGameInstance() : nullptr;
 	return GameInstance ? GameInstance->GetSubsystem<UStageAudioSubsystem>() : nullptr;
+}
+
+void SStageWorkspaceMenuBar::OpenFolder(const FString& Directory)
+{
+	IFileManager::Get().MakeDirectory(*Directory, /*Tree*/ true);
+	FPlatformProcess::ExploreFolder(*Directory);
+}
+
+void SStageWorkspaceMenuBar::FillFileMenu(FMenuBuilder& MenuBuilder)
+{
+	const TWeakObjectPtr<AModularPlayerController> WeakController = GetStageController();
+	const UStageSceneComponent* Scenes = WeakController.IsValid() ? WeakController->GetSceneFiles() : nullptr;
+	const UStageSessionSubsystem* Session = WeakController.IsValid() ? UWorld::GetSubsystem<UStageSessionSubsystem>(WeakController->GetWorld()) : nullptr;
+	if (!Scenes || !Session)
+	{
+		return;
+	}
+
+	const FString CurrentScene = Session->GetSceneName();
+	const bool bBusy = Scenes->IsBusy();
+	const bool bHasScenes = !Scenes->GetSceneNames().IsEmpty();
+
+	// The heading says what is open and whether it has unsaved changes, like a document title.
+	const FText Heading = CurrentScene.IsEmpty()
+		? (Session->IsDirty() ? LOCTEXT("UntitledDirty", "Untitled stage  (unsaved)") : LOCTEXT("Untitled", "Untitled stage"))
+		: FText::Format(Session->IsDirty() ? LOCTEXT("SceneDirty", "{0}  (unsaved changes)") : LOCTEXT("SceneClean", "{0}"), FText::FromString(CurrentScene));
+	MenuBuilder.BeginSection(TEXT("Scene"), Heading);
+	MenuBuilder.AddMenuEntry(
+		CurrentScene.IsEmpty() ? LOCTEXT("SaveScene", "Save Scene") : FText::Format(LOCTEXT("SaveSceneNamed", "Save \"{0}\""), FText::FromString(CurrentScene)),
+		LOCTEXT("SaveSceneTip", "Write the stage to its scene file. A stage that was never saved needs Save Scene As first."), FSlateIcon(),
+		FUIAction(
+			FExecuteAction::CreateLambda([WeakController, CurrentScene]() { if (WeakController.IsValid()) { WeakController->RequestSaveScene(CurrentScene); } }),
+			FCanExecuteAction::CreateLambda([bCanSave = !CurrentScene.IsEmpty() && !bBusy]() { return bCanSave; })));
+	MenuBuilder.AddSubMenu(LOCTEXT("SaveSceneAs", "Save Scene As..."),
+		LOCTEXT("SaveSceneAsTip", "Save every placed item (position, rotation, scale, settings) under a name."),
+		FNewMenuDelegate::CreateSP(this, &SStageWorkspaceMenuBar::FillSaveSceneAsMenu));
+	MenuBuilder.AddSubMenu(LOCTEXT("OpenScene", "Open Scene"),
+		LOCTEXT("OpenSceneTip", "Replace the stage with a saved scene."),
+		FNewMenuDelegate::CreateSP(this, &SStageWorkspaceMenuBar::FillOpenSceneMenu),
+		FUIAction(FExecuteAction(), FCanExecuteAction::CreateLambda([bCanOpen = bHasScenes && !bBusy]() { return bCanOpen; })),
+		NAME_None, EUserInterfaceActionType::Button);
+	MenuBuilder.AddSubMenu(LOCTEXT("DeleteScene", "Delete Scene"),
+		LOCTEXT("DeleteSceneTip", "Delete a saved scene file. The stage on screen is not changed."),
+		FNewMenuDelegate::CreateSP(this, &SStageWorkspaceMenuBar::FillDeleteSceneMenu),
+		FUIAction(FExecuteAction(), FCanExecuteAction::CreateLambda([bCanDelete = bHasScenes && !bBusy]() { return bCanDelete; })),
+		NAME_None, EUserInterfaceActionType::Button);
+	MenuBuilder.EndSection();
+
+	MenuBuilder.BeginSection(TEXT("SceneFolder"));
+	MenuBuilder.AddMenuEntry(LOCTEXT("OpenScenesFolder", "Open Scenes Folder"), FText::FromString(Scenes->GetScenesDirectory()), FSlateIcon(),
+		FUIAction(FExecuteAction::CreateLambda([Directory = Scenes->GetScenesDirectory()]() { OpenFolder(Directory); })));
+	MenuBuilder.EndSection();
+}
+
+void SStageWorkspaceMenuBar::FillSaveSceneAsMenu(FMenuBuilder& MenuBuilder)
+{
+	const AModularPlayerController* Controller = GetStageController();
+	const UStageSessionSubsystem* Session = Controller ? UWorld::GetSubsystem<UStageSessionSubsystem>(Controller->GetWorld()) : nullptr;
+	PendingSceneOverwrite.Reset();
+
+	const TSharedRef<SEditableTextBox> TextBox = SNew(SEditableTextBox)
+		.HintText(LOCTEXT("SaveSceneAsHint", "Scene name"))
+		.Text(Session ? FText::FromString(Session->GetSceneName()) : FText::GetEmpty())
+		.SelectAllTextWhenFocused(true)
+		.ClearKeyboardFocusOnCommit(false)
+		.OnTextCommitted(this, &SStageWorkspaceMenuBar::HandleSaveSceneAsCommitted);
+	SaveSceneAsTextBox = TextBox;
+
+	MenuBuilder.AddWidget(SNew(SBox).MinDesiredWidth(220.f)[TextBox], FText::GetEmpty(), /*bNoIndent*/ true);
+}
+
+void SStageWorkspaceMenuBar::HandleSaveSceneAsCommitted(const FText& Text, ETextCommit::Type CommitType)
+{
+	AModularPlayerController* Controller = GetStageController();
+	const UStageSceneComponent* Scenes = Controller ? Controller->GetSceneFiles() : nullptr;
+	const TSharedPtr<SEditableTextBox> TextBox = SaveSceneAsTextBox.Pin();
+	if (CommitType != ETextCommit::OnEnter || !Scenes || !TextBox.IsValid())
+	{
+		return;
+	}
+
+	const FString Name = Text.ToString().TrimStartAndEnd();
+	if (!FStageSceneStore::IsValidSceneName(Name))
+	{
+		TextBox->SetError(UStageSceneComponent::DescribeFailure(EStageSceneOperation::Save, EStageSceneResult::InvalidName, Name));
+		return;
+	}
+
+	// Replacing another saved scene loses it, so the first Enter on an existing name only warns.
+	const UStageSessionSubsystem* Session = UWorld::GetSubsystem<UStageSessionSubsystem>(Controller->GetWorld());
+	const bool bIsCurrentScene = Session && Session->GetSceneName().Equals(Name, ESearchCase::IgnoreCase);
+	if (Scenes->SceneExists(Name) && !bIsCurrentScene && !PendingSceneOverwrite.Equals(Name, ESearchCase::IgnoreCase))
+	{
+		PendingSceneOverwrite = Name;
+		TextBox->SetError(FText::Format(LOCTEXT("SceneExists", "\"{0}\" already exists. Press Enter again to replace it."), FText::FromString(Name)));
+		return;
+	}
+
+	PendingSceneOverwrite.Reset();
+	const EStageSceneResult Result = Controller->RequestSaveScene(Name);
+	if (Result == EStageSceneResult::Success)
+	{
+		FSlateApplication::Get().DismissAllMenus();
+	}
+	else
+	{
+		TextBox->SetError(UStageSceneComponent::DescribeFailure(EStageSceneOperation::Save, Result, Name));
+	}
+}
+
+void SStageWorkspaceMenuBar::FillOpenSceneMenu(FMenuBuilder& MenuBuilder)
+{
+	const TWeakObjectPtr<AModularPlayerController> WeakController = GetStageController();
+	const UStageSceneComponent* Scenes = WeakController.IsValid() ? WeakController->GetSceneFiles() : nullptr;
+	const UStageSessionSubsystem* Session = WeakController.IsValid() ? UWorld::GetSubsystem<UStageSessionSubsystem>(WeakController->GetWorld()) : nullptr;
+	if (!Scenes || !Session)
+	{
+		return;
+	}
+
+	const bool bDirty = Session->IsDirty();
+	for (const FString& Name : Scenes->GetSceneNames())
+	{
+		const FExecuteAction Open = FExecuteAction::CreateLambda([WeakController, Name]() { if (WeakController.IsValid()) { WeakController->RequestLoadScene(Name); } });
+		if (!bDirty)
+		{
+			MenuBuilder.AddMenuEntry(FText::FromString(Name), FText::Format(LOCTEXT("OpenSceneEntryTip", "Replace the stage with \"{0}\"."), FText::FromString(Name)),
+				FSlateIcon(), FUIAction(Open));
+			continue;
+		}
+
+		// Unsaved changes would be lost: opening asks for one more, explicit click.
+		MenuBuilder.AddSubMenu(FText::FromString(Name), FText::Format(LOCTEXT("OpenSceneDirtyTip", "The stage has unsaved changes. Opening \"{0}\" discards them."), FText::FromString(Name)),
+			FNewMenuDelegate::CreateLambda([Name, Open](FMenuBuilder& ConfirmMenu)
+			{
+				ConfirmMenu.AddMenuEntry(FText::Format(LOCTEXT("DiscardAndOpen", "Discard unsaved changes and open \"{0}\""), FText::FromString(Name)),
+					FText::GetEmpty(), FSlateIcon(), FUIAction(Open));
+			}));
+	}
+}
+
+void SStageWorkspaceMenuBar::FillDeleteSceneMenu(FMenuBuilder& MenuBuilder)
+{
+	const TWeakObjectPtr<AModularPlayerController> WeakController = GetStageController();
+	const UStageSceneComponent* Scenes = WeakController.IsValid() ? WeakController->GetSceneFiles() : nullptr;
+	if (!Scenes)
+	{
+		return;
+	}
+
+	for (const FString& Name : Scenes->GetSceneNames())
+	{
+		// A file deletion cannot be undone, so it takes a second, explicit click.
+		MenuBuilder.AddSubMenu(FText::FromString(Name), FText::Format(LOCTEXT("DeleteSceneEntryTip", "Delete the scene file \"{0}\"."), FText::FromString(Name)),
+			FNewMenuDelegate::CreateLambda([WeakController, Name](FMenuBuilder& ConfirmMenu)
+			{
+				ConfirmMenu.AddMenuEntry(FText::Format(LOCTEXT("DeleteSceneConfirm", "Delete \"{0}\" permanently"), FText::FromString(Name)), FText::GetEmpty(), FSlateIcon(),
+					FUIAction(FExecuteAction::CreateLambda([WeakController, Name]() { if (WeakController.IsValid()) { WeakController->RequestDeleteScene(Name); } })));
+			}));
+	}
+}
+
+void SStageWorkspaceMenuBar::FillRenderMenu(FMenuBuilder& MenuBuilder)
+{
+	const TWeakObjectPtr<AModularPlayerController> WeakController = GetStageController();
+	const UStageRenderSubsystem* Render = WeakController.IsValid() ? UWorld::GetSubsystem<UStageRenderSubsystem>(WeakController->GetWorld()) : nullptr;
+	if (!Render)
+	{
+		return;
+	}
+
+	const FStageRenderSettings Settings = Render->GetSettings();
+	const FIntPoint Size = StageRender::GetOutputSize(Settings.Resolution);
+	MenuBuilder.BeginSection(TEXT("Render"), FText::Format(LOCTEXT("RenderSection", "Render  ({0} x {1}, {2})"),
+		FText::AsNumber(Size.X), FText::AsNumber(Size.Y), StaticEnum<EStageRenderAntiAliasing>()->GetDisplayNameTextByValue(int64(Settings.AntiAliasing))));
+	MenuBuilder.AddMenuEntry(LOCTEXT("RenderImage", "Render Image"),
+		LOCTEXT("RenderImageTip", "Render the current view with the Render panel's settings. You can keep working while it renders."), FSlateIcon(),
+		FUIAction(
+			FExecuteAction::CreateLambda([WeakController]() { if (WeakController.IsValid()) { WeakController->RequestRender(); } }),
+			FCanExecuteAction::CreateLambda([bIdle = !Render->IsRendering()]() { return bIdle; })));
+	MenuBuilder.AddMenuEntry(LOCTEXT("RenderPanel", "Render Settings..."), LOCTEXT("RenderPanelTip", "Show the Render panel: resolution, anti-aliasing, post-processing, watermark."),
+		FSlateIcon(), FUIAction(FExecuteAction::CreateSP(this, &SStageWorkspaceMenuBar::ShowPanel, FGameplayTag(StageCraftTags::Panel_Render))));
+	MenuBuilder.AddMenuEntry(LOCTEXT("OpenRendersFolder", "Open Renders Folder"), FText::FromString(Render->GetOutputDirectory()), FSlateIcon(),
+		FUIAction(FExecuteAction::CreateLambda([Directory = Render->GetOutputDirectory()]() { OpenFolder(Directory); })));
+	MenuBuilder.EndSection();
 }
 
 void SStageWorkspaceMenuBar::FillEditMenu(FMenuBuilder& MenuBuilder)
@@ -90,6 +287,8 @@ void SStageWorkspaceMenuBar::FillEditMenu(FMenuBuilder& MenuBuilder)
 				FCanExecuteAction::CreateLambda([bCanRedo = !RedoName.IsEmpty()]() { return bCanRedo; })));
 	}
 	MenuBuilder.EndSection();
+
+	FillSelectionSection(MenuBuilder, WeakController);
 
 	MenuBuilder.BeginSection(TEXT("EditMode"), LOCTEXT("ModeSection", "Mode"));
 	const auto AddModeEntry = [&MenuBuilder, WeakController](EStageEditMode Mode, const FText& Label, const FText& Tip)
@@ -159,6 +358,56 @@ void SStageWorkspaceMenuBar::FillEditMenu(FMenuBuilder& MenuBuilder)
 				return SnappingComponent && SnappingComponent->IsSnapToItemsEnabled();
 			})),
 		NAME_None, EUserInterfaceActionType::ToggleButton);
+	MenuBuilder.EndSection();
+}
+
+void SStageWorkspaceMenuBar::FillSelectionSection(FMenuBuilder& MenuBuilder, const TWeakObjectPtr<AModularPlayerController>& WeakController)
+{
+	const USelectionComponent* SelectionComponent = WeakController->GetSelection();
+	const UStageSessionSubsystem* Session = UWorld::GetSubsystem<UStageSessionSubsystem>(WeakController->GetWorld());
+	const int32 SelectedCount = SelectionComponent ? SelectionComponent->GetSelectionCount() : 0;
+	const int32 PlacedCount = Session ? Session->GetStats().PlacedItems : 0;
+
+	MenuBuilder.BeginSection(TEXT("Selection"), LOCTEXT("SelectionSection", "Selection"));
+	MenuBuilder.AddMenuEntry(LOCTEXT("SelectAll", "Select All"),
+		LOCTEXT("SelectAllTip", "Select every placed item. Ctrl+Click adds or removes single items."), FSlateIcon(),
+		FUIAction(
+			FExecuteAction::CreateLambda([WeakController]() { if (WeakController.IsValid()) { WeakController->RequestSelectAll(); } }),
+			FCanExecuteAction::CreateLambda([PlacedCount]() { return PlacedCount > 0; })));
+	MenuBuilder.AddMenuEntry(LOCTEXT("DeselectAll", "Deselect All  (Esc)"), FText::GetEmpty(), FSlateIcon(),
+		FUIAction(
+			FExecuteAction::CreateLambda([WeakController]()
+			{
+				if (USelectionComponent* Target = WeakController.IsValid() ? WeakController->GetSelection() : nullptr)
+				{
+					Target->ClearSelection();
+				}
+			}),
+			FCanExecuteAction::CreateLambda([SelectedCount]() { return SelectedCount > 0; })));
+	MenuBuilder.AddMenuEntry(
+		SelectedCount > 1 ? FText::Format(LOCTEXT("DeleteSelectedN", "Delete {0} Selected Items  (Delete)"), FText::AsNumber(SelectedCount))
+			: LOCTEXT("DeleteSelected", "Delete Selected  (Delete)"),
+		LOCTEXT("DeleteSelectedTip", "Remove the selected items as one step; Ctrl+Z brings them back."), FSlateIcon(),
+		FUIAction(
+			FExecuteAction::CreateLambda([WeakController]() { if (WeakController.IsValid()) { WeakController->RequestDeleteSelection(); } }),
+			FCanExecuteAction::CreateLambda([SelectedCount]() { return SelectedCount > 0; })));
+
+	// Clearing asks first: the confirmation is a submenu, so one stray click can never wipe the stage.
+	MenuBuilder.AddSubMenu(LOCTEXT("ClearStage", "Clear Stage..."),
+		LOCTEXT("ClearStageTip", "Remove every placed item. You are asked to confirm, and Ctrl+Z restores the stage."),
+		FNewMenuDelegate::CreateLambda([WeakController, PlacedCount](FMenuBuilder& ConfirmMenu)
+		{
+			ConfirmMenu.AddWidget(SNew(SBox).MaxDesiredWidth(280.f)
+				[
+					SNew(STextBlock)
+					.AutoWrapText(true)
+					.Text(FText::Format(LOCTEXT("ClearStageWarning", "This removes all {0} placed items from the stage. You can undo it with Ctrl+Z."), FText::AsNumber(PlacedCount)))
+				], FText::GetEmpty(), /*bNoIndent*/ true);
+			ConfirmMenu.AddMenuEntry(FText::Format(LOCTEXT("ClearStageConfirm", "Clear {0} Items"), FText::AsNumber(PlacedCount)), FText::GetEmpty(), FSlateIcon(),
+				FUIAction(FExecuteAction::CreateLambda([WeakController]() { if (WeakController.IsValid()) { WeakController->RequestClearStage(); } })));
+		}),
+		FUIAction(FExecuteAction(), FCanExecuteAction::CreateLambda([PlacedCount]() { return PlacedCount > 0; })),
+		NAME_None, EUserInterfaceActionType::Button);
 	MenuBuilder.EndSection();
 }
 
@@ -337,6 +586,15 @@ void SStageWorkspaceMenuBar::TogglePanel(FGameplayTag PanelTag)
 		WorkspacePtr->ClosePanel(PanelTag);
 	}
 	else
+	{
+		WorkspacePtr->OpenPanel(PanelTag);
+	}
+}
+
+void SStageWorkspaceMenuBar::ShowPanel(FGameplayTag PanelTag)
+{
+	// Opens the panel, or brings it to the front if it is already open somewhere.
+	if (UStageWorkspaceSubsystem* WorkspacePtr = Workspace.Get())
 	{
 		WorkspacePtr->OpenPanel(PanelTag);
 	}

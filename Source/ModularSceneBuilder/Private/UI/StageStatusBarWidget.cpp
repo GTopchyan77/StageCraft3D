@@ -4,6 +4,7 @@
 
 #include "Blueprint/WidgetTree.h"
 #include "Components/Border.h"
+#include "Components/SelectionComponent.h"
 #include "Components/HorizontalBox.h"
 #include "Components/HorizontalBoxSlot.h"
 #include "Components/Image.h"
@@ -18,6 +19,8 @@
 #include "Placement/StagePlacementToolComponent.h"
 #include "Player/ModularPlayerController.h"
 #include "Player/StageCameraPawn.h"
+#include "Render/StageRenderSubsystem.h"
+#include "Scene/StageSceneComponent.h"
 #include "Subsystems/StageEconomySubsystem.h"
 #include "TimerManager.h"
 #include "UI/StageCraftUITheme.h"
@@ -29,7 +32,7 @@
 
 namespace StageStatusBar
 {
-	FText MakeHint(EStageEditMode Mode, const FText& ArmedItemName)
+	FText MakeHint(EStageEditMode Mode, const FText& ArmedItemName, int32 SelectedCount)
 	{
 		if (Mode == EStageEditMode::Place)
 		{
@@ -37,9 +40,14 @@ namespace StageStatusBar
 				? LOCTEXT("PlaceNoItem", "Pick an item in the Library to place it   ·   Esc or P: back to Select")
 				: FText::Format(LOCTEXT("PlaceItem", "Placing {0}: each click places a copy   ·   Esc or P: finish"), ArmedItemName);
 		}
+		if (SelectedCount > 1)
+		{
+			return FText::Format(LOCTEXT("SelectGroup", "{0} items selected: the gizmo moves them together   ·   Delete: remove all   ·   Ctrl+Click: add / remove"),
+				FText::AsNumber(SelectedCount));
+		}
 		return ArmedItemName.IsEmpty()
-			? LOCTEXT("SelectNoItem", "Click an item to select it   ·   Space: Move / Rotate / Scale   ·   Right mouse + WASD: fly")
-			: FText::Format(LOCTEXT("SelectItem", "Click an item to select it   ·   Space: Move / Rotate / Scale   ·   P: place {0}"), ArmedItemName);
+			? LOCTEXT("SelectNoItem", "Click an item to select it   ·   Ctrl+Click: select several   ·   Space: Move / Rotate / Scale   ·   Right mouse + WASD: fly")
+			: FText::Format(LOCTEXT("SelectItem", "Click an item to select it   ·   Ctrl+Click: select several   ·   Space: Move / Rotate / Scale   ·   P: place {0}"), ArmedItemName);
 	}
 }
 
@@ -160,6 +168,25 @@ void UStageStatusBarWidget::BindSources()
 		History = HistorySubsystem;
 		HistorySubsystem->OnHistoryChanged.AddUniqueDynamic(this, &ThisClass::HandleHistoryChanged);
 	}
+
+	if (USelectionComponent* SelectionComponent = OwningController->GetSelection())
+	{
+		Selection = SelectionComponent;
+		SelectionComponent->OnSelectionSetChanged.AddUniqueDynamic(this, &ThisClass::HandleSelectionSetChanged);
+	}
+
+	if (UStageSceneComponent* Scenes = OwningController->GetSceneFiles())
+	{
+		SceneFiles = Scenes;
+		Scenes->OnSceneOperationFinished.AddUniqueDynamic(this, &ThisClass::HandleSceneOperationFinished);
+	}
+
+	if (UStageRenderSubsystem* RenderSubsystem = UWorld::GetSubsystem<UStageRenderSubsystem>(GetWorld()))
+	{
+		Render = RenderSubsystem;
+		RenderSubsystem->OnRenderStateChanged.AddUniqueDynamic(this, &ThisClass::HandleRenderStateChanged);
+		RenderSubsystem->OnRenderFinished.AddUniqueDynamic(this, &ThisClass::HandleRenderFinished);
+	}
 }
 
 void UStageStatusBarWidget::UnbindSources()
@@ -182,12 +209,28 @@ void UStageStatusBarWidget::UnbindSources()
 	{
 		HistorySubsystem->OnHistoryChanged.RemoveDynamic(this, &ThisClass::HandleHistoryChanged);
 	}
+	if (USelectionComponent* SelectionComponent = Selection.Get())
+	{
+		SelectionComponent->OnSelectionSetChanged.RemoveDynamic(this, &ThisClass::HandleSelectionSetChanged);
+	}
+	if (UStageSceneComponent* Scenes = SceneFiles.Get())
+	{
+		Scenes->OnSceneOperationFinished.RemoveDynamic(this, &ThisClass::HandleSceneOperationFinished);
+	}
+	if (UStageRenderSubsystem* RenderSubsystem = Render.Get())
+	{
+		RenderSubsystem->OnRenderStateChanged.RemoveDynamic(this, &ThisClass::HandleRenderStateChanged);
+		RenderSubsystem->OnRenderFinished.RemoveDynamic(this, &ThisClass::HandleRenderFinished);
+	}
 	BindCameraPawn(nullptr);
 
 	Controller.Reset();
 	PlacementTool.Reset();
 	Economy.Reset();
 	History.Reset();
+	Selection.Reset();
+	SceneFiles.Reset();
+	Render.Reset();
 }
 
 void UStageStatusBarWidget::BindCameraPawn(APawn* Pawn)
@@ -227,7 +270,8 @@ void UStageStatusBarWidget::RefreshMode()
 	}
 	if (HintText)
 	{
-		HintText->SetText(StageStatusBar::MakeHint(Mode, ArmedName));
+		const USelectionComponent* SelectionComponent = Selection.Get();
+		HintText->SetText(StageStatusBar::MakeHint(Mode, ArmedName, SelectionComponent ? SelectionComponent->GetSelectionCount() : 0));
 	}
 }
 
@@ -299,6 +343,40 @@ void UStageStatusBarWidget::HandleHistoryChanged(EStageHistoryChange Change, con
 	{
 		ShowMessage(FText::Format(LOCTEXT("Redone", "Redo: {0}"), Description), EMessageSeverity::Info);
 	}
+}
+
+void UStageStatusBarWidget::HandleSelectionSetChanged(int32 Count)
+{
+	RefreshMode();
+}
+
+void UStageStatusBarWidget::HandleSceneOperationFinished(const FStageSceneOperationResult& Result)
+{
+	// Failures arrive through the controller's OnRequestRejected (with the error cue); successes are announced here.
+	if (Result.IsSuccess())
+	{
+		ShowMessage(Result.Message, Result.SkippedCount > 0 ? EMessageSeverity::Warning : EMessageSeverity::Info);
+	}
+}
+
+void UStageStatusBarWidget::HandleRenderStateChanged(EStageRenderState NewState)
+{
+	const UStageRenderSubsystem* RenderSubsystem = Render.Get();
+	if (NewState == EStageRenderState::Capturing && RenderSubsystem)
+	{
+		const FIntPoint Size = StageRender::GetOutputSize(RenderSubsystem->GetSettings().Resolution);
+		ShowMessage(FText::Format(LOCTEXT("Rendering", "Rendering {0} x {1}..."), FText::AsNumber(Size.X), FText::AsNumber(Size.Y)), EMessageSeverity::Info);
+	}
+}
+
+void UStageStatusBarWidget::HandleRenderFinished(const FStageRenderResult& Result)
+{
+	FNumberFormattingOptions OneDecimal;
+	OneDecimal.SetMinimumFractionalDigits(1).SetMaximumFractionalDigits(1);
+	ShowMessage(Result.bSucceeded
+			? FText::Format(LOCTEXT("Rendered", "{0}  ({1} s)"), Result.Message, FText::AsNumber(Result.Seconds, &OneDecimal))
+			: Result.Message,
+		Result.bSucceeded ? EMessageSeverity::Info : EMessageSeverity::Warning);
 }
 
 void UStageStatusBarWidget::HandleFlySpeedChanged(float NewFlySpeed)

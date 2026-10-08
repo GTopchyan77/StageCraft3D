@@ -9,6 +9,7 @@
 #if WITH_DEV_AUTOMATION_TESTS
 
 #include "Data/BaseItemData.h"
+#include "History/StageBatchCommand.h"
 #include "History/StageCommandHistory.h"
 #include "History/StageItemCommands.h"
 #include "History/StageItemSnapshot.h"
@@ -24,6 +25,8 @@ namespace StageHistoryTests
 	public:
 		TMap<FGuid, FStageItemSnapshot> Items;
 		bool bRefuseRestores = false;
+		/** When set, restores succeed this many more times and are then refused (a session limit reached part-way). */
+		TOptional<int32> RestoresLeft;
 
 		virtual bool CaptureItem(const FGuid& InstanceId, FStageItemSnapshot& OutSnapshot) const override
 		{
@@ -41,9 +44,13 @@ namespace StageHistoryTests
 			{
 				return EStageCommandResult::Invalid;
 			}
-			if (bRefuseRestores)
+			if (bRefuseRestores || (RestoresLeft.IsSet() && RestoresLeft.GetValue() <= 0))
 			{
 				return EStageCommandResult::Refused;
+			}
+			if (RestoresLeft.IsSet())
+			{
+				RestoresLeft = RestoresLeft.GetValue() - 1;
 			}
 			Items.Add(Snapshot.InstanceId, Snapshot);
 			return EStageCommandResult::Succeeded;
@@ -255,6 +262,70 @@ bool FStageHistoryItemCommandsTest::RunTest(const FString& Parameters)
 	NoAsset.Item.Reset();
 	FStageDeleteItemCommand OrphanDelete(NoAsset);
 	TestEqual(TEXT("Restore without a catalog item is Invalid"), Str(OrphanDelete.Undo(Editor)), Str(EStageCommandResult::Invalid));
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FStageHistoryBatchTest, "StageCraft.History.Batch", StageHistoryTests::Flags)
+
+bool FStageHistoryBatchTest::RunTest(const FString& Parameters)
+{
+	using namespace StageHistoryTests;
+
+	FFakeItemEditor Editor;
+	FStageCommandHistory History;
+	const FStageItemSnapshot A = MakeItem(TEXT("A"), FVector(0, 0, 0));
+	const FStageItemSnapshot B = MakeItem(TEXT("B"), FVector(100, 0, 0));
+	const FStageItemSnapshot C = MakeItem(TEXT("C"), FVector(200, 0, 0));
+	for (const FStageItemSnapshot& Item : { A, B, C })
+	{
+		Editor.Items.Add(Item.InstanceId, Item);
+	}
+
+	// A multi-delete as the history component records it: remove all, then one batch of delete commands.
+	TArray<TSharedRef<IStageEditCommand>> Deletes;
+	for (const FStageItemSnapshot& Item : { A, B, C })
+	{
+		Editor.RemoveItem(Item.InstanceId);
+		Deletes.Add(MakeShared<FStageDeleteItemCommand>(Item));
+	}
+	History.Record(MakeShared<FStageBatchCommand>(FText::FromString(TEXT("Delete 3 items")), MoveTemp(Deletes)));
+	TestEqual(TEXT("One step for the whole selection"), History.GetUndoCount(), 1);
+	TestEqual(TEXT("Batch description"), History.GetUndoDescription().ToString(), FString(TEXT("Delete 3 items")));
+
+	TestEqual(TEXT("Undo restores the group"), Str(History.Undo(Editor)), Str(EStageCommandResult::Succeeded));
+	TestEqual(TEXT("All three are back"), Editor.Items.Num(), 3);
+	TestEqual(TEXT("Redo deletes the group"), Str(History.Redo(Editor)), Str(EStageCommandResult::Succeeded));
+	TestEqual(TEXT("All three are gone"), Editor.Items.Num(), 0);
+
+	// All or nothing: the rules allow only two restores (a session item limit reached part-way).
+	Editor.RestoresLeft = 2;
+	TestEqual(TEXT("Partial restore is refused"), Str(History.Undo(Editor)), Str(EStageCommandResult::Refused));
+	TestEqual(TEXT("The items restored before the refusal are removed again"), Editor.Items.Num(), 0);
+	TestEqual(TEXT("The refused step stays undoable"), History.GetUndoCount(), 1);
+	Editor.RestoresLeft.Reset();
+	TestEqual(TEXT("Retry once allowed"), Str(History.Undo(Editor)), Str(EStageCommandResult::Succeeded));
+	TestEqual(TEXT("Everything restored"), Editor.Items.Num(), 3);
+
+	// A group move: one step that moves every item back and forth together.
+	const FTransform MovedA(FVector(0, 50, 0));
+	const FTransform MovedB(FVector(100, 50, 0));
+	Editor.SetItemTransform(A.InstanceId, MovedA);
+	Editor.SetItemTransform(B.InstanceId, MovedB);
+	TArray<TSharedRef<IStageEditCommand>> Moves;
+	Moves.Add(MakeShared<FStageTransformItemCommand>(A.InstanceId, FText::FromString(TEXT("A")), A.Transform, MovedA));
+	Moves.Add(MakeShared<FStageTransformItemCommand>(B.InstanceId, FText::FromString(TEXT("B")), B.Transform, MovedB));
+	History.Record(MakeShared<FStageBatchCommand>(FText::FromString(TEXT("Transform 2 items")), MoveTemp(Moves)));
+	TestEqual(TEXT("Undo group move"), Str(History.Undo(Editor)), Str(EStageCommandResult::Succeeded));
+	TestTrue(TEXT("A back"), Editor.Items[A.InstanceId].Transform.Equals(A.Transform));
+	TestTrue(TEXT("B back"), Editor.Items[B.InstanceId].Transform.Equals(B.Transform));
+	TestEqual(TEXT("Redo group move"), Str(History.Redo(Editor)), Str(EStageCommandResult::Succeeded));
+	TestTrue(TEXT("A moved again"), Editor.Items[A.InstanceId].Transform.Equals(MovedA));
+	TestTrue(TEXT("B moved again"), Editor.Items[B.InstanceId].Transform.Equals(MovedB));
+
+	// One member vanished outside the history: the whole step is Invalid and the others are left as they were.
+	Editor.Items.Remove(B.InstanceId);
+	TestEqual(TEXT("Group step with a missing item is Invalid"), Str(History.Undo(Editor)), Str(EStageCommandResult::Invalid));
+	TestTrue(TEXT("The surviving item is left exactly as the step found it"), Editor.Items[A.InstanceId].Transform.Equals(MovedA));
 	return true;
 }
 

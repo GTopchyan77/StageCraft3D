@@ -22,6 +22,7 @@ void UStageCraftUserSettings::SetToDefaults()
 	Super::SetToDefaults();
 	ResetAudioToDefaults();
 	bSnapToItems = true;
+	RenderSettings = FStageRenderSettings();
 }
 
 void UStageCraftUserSettings::LoadSettings(bool bForceReload)
@@ -33,6 +34,7 @@ void UStageCraftUserSettings::LoadSettings(bool bForceReload)
 		ResetAudioToDefaults();
 	}
 	SanitizeAudio();
+	RenderSettings = StageRender::Sanitize(RenderSettings);
 }
 
 bool UStageCraftUserSettings::SetMasterVolume(float Volume)
@@ -62,6 +64,14 @@ bool UStageCraftUserSettings::SetSnapToItemsEnabled(bool bEnabled)
 {
 	const bool bChanged = bSnapToItems != bEnabled;
 	bSnapToItems = bEnabled;
+	return bChanged;
+}
+
+bool UStageCraftUserSettings::SetRenderSettings(const FStageRenderSettings& Settings)
+{
+	const FStageRenderSettings Sanitized = StageRender::Sanitize(Settings);
+	const bool bChanged = !(RenderSettings == Sanitized);
+	RenderSettings = Sanitized;
 	return bChanged;
 }
 

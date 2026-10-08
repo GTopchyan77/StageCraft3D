@@ -36,6 +36,12 @@ public:
 	EStageCommandResult Undo(IStageItemEditor& Editor);
 	EStageCommandResult Redo(IStageItemEditor& Editor);
 
+	/**
+	 * Forgets every step. Called when the whole stage is replaced (a scene file was loaded): the recorded steps name
+	 * items of the previous stage and must not be applied to the new one. Broadcasts Cleared. Idempotent.
+	 */
+	void ClearHistory();
+
 	UFUNCTION(BlueprintPure, Category = "StageCraft|History")
 	bool CanUndo() const { return History.CanUndo(); }
 

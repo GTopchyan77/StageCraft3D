@@ -8,9 +8,19 @@
 #include "Economy/StageEconomyTypes.h"
 #include "History/StageEditCommand.h"
 #include "Placement/StagePlacementTypes.h"
+#include "Scene/StageSceneTypes.h"
 #include "ModularPlayerController.generated.h"
 
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FOnStageRequestRejected, const FStageEconomyResultInfo&, Result);
+
+/** What a left click on a stage item does to the selection. */
+enum class EStageSelectionClick : uint8
+{
+	/** Plain click: the item becomes the only selection. */
+	Replace,
+	/** Ctrl+Click: the item is added to the selection, or removed if it was already in it. */
+	Toggle,
+};
 
 /**
  * Stage editing controller. Its only jobs are Enhanced Input, cursor tracing and deciding which
@@ -25,7 +35,9 @@ DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FOnStageRequestRejected, const FStag
  *  - Left, Place mode: places exactly one armed item where the ghost shows it; Place mode stays active for the next copy.
  *    Holding the button never places more.
  *  - Left, Select mode: gizmo handle (drag) > placed item (select; it never follows the mouse) > empty
- *    (deselect). Ignored entirely while the right button is held.
+ *    (deselect). Ctrl+Click adds an item to the selection or removes it, and never deselects on empty space.
+ *    A gizmo drag or numeric transform edit of one selected item moves the whole selection with it
+ *    (UStageGroupTransformComponent). Ignored entirely while the right button is held.
  *  - Right: navigation only. While held: mouse = look, W/S = forward/back along the view, A/D =
  *    strafe, E/Q = straight up/down world Z. It never selects, places or deletes, and is ignored
  *    while a left-button drag is in progress. Cursor hide/capture/restore is done by
@@ -33,7 +45,7 @@ DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FOnStageRequestRejected, const FStag
  *  - Wheel: fly speed, with or without the right button held. It scales every fly axis alike.
  *
  * Keys: P toggles Place mode, Esc leaves Place mode (or, in Select mode, deselects and disarms),
- * Delete removes the selected item, Space cycles the gizmo Move -> Rotate -> Scale, Ctrl+Z undoes and
+ * Delete removes every selected item (one undo step), Space cycles the gizmo Move -> Rotate -> Scale, Ctrl+Z undoes and
  * Ctrl+Y / Ctrl+Shift+Z redo (text fields keep these keys while they have focus).
  *
  * The placement preview follows the cursor without any tick: cursor moves (viewport client), camera
@@ -73,6 +85,12 @@ public:
 
 	UFUNCTION(BlueprintPure, Category = "StageCraft")
 	class UStageSnappingComponent* GetSnapping() const { return Snapping; }
+
+	UFUNCTION(BlueprintPure, Category = "StageCraft")
+	class UStageGroupTransformComponent* GetGroupTransform() const { return GroupTransform; }
+
+	UFUNCTION(BlueprintPure, Category = "StageCraft")
+	class UStageSceneComponent* GetSceneFiles() const { return SceneFiles; }
 
 	UFUNCTION(BlueprintPure, Category = "StageCraft|UI")
 	class UUserWidget* GetHUDWidget() const { return HUDWidget; }
@@ -142,6 +160,51 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "StageCraft|Requests")
 	EStageCommandResult RequestRedo();
 
+	/**
+	 * Deletes every selected item as one undoable step (Delete key, Edit menu). Ignored during a gizmo drag or camera
+	 * navigation. Returns how many items were deleted.
+	 */
+	UFUNCTION(BlueprintCallable, Category = "StageCraft|Requests")
+	int32 RequestDeleteSelection();
+
+	/** Selects every placed item (Edit > Select All). Leaves Place mode first, like any selection. Same guards as delete. */
+	UFUNCTION(BlueprintCallable, Category = "StageCraft|Requests")
+	void RequestSelectAll();
+
+	/**
+	 * Removes every placed item as one undoable step. The caller must have asked the user to confirm (the Edit menu's
+	 * Clear Stage does); Ctrl+Z restores the whole stage. Same guards as delete. Returns how many items were removed.
+	 */
+	UFUNCTION(BlueprintCallable, Category = "StageCraft|Requests")
+	int32 RequestClearStage();
+
+	/**
+	 * Saves the stage as Name (File > Save / Save As), replacing a scene of that name: the caller confirms an overwrite.
+	 * Returns Success when the save started; refusals and failures are reported on OnRequestRejected, success on the scene
+	 * component's OnSceneOperationFinished.
+	 */
+	UFUNCTION(BlueprintCallable, Category = "StageCraft|Requests")
+	EStageSceneResult RequestSaveScene(const FString& Name);
+
+	/**
+	 * Replaces the stage with the saved scene Name (File > Open). Unsaved changes are lost and the undo history is cleared,
+	 * so the caller confirms first when the stage is dirty. Ignored during a gizmo drag or camera navigation. Reported like Save.
+	 */
+	UFUNCTION(BlueprintCallable, Category = "StageCraft|Requests")
+	EStageSceneResult RequestLoadScene(const FString& Name);
+
+	/** Deletes the saved scene Name from disk (the caller confirms). The stage on screen is not changed. Reported like Save. */
+	UFUNCTION(BlueprintCallable, Category = "StageCraft|Requests")
+	EStageSceneResult RequestDeleteScene(const FString& Name);
+
+	/**
+	 * Renders a still image of the current view with the user's render settings (Render panel, Render menu), leaving out
+	 * the gizmo, the placement ghost and selection overlays. Returns true when the render started; the image arrives on
+	 * UStageRenderSubsystem::OnRenderFinished. A refusal (already rendering) is reported on OnRequestRejected.
+	 */
+	UFUNCTION(BlueprintCallable, Category = "StageCraft|Requests")
+	bool RequestRender();
+
 	/** Every refused request (UI toasts, shop prompts, error cue). */
 	UPROPERTY(BlueprintAssignable, Category = "StageCraft|Requests")
 	FOnStageRequestRejected OnRequestRejected;
@@ -151,7 +214,7 @@ public:
 	// the mouse, at a simulated cursor position in viewport pixels. Compiled out of Shipping.
 	void DevSetSimulatedCursor(const FVector2D& ViewportPosition);
 	void DevClearSimulatedCursor();
-	void DevSimulatePrimaryPressed();
+	void DevSimulatePrimaryPressed(EStageSelectionClick Click = EStageSelectionClick::Replace);
 	void DevSimulatePrimaryHeld();
 	void DevSimulatePrimaryReleased();
 #endif
@@ -180,6 +243,12 @@ protected:
 
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Components")
 	TObjectPtr<class UStageSnappingComponent> Snapping = nullptr;
+
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Components")
+	TObjectPtr<class UStageGroupTransformComponent> GroupTransform = nullptr;
+
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Components")
+	TObjectPtr<class UStageSceneComponent> SceneFiles = nullptr;
 
 	/** Spawned once for the local player and re-targeted on every selection change. */
 	UPROPERTY(EditDefaultsOnly, Category = "StageCraft|Gizmo")
@@ -278,6 +347,12 @@ private:
 	void HandleArmedItemChanged(class UBaseItemData* ArmedItem);
 
 	UFUNCTION()
+	void HandleSceneOperationFinished(const FStageSceneOperationResult& Result);
+
+	/** Reports a scene request that could not start; returns Result for the caller to pass on. */
+	EStageSceneResult ReportSceneRefusal(EStageSceneOperation Operation, EStageSceneResult Result, const FString& Name);
+
+	UFUNCTION()
 	void HandlePossessedPawnChanged(APawn* PreviousPawn, APawn* NewPawn);
 
 	FStageEconomyResultInfo ValidatePlacement(const class UBaseItemData& Item);
@@ -308,15 +383,21 @@ private:
 	/** Shared by undo and redo: input guards, the step itself, and reporting a step that can never apply. */
 	EStageCommandResult RequestHistoryStep(bool bUndo);
 
+	/** Structural edits (delete, clear, undo) must not run under a gizmo drag or while the camera flies. */
+	bool IsBusyWithPointer() const;
+
+	/** Ctrl held (either key), read from Slate's modifier state so it is independent of Enhanced Input mappings. */
+	static EStageSelectionClick GetSelectionClickFromKeyboard();
+
 	void HandleCameraLook(const struct FInputActionValue& Value);
 	void HandleCameraMove(const struct FInputActionValue& Value);
 	void HandleCameraSpeed(const struct FInputActionValue& Value);
 
 	// Position-based handlers, shared by real input and the dev simulation.
-	void HandlePrimaryPressedAt(const FVector2D& ViewportPosition);
+	void HandlePrimaryPressedAt(const FVector2D& ViewportPosition, EStageSelectionClick Click);
 	void HandlePrimaryHeldAt(const FVector2D& ViewportPosition);
 	void HandlePrimaryReleased();
-	void SelectOrDeselectAt(const FVector2D& ViewportPosition);
+	void SelectOrDeselectAt(const FVector2D& ViewportPosition, EStageSelectionClick Click);
 
 	// Placement preview: event-driven, coalesced to one trace per frame.
 	void BindPreviewRefreshSources();

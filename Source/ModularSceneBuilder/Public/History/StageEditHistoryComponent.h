@@ -7,6 +7,13 @@
 #include "History/StageEditCommand.h"
 #include "StageEditHistoryComponent.generated.h"
 
+/** One item's transform before an edit; its current transform is the "after". Held only for the length of one edit. */
+struct FStageTransformChange
+{
+	TWeakObjectPtr<class AActor> Item;
+	FTransform Before = FTransform::Identity;
+};
+
 /**
  * The local player's link to the stage's undo history (Docs/ADR/0003-undo-redo-and-object-snapping.md):
  * it records what this player's tools did, and runs undo/redo against the live world.
@@ -42,10 +49,29 @@ public:
 	bool DeleteItem(AActor* Target);
 
 	/**
+	 * Deletes every stage item in Targets as ONE undoable step ("Delete 3 items"); undo brings them all back.
+	 * Anything that is not a deletable stage item is skipped. Returns how many items were deleted.
+	 */
+	UFUNCTION(BlueprintCallable, Category = "StageCraft|History")
+	int32 DeleteItems(const TArray<AActor*>& Targets);
+
+	/**
+	 * Removes every placed item from the stage as one undoable step ("Clear Stage (12 items)"). Callers confirm
+	 * with the user first (the Edit menu's Clear Stage asks); Ctrl+Z restores the whole stage. Returns the count removed.
+	 */
+	int32 ClearStage();
+
+	/**
 	 * Records that Target moved from Before to its current transform. Ignored when nothing changed
 	 * meaningfully or Target is not a stage item. Call once per finished edit, not per drag frame.
 	 */
 	void RecordTransformChange(AActor* Target, const FTransform& Before);
+
+	/**
+	 * Records one edit that moved several items (a group drag, a group numeric edit) as a single step. Items that did
+	 * not change meaningfully, or are no longer stage items, are left out; nothing is recorded if none changed.
+	 */
+	void RecordTransformChanges(TConstArrayView<FStageTransformChange> Changes);
 
 	EStageCommandResult Undo();
 	EStageCommandResult Redo();
@@ -64,6 +90,13 @@ private:
 	void HandleItemPlaced(class AModularBaseActor* PlacedActor);
 
 	void Record(TSharedRef<IStageEditCommand> Command) const;
+
+	/** Records Commands as one step: the command itself when there is one, a batch named Description otherwise. */
+	void RecordAsOneStep(TArray<TSharedRef<IStageEditCommand>> Commands, const FText& BatchDescription) const;
+
+	/** Deletes the deletable items among Targets and records them as one step named by MakeDescription(Count). */
+	int32 DeleteAsOneStep(const TArray<AActor*>& Targets, TFunctionRef<FText(int32)> MakeBatchDescription);
+
 	EStageCommandResult Step(bool bUndo);
 
 	UPROPERTY(Transient)

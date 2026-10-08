@@ -70,7 +70,7 @@ FStageSnapOutcome UStageSnappingComponent::SnapPlacement(const UBaseItemData& It
 	}
 
 	const FBox FreeBox = Mesh->GetBoundingBox().TransformBy(FreeTransform);
-	GatherNeighbourBounds(nullptr, PlacementNeighbours);
+	GatherNeighbourBounds({}, PlacementNeighbours);
 	const StageSnapMath::FSnapResult Snap = StageSnapMath::ComputeSnap(FreeBox, PlacementNeighbours, SnapDistance, StageSnapMath::HorizontalAxes);
 	NoteEngagement(Snap);
 	if (!Snap.AnySnapped())
@@ -84,12 +84,15 @@ FStageSnapOutcome UStageSnappingComponent::SnapPlacement(const UBaseItemData& It
 	return Outcome;
 }
 
-void UStageSnappingComponent::BeginMove(const AActor& Moving)
+void UStageSnappingComponent::BeginMove(const AActor& Moving, TConstArrayView<const AActor*> MovingWith)
 {
 	MovingActor = &Moving;
 	MoveStartLocation = Moving.GetActorLocation();
 	MoveStartBounds = GetItemBounds(Moving);
-	GatherNeighbourBounds(&Moving, MoveNeighbours);
+
+	TArray<const AActor*, TInlineAllocator<16>> Excluded(MovingWith);
+	Excluded.Add(&Moving);
+	GatherNeighbourBounds(Excluded, MoveNeighbours);
 	LastSnapSignature = 0;
 }
 
@@ -126,7 +129,7 @@ void UStageSnappingComponent::EndMove()
 	LastSnapSignature = 0;
 }
 
-void UStageSnappingComponent::GatherNeighbourBounds(const AActor* Exclude, TArray<FBox>& OutBounds) const
+void UStageSnappingComponent::GatherNeighbourBounds(TConstArrayView<const AActor*> Exclude, TArray<FBox>& OutBounds) const
 {
 	OutBounds.Reset();
 	const UStageSessionSubsystem* Session = UWorld::GetSubsystem<UStageSessionSubsystem>(GetWorld());
@@ -137,7 +140,7 @@ void UStageSnappingComponent::GatherNeighbourBounds(const AActor* Exclude, TArra
 
 	for (const AModularBaseActor* Item : Session->GetPlacedItems())
 	{
-		if (Item && Item != Exclude && !Item->IsActorBeingDestroyed())
+		if (Item && !Exclude.Contains(Item) && !Item->IsActorBeingDestroyed())
 		{
 			const FBox Bounds = GetItemBounds(*Item);
 			if (Bounds.IsValid)

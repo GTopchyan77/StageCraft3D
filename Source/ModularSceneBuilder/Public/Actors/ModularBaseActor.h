@@ -63,6 +63,12 @@ public:
 	bool IsSelected() const { return bIsSelected; }
 
 	/**
+	 * Hides the hover / selection overlay without changing the hover or selection state, and shows it again when
+	 * released. Used while a render captures the stage, so editor feedback never appears in a delivered image.
+	 */
+	void SetHighlightSuppressed(bool bSuppressed);
+
+	/**
 	 * Fires on select/deselect, and with bSelected = false when a selected actor is destroyed.
 	 * The gizmo (Phase 4) and details panel bind here instead of watching the actor.
 	 */
@@ -81,9 +87,9 @@ public:
 	FText GetInstanceLabel() const;
 
 	/**
-	 * Identity of this placed item for the current stage session. Undo history names items by it, so an item
-	 * that is deleted and restored is still the same item. Assigned at BeginPlay unless restored from a snapshot.
-	 * Not saved: the history is per session.
+	 * Identity of this placed item. Undo history names items by it, so an item that is deleted and restored is
+	 * still the same item. Assigned at BeginPlay unless restored from a snapshot; scene files store it, so an item
+	 * keeps its id across save and load.
 	 */
 	const FGuid& GetInstanceId() const { return InstanceId; }
 
@@ -179,4 +185,7 @@ private:
 
 	UPROPERTY(Transient, VisibleInstanceOnly, Category = "StageCraft|Interaction")
 	bool bIsSelected = false;
+
+	UPROPERTY(Transient)
+	bool bHighlightSuppressed = false;
 };

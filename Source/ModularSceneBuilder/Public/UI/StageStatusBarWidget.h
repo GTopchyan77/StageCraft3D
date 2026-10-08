@@ -7,23 +7,30 @@
 #include "Economy/StageEconomyTypes.h"
 #include "History/StageEditCommand.h"
 #include "Placement/StagePlacementTypes.h"
+#include "Render/StageRenderTypes.h"
+#include "Scene/StageSceneTypes.h"
 #include "StageStatusBarWidget.generated.h"
 
 namespace StageStatusBar
 {
-	/** The context hint for an edit mode: what a click does and which keys apply. ArmedItemName is empty when nothing is armed. */
-	MODULARSCENEBUILDER_API FText MakeHint(EStageEditMode Mode, const FText& ArmedItemName);
+	/**
+	 * The context hint for an edit mode: what a click does and which keys apply. ArmedItemName is empty when nothing is armed.
+	 * With more than one item selected (Select mode), the hint names the group actions instead.
+	 */
+	MODULARSCENEBUILDER_API FText MakeHint(EStageEditMode Mode, const FText& ArmedItemName, int32 SelectedCount = 0);
 }
 
 /**
  * The workspace status bar along the bottom of the main window, the place for instructions and feedback instead of
  * text drawn over the viewport:
  * - left: the edit mode as a chip (SELECT / PLACE) and a hint for what a click does now;
- * - right: a short-lived message: refused requests (warning color), purchases, camera speed changes, undo / redo.
+ * - right: a short-lived message: refused requests (warning color), purchases, camera speed changes, undo / redo,
+ *   scene saves and loads, render progress and results.
  *
  * A view only. It is owned by the local AModularPlayerController (CreateWidget) and binds, in NativeConstruct, to the
  * placement tool, the controller's OnRequestRejected, the economy's OnPurchaseCompleted and the camera pawn's
- * OnFlySpeedChanged and the edit history's OnHistoryChanged; everything is unbound in NativeDestruct. No tick: the message
+ * OnFlySpeedChanged, the edit history's OnHistoryChanged, the selection's OnSelectionSetChanged, the scene component's
+ * OnSceneOperationFinished and the render subsystem's state and results; everything is unbound in NativeDestruct. No tick: the message
  * clears on a one-shot timer.
  */
 UCLASS()
@@ -82,6 +89,18 @@ private:
 	UFUNCTION()
 	void HandleHistoryChanged(EStageHistoryChange Change, const FText& Description);
 
+	UFUNCTION()
+	void HandleSelectionSetChanged(int32 Count);
+
+	UFUNCTION()
+	void HandleSceneOperationFinished(const FStageSceneOperationResult& Result);
+
+	UFUNCTION()
+	void HandleRenderStateChanged(EStageRenderState NewState);
+
+	UFUNCTION()
+	void HandleRenderFinished(const FStageRenderResult& Result);
+
 	UPROPERTY(Transient)
 	TObjectPtr<class UBorder> ModeChip = nullptr;
 
@@ -99,6 +118,9 @@ private:
 	TWeakObjectPtr<class UStageEconomySubsystem> Economy;
 	TWeakObjectPtr<class AStageCameraPawn> CameraPawn;
 	TWeakObjectPtr<class UStageEditHistorySubsystem> History;
+	TWeakObjectPtr<class USelectionComponent> Selection;
+	TWeakObjectPtr<class UStageSceneComponent> SceneFiles;
+	TWeakObjectPtr<class UStageRenderSubsystem> Render;
 
 	FTimerHandle MessageTimer;
 };

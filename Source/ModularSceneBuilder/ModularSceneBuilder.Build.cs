@@ -12,7 +12,8 @@ public class ModularSceneBuilder : ModuleRules
 
 		// ApplicationCore: FDisplayMetrics and DPI scale (monitor work areas). Json: workspace layout files.
 		// DeveloperSettings: StageCraft Audio project settings (feedback cue table).
-		PrivateDependencyModuleNames.AddRange(new string[] { "ProceduralMeshComponent", "Slate", "SlateCore", "ApplicationCore", "Json", "DeveloperSettings" });
+		// RenderCore, RHI: render-thread GPU readback of still renders. ImageCore: resizing supersampled renders.
+		PrivateDependencyModuleNames.AddRange(new string[] { "ProceduralMeshComponent", "Slate", "SlateCore", "ApplicationCore", "Json", "DeveloperSettings", "RenderCore", "RHI", "ImageCore" });
 
 		// DMX Engine (Art-Net/sACN) is deliberately not a dependency of this module. A separate
 		// module that depends on "DMXProtocol" implements UStageDMXBridge (see STATE.md #9).

@@ -83,6 +83,19 @@ public:
 	UPROPERTY(BlueprintAssignable, Category = "StageCraft|Session")
 	FOnStageSessionDirtyChanged OnDirtyChanged;
 
+	/** The scene file this stage was last saved as or loaded from; empty while the stage has never been saved. */
+	UFUNCTION(BlueprintPure, Category = "StageCraft|Session")
+	const FString& GetSceneName() const { return SceneName; }
+
+	/** Called by UStageSceneComponent after a successful save or load, together with MarkClean. */
+	void SetSceneName(const FString& InSceneName);
+
+	/**
+	 * Increases with every edit that marks the session dirty. A save captures it when it starts and marks the session clean
+	 * only if it is unchanged when the file has been written, so edits made during a background save are never lost track of.
+	 */
+	uint64 GetEditSerial() const { return EditSerial; }
+
 protected:
 	//~ Begin UWorldSubsystem Interface
 	virtual bool DoesSupportWorldType(const EWorldType::Type WorldType) const override;
@@ -98,6 +111,8 @@ private:
 	TArray<TWeakObjectPtr<class AModularBaseActor>> Items;
 	FStageSessionRules Rules;
 	FStageSessionStats Stats;
+	FString SceneName;
+	uint64 EditSerial = 0;
 	bool bSessionStarted = false;
 	bool bDirty = false;
 };

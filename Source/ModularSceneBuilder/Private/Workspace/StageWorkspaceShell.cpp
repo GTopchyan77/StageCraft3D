@@ -85,8 +85,11 @@ TSharedRef<FTabManager::FLayout> FStageWorkspaceShell::MakeDefaultLayout()
 			)
 			->Split
 			(
+				// The Render panel shares the Inspector's column as a second tab; the Inspector stays in front.
 				FTabManager::NewStack()->SetSizeCoefficient(0.22f)
 				->AddTab(ToTabId(StageCraftTags::Panel_Inspector), ETabState::OpenedTab)
+				->AddTab(ToTabId(StageCraftTags::Panel_Render), ETabState::OpenedTab)
+				->SetForegroundTab(ToTabId(StageCraftTags::Panel_Inspector))
 			)
 		);
 }

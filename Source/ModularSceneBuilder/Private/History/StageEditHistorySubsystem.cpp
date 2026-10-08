@@ -30,6 +30,17 @@ void UStageEditHistorySubsystem::Record(TSharedRef<IStageEditCommand> Command)
 	}
 }
 
+void UStageEditHistorySubsystem::ClearHistory()
+{
+	if (!History.CanUndo() && !History.CanRedo())
+	{
+		return;
+	}
+	History.Clear();
+	UE_LOG(LogStageCraft, Log, TEXT("History: cleared."));
+	OnHistoryChanged.Broadcast(EStageHistoryChange::Cleared, FText::GetEmpty());
+}
+
 EStageCommandResult UStageEditHistorySubsystem::Undo(IStageItemEditor& Editor)
 {
 	return ApplyStep(/*bUndo*/ true, Editor);

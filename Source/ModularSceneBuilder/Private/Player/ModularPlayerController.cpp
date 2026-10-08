@@ -2,14 +2,17 @@
 
 #include "Player/ModularPlayerController.h"
 
+#include "Actors/ModularBaseActor.h"
 #include "Actors/ModularTransformGizmo.h"
 #include "Audio/StageEditorAudioFeedbackComponent.h"
 #include "Blueprint/UserWidget.h"
 #include "Components/SceneComponent.h"
 #include "Components/SelectionComponent.h"
 #include "Components/SpawnSystemComponent.h"
+#include "Components/StageGroupTransformComponent.h"
 #include "EnhancedInputComponent.h"
 #include "EnhancedInputSubsystems.h"
+#include "Framework/Application/SlateApplication.h"
 #include "Engine/Engine.h"
 #include "Engine/GameInstance.h"
 #include "Engine/LocalPlayer.h"
@@ -25,10 +28,13 @@
 #include "History/StageEditHistoryComponent.h"
 #include "Interaction/StageCraftCollision.h"
 #include "ModularSceneBuilder.h"
+#include "Placement/StagePlacementPreview.h"
 #include "Placement/StagePlacementToolComponent.h"
 #include "Placement/StageSnappingComponent.h"
 #include "Player/StageCameraPawn.h"
 #include "Player/StageCraftGameViewportClient.h"
+#include "Render/StageRenderSubsystem.h"
+#include "Scene/StageSceneComponent.h"
 #include "Subsystems/StageEconomySubsystem.h"
 #include "Subsystems/StageItemSubsystem.h"
 #include "Subsystems/StageSessionSubsystem.h"
@@ -68,6 +74,8 @@ AModularPlayerController::AModularPlayerController()
 	AudioFeedback = CreateDefaultSubobject<UStageEditorAudioFeedbackComponent>(TEXT("AudioFeedback"));
 	EditHistory = CreateDefaultSubobject<UStageEditHistoryComponent>(TEXT("EditHistory"));
 	Snapping = CreateDefaultSubobject<UStageSnappingComponent>(TEXT("Snapping"));
+	GroupTransform = CreateDefaultSubobject<UStageGroupTransformComponent>(TEXT("GroupTransform"));
+	SceneFiles = CreateDefaultSubobject<UStageSceneComponent>(TEXT("SceneFiles"));
 	GizmoClass = AModularTransformGizmo::StaticClass();
 }
 
@@ -121,6 +129,10 @@ void AModularPlayerController::BeginPlay()
 	PlacementTool->OnArmedItemChanged.AddUniqueDynamic(this, &ThisClass::HandleArmedItemChanged);
 	BindPreviewRefreshSources();
 
+	// Loading a scene asks the same rules per item, silently, and reports one summary instead of a refusal per item.
+	SceneFiles->PlacementEvaluator.BindUObject(this, &ThisClass::EvaluatePlacementPreview);
+	SceneFiles->OnSceneOperationFinished.AddUniqueDynamic(this, &ThisClass::HandleSceneOperationFinished);
+
 	if (UStageEconomySubsystem* Economy = GetEconomy())
 	{
 		Economy->OnPurchaseCompleted.AddUniqueDynamic(this, &ThisClass::HandlePurchaseCompleted);
@@ -158,6 +170,8 @@ void AModularPlayerController::EndPlay(const EEndPlayReason::Type EndPlayReason)
 	PlacementTool->PlacementSnapper.Unbind();
 	PlacementTool->OnEditModeChanged.RemoveDynamic(this, &ThisClass::HandleEditModeChanged);
 	PlacementTool->OnArmedItemChanged.RemoveDynamic(this, &ThisClass::HandleArmedItemChanged);
+	SceneFiles->PlacementEvaluator.Unbind();
+	SceneFiles->OnSceneOperationFinished.RemoveDynamic(this, &ThisClass::HandleSceneOperationFinished);
 	if (UStageEconomySubsystem* Economy = GetEconomy())
 	{
 		Economy->OnPurchaseCompleted.RemoveDynamic(this, &ThisClass::HandlePurchaseCompleted);
@@ -448,12 +462,19 @@ bool AModularPlayerController::IsGizmoDragging() const
 
 // --- Primary button ---
 
+EStageSelectionClick AModularPlayerController::GetSelectionClickFromKeyboard()
+{
+	return FSlateApplication::IsInitialized() && FSlateApplication::Get().GetModifierKeys().IsControlDown()
+		? EStageSelectionClick::Toggle
+		: EStageSelectionClick::Replace;
+}
+
 void AModularPlayerController::HandlePrimaryStarted()
 {
 	FVector2D Position;
 	if (GetCursorViewportPosition(Position))
 	{
-		HandlePrimaryPressedAt(Position);
+		HandlePrimaryPressedAt(Position, GetSelectionClickFromKeyboard());
 	}
 }
 
@@ -472,7 +493,7 @@ void AModularPlayerController::HandlePrimaryCompleted()
 	HandlePrimaryReleased();
 }
 
-void AModularPlayerController::HandlePrimaryPressedAt(const FVector2D& ViewportPosition)
+void AModularPlayerController::HandlePrimaryPressedAt(const FVector2D& ViewportPosition, EStageSelectionClick Click)
 {
 	// The cursor is hidden and frozen while flying; a left click there has no meaningful target.
 	if (bIsNavigatingCamera)
@@ -498,7 +519,7 @@ void AModularPlayerController::HandlePrimaryPressedAt(const FVector2D& ViewportP
 		return;
 	}
 
-	SelectOrDeselectAt(ViewportPosition);
+	SelectOrDeselectAt(ViewportPosition, Click);
 }
 
 void AModularPlayerController::HandlePrimaryHeldAt(const FVector2D& ViewportPosition)
@@ -507,6 +528,8 @@ void AModularPlayerController::HandlePrimaryHeldAt(const FVector2D& ViewportPosi
 	if (IsGizmoDragging() && GetRayAt(ViewportPosition, RayOrigin, RayDirection))
 	{
 		Gizmo->UpdateDrag(RayOrigin, RayDirection);
+		// The rest of the selection follows the target's final (snapped, clamped) transform for this frame.
+		GroupTransform->FollowLeader();
 	}
 }
 
@@ -518,11 +541,23 @@ void AModularPlayerController::HandlePrimaryReleased()
 	}
 }
 
-void AModularPlayerController::SelectOrDeselectAt(const FVector2D& ViewportPosition)
+void AModularPlayerController::SelectOrDeselectAt(const FVector2D& ViewportPosition, EStageSelectionClick Click)
 {
 	// Selecting never moves the item: only an explicit gizmo handle drag or a numeric edit does.
 	FHitResult ItemHit;
-	if (GetStageItemHitAt(ViewportPosition, ItemHit) && Selection->SelectActor(ItemHit.GetActor()))
+	const bool bHitItem = GetStageItemHitAt(ViewportPosition, ItemHit);
+
+	if (Click == EStageSelectionClick::Toggle)
+	{
+		// Ctrl+Click on empty space keeps the selection, as in the Unreal Editor, so a missed click never loses a group.
+		if (bHitItem)
+		{
+			Selection->ToggleActorSelection(ItemHit.GetActor());
+		}
+		return;
+	}
+
+	if (bHitItem && Selection->SelectActor(ItemHit.GetActor()))
 	{
 		return;
 	}
@@ -564,14 +599,7 @@ void AModularPlayerController::HandleNavigateCompleted()
 
 void AModularPlayerController::HandleDelete()
 {
-	AActor* Target = Selection->GetSelectedActor();
-	if (!Target || bIsNavigatingCamera || IsGizmoDragging())
-	{
-		return;
-	}
-
-	// One undoable step; the history component releases the selection before the actor is torn down.
-	EditHistory->DeleteItem(Target);
+	RequestDeleteSelection();
 }
 
 void AModularPlayerController::HandleUndo()
@@ -588,15 +616,24 @@ void AModularPlayerController::HandleGizmoDragStarted(AActor* Target)
 {
 	if (Target)
 	{
-		Snapping->BeginMove(*Target);
+		// The rest of the selection travels with the target, so it is neither left behind nor a snap neighbour.
+		GroupTransform->BeginGroupEdit(*Target);
+		Snapping->BeginMove(*Target, GroupTransform->GetFollowers());
 	}
 }
 
 void AModularPlayerController::HandleGizmoDragFinished(AActor* Target, const FTransform& StartTransform)
 {
 	Snapping->EndMove();
-	// The whole drag is one step, however many frames it took.
-	EditHistory->RecordTransformChange(Target, StartTransform);
+
+	// The whole drag is one step, however many frames it took and however many items moved.
+	const TArray<FStageTransformChange> Changes = GroupTransform->EndGroupEdit();
+	if (Changes.IsEmpty())
+	{
+		EditHistory->RecordTransformChange(Target, StartTransform);
+		return;
+	}
+	EditHistory->RecordTransformChanges(Changes);
 }
 
 void AModularPlayerController::HandleCancel()
@@ -788,9 +825,13 @@ void AModularPlayerController::DevClearSimulatedCursor()
 	RequestPreviewRefresh();
 }
 
-void AModularPlayerController::DevSimulatePrimaryPressed()
+void AModularPlayerController::DevSimulatePrimaryPressed(EStageSelectionClick Click)
 {
-	HandlePrimaryStarted();
+	FVector2D Position;
+	if (GetCursorViewportPosition(Position))
+	{
+		HandlePrimaryPressedAt(Position, Click);
+	}
 }
 
 void AModularPlayerController::DevSimulatePrimaryHeld()
@@ -840,22 +881,154 @@ FStageEconomyResultInfo AModularPlayerController::RequestParameterChange(UObject
 		return Verdict;
 	}
 
-	// Transform edits are undoable; the value actually stored (after clamping) is what gets recorded.
+	// Transform edits are undoable; the value actually stored (after clamping) is what gets recorded. A transform edit of a
+	// selected item moves the rest of the selection with it, as a gizmo drag does. Mid-drag the gizmo owns the group edit.
 	AActor* TransformTarget = StageCraftTags::IsTransformParameter(ParameterId) ? Cast<AActor>(Target) : nullptr;
 	const FTransform TransformBefore = TransformTarget ? TransformTarget->GetActorTransform() : FTransform::Identity;
+	const bool bGroupEdit = TransformTarget && !IsGizmoDragging();
+	if (bGroupEdit)
+	{
+		GroupTransform->BeginGroupEdit(*TransformTarget);
+	}
 
 	// A value the target cannot take (wrong type, read-only id) is not a rule violation, so it is
 	// returned but not reported; the panel snaps back on read-back anyway.
 	if (!Session->ApplyParameterChange(Target, ParameterId, Value))
 	{
+		if (bGroupEdit)
+		{
+			GroupTransform->EndGroupEdit();
+		}
 		return FStageEconomyResultInfo::Fail(EStageEconomyResult::InvalidRequest, LOCTEXT("NotAccepted", "The value was not accepted."));
 	}
 
-	if (TransformTarget)
+	if (bGroupEdit)
+	{
+		GroupTransform->FollowLeader();
+		EditHistory->RecordTransformChanges(GroupTransform->EndGroupEdit());
+	}
+	else if (TransformTarget)
 	{
 		EditHistory->RecordTransformChange(TransformTarget, TransformBefore);
 	}
 	return FStageEconomyResultInfo::Ok();
+}
+
+bool AModularPlayerController::IsBusyWithPointer() const
+{
+	return bIsNavigatingCamera || IsGizmoDragging();
+}
+
+int32 AModularPlayerController::RequestDeleteSelection()
+{
+	if (IsBusyWithPointer() || !Selection->HasSelection())
+	{
+		return 0;
+	}
+
+	// One undoable step; the history component releases each item's selection before the actor is torn down.
+	const int32 Deleted = EditHistory->DeleteItems(Selection->GetSelectedActors());
+	RequestPreviewRefresh();
+	return Deleted;
+}
+
+void AModularPlayerController::RequestSelectAll()
+{
+	const UStageSessionSubsystem* Session = UWorld::GetSubsystem<UStageSessionSubsystem>(GetWorld());
+	if (IsBusyWithPointer() || !Session)
+	{
+		return;
+	}
+
+	// Selecting is a Select-mode activity; the ghost would otherwise sit on top of a selected group.
+	PlacementTool->EnterSelectMode();
+	const TArray<AModularBaseActor*> PlacedItems = Session->GetPlacedItems();
+	Selection->SelectActors(TArray<AActor*>(PlacedItems));
+}
+
+int32 AModularPlayerController::RequestClearStage()
+{
+	if (IsBusyWithPointer())
+	{
+		return 0;
+	}
+
+	const int32 Removed = EditHistory->ClearStage();
+	RequestPreviewRefresh();
+	return Removed;
+}
+
+EStageSceneResult AModularPlayerController::RequestSaveScene(const FString& Name)
+{
+	return ReportSceneRefusal(EStageSceneOperation::Save, SceneFiles->SaveScene(Name.TrimStartAndEnd()), Name);
+}
+
+EStageSceneResult AModularPlayerController::RequestLoadScene(const FString& Name)
+{
+	// Loading destroys every item, including one the gizmo may be holding.
+	if (IsBusyWithPointer())
+	{
+		return EStageSceneResult::Busy;
+	}
+	return ReportSceneRefusal(EStageSceneOperation::Load, SceneFiles->LoadScene(Name), Name);
+}
+
+EStageSceneResult AModularPlayerController::RequestDeleteScene(const FString& Name)
+{
+	// The component reports the outcome (success or failure) itself; only a refusal to start is reported here.
+	const EStageSceneResult Result = SceneFiles->DeleteScene(Name);
+	return Result == EStageSceneResult::Busy || Result == EStageSceneResult::Unavailable
+		? ReportSceneRefusal(EStageSceneOperation::Delete, Result, Name)
+		: Result;
+}
+
+bool AModularPlayerController::RequestRender()
+{
+	UStageRenderSubsystem* Render = UWorld::GetSubsystem<UStageRenderSubsystem>(GetWorld());
+	if (!Render || !PlayerCameraManager)
+	{
+		ReportRejection(FStageEconomyResultInfo::Fail(EStageEconomyResult::InvalidRequest, LOCTEXT("NoRender", "Rendering is not available in this level.")));
+		return false;
+	}
+
+	FStageRenderRequest Request;
+	Request.View = PlayerCameraManager->GetCameraCacheView();
+	Request.HiddenActors.Add(Gizmo.Get());
+	if (AStagePlacementPreview* Preview = PlacementTool->GetPreviewActor())
+	{
+		Request.HiddenActors.Add(Preview);
+	}
+
+	FText Reason;
+	if (!Render->StartRender(Request, Reason))
+	{
+		ReportRejection(FStageEconomyResultInfo::Fail(EStageEconomyResult::InvalidRequest, Reason));
+		return false;
+	}
+	return true;
+}
+
+EStageSceneResult AModularPlayerController::ReportSceneRefusal(EStageSceneOperation Operation, EStageSceneResult Result, const FString& Name)
+{
+	if (Result != EStageSceneResult::Success)
+	{
+		ReportRejection(FStageEconomyResultInfo::Fail(EStageEconomyResult::InvalidRequest, UStageSceneComponent::DescribeFailure(Operation, Result, Name)));
+	}
+	return Result;
+}
+
+void AModularPlayerController::HandleSceneOperationFinished(const FStageSceneOperationResult& Result)
+{
+	// Failures take the common refusal path (status bar warning + error cue); successes are announced by the status bar.
+	if (!Result.IsSuccess())
+	{
+		ReportRejection(FStageEconomyResultInfo::Fail(EStageEconomyResult::InvalidRequest, Result.Message));
+		return;
+	}
+	if (Result.Operation == EStageSceneOperation::Load)
+	{
+		RequestPreviewRefresh();
+	}
 }
 
 EStageCommandResult AModularPlayerController::RequestUndo()
@@ -871,7 +1044,7 @@ EStageCommandResult AModularPlayerController::RequestRedo()
 EStageCommandResult AModularPlayerController::RequestHistoryStep(bool bUndo)
 {
 	// Mid-drag the gizmo owns the target's transform; reverting it underneath would fight the drag.
-	if (bIsNavigatingCamera || IsGizmoDragging())
+	if (IsBusyWithPointer())
 	{
 		return EStageCommandResult::NothingToDo;
 	}

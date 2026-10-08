@@ -76,6 +76,9 @@ public:
 	/** Read-only access for dev diagnostics (StageCraft.Edit.Status). Null until the first preview is needed. */
 	const class AStagePlacementPreview* GetPreviewForDiagnostics() const { return Preview; }
 
+	/** The ghost and landing-marker actor, so still renders can leave it out. Null until the first preview is needed. */
+	class AStagePlacementPreview* GetPreviewActor() const { return Preview; }
+
 	/**
 	 * Moves the preview to the landing transform for Hit. Hides it when not in Place mode, when nothing is
 	 * armed or when Hit has no blocking surface. Called by the controller on cursor or camera movement.

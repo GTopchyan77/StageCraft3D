@@ -4,6 +4,7 @@
 
 #include "CoreMinimal.h"
 #include "GameFramework/GameUserSettings.h"
+#include "Render/StageRenderTypes.h"
 #include "StageCraftUserSettings.generated.h"
 
 /**
@@ -48,6 +49,12 @@ public:
 	/** Returns true if the stored value changed. Does not save. */
 	bool SetSnapToItemsEnabled(bool bEnabled);
 
+	/** Render panel choices (UStageRenderSubsystem is the only writer). */
+	const FStageRenderSettings& GetRenderSettings() const { return RenderSettings; }
+
+	/** Sanitized (out-of-range enums fall back to defaults). Returns true if the stored value changed. Does not save. */
+	bool SetRenderSettings(const FStageRenderSettings& Settings);
+
 private:
 	void ResetAudioToDefaults();
 	void SanitizeAudio();
@@ -69,4 +76,7 @@ private:
 
 	UPROPERTY(Config)
 	bool bSnapToItems = true;
+
+	UPROPERTY(Config)
+	FStageRenderSettings RenderSettings;
 };
