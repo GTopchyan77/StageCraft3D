@@ -43,102 +43,24 @@ export function readEngineAssociation(uprojectPath) {
   } catch { return null; }
 }
 
-// An EngineAssociation is either a version ("5.8") or a source-build GUID
-// ("{A1B2...}"). It comes from a file on disk and is interpolated into a shell
-// command below, so anything outside that alphabet is refused rather than
-// escaped — there is no legitimate association that needs quotes or separators.
-const ENGINE_ASSOCIATION_RE = /^[A-Za-z0-9._{}-]+$/;
-
-/**
- * Read InstalledDirectory for a launcher-installed engine out of HKLM. This is
- * where the Epic Games Launcher records every installed engine version, keyed
- * by "5.8"-style version. HKCU\...\Builds (queried separately) only ever holds
- * *custom* source builds the user registered by hand, so a machine with only
- * launcher installs has no HKCU key at all.
- *
- * @returns {string|null} the install root, or null when absent/unusable
- */
-function readHklmInstallDir(engineAssociation, execSyncFn, existsSyncFn) {
-  try {
-    const regOut = execSyncFn(
-      `reg query "HKLM\\SOFTWARE\\EpicGames\\Unreal Engine\\${engineAssociation}" /v InstalledDirectory 2>nul`,
-      { encoding: "utf8", timeout: 5000 }
-    );
-    const match = regOut.match(/^\s*InstalledDirectory\s+REG_SZ\s+(.+)$/m);
-    if (match) {
-      const dir = match[1].trim();
-      if (existsSyncFn(path.join(dir, "Engine", "Build", "BatchFiles", "Build.bat"))) {
-        return dir;
-      }
-    }
-  } catch { /* key missing, or reg unavailable — caller falls through */ }
-  return null;
-}
-
-/**
- * Read the launcher's own manifest. Covers the case where the registry is
- * missing or stale but the launcher still knows where the engine lives.
- *
- * The manifest lists plugins (FabPlugin_5.8, QuixelBridge_5.8) alongside the
- * engines themselves, and those share the engine's InstallLocation — so match
- * on AppName/ArtifactId `UE_<version>` rather than taking the first hit.
- *
- * @returns {string|null} the install root, or null when absent/unusable
- */
-function readLauncherManifest(engineAssociation, existsSyncFn, readFileSyncFn, env) {
-  const programData = env.PROGRAMDATA || "C:\\ProgramData";
-  const manifest = path.join(
-    programData, "Epic", "UnrealEngineLauncher", "LauncherInstalled.dat"
-  );
-  try {
-    if (!existsSyncFn(manifest)) return null;
-    const parsed = JSON.parse(readFileSyncFn(manifest, "utf8"));
-    const list = Array.isArray(parsed?.InstallationList) ? parsed.InstallationList : [];
-    const wanted = `UE_${engineAssociation}`;
-    for (const entry of list) {
-      if (entry?.AppName !== wanted && entry?.ArtifactId !== wanted) continue;
-      const dir = entry?.InstallLocation;
-      if (typeof dir !== "string" || !dir) continue;
-      if (existsSyncFn(path.join(dir, "Engine", "Build", "BatchFiles", "Build.bat"))) {
-        return dir;
-      }
-    }
-  } catch { /* missing, unreadable or malformed — caller falls through */ }
-  return null;
-}
-
 /**
  * Discover the UE install directory.
- * Priority: NGG_UE_INSTALL_DIR env > HKCU custom builds > HKLM launcher
- *           installs > the launcher's LauncherInstalled.dat manifest >
+ * Priority: NGG_UE_INSTALL_DIR env > Windows registry custom builds >
  *           well-known install paths on every available drive letter.
- *
- * Windows only — the drive-letter scan and `reg query` have no meaning
- * elsewhere. On other platforms set NGG_UE_INSTALL_DIR.
  *
  * Throws if nothing is found.
  *
  * @param {string|null} engineAssociation - value from .uproject EngineAssociation
  * @param {object}      [opts]
- * @param {typeof fs.existsSync}   [opts.existsSync]   - injectable for tests
- * @param {typeof execSync}        [opts.execSync]     - injectable for tests
- * @param {typeof fs.readFileSync} [opts.readFileSync] - injectable for tests
- * @param {NodeJS.ProcessEnv}      [opts.env]          - injectable for tests
+ * @param {typeof fs.existsSync}   [opts.existsSync] - injectable for tests
+ * @param {typeof execSync}        [opts.execSync]   - injectable for tests
+ * @param {NodeJS.ProcessEnv}      [opts.env]        - injectable for tests
  * @returns {string}
  */
 export function discoverEngineDir(engineAssociation, opts = {}) {
-  const existsSyncFn   = opts.existsSync   ?? fs.existsSync;
-  const execSyncFn     = opts.execSync     ?? execSync;
-  const readFileSyncFn = opts.readFileSync ?? fs.readFileSync;
-  const env            = opts.env          ?? process.env;
-
-  // Refuse an association that can't be safely interpolated into `reg query`.
-  // Discovery continues without the registry/manifest steps rather than failing
-  // outright — the drive scan may still find the engine.
-  const safeAssociation =
-    engineAssociation && ENGINE_ASSOCIATION_RE.test(engineAssociation)
-      ? engineAssociation
-      : null;
+  const existsSyncFn = opts.existsSync ?? fs.existsSync;
+  const execSyncFn   = opts.execSync   ?? execSync;
+  const env          = opts.env        ?? process.env;
 
   // 1. Explicit env var wins — but only if it actually points at an engine
   //    root (otherwise fall through to discovery rather than returning a path
@@ -149,16 +71,16 @@ export function discoverEngineDir(engineAssociation, opts = {}) {
   }
 
   // 2. Windows registry — custom engine builds registered under HKCU.
-  if (safeAssociation) {
+  if (engineAssociation) {
     try {
       const regOut = execSyncFn(
-        `reg query "HKCU\\Software\\Epic Games\\Unreal Engine\\Builds" /v "${safeAssociation}" 2>nul`,
+        `reg query "HKCU\\Software\\Epic Games\\Unreal Engine\\Builds" /v "${engineAssociation}" 2>nul`,
         { encoding: "utf8", timeout: 5000 }
       );
       // Anchor to the queried value name so we can't accidentally grab the
       // REG_SZ value of a different registered build. `reg query` prints each
       // value as: `    <ValueName>    REG_SZ    <data>`.
-      const escapedName = safeAssociation.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+      const escapedName = engineAssociation.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
       const match = regOut.match(new RegExp(`^\\s*${escapedName}\\s+REG_SZ\\s+(.+)$`, "m"));
       if (match) {
         const regPath = match[1].trim();
@@ -169,24 +91,7 @@ export function discoverEngineDir(engineAssociation, opts = {}) {
     } catch { /* not registered — fall through */ }
   }
 
-  // 3. HKLM — where the Epic Games Launcher records installed engine versions.
-  //    This is the common case: a launcher-only machine has no HKCU\Builds key.
-  if (safeAssociation) {
-    const hklmDir = readHklmInstallDir(safeAssociation, execSyncFn, existsSyncFn);
-    if (hklmDir) return hklmDir;
-  }
-
-  // 4. The launcher's own manifest — covers a missing or stale registry.
-  if (safeAssociation) {
-    const manifestDir = readLauncherManifest(
-      safeAssociation, existsSyncFn, readFileSyncFn, env
-    );
-    if (manifestDir) return manifestDir;
-  }
-
-  // 5. Last resort: scan well-known install locations on every drive letter.
-  //    Only finds engines that happen to sit in a conventional directory —
-  //    D:\Epic\UE_5.8 would be missed, which is why the steps above exist.
+  // 3. Scan well-known install locations on every drive letter (C:–Z:).
   const drives = [];
   for (let c = 67; c <= 90; c++) {
     const d = String.fromCharCode(c) + ":\\";

@@ -3,7 +3,6 @@
 #include "NodeDepsInstaller.h"
 
 #include "SidecarLauncher.h" // LogNGGChat
-#include "NGGPluginPaths.h"
 #include "Async/Async.h"
 #include "HAL/PlatformProcess.h"
 #include "HAL/PlatformFileManager.h"
@@ -39,10 +38,8 @@ TArray<FNodeDepsInstaller::FPackage> FNodeDepsInstaller::GetPackages()
 	TArray<FPackage> Out;
 	for (const TCHAR* Name : PackageNames)
 	{
-		// Located via the plugin manager rather than a fixed "Plugins/UnrealNGGMCP",
-		// so the packages are still found when the plugin folder was renamed.
-		const FString Dir = FPaths::ConvertRelativePathToFull(
-			FNGGPluginPaths::GetThirdPartyPackageDir(Name));
+		const FString Dir = FPaths::ConvertRelativePathToFull(FPaths::Combine(
+			FPaths::ProjectDir(), TEXT("Plugins/UnrealNGGMCP/Source/ThirdParty"), Name));
 		// Skip packages missing from a trimmed install rather than failing on them.
 		if (FPaths::FileExists(FPaths::Combine(Dir, TEXT("package.json"))))
 		{

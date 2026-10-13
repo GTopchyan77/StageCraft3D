@@ -1,0 +1,45 @@
+{
+	"FileVersion": 3,
+	"Version": 1,
+	"VersionName": "1.0",
+	"FriendlyName": "OverCrowd",
+	"Description": "Vertex Animation Toolkit for generating highly optimized crowds of 100K or more! Any crowd member can be swapped to a Pawn seamlessly and instantly for more realistic interactions.",
+	"Category": "Vertex Animation Toolkit",
+	"CreatedBy": "Ken MacLean",
+	"CreatedByURL": "overcrowd.co",
+	"DocsURL": "https://youtube.com/playlist?list=PL4TWJ0bKFM-AEYSOOriOl6dFpttVimQ7m&si=W4nY4O-n-D4NLw6G",
+	"MarketplaceURL": "",
+	"SupportURL": "https://discord.gg/67VBuxMg",
+	"EngineVersion": "5.7.0",
+	"CanContainContent": true,
+	"IsBetaVersion": true,
+	"Installed": true,
+	"Modules": [
+		{
+			"Name": "OverCrowd",
+			"Type": "Runtime",
+			"LoadingPhase": "Default",
+			"PlatformAllowList": [
+				"Win64"
+			]
+		},
+		{
+			"Name": "OverCrowdEditor",
+			"Type": "Editor",
+			"LoadingPhase": "Default",
+			"PlatformAllowList": [
+				"Win64"
+			]
+		}
+	],
+	"Plugins": [
+		{
+			"Name": "GameplayTagsEditor",
+			"Enabled": true
+		},
+		{
+			"Name": "Niagara",
+			"Enabled": true
+		}
+	]
+}

@@ -1,26 +1,14 @@
 # UE5 NGG — MCP Workflow Rules
 
 These rules ship with the `ue5-ngg` plugin. The MCP sidecar (`index.js`) loads
-this file at startup and splits it (see `rules.js`):
-
-- everything up to rule 6 — the rules that apply no matter what you are doing —
-  is sent as the server's `instructions`, injected into the model's system
-  context on every connection;
-- the subsystem chapters (rules 6-14, the cheat sheet, the Blueprint schema
-  reference) are served as MCP **resources** under `ue5-ngg://rules/…` and read
-  on demand, so they cost nothing until the work actually touches them.
-
-Either way any project using this plugin gets the rules automatically, on any
-PC, without per-project CLAUDE.md edits or other setup.
+this file at startup and sends its contents to Claude (or any MCP-aware client)
+as the server's `instructions` field. They are injected into the model's
+system context on every connection — so any project that uses this plugin gets
+them automatically, on any PC, without per-project CLAUDE.md edits or other
+setup.
 
 To add, change, or remove a rule: edit this file, then have the user run
 `/mcp` (or restart their MCP client) so the sidecar reloads.
-
-**Section headings are load-bearing.** `rules.js` slices this document at the
-headings listed in its `SECTION_SPECS`. Renaming or reordering one of those
-headings makes the sidecar fall back to sending the whole file (nothing is
-lost, but the handshake gets big again) — update `SECTION_SPECS` to match, and
-`rules.test.js` will confirm the split still works.
 
 ---
 

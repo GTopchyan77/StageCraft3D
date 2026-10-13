@@ -10,15 +10,6 @@ import { z } from "zod";
 import * as ue5 from "./ue5client.js";
 import * as pcg from "./pcg.js";
 import * as gamedev from "./gamedev.js";
-import * as sequencer from "./sequencer.js";
-import * as worldpartition from "./worldpartition.js";
-import * as metasound from "./metasound.js";
-import * as rigging from "./rigging.js";
-import * as rendering from "./rendering.js";
-import * as assetconfig from "./assetconfig.js";
-import * as interchange from "./interchange.js";
-import * as substrate from "./substrate.js";
-import * as landscape from "./landscape.js";
 import * as profile from "./profile.js";
 import { resolveApiKey as meshyResolveApiKey, generateTextTo3D as meshyGenerate } from "./meshy.js";
 import { YoutubeTranscript } from "youtube-transcript";
@@ -28,8 +19,6 @@ import path from "path";
 import { fileURLToPath } from "url";
 import { jsonPreprocess } from "./helpers.js";
 import { installClaudeAssets } from "./setup-assets.js";
-import { splitRules } from "./rules.js";
-import { resolveToolsets, toolsetFor, ALL_TOOLSETS } from "./toolsets.js";
 import {
   findUProject,
   readEngineAssociation,
@@ -158,33 +147,18 @@ const WS_PORT         = Number.isNaN(WS_PORT_PARSED) ? 6777 : WS_PORT_PARSED;
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const RULES_PATH = path.join(__dirname, "UE5_NGG_RULES.md");
 
-let RULES_RAW;
+let UE5_NGG_INSTRUCTIONS;
 try {
-  RULES_RAW = fs.readFileSync(RULES_PATH, "utf8");
+  UE5_NGG_INSTRUCTIONS = fs.readFileSync(RULES_PATH, "utf8");
 } catch (err) {
   // Fail loud but don't crash — the server still works without instructions.
   console.error(`[ue5-ngg] Failed to load rules from ${RULES_PATH}: ${err.message}`);
-  RULES_RAW =
+  UE5_NGG_INSTRUCTIONS =
     "This MCP server bridges to an Unreal Engine 5 editor. " +
     "Rules file UE5_NGG_RULES.md was missing — see the plugin source.";
 }
-
-// Only the always-applicable rules go into `instructions`; the subsystem
-// chapters (GAS, Behavior Trees, profiling, the Blueprint schema reference) are
-// registered as resources below and read on demand. If the document's structure
-// ever stops matching rules.js, splitRules() hands back the whole file and we
-// send it as before — a bloated handshake beats a silently dropped rule.
-const RULES = splitRules(RULES_RAW);
-const UE5_NGG_INSTRUCTIONS = RULES.core;
-
-console.error(
-  `[ue5-ngg] rules: ${RULES_RAW.length} bytes on disk -> ` +
-  `${UE5_NGG_INSTRUCTIONS.length} bytes in instructions + ` +
-  `${RULES.sections.length} resource(s) ` +
-  `(${RULES_RAW.startsWith("This MCP") ? "FALLBACK — rules file missing"
-    : RULES.complete ? "OK"
-    : `UNSPLIT — headings moved: ${RULES.missing.join("; ")}`})`
-);
+// After the try/catch:
+console.error(`[ue5-ngg] rules: ${UE5_NGG_INSTRUCTIONS.length} bytes, ${UE5_NGG_INSTRUCTIONS.split('\n').length} lines (${UE5_NGG_INSTRUCTIONS.startsWith("This MCP") ? "FALLBACK — rules file missing" : "OK"})`);
 
 const server = new McpServer(
   {
@@ -195,56 +169,6 @@ const server = new McpServer(
     instructions: UE5_NGG_INSTRUCTIONS,
   }
 );
-
-// ---------------------------------------------------------------------------
-// Toolset filtering
-// ---------------------------------------------------------------------------
-// Every tool registration below goes through this wrapper, so a project can
-// register only the sets it uses (NGG_TOOLSETS / NGG_TOOLSETS_EXCLUDE).
-// Unset => everything, i.e. the previous behaviour.
-//
-// Note for future edits: index.tools.test.js parses this file as text and
-// counts registration call sites, so don't write that call's literal spelling
-// in a comment — it inflates the count and fails the suite.
-const TOOLSETS = resolveToolsets(process.env);
-const skippedToolsets = new Map();   // set -> count, for the startup banner
-
-const serverToolDirect = server.tool.bind(server);
-server.tool = function toolWithToolsetFilter(name, ...rest) {
-  const set = toolsetFor(name);
-  if (!TOOLSETS.enabled.has(set)) {
-    skippedToolsets.set(set, (skippedToolsets.get(set) ?? 0) + 1);
-    return undefined;
-  }
-  return serverToolDirect(name, ...rest);
-};
-
-if (TOOLSETS.unknown.length > 0) {
-  console.error(
-    `[ue5-ngg] unknown toolset name(s) ignored: ${TOOLSETS.unknown.join(", ")}. ` +
-    `Known sets: ${ALL_TOOLSETS.join(", ")}`
-  );
-}
-
-// ---------------------------------------------------------------------------
-// Rule chapters as MCP resources
-// ---------------------------------------------------------------------------
-// Registered even when the split failed (sections is then empty), so a client
-// never sees a half-populated resource list.
-for (const section of RULES.sections) {
-  server.registerResource(
-    `rules-${section.slug}`,
-    section.uri,
-    {
-      title:       section.title,
-      description: section.description,
-      mimeType:    "text/markdown",
-    },
-    async (uri) => ({
-      contents: [{ uri: uri.href, mimeType: "text/markdown", text: section.text }],
-    })
-  );
-}
 
 // ---------------------------------------------------------------------------
 // First-run install of bundled Claude Code skills + agents
@@ -350,28 +274,14 @@ server.tool(
       // was down, drop it so the next resolveProject() picks up live editor info.
       if (!cachedBridgeUp) invalidateProjectCache();
       const rulesOk = !UE5_NGG_INSTRUCTIONS.startsWith("This MCP server bridges");
-      // Surface the token state here rather than letting the first pcg_* call
-      // fail with an opaque 403 about exec_python.
-      const auth = ue5.getAuthTokenStatus();
-      // A plugin/sidecar version skew otherwise shows up as an assortment of
-      // odd failures rather than one diagnosable message.
-      const protocol = ue5.checkBridgeProtocol(result);
       return {
         content: [{
           type: "text",
           text: JSON.stringify({
             ...result,
-            ...(protocol.warning ? { protocol_warning: protocol.warning } : {}),
             rules_ok:    rulesOk,
             rules_bytes: UE5_NGG_INSTRUCTIONS.length,
             rules_lines: UE5_NGG_INSTRUCTIONS.split('\n').length,
-            auth_token:  auth.configured
-              ? { configured: true, source: auth.source }
-              : {
-                  configured: false,
-                  disabled_features: auth.disables,
-                  fix: "Run `npm run set-token` in Plugins/UnrealNGGMCP/Source/ThirdParty/unrealngg-mcp/, then restart the editor. It writes the token to Config/UserEngine.ini (gitignored).",
-                },
           }, null, 2),
         }],
       };
@@ -1446,22 +1356,15 @@ server.tool(
 
 server.tool(
   "ue5_create_level",
-  [
-    "Create a new empty persistent level in the UE5 editor and save it to disk. The level is opened in the editor after creation.",
-    "Set partitioned:true for a World Partition map (streaming grid, external actors) instead of a classic monolithic level.",
-  ].join(" "),
+  "Create a new empty persistent level in the UE5 editor and save it to disk. The level is opened in the editor after creation.",
   {
     level_path: z
       .string()
       .describe("Content path for the level, e.g. '/Game/Maps/L_Persistent_Exercise'"),
-    partitioned: z
-      .boolean()
-      .optional()
-      .describe("Create a World Partition map instead of a classic level (default false)"),
   },
-  async ({ level_path, partitioned }) => {
+  async ({ level_path }) => {
     try {
-      const result = await ue5.createLevel(level_path, { partitioned });
+      const result = await ue5.createLevel(level_path);
       const status = result.already_existed
         ? `Level already exists at: ${result.level_path}`
         : `Level created at: ${result.level_path} (${result.file_path})`;
@@ -4132,32 +4035,6 @@ server.tool(
 );
 
 server.tool(
-  "ue5_bp_heal_world_context",
-  [
-    "Repair the UE5 migration corruption where a static Blueprint function's entry node has a VISIBLE '__WorldContext' pin backed by a resolvable self-FunctionReference.",
-    "That state makes UK2Node_FunctionEntry::AllocateDefaultPins build the auto world-context pin twice, tripping an ensure ('World context parameter pin already exists') — harmless in-editor but FATAL to a cook (packaged/UAT builds run under -CrashForUAT). Symptom: cook aborts on one specific BP with that ensure.",
-    "The fix resets the entry FunctionReference to the healthy unresolvable state (function name preserved) so the pin regenerates hidden on the next reconstruct. Compiles + saves by default.",
-    "Pass 'blueprint' (single) or 'blueprints' (array). Run with dry_run:true FIRST to get per-function diagnostics (entry-pin hidden state, resolved member, reference internals, WorldContext metadata) with NO mutation, then re-run without dry_run to heal.",
-    "Example: {\"blueprint\":\"/Game/Blueprints/BP_Foo\",\"dry_run\":true}",
-  ].join(" "),
-  {
-    blueprint:  z.string().optional().describe("Single blueprint content path, e.g. '/Game/Blueprints/BP_Foo'"),
-    blueprints: z.array(z.string()).optional().describe("Batch mode: array of blueprint content paths"),
-    compile:    z.boolean().optional().describe("Compile after healing (default true)"),
-    save:       z.boolean().optional().describe("Save after successful compile (default true)"),
-    dry_run:    z.boolean().optional().describe("Diagnose only — report per-function state with no mutation (default false)"),
-  },
-  async ({ blueprint, blueprints, compile, save, dry_run }) => {
-    try {
-      const r = await ue5.bpHealWorldContext({ blueprint, blueprints, compile, save, dry_run });
-      return { content: [{ type: "text", text: JSON.stringify(r, null, 2) }] };
-    } catch (err) {
-      return { content: [{ type: "text", text: err.message }], isError: true };
-    }
-  }
-);
-
-server.tool(
   "ue5_bp_create_variable",
   [
     "Add a member variable to a Blueprint. Use this BEFORE referencing a variable via variable_get/variable_set in ue5_bp_add_logic.",
@@ -5415,676 +5292,6 @@ server.tool(
 );
 
 server.tool(
-  "ue5_sequencer_read",
-  [
-    "Read a Level Sequence's full structure: display rate, playback range, marked frames, master tracks, and every binding with its tracks, sections and keyed channels.",
-    "Call this BEFORE ue5_sequencer_set_keys — it reports the exact channel_name values ('Location.X', 'Rotation.Z', ...) that keying requires, and shows what is already keyed.",
-    "This is the sequencer counterpart to ue5_bp_read_graph.",
-  ].join(" "),
-  {
-    sequence_path: z.string().describe("Content path of the Level Sequence, e.g. '/Game/Cine/LS_Intro'"),
-    include_keys:  z.boolean().optional().describe("Include each channel's keys (default true; false gives a lighter outline)"),
-  },
-  async (args) => sequencer.mcpResponse(await sequencer.sequencerRead(args))
-);
-
-server.tool(
-  "ue5_sequencer_add_spawnable",
-  [
-    "Add a spawnable binding — an object the sequence creates itself instead of possessing from the level.",
-    "Give either actor_class (an unreal.* class name such as 'CineCameraActor', 'PointLight', 'StaticMeshActor') or asset_path (a Blueprint or mesh to spawn from).",
-    "Use ue5_sequencer_bind_actor instead when the object already exists in the level.",
-  ].join(" "),
-  {
-    sequence_path: z.string().describe("Content path of the Level Sequence"),
-    actor_class:   z.string().optional().describe("Class name to spawn, e.g. 'CineCameraActor'"),
-    asset_path:    z.string().optional().describe("Or an asset path to spawn from, e.g. '/Game/BP/BP_Prop'"),
-    display_name:  z.string().optional().describe("Name for the binding in the sequencer outliner"),
-    save:          z.boolean().optional().describe("Save the sequence afterwards (default true)"),
-  },
-  async (args) => sequencer.mcpResponse(await sequencer.sequencerAddSpawnable(args))
-);
-
-server.tool(
-  "ue5_sequencer_add_track",
-  [
-    "Add a track to a Level Sequence. With `binding` the track goes on that object; without one it becomes a master track on the sequence itself (where CameraCut and Event tracks belong).",
-    "track_type accepts a short alias — transform, visibility, audio, animation, cameracut, event, float, double, bool, integer, color, vector, particle, cinematicshot — or an exact UClass name like 'MovieScene3DTransformTrack'.",
-    "Property tracks (float/double/bool/integer/color/vector) also need property_path, e.g. 'RelativeLocation' or 'Intensity'; without it the track evaluates to nothing.",
-    "Returns the section's channel names, which ue5_sequencer_set_keys takes.",
-  ].join(" "),
-  {
-    sequence_path: z.string().describe("Content path of the Level Sequence"),
-    track_type:    z.string().describe("Track alias ('transform') or UClass name ('MovieScene3DTransformTrack')"),
-    binding:       z.string().optional().describe("Binding name to attach to; omit for a master track"),
-    property_path: z.string().optional().describe("Property this track drives — required for property tracks"),
-    add_section:   z.boolean().optional().describe("Also cut one section spanning the playback range (default true)"),
-    save:          z.boolean().optional().describe("Save the sequence afterwards (default true)"),
-  },
-  async (args) => sequencer.mcpResponse(await sequencer.sequencerAddTrack(args))
-);
-
-server.tool(
-  "ue5_sequencer_add_section",
-  [
-    "Cut an additional section on an existing track, bounded in seconds. Use for clips that do not span the whole sequence — a second animation, another shot.",
-    "The track must already exist (ue5_sequencer_add_track). Pass row_index to stack overlapping sections on separate rows.",
-  ].join(" "),
-  {
-    sequence_path: z.string().describe("Content path of the Level Sequence"),
-    track_type:    z.string().describe("Which track to cut on — same aliases as ue5_sequencer_add_track"),
-    binding:       z.string().optional().describe("Binding the track sits on; omit for a master track"),
-    start_seconds: z.number().describe("Section start, in seconds"),
-    end_seconds:   z.number().describe("Section end, in seconds (must be greater than start)"),
-    row_index:     z.number().optional().describe("Row to place the section on, for overlapping clips"),
-    save:          z.boolean().optional().describe("Save the sequence afterwards (default true)"),
-  },
-  async (args) => sequencer.mcpResponse(await sequencer.sequencerAddSection(args))
-);
-
-server.tool(
-  "ue5_sequencer_set_keys",
-  [
-    "Key a section's channels. Each entry in keys[] is { channel, time, value, interpolation? } where `channel` is a channel_name — 'Location.X', 'Rotation.Z', 'Scale.Y' — and `time` is in seconds.",
-    "Channels are addressed by NAME, not index: run ue5_sequencer_read (or read the channels returned by ue5_sequencer_add_track) to see what a section exposes.",
-    "interpolation is one of auto, cubic, linear, constant. Values are coerced to the channel's own type, so bool channels take true/false and integer channels take whole numbers.",
-  ].join(" "),
-  {
-    sequence_path: z.string().describe("Content path of the Level Sequence"),
-    track_type:    z.string().describe("Which track to key — same aliases as ue5_sequencer_add_track"),
-    binding:       z.string().optional().describe("Binding the track sits on; omit for a master track"),
-    section_index: z.number().optional().describe("Which section on that track (default 0)"),
-    keys: z.preprocess(jsonPreprocess, z.array(z.any())).describe(
-      "Array of { channel, time, value, interpolation? } — e.g. [{\"channel\":\"Location.X\",\"time\":0,\"value\":0},{\"channel\":\"Location.X\",\"time\":2,\"value\":500}]"
-    ),
-    save:          z.boolean().optional().describe("Save the sequence afterwards (default true)"),
-  },
-  async (args) => sequencer.mcpResponse(await sequencer.sequencerSetKeys(args))
-);
-
-server.tool(
-  "ue5_sequencer_set_playback_range",
-  [
-    "Change an existing sequence's length and/or display rate.",
-    "Note that changing frame_rate re-times the ruler, not the content: keys are stored in tick resolution and keep their wall-clock timing.",
-  ].join(" "),
-  {
-    sequence_path: z.string().describe("Content path of the Level Sequence"),
-    start_seconds: z.number().optional().describe("New playback start, in seconds"),
-    end_seconds:   z.number().optional().describe("New playback end, in seconds"),
-    frame_rate:    z.number().optional().describe("New display rate in FPS, e.g. 24, 30, 60"),
-    save:          z.boolean().optional().describe("Save the sequence afterwards (default true)"),
-  },
-  async (args) => sequencer.mcpResponse(await sequencer.sequencerSetPlaybackRange(args))
-);
-
-server.tool(
-  "ue5_wp_read",
-  [
-    "Describe the currently open world for World Partition work: whether it is partitioned at all, its bounds, every Data Layer with its state, and a summary of the streaming manifest (actor counts by class, runtime grids, how many actors are spatially loaded).",
-    "Call this before any other ue5_wp_* tool — they need to know which layers exist, and Data Layers require a partitioned map.",
-    "include_actors lists individual actor descriptors, which can be long on a real map; class_filter narrows it.",
-  ].join(" "),
-  {
-    include_actors: z.boolean().optional().describe("List every actor descriptor (default false)"),
-    class_filter:   z.string().optional().describe("With include_actors, only descs whose class name contains this"),
-  },
-  async (args) => worldpartition.mcpResponse(await worldpartition.wpRead(args))
-);
-
-server.tool(
-  "ue5_wp_create_data_layer",
-  [
-    "Create a Data Layer: the DataLayerAsset plus an instance of it in the current world. Both are reported — the asset is shared content that outlives this level, the instance is this level's use of it.",
-    "type is 'runtime' (streams in and out during play, default) or 'editor' (an authoring-time grouping only).",
-    "Requires a World Partition map — make one with ue5_create_level partitioned=true.",
-  ].join(" "),
-  {
-    asset_path: z.string().describe("Where to create the DataLayerAsset, e.g. '/Game/DataLayers/DL_Foliage'"),
-    type:       z.string().optional().describe("'runtime' (default) or 'editor'"),
-    parent:     z.string().optional().describe("Short name of an existing layer to nest this one under"),
-    initial_runtime_state: z.string().optional().describe("State the layer starts in: unloaded, loaded or activated"),
-    is_private: z.boolean().optional().describe("Make it private to this level instead of a shared asset"),
-    save:       z.boolean().optional().describe("Save the asset and level afterwards (default true)"),
-  },
-  async (args) => worldpartition.mcpResponse(await worldpartition.wpCreateDataLayer(args))
-);
-
-server.tool(
-  "ue5_wp_set_actor_data_layers",
-  "Add or remove level actors (by label) on a Data Layer. Returns the layer's full membership afterwards so the result is verifiable.",
-  {
-    layer:  z.string().describe("Short name of the Data Layer"),
-    actors: z.preprocess(jsonPreprocess, z.array(z.string())).describe("Actor labels, e.g. [\"Rock_01\",\"Rock_02\"]"),
-    mode:   z.string().optional().describe("'add' (default) or 'remove'"),
-    save:   z.boolean().optional().describe("Save the level afterwards (default true)"),
-  },
-  async (args) => worldpartition.mcpResponse(await worldpartition.wpSetActorDataLayers(args))
-);
-
-server.tool(
-  "ue5_wp_set_data_layer_state",
-  "Change a Data Layer's editor visibility, whether it is loaded in the editor, and the runtime state it starts in (unloaded / loaded / activated).",
-  {
-    layer:            z.string().describe("Short name of the Data Layer"),
-    visible:          z.boolean().optional().describe("Editor visibility"),
-    loaded_in_editor: z.boolean().optional().describe("Whether its actors are loaded in the editor"),
-    initial_runtime_state: z.string().optional().describe("unloaded, loaded or activated"),
-    save:             z.boolean().optional().describe("Save the level afterwards (default true)"),
-  },
-  async (args) => worldpartition.mcpResponse(await worldpartition.wpSetDataLayerState(args))
-);
-
-server.tool(
-  "ue5_wp_delete_data_layer",
-  "Remove a Data Layer instance from this level. The DataLayerAsset itself is kept — it is shared content and other levels may instance it.",
-  {
-    layer: z.string().describe("Short name of the Data Layer"),
-    save:  z.boolean().optional().describe("Save the level afterwards (default true)"),
-  },
-  async (args) => worldpartition.mcpResponse(await worldpartition.wpDeleteDataLayer(args))
-);
-
-server.tool(
-  "ue5_wp_load_region",
-  [
-    "Load, unload, pin or unpin the actors of a partitioned world inside a box, so a region can be edited without opening the whole map.",
-    "Pin keeps actors loaded regardless of the streaming source; load is a one-off.",
-    "Use ue5_wp_read to get the world bounds first.",
-  ].join(" "),
-  {
-    min:  z.preprocess(jsonPreprocess, z.array(z.number()).length(3)).describe("Region minimum [x, y, z]"),
-    max:  z.preprocess(jsonPreprocess, z.array(z.number()).length(3)).describe("Region maximum [x, y, z]"),
-    mode: z.string().optional().describe("'load' (default), 'unload', 'pin' or 'unpin'"),
-  },
-  async (args) => worldpartition.mcpResponse(await worldpartition.wpLoadRegion(args))
-);
-
-server.tool(
-  "ue5_level_instance_create",
-  [
-    "Place an existing level inside the current one as a Level Instance actor.",
-    "Note the direction: UE 5.8 does not expose LevelInstanceSubsystem to Python, so collapsing a selection of actors INTO a new level instance is not available here — this is the 'place level A inside level B' half.",
-  ].join(" "),
-  {
-    level_asset: z.string().describe("Level to instance, e.g. '/Game/Maps/L_Room'"),
-    location:    z.preprocess(jsonPreprocess, z.array(z.number()).length(3)).optional().describe("Placement [x, y, z] (default origin)"),
-    rotation:    z.preprocess(jsonPreprocess, z.array(z.number()).length(3)).optional().describe("Rotation [pitch, yaw, roll]"),
-    actor_label: z.string().optional().describe("Label for the spawned LevelInstance actor"),
-    save:        z.boolean().optional().describe("Save the level afterwards (default true)"),
-  },
-  async (args) => worldpartition.mcpResponse(await worldpartition.levelInstanceCreate(args))
-);
-
-server.tool(
-  "ue5_ikrig_create",
-  [
-    "Create an IK Rig for a skeletal mesh: a Full Body IK solver, IK goals on named bones, and the retarget chains an IK Retargeter later maps between characters.",
-    "Order is handled for you (mesh -> solver -> goals -> chains): a goal cannot attach to a solver that does not exist yet, and the engine reports that as a silent failure.",
-    "Note that auto_fbik adds its own goals for the limbs (LeftHandIK, RightHandIK, LeftFootIK, RightFootIK), so the result lists more goals than you asked for — yours are added alongside them.",
-    "Only the Full Body IK solver is available — UE 5.8's Python bindings cannot pass an arbitrary solver class to IKRigController.add_solver. Add other solvers in the IK Rig editor.",
-  ].join(" "),
-  {
-    asset_path:    z.string().describe("Destination path, e.g. '/Game/Rigs/IK_Quinn'"),
-    skeletal_mesh: z.string().describe("Skeletal mesh to rig, e.g. '/Game/Characters/Meshes/SKM_Quinn'"),
-    retarget_root: z.string().optional().describe("Root bone for retargeting, usually 'pelvis' or 'root'"),
-    auto_fbik:     z.boolean().optional().describe("Add a Full Body IK solver (default true)"),
-    goals: z.preprocess(jsonPreprocess, z.array(z.any())).optional().describe(
-      "IK goals: [{ name, bone }] — e.g. [{\"name\":\"Hand_L\",\"bone\":\"hand_l\"}]"
-    ),
-    chains: z.preprocess(jsonPreprocess, z.array(z.any())).optional().describe(
-      "Retarget chains: [{ name, start_bone, end_bone, goal? }]"
-    ),
-  },
-  async (args) => rigging.mcpResponse(await rigging.ikRigCreate(args))
-);
-
-server.tool(
-  "ue5_ikrig_read",
-  "Read an IK Rig: its skeletal mesh, solver count, retarget root, IK goals with their bones, and retarget chains with their start/end bones.",
-  {
-    asset_path: z.string().describe("Content path of the IK Rig"),
-  },
-  async (args) => rigging.mcpResponse(await rigging.ikRigRead(args))
-);
-
-server.tool(
-  "ue5_ikretargeter_create",
-  [
-    "Create an IK Retargeter that maps animation from one IK Rig onto another — the asset behind retargeting a character's animations to a different skeleton.",
-    "Both rigs need retarget chains (see ue5_ikrig_create) or there is nothing to map. auto_map 'exact' matches chains by identical name, 'fuzzy' by similarity, 'none' leaves them unmapped.",
-    "The standard retarget op stack is created too; without it the asset is inert.",
-  ].join(" "),
-  {
-    asset_path:  z.string().describe("Destination path, e.g. '/Game/Rigs/RTG_QuinnToManny'"),
-    source_rig:  z.string().describe("IK Rig to take animation FROM"),
-    target_rig:  z.string().describe("IK Rig to apply animation TO"),
-    auto_map:    z.string().optional().describe("'exact' (default), 'fuzzy' or 'none'"),
-    source_preview_mesh: z.string().optional().describe("Preview mesh for the source side"),
-    target_preview_mesh: z.string().optional().describe("Preview mesh for the target side"),
-  },
-  async (args) => rigging.mcpResponse(await rigging.ikRetargeterCreate(args))
-);
-
-server.tool(
-  "ue5_ikretargeter_set_chain_mapping",
-  "Fix chain mappings on an existing IK Retargeter — for the pairs auto-mapping got wrong. Each mapping says which source chain drives which target chain.",
-  {
-    asset_path: z.string().describe("Content path of the IK Retargeter"),
-    mappings: z.preprocess(jsonPreprocess, z.array(z.any())).describe(
-      "[{ target_chain, source_chain }] — e.g. [{\"target_chain\":\"LeftArm\",\"source_chain\":\"arm_l\"}]"
-    ),
-    save: z.boolean().optional().describe("Save the asset afterwards (default true)"),
-  },
-  async (args) => rigging.mcpResponse(await rigging.ikRetargeterSetChainMapping(args))
-);
-
-server.tool(
-  "ue5_controlrig_create",
-  [
-    "Create a Control Rig blueprint for a skeletal mesh, with the skeleton hierarchy imported into it.",
-    "The factory chooses the location; pass asset_path to have it moved there afterwards. Set modular:true for a Modular Rig.",
-    "Authoring the rig's node graph is not covered — do that in the Control Rig editor.",
-  ].join(" "),
-  {
-    skeletal_mesh: z.string().describe("Skeletal mesh to build the rig from"),
-    asset_path:    z.string().optional().describe("Where the rig should end up; defaults to beside the mesh"),
-    modular:       z.boolean().optional().describe("Create a Modular Rig (default false)"),
-  },
-  async (args) => rigging.mcpResponse(await rigging.controlRigCreate(args))
-);
-
-server.tool(
-  "ue5_nanite_configure",
-  [
-    "Turn Nanite on or off for static meshes and tune how it simplifies them (precision, fallback mesh, shape preservation).",
-    "The mesh is rebuilt as part of the call, so the result's before/after blocks show what actually changed rather than what was requested.",
-    "UE 5.8 note: the old bPreserveArea boolean is now the shape_preservation enum — 'none', 'preserve_area' or 'voxelize'.",
-  ].join(" "),
-  {
-    static_meshes: z.preprocess(jsonPreprocess, z.array(z.string())).describe(
-      "Static mesh content paths, e.g. [\"/Game/Meshes/SM_Rock\"]"
-    ),
-    enabled:                    z.boolean().optional().describe("Enable Nanite on these meshes"),
-    position_precision:         z.number().int().optional().describe("Position quantisation; leave unset for Auto"),
-    normal_precision:           z.number().int().optional().describe("Normal quantisation; -1 is Auto"),
-    tangent_precision:          z.number().int().optional().describe("Tangent quantisation; -1 is Auto"),
-    keep_percent_triangles:     z.number().optional().describe("Fraction of triangles kept when building (0..1)"),
-    trim_relative_error:        z.number().optional().describe("Error budget for trimming during the build"),
-    fallback_target:            z.string().optional().describe("'auto', 'percent_triangles' or 'relative_error' — how the non-Nanite fallback mesh is chosen"),
-    fallback_percent_triangles: z.number().optional().describe("Fallback mesh triangle fraction (0..1), with fallback_target 'percent_triangles'"),
-    fallback_relative_error:    z.number().optional().describe("Fallback mesh error budget, with fallback_target 'relative_error'"),
-    explicit_tangents:          z.boolean().optional().describe("Store tangents rather than deriving them"),
-    shape_preservation:         z.string().optional().describe("'none', 'preserve_area' or 'voxelize'"),
-    max_edge_length_factor:     z.number().optional().describe("Cap on edge length relative to the mesh size"),
-    save:                       z.boolean().optional().describe("Save the assets afterwards (default true)"),
-  },
-  async (args) => rendering.mcpResponse(await rendering.naniteConfigure(args))
-);
-
-server.tool(
-  "ue5_lumen_configure",
-  [
-    "Set Lumen global illumination and reflections for the open level, on an unbounded PostProcessVolume (created if the level has none).",
-    "Every post-process property is inert until its override flag is set; this sets the flag for each value you pass and lists them in overrides_set, which is the usual reason 'I changed Lumen settings and nothing happened'.",
-    "advanced{} takes any other PostProcessSettings property by its snake_case name and overrides it the same way.",
-  ].join(" "),
-  {
-    volume_label:      z.string().optional().describe("Target a specific PostProcessVolume by actor label; default is the level's unbounded one"),
-    create_if_missing: z.boolean().optional().describe("Spawn an unbounded volume if there isn't one (default true)"),
-    global_illumination: z.string().optional().describe("'lumen', 'screen_space', 'none' or 'plugin'"),
-    reflections:         z.string().optional().describe("'lumen', 'screen_space' or 'none'"),
-    ray_lighting_mode:   z.string().optional().describe("'default', 'surface_cache', 'hit_lighting' or 'hit_lighting_for_reflections'"),
-    lumen_scene_lighting_quality: z.number().optional().describe("Lumen Scene lighting quality (1 = default)"),
-    lumen_scene_detail:           z.number().optional().describe("Lumen Scene detail (1 = default)"),
-    lumen_scene_view_distance:    z.number().optional().describe("Lumen Scene view distance in cm"),
-    lumen_final_gather_quality:   z.number().optional().describe("Final gather quality (1 = default)"),
-    lumen_reflection_quality:     z.number().optional().describe("Reflection quality (1 = default)"),
-    lumen_max_reflection_bounces: z.number().int().optional().describe("Reflection bounce count"),
-    lumen_max_trace_distance:     z.number().optional().describe("Max trace distance in cm"),
-    advanced: z.preprocess(jsonPreprocess, z.record(z.any())).optional().describe(
-      "Any other PostProcessSettings property, e.g. {\"lumen_surface_cache_resolution\": 0.75}"
-    ),
-    save: z.boolean().optional().describe("Save the level afterwards (default true)"),
-  },
-  async (args) => rendering.mcpResponse(await rendering.lumenConfigure(args))
-);
-
-server.tool(
-  "ue5_render_read",
-  [
-    "Report what actually drives the look of the open level: every PostProcessVolume with the settings it overrides, the live rendering console variables, and the project's [/Script/Engine.RendererSettings] ini section.",
-    "Pass static_meshes to include their Nanite state (enabled, precision, fallback, triangle counts) in the same answer.",
-  ].join(" "),
-  {
-    static_meshes: z.preprocess(jsonPreprocess, z.array(z.string())).optional().describe(
-      "Static mesh paths to report Nanite settings for"
-    ),
-  },
-  async (args) => rendering.mcpResponse(await rendering.renderRead(args))
-);
-
-server.tool(
-  "ue5_render_project_settings",
-  [
-    "Change project-wide renderer settings — Nanite, Lumen, virtual shadow maps, Substrate — by writing [/Script/Engine.RendererSettings] in Config/DefaultEngine.ini. A null value removes a key.",
-    "UE 5.8 exposes no RendererSettings object to Python, so this is ini text: the running editor keeps its own copy and only picks the file up on the next start. apply_live pushes each key as a console variable so the viewport updates now, but some settings are read-only at runtime.",
-    "Use ue5_render_read to see the current values first.",
-  ].join(" "),
-  {
-    settings: z.preprocess(jsonPreprocess, z.record(z.any())).describe(
-      "Map of setting to value, e.g. {\"r.DynamicGlobalIlluminationMethod\": 1, \"r.Shadow.Virtual.Enable\": 1}"
-    ),
-    apply_live: z.boolean().optional().describe("Also run each key as a console command (default true)"),
-  },
-  async (args) => rendering.mcpResponse(await rendering.renderProjectSettings(args))
-);
-
-server.tool(
-  "ue5_collision_configure",
-  [
-    "Set up collision on static meshes: simple primitives, convex decomposition, the trace flag, and the physical material.",
-    "Order inside the call is remove -> add -> flags, so remove_existing:true with add_shape replaces the collision rather than clearing what you just added.",
-    "trace_flag, physical_material and double_sided_geometry live on the mesh's BodySetup, which only exists once the mesh has collision.",
-  ].join(" "),
-  {
-    static_meshes: z.preprocess(jsonPreprocess, z.array(z.string())).describe(
-      "Static mesh content paths"
-    ),
-    remove_existing:  z.boolean().optional().describe("Clear existing collision first"),
-    add_shape:        z.string().optional().describe("'box', 'sphere', 'capsule', 'ndop10_x', 'ndop10_y', 'ndop10_z', 'ndop18' or 'ndop26'"),
-    shape_count:      z.number().int().optional().describe("How many of that shape to add (default 1)"),
-    convex_hulls:     z.number().int().optional().describe("Run convex decomposition, producing up to this many hulls"),
-    convex_max_verts: z.number().int().optional().describe("Max vertices per hull (default 16)"),
-    convex_precision: z.number().int().optional().describe("Decomposition precision (default 100000)"),
-    trace_flag:       z.string().optional().describe("'use_default', 'use_simple_and_complex', 'use_simple_as_complex' or 'use_complex_as_simple'"),
-    physical_material: z.string().optional().describe("Content path of a PhysicalMaterial to bind"),
-    double_sided_geometry: z.boolean().optional().describe("Treat complex collision as double sided"),
-    save:             z.boolean().optional().describe("Save the assets afterwards (default true)"),
-  },
-  async (args) => assetconfig.mcpResponse(await assetconfig.collisionConfigure(args))
-);
-
-server.tool(
-  "ue5_physical_material_create",
-  [
-    "Create or update a PhysicalMaterial: friction, restitution, density, the combine modes, and the surface type that drives footstep sounds and impact decals.",
-    "The combine modes only take effect when their override flag is set, which this does for you.",
-    "surface_type values come from [/Script/Engine.PhysicsSettings] in DefaultEngine.ini — a project that declares none has only 'default'.",
-  ].join(" "),
-  {
-    asset_path:      z.string().describe("Destination path, e.g. '/Game/Physics/PM_Ice'"),
-    friction:        z.number().optional().describe("Kinetic friction (0..1 typical)"),
-    static_friction: z.number().optional().describe("Static friction"),
-    restitution:     z.number().optional().describe("Bounciness (0..1)"),
-    density:         z.number().optional().describe("Density in g/cm^3"),
-    friction_combine_mode:    z.string().optional().describe("'average', 'min', 'multiply' or 'max'"),
-    restitution_combine_mode: z.string().optional().describe("'average', 'min', 'multiply' or 'max'"),
-    surface_type:    z.string().optional().describe("Surface type name, e.g. 'default'"),
-    overwrite:       z.boolean().optional().describe("Update the asset if it already exists (default false)"),
-  },
-  async (args) => assetconfig.mcpResponse(await assetconfig.physicalMaterialCreate(args))
-);
-
-server.tool(
-  "ue5_foliage_type_create",
-  [
-    "Create or update a FoliageType asset for a static mesh — the settings both the foliage paint brush and procedural foliage read: density, radius, scale range, slope limits, cull distance.",
-    "Ranges are [min, max] pairs. A FoliageType without a mesh scatters nothing, so static_mesh is required.",
-  ].join(" "),
-  {
-    asset_path:  z.string().describe("Destination path, e.g. '/Game/Foliage/FT_Grass'"),
-    static_mesh: z.string().describe("Static mesh this foliage scatters"),
-    density:     z.number().optional().describe("Instances per 1000x1000 unit area"),
-    radius:      z.number().optional().describe("Minimum distance between instances"),
-    scaling:     z.string().optional().describe("'uniform', 'free', 'lock_xy', 'lock_xz' or 'lock_yz'"),
-    scale_x:     z.preprocess(jsonPreprocess, z.array(z.number()).length(2)).optional().describe("[min, max] scale"),
-    scale_y:     z.preprocess(jsonPreprocess, z.array(z.number()).length(2)).optional().describe("[min, max] scale (non-uniform scaling only)"),
-    scale_z:     z.preprocess(jsonPreprocess, z.array(z.number()).length(2)).optional().describe("[min, max] scale (non-uniform scaling only)"),
-    align_to_normal:     z.boolean().optional().describe("Align instances to the surface normal"),
-    random_yaw:          z.boolean().optional().describe("Randomise yaw"),
-    random_pitch_angle:  z.number().optional().describe("Max random pitch in degrees"),
-    ground_slope_angle:  z.preprocess(jsonPreprocess, z.array(z.number()).length(2)).optional().describe("[min, max] slope in degrees the mesh may sit on"),
-    z_offset:            z.preprocess(jsonPreprocess, z.array(z.number()).length(2)).optional().describe("[min, max] vertical offset"),
-    cull_distance:       z.preprocess(jsonPreprocess, z.array(z.number()).length(2)).optional().describe("[start, end] cull distance"),
-    collision_with_world: z.boolean().optional().describe("Test against world collision when placing"),
-    cast_shadow:         z.boolean().optional().describe("Instances cast shadows"),
-    overwrite:           z.boolean().optional().describe("Update the asset if it already exists (default false)"),
-  },
-  async (args) => assetconfig.mcpResponse(await assetconfig.foliageTypeCreate(args))
-);
-
-server.tool(
-  "ue5_texture_configure",
-  [
-    "Set compression and streaming settings on textures — the pass that makes a freshly imported normal map or mask render correctly.",
-    "Enum values accept the short form as well as the engine spelling: 'normalmap' or 'TC_NORMALMAP', 'character' or 'TEXTUREGROUP_CHARACTER', 'no_mipmaps' or 'TMGS_NO_MIPMAPS'. A wrong value answers with the full list.",
-  ].join(" "),
-  {
-    textures: z.preprocess(jsonPreprocess, z.array(z.string())).describe("Texture content paths"),
-    compression_settings: z.string().optional().describe("'default', 'normalmap', 'masks', 'grayscale', 'hdr', 'bc7', ..."),
-    lod_group:            z.string().optional().describe("'world', 'character', 'ui', 'character_normal_map', ..."),
-    srgb:                 z.boolean().optional().describe("Treat the source as sRGB (false for normal maps and masks)"),
-    max_texture_size:     z.number().int().optional().describe("Clamp the built texture to this size; 0 means no limit"),
-    mip_gen_settings:     z.string().optional().describe("'from_texture_group', 'no_mipmaps', 'simple_average', 'sharpen0'..'sharpen10', ..."),
-    lod_bias:             z.number().int().optional().describe("LOD bias"),
-    never_stream:         z.boolean().optional().describe("Keep fully resident rather than streaming"),
-    virtual_texture_streaming: z.boolean().optional().describe("Build as a virtual texture"),
-    filter:               z.string().optional().describe("'default', 'nearest', 'bilinear' or 'trilinear'"),
-    address_x:            z.string().optional().describe("'wrap', 'clamp' or 'mirror'"),
-    address_y:            z.string().optional().describe("'wrap', 'clamp' or 'mirror'"),
-    compression_no_alpha: z.boolean().optional().describe("Discard the alpha channel when compressing"),
-    flip_green_channel:   z.boolean().optional().describe("Flip green — for normal maps authored in the other convention"),
-    save:                 z.boolean().optional().describe("Save the assets afterwards (default true)"),
-  },
-  async (args) => assetconfig.mcpResponse(await assetconfig.textureConfigure(args))
-);
-
-server.tool(
-  "ue5_interchange_import",
-  [
-    "Import a file through Interchange, UE's current import framework, with control over the import pipeline: combine meshes, build Nanite, which skeleton to bind to, whether to create materials, LODs, import offsets.",
-    "This is the difference from ue5_import_asset, which uses the legacy importer and can only drop a file into a folder.",
-    "source_file is read by the editor process, so it must be an absolute path on the editor's machine. destination_path is a content path like '/Game/Imported'.",
-    "Beyond the named arguments, pipeline_settings reaches any pipeline property by dotted path ('mesh_pipeline.nanite_triangle_threshold'). Run ue5_interchange_inspect to list the real names.",
-  ].join(" "),
-  {
-    source_file:      z.string().describe("Absolute path of the file to import, on the editor's machine"),
-    destination_path: z.string().describe("Content folder for the result, e.g. '/Game/Imported'"),
-    asset_name:       z.string().optional().describe("Name for the imported asset; renamed after import for the asset types Interchange names from the file"),
-    pipeline_asset:   z.string().optional().describe("A pipeline saved with ue5_interchange_pipeline_create, used as the base"),
-    pipeline_settings: z.preprocess(jsonPreprocess, z.record(z.any())).optional().describe(
-      "Any pipeline property by dotted path, e.g. {\"mesh_pipeline.build_nanite\": true}"
-    ),
-    replace_existing: z.boolean().optional().describe("Overwrite assets already at that path (default true)"),
-    import_static_meshes:   z.boolean().optional().describe("Import static meshes from the file"),
-    import_skeletal_meshes: z.boolean().optional().describe("Import skeletal meshes from the file"),
-    import_animations:      z.boolean().optional().describe("Import animation tracks"),
-    import_materials:       z.boolean().optional().describe("Import materials"),
-    import_morph_targets:   z.boolean().optional().describe("Import morph targets"),
-    import_collision:       z.boolean().optional().describe("Import collision geometry"),
-    import_lods:            z.boolean().optional().describe("Import LODs present in the file"),
-    import_sockets:         z.boolean().optional().describe("Import sockets"),
-    build_nanite:           z.boolean().optional().describe("Build imported static meshes as Nanite"),
-    create_physics_asset:   z.boolean().optional().describe("Create a physics asset for skeletal meshes"),
-    create_new_materials:   z.boolean().optional().describe("Create materials rather than only reusing existing ones"),
-    reuse_existing_materials: z.boolean().optional().describe("Reuse materials already in the project when names match"),
-    recompute_normals:      z.boolean().optional().describe("Recompute normals instead of using the file's"),
-    recompute_tangents:     z.boolean().optional().describe("Recompute tangents"),
-    combine_static_meshes_behavior:   z.string().optional().describe("'all', 'visible_only' or 'do_not_combine'"),
-    combine_skeletal_meshes_behavior: z.string().optional().describe("'by_skeleton', 'by_skeleton_visible_only' or 'do_not_combine'"),
-    skeleton:         z.string().optional().describe("Existing Skeleton asset to bind a skeletal mesh or animation to"),
-    parent_material:  z.string().optional().describe("Parent material for created material instances"),
-    import_offset_translation:   z.preprocess(jsonPreprocess, z.array(z.number()).length(3)).optional().describe("[x, y, z] offset applied on import"),
-    import_offset_rotation:      z.preprocess(jsonPreprocess, z.array(z.number()).length(3)).optional().describe("[pitch, yaw, roll] applied on import"),
-    import_offset_uniform_scale: z.number().optional().describe("Uniform scale applied on import"),
-  },
-  async (args) => interchange.mcpResponse(await interchange.interchangeImport(args))
-);
-
-server.tool(
-  "ue5_interchange_inspect",
-  [
-    "Report whether Interchange can import a given file and which translator handles it, and list the pipeline property names available to ue5_interchange_import's pipeline_settings.",
-    "Run this before an unfamiliar import: the property list is the ground truth for this engine build, and it already excludes names the engine has deprecated.",
-  ].join(" "),
-  {
-    source_file: z.string().optional().describe("Absolute path of a file to test; omit to only list pipeline properties"),
-    list_pipeline_properties: z.boolean().optional().describe("Include the pipeline property listing (default true)"),
-  },
-  async (args) => interchange.mcpResponse(await interchange.interchangeInspect(args))
-);
-
-server.tool(
-  "ue5_interchange_pipeline_create",
-  [
-    "Save a configured Interchange pipeline as an asset so the same import settings can be reused and version-controlled, then pass it to ue5_interchange_import as pipeline_asset.",
-    "Takes the same named settings as ue5_interchange_import plus pipeline_settings for anything else. Per-import overrides are applied to a throwaway copy, so a saved pipeline is never modified behind your back.",
-  ].join(" "),
-  {
-    asset_path: z.string().describe("Destination path, e.g. '/Game/Import/PL_CharacterFBX'"),
-    pipeline_settings: z.preprocess(jsonPreprocess, z.record(z.any())).optional().describe(
-      "Any pipeline property by dotted path, e.g. {\"mesh_pipeline.build_nanite\": true}"
-    ),
-    overwrite: z.boolean().optional().describe("Update the asset if it already exists (default false)"),
-    import_static_meshes:   z.boolean().optional().describe("Import static meshes from the file"),
-    import_skeletal_meshes: z.boolean().optional().describe("Import skeletal meshes from the file"),
-    import_animations:      z.boolean().optional().describe("Import animation tracks"),
-    import_materials:       z.boolean().optional().describe("Import materials"),
-    import_lods:            z.boolean().optional().describe("Import LODs present in the file"),
-    build_nanite:           z.boolean().optional().describe("Build imported static meshes as Nanite"),
-    create_physics_asset:   z.boolean().optional().describe("Create a physics asset for skeletal meshes"),
-    combine_static_meshes_behavior: z.string().optional().describe("'all', 'visible_only' or 'do_not_combine'"),
-    skeleton:               z.string().optional().describe("Existing Skeleton asset to bind to"),
-    import_offset_uniform_scale: z.number().optional().describe("Uniform scale applied on import"),
-  },
-  async (args) => interchange.mcpResponse(await interchange.interchangePipelineCreate(args))
-);
-
-server.tool(
-  "ue5_substrate_material_create",
-  [
-    "Build a native Substrate material — a BSDF wired into the material's FrontMaterial output — instead of the legacy BaseColor/Metallic/Roughness graph ue5_create_material makes.",
-    "Substrate's Slab BSDF has no BaseColor or Metallic pin: it takes Diffuse Albedo and F0. Passing base_color/metallic/specular inserts the SubstrateMetalnessToDiffuseAlbedoF0 node that bridges them, so the familiar three values still work.",
-    "use_parameters exposes named scalar/vector/texture parameters so material instances can drive the result.",
-    "Requires Substrate to be on in the project; if it is off the tool says so rather than building a graph that compiles to nothing.",
-  ].join(" "),
-  {
-    asset_path: z.string().describe("Destination path, e.g. '/Game/Materials/M_Metal'"),
-    shading:    z.string().optional().describe("'slab' (default), 'clearcoat', 'unlit', 'toon', 'hair', 'eye' or 'water'"),
-    base_color: z.preprocess(jsonPreprocess, z.array(z.number()).min(3).max(4)).optional().describe("[r, g, b] linear colour"),
-    metallic:   z.number().optional().describe("0 = dielectric, 1 = metal"),
-    specular:   z.number().optional().describe("Specular level (0.5 is the neutral default)"),
-    roughness:  z.number().optional().describe("0 = mirror, 1 = fully rough"),
-    emissive_color: z.preprocess(jsonPreprocess, z.array(z.number()).min(3).max(4)).optional().describe("[r, g, b] emissive"),
-    base_color_texture: z.string().optional().describe("Texture asset driving base colour instead of a constant"),
-    normal_texture:     z.string().optional().describe("Normal map texture asset"),
-    use_parameters:     z.boolean().optional().describe("Expose the values as material parameters (default false)"),
-    blend_mode: z.string().optional().describe("'opaque' (default), 'masked', 'translucent', 'additive', 'modulate', 'alpha_composite', 'alpha_holdout'"),
-    two_sided:  z.boolean().optional().describe("Render both faces"),
-    overwrite:  z.boolean().optional().describe("Replace an existing asset at that path"),
-  },
-  async (args) => substrate.mcpResponse(await substrate.substrateMaterialCreate(args))
-);
-
-server.tool(
-  "ue5_substrate_read",
-  [
-    "Report whether Substrate is enabled in the project, and — given a Material — which Substrate nodes its graph contains, their input pins, and the parameters it exposes.",
-    "Call it with no asset_path to answer just 'is this a Substrate project'.",
-  ].join(" "),
-  {
-    asset_path: z.string().optional().describe("Material to inspect; omit to report only the project state"),
-  },
-  async (args) => substrate.mcpResponse(await substrate.substrateRead(args))
-);
-
-server.tool(
-  "ue5_landscape_read",
-  [
-    "Report the landscapes in the open level: material, hole material, paint layers with the LayerInfo asset bound to each, edit layers, and which actors are streaming proxies rather than the parent landscape.",
-    "If the level has none, the answer says so — UE 5.8 cannot create a landscape from script (ALandscape::Import is not exposed to Python, and spawning the class gives a LandscapePlaceholder), so that first step happens in Landscape mode.",
-  ].join(" "),
-  {
-    include_proxies: z.boolean().optional().describe("Also list World Partition streaming proxies (default false)"),
-  },
-  async (args) => landscape.mcpResponse(await landscape.landscapeRead(args))
-);
-
-server.tool(
-  "ue5_landscape_setup",
-  [
-    "Assign a landscape's material and bind its paint layers, creating the LandscapeLayerInfoObject asset each named layer needs.",
-    "A paint layer declared in the landscape material does nothing until a LayerInfo asset is bound to it on that landscape — this is the '+' next to a layer in Landscape mode, done in bulk.",
-    "Needs a landscape that already exists; see ue5_landscape_read.",
-  ].join(" "),
-  {
-    landscape_label: z.string().optional().describe("Which landscape, by actor label; required only when the level has more than one"),
-    material:        z.string().optional().describe("Landscape material to assign"),
-    hole_material:   z.string().optional().describe("Landscape hole material to assign"),
-    layers: z.preprocess(jsonPreprocess, z.array(z.any())).optional().describe(
-      "Paint layers: [{ name, layer_info_path?, hardness?, phys_material?, debug_color? }] — name must match the layer name in the material"
-    ),
-    layer_info_folder: z.string().optional().describe("Where new LayerInfo assets go; defaults to a LayerInfo folder beside the level"),
-    save: z.boolean().optional().describe("Save the level afterwards (default true)"),
-  },
-  async (args) => landscape.mcpResponse(await landscape.landscapeSetup(args))
-);
-
-server.tool(
-  "ue5_metasound_create",
-  [
-    "Build a MetaSound Source or Patch and save it as an asset. The whole graph goes in ONE call: nodes[], connections[] and graph_inputs[].",
-    "Why one call: UE 5.8's MetaSound scripting API cannot find a node again in a later call (there is no node enumeration), so nodes are addressed by ids you choose inside this request — same shape as ue5_bp_add_logic.",
-    "A node class is namespace/name/variant. Give just the name ('Sine', 'Saw', 'Noise', 'Stereo Delay', 'Trigger Repeat') and the variant is auto-detected: audio-rate nodes use 'Audio', trigger and maths nodes use none. Prefix a namespace with a dot if it is not UE.",
-    "connections: {from: 'nodeId.OutputName', to: 'nodeId.InputName'}. `to` also accepts 'audio_out' (the source's audio output) and 'graph_output:Name'.",
-    "The result lists every node's real input and output pin names — read it before wiring a second graph.",
-  ].join(" "),
-  {
-    asset_path:    z.string().describe("Destination content path, e.g. '/Game/Audio/MS_Engine'"),
-    type:          z.string().optional().describe("'source' (playable, default) or 'patch' (reusable graph)"),
-    output_format: z.string().optional().describe("'mono' (default) or 'stereo' — sources only"),
-    one_shot:      z.boolean().optional().describe("Source finishes itself rather than looping (default true)"),
-    nodes: z.preprocess(jsonPreprocess, z.array(z.any())).optional().describe(
-      "Array of { id, class, variant?, version?, inputs? } — e.g. [{\"id\":\"osc\",\"class\":\"Sine\",\"inputs\":{\"Frequency\":220.0}}]"
-    ),
-    connections: z.preprocess(jsonPreprocess, z.array(z.any())).optional().describe(
-      "Array of { from, to } — e.g. [{\"from\":\"osc.Audio\",\"to\":\"audio_out\"}]"
-    ),
-    graph_inputs: z.preprocess(jsonPreprocess, z.array(z.any())).optional().describe(
-      "Parameters the sound exposes: [{ name, type, default }], type is a MetaSound data type (Float, Bool, Int32, String, Trigger, Audio)"
-    ),
-    author: z.string().optional().describe("Author recorded on the asset (default 'NGG')"),
-  },
-  async (args) => metasound.mcpResponse(await metasound.metasoundCreate(args))
-);
-
-server.tool(
-  "ue5_metasound_read",
-  [
-    "Report what an existing MetaSound exposes: type, output format, and its graph inputs and outputs.",
-    "Note the limit, which is the API's and not this tool's: UE 5.8 cannot enumerate the nodes inside a MetaSound graph from scripting, so this shows the interface, not the node network.",
-  ].join(" "),
-  {
-    asset_path: z.string().describe("Content path of the MetaSound Source or Patch"),
-  },
-  async (args) => metasound.mcpResponse(await metasound.metasoundRead(args))
-);
-
-server.tool(
-  "ue5_metasound_set_graph_input_defaults",
-  "Retune an existing MetaSound: change the default values of the graph inputs it exposes, without rebuilding the graph. Use ue5_metasound_read to see the input names.",
-  {
-    asset_path: z.string().describe("Content path of the MetaSound"),
-    inputs: z.preprocess(jsonPreprocess, z.record(z.any())).describe(
-      "Map of input name to value, e.g. {\"Frequency\": 440.0, \"Gain\": 0.5}"
-    ),
-    save: z.boolean().optional().describe("Save the asset afterwards (default true)"),
-  },
-  async (args) => metasound.mcpResponse(await metasound.metasoundSetGraphInputDefaults(args))
-);
-
-server.tool(
   "ue5_create_sound_cue",
   "Create a SoundCue asset from an imported SoundWave (WavePlayer wired automatically). Import the .wav first with ue5_import_asset. Optional volume/pitch/looping.",
   {
@@ -6308,23 +5515,6 @@ server.tool(
     }
   }
 );
-
-// ---------------------------------------------------------------------------
-// Toolset summary
-// ---------------------------------------------------------------------------
-// Printed after every registration so the user can see what a NGG_TOOLSETS
-// setting actually cost them. Silent when nothing was filtered.
-if (skippedToolsets.size > 0) {
-  const skippedTotal = [...skippedToolsets.values()].reduce((a, b) => a + b, 0);
-  const detail = [...skippedToolsets.entries()]
-    .sort((a, b) => b[1] - a[1])
-    .map(([set, n]) => `${set}(${n})`)
-    .join(" ");
-  console.error(
-    `[ue5-ngg] toolsets ${TOOLSETS.mode}: registered ${[...TOOLSETS.enabled].sort().join(",")} — ` +
-    `skipped ${skippedTotal} tool(s): ${detail}`
-  );
-}
 
 // ---------------------------------------------------------------------------
 // Start the server

@@ -1,0 +1,42 @@
+{
+	"FileVersion": 3,
+	"Version": 1,
+	"VersionName": "1.0",
+	"FriendlyName": "Dynamic Datatable Plugin",
+	"Description": "Dynamic replacement for Datatables. Includes standard operations and filling from existing Datatable assets.",
+	"Category": "Other",
+	"CreatedBy": "Vyrulent",
+	"CreatedByURL": "https://Vyrulent.com",
+	"DocsURL": "https://vyrulent.com",
+	"MarketplaceURL": "https://www.unrealengine.com/marketplace/en-US/product/aaad9edf714e45b4968fc2942eb11666",
+	"SupportURL": "vyrulentstudios@gmail.com",
+	"EngineVersion": "5.7.0",
+	"CanContainContent": true,
+	"Installed": true,
+	"Modules": [
+		{
+			"Name": "DynamicDatatable",
+			"Type": "Runtime",
+			"LoadingPhase": "PreLoadingScreen",
+			"PlatformAllowList": [
+				"Win64"
+			]
+		},
+		{
+			"Name": "DynamicDataTablePluginEditor",
+			"Type": "UncookedOnly",
+			"LoadingPhase": "PreLoadingScreen",
+			"PlatformAllowList": [
+				"Win64"
+			]
+		},
+		{
+			"Name": "DynamicDataTableEditor",
+			"Type": "Editor",
+			"LoadingPhase": "PreLoadingScreen",
+			"PlatformAllowList": [
+				"Win64"
+			]
+		}
+	]
+}

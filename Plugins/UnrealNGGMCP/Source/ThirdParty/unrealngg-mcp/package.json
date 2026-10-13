@@ -10,19 +10,9 @@
   "scripts": {
     "start": "node index.js",
     "dev": "node --watch index.js",
-    "set-token": "node set-token.js",
-    "test": "node --test helpers.test.js paths.test.js ue5client.test.js pcg.unit.test.js gamedev.test.js meshy.test.js setup-assets.test.js index.tools.test.js set-token.test.js rules.test.js toolsets.test.js newtools.test.js",
+    "test": "node --test helpers.test.js paths.test.js ue5client.test.js pcg.unit.test.js gamedev.test.js meshy.test.js setup-assets.test.js index.tools.test.js",
     "test:live": "node live.test.mjs",
-    "test:live:endpoints": "node live.endpoints.test.mjs",
-    "test:live:sequencer": "node sequencer.live.test.mjs",
-    "test:live:worldpartition": "node worldpartition.live.test.mjs",
-    "test:live:metasound": "node metasound.live.test.mjs",
-    "test:live:rigging": "node rigging.live.test.mjs",
-    "test:live:rendering": "node rendering.live.test.mjs",
-    "test:live:assetconfig": "node assetconfig.live.test.mjs",
-    "test:live:interchange": "node interchange.live.test.mjs",
-    "test:live:substrate": "node substrate.live.test.mjs",
-    "test:live:landscape": "node landscape.live.test.mjs"
+    "test:live:endpoints": "node live.endpoints.test.mjs"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.0.0",

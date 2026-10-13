@@ -1,0 +1,55 @@
+{
+	"FileVersion": 3,
+	"Version": 1,
+	"VersionName": "1.0",
+	"FriendlyName": "UMG In Sequencer",
+	"Description": "A plugin that enables you to add any UMG widget directly into your Level Sequences.",
+	"Category": "Cinematic",
+	"CreatedBy": "WASD Studio",
+	"CreatedByURL": "",
+	"DocsURL": "https://docs.google.com/document/d/1EQwi2hKgoZRDnrmcF86dUfK9yvPnBiuXpGGRd8oxJL8/edit?usp=sharing",
+	"MarketplaceURL": "com.epicgames.launcher://ue/Fab/product/d47b3b79-50ae-47c3-8d0d7da3f1ee48b8",
+	"SupportURL": "",
+	"EngineVersion": "5.7.0",
+	"CanContainContent": true,
+	"Installed": true,
+	"SupportedTargetPlatforms": [
+		"Win64",
+		"Android",
+		"IOS",
+		"Linux",
+		"Mac"
+	],
+	"Modules": [
+		{
+			"Name": "UMGInSequence",
+			"Type": "Runtime",
+			"LoadingPhase": "PreLoadingScreen",
+			"PlatformAllowList": [
+				"Win64",
+				"Android",
+				"IOS",
+				"Linux",
+				"Mac"
+			]
+		},
+		{
+			"Name": "UMGInSequenceEditor",
+			"Type": "Editor",
+			"LoadingPhase": "Default",
+			"PlatformAllowList": [
+				"Win64",
+				"Android",
+				"IOS",
+				"Linux",
+				"Mac"
+			]
+		}
+	],
+	"Plugins": [
+		{
+			"Name": "CustomizableSequencerTracks",
+			"Enabled": true
+		}
+	]
+}

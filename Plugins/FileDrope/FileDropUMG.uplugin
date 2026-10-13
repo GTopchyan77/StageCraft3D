@@ -1,0 +1,28 @@
+{
+	"FileVersion": 3,
+	"Version": 2,
+	"VersionName": "1.0.1",
+	"FriendlyName": "FileDropUMG",
+	"Description": "Drag-and-drop file support for UMG with extension filtering, for runtime and editor use.",
+	"Category": "UI",
+	"CreatedBy": "Shape-Shift Studio GmbH",
+	"CreatedByURL": "https://shape-shift.studio",
+	"DocsURL": "https://docs.shape-shift.de/FileDropUMG",
+	"MarketplaceURL": "",
+	"SupportURL": "https://docs.shape-shift.de/FileDropUMG",
+	"EngineVersion": "5.7.0",
+	"CanContainContent": true,
+	"Installed": true,
+	"Modules": [
+		{
+			"Name": "FileDropUMG",
+			"Type": "Runtime",
+			"LoadingPhase": "PreLoadingScreen",
+			"PlatformAllowList": [
+				"Win64",
+				"Mac",
+				"Linux"
+			]
+		}
+	]
+}

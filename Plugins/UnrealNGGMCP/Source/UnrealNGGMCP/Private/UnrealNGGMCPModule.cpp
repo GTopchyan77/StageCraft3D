@@ -2,7 +2,6 @@
 
 #include "UnrealNGGMCPModule.h"
 #include "NGGHttpServer.h"
-#include "NGGMcpConfig.h"
 #include "Modules/ModuleManager.h"
 #include "Chat/NGGChatTabSpawner.h"
 #include "Chat/NodeDepsInstaller.h"
@@ -177,22 +176,15 @@ void FUnrealNGGMCPModule::StartupModule()
 	}
 	else
 	{
-		// NOTE: UE binds this listener to localhost unless the project overrides
-		// [HTTPServer.Listeners] BindAddress, so the port is normally loopback-only.
-		// Should it be bound wider, FNGGHttpServer::IsLoopbackPeer still refuses
-		// non-local peers with 403 unless AllowRemoteClients is set.
+		// NOTE: FHttpServerModule has no bind-address API and listens on ALL
+		// interfaces, not just loopback. The URL below is what the local sidecar
+		// uses; it does not imply the port is unreachable from the network. See
+		// FNGGHttpServer::Start() for the unauthenticated-exposure warning.
 		UE_LOG(LogNGGBridge, Log,
 			TEXT("UnrealNGGMCP: HTTP bridge reachable on port %u (local sidecar uses http://localhost:%u)"),
 			HttpServer->GetPort(), HttpServer->GetPort());
 		WriteBridgeDiscoveryFile(HttpServer->GetPort());
 	}
-
-	// Make sure this project can actually launch the MCP server that ships with
-	// the plugin: without a .mcp.json naming it, Claude Code has no entry point
-	// and the plugin looks dead from the outside. The path written there is
-	// derived from where this plugin really sits, so a renamed plugin folder
-	// (what a Fab install moved into a project usually ends up as) still works.
-	FNGGMcpConfig::EnsureProjectConfig();
 
 	// Claude Chat editor window — tab + toolbar button.
 	FNGGChatTabSpawner::Register();

@@ -13,53 +13,21 @@ export const DEFAULT_BRIDGE_URL = "http://localhost:6776";
 export const DEFAULT_TIMEOUT_MS = 15000;
 
 // Sidecar lives at <Project>/Plugins/UnrealNGGMCP/Source/ThirdParty/unrealngg-mcp/ue5client.js.
-// Five levels up — unrealngg-mcp, ThirdParty, Source, UnrealNGGMCP, Plugins —
-// lands on the project root that owns this copy of the plugin, the same project
-// whose editor wrote bridge.json under Saved/.
-//
-// That walk assumes the standard <Project>/Plugins/<PluginFolder> layout (the
-// folder name itself is irrelevant — only the depth counts). NGG_PROJECT_ROOT
-// covers the layouts where it does not hold: a plugin grouped one level deeper
-// under Plugins/, or one left in the engine. The editor writes that variable
-// into the generated .mcp.json only for those cases, so the usual install keeps
-// a config with no machine-specific absolute paths in it.
+// Walking up five levels lands on the project root that owns this copy of the
+// plugin — same project whose editor wrote bridge.json under Saved/.
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const WALKED_PROJECT_ROOT = path.resolve(__dirname, "..", "..", "..", "..", "..");
-function projectRoot() {
-  return process.env.NGG_PROJECT_ROOT
-    ? path.resolve(process.env.NGG_PROJECT_ROOT)
-    : WALKED_PROJECT_ROOT;
-}
+const PROJECT_ROOT = path.resolve(__dirname, "..", "..", "..", "..", "..");
+const DEFAULT_DISCOVERY_PATH = path.join(PROJECT_ROOT, "Saved", "UnrealNGGMCP", "bridge.json");
 let discoveryPathOverride = null;
-function getDiscoveryPath() {
-  return discoveryPathOverride ?? path.join(projectRoot(), "Saved", "UnrealNGGMCP", "bridge.json");
-}
+function getDiscoveryPath() { return discoveryPathOverride ?? DEFAULT_DISCOVERY_PATH; }
 
-// The plugin reads its auth token from GConfig under [UnrealNGGMCP] AuthToken=…
-// so we read the same ini layers, in GConfig's own precedence order:
-//
-//   Config/UserEngine.ini    — `GameDirUser`, the LAST entry in GConfigLayers
-//                              (Engine/Source/Runtime/Core/Public/Misc/
-//                              ConfigHierarchy.h), so it overrides everything
-//                              below and the editor never rewrites it.
-//   Config/DefaultEngine.ini — `ProjectDefault`; tracked in git.
-//
-// The secret belongs in the UserEngine.ini layer: it is gitignored, while
-// DefaultEngine.ini is tracked and would publish the token into history.
-// Reading both means the sidecar and the live test suites authenticate against
-// this project's editor out of the box, with no NGG_BRIDGE_TOKEN in the
-// environment, and installs that still keep their token in DefaultEngine.ini
-// keep working.
-//
-// Built per call rather than at import, for the same reason getDiscoveryPath is:
-// NGG_PROJECT_ROOT may be set after this module loads.
-let iniPathOverride = null;   // null = use the real layers; otherwise an array
-function getIniPaths() {
-  return iniPathOverride ?? [
-    path.join(projectRoot(), "Config", "UserEngine.ini"),
-    path.join(projectRoot(), "Config", "DefaultEngine.ini"),
-  ];
-}
+// The plugin reads its auth token from DefaultEngine.ini [UnrealNGGMCP]
+// AuthToken=... — the same file is the fallback token source here, so running
+// the sidecar or the live test suites standalone (without NGG_BRIDGE_TOKEN in
+// the environment) authenticates against this project's editor out of the box.
+const DEFAULT_INI_PATH = path.join(PROJECT_ROOT, "Config", "DefaultEngine.ini");
+let iniPathOverride = null;
+function getIniPath() { return iniPathOverride ?? DEFAULT_INI_PATH; }
 
 // Cache the discovered URL briefly so back-to-back calls don't hammer the
 // filesystem, but stay short enough to pick up a port change after an editor
@@ -111,12 +79,15 @@ function timeoutMs()  {
 let iniTokenCache = null;
 let iniTokenCacheAt = 0;
 
-// Pull [UnrealNGGMCP] AuthToken out of one ini file. Returns "" when the file
-// is missing, unreadable, or has no token — the caller then tries the next
-// layer.
-function parseIniToken(iniPath) {
+function readIniToken() {
+  const now = Date.now();
+  if (iniTokenCache !== null && (now - iniTokenCacheAt) < DISCOVERY_CACHE_MS) {
+    return iniTokenCache;
+  }
+  iniTokenCacheAt = now;
+  iniTokenCache = "";
   try {
-    const text = fs.readFileSync(iniPath, "utf8");
+    const text = fs.readFileSync(getIniPath(), "utf8");
     let inSection = false;
     for (const rawLine of text.split(/\r?\n/)) {
       const line = rawLine.trim();
@@ -126,70 +97,19 @@ function parseIniToken(iniPath) {
       }
       if (!inSection) continue;
       const m = line.match(/^AuthToken\s*=\s*(\S+)/);
-      if (m) return m[1];
+      if (m) {
+        iniTokenCache = m[1];
+        break;
+      }
     }
   } catch {
-    // Ini missing or unreadable — no token from this layer.
-  }
-  return "";
-}
-
-function readIniToken() {
-  const now = Date.now();
-  if (iniTokenCache !== null && (now - iniTokenCacheAt) < DISCOVERY_CACHE_MS) {
-    return iniTokenCache;
-  }
-  iniTokenCacheAt = now;
-  iniTokenCache = "";
-  // First layer that carries a token wins, matching GConfig's precedence
-  // (UserEngine.ini overrides DefaultEngine.ini). If none do, requests go out
-  // unauthenticated — which still works against a bridge that has no AuthToken
-  // configured, minus exec_python and the lifecycle routes.
-  for (const iniPath of getIniPaths()) {
-    const token = parseIniToken(iniPath);
-    if (token) {
-      iniTokenCache = token;
-      break;
-    }
+    // Ini missing or unreadable — no token; unauthenticated requests still
+    // work against a bridge that has no AuthToken configured.
   }
   return iniTokenCache;
 }
 
 function authToken()  { return process.env.NGG_BRIDGE_TOKEN      || readIniToken(); }
-
-/**
- * Explains a 401 in terms of where this process got its token, so the failure
- * points at the file to fix instead of just saying "unauthorized".
- *
- * The editor writes an AuthToken into <Project>/Config/UserEngine.ini the first
- * time it runs in a project that has none, so the usual causes of a mismatch
- * are a stale NGG_BRIDGE_TOKEN overriding that file, or a sidecar pointed at a
- * different project's ini than the editor it is talking to.
- */
-function authMismatchHint() {
-  // Name the layer the token actually came from; fall back to the one the
-  // editor provisions into when no layer carries a token at all.
-  const paths   = getIniPaths();
-  const iniPath = paths.find(p => parseIniToken(p)) ?? paths[0];
-  if (process.env.NGG_BRIDGE_TOKEN) {
-    return (
-      `NGG_BRIDGE_TOKEN is set in this process's environment and takes precedence over ` +
-      `${iniPath}, where the editor keeps the token it actually expects ([UnrealNGGMCP] AuthToken). ` +
-      `Copy that value into NGG_BRIDGE_TOKEN, or drop the env var (e.g. from .mcp.json) so the ini is used.`
-    );
-  }
-  if (readIniToken()) {
-    return (
-      `The token sent came from ${iniPath} ([UnrealNGGMCP] AuthToken) and the editor rejected it — ` +
-      `this sidecar is most likely pointed at a different project than the editor on the bridge port. ` +
-      `Check that ini against the editor's project, then restart the editor.`
-    );
-  }
-  return (
-    `No token was sent: ${iniPath} has no [UnrealNGGMCP] AuthToken and NGG_BRIDGE_TOKEN is unset. ` +
-    `Restart the Unreal Editor — it writes a token there on first run — or set NGG_BRIDGE_TOKEN to the editor's token.`
-  );
-}
 
 // Read at import for anything that needs a stable banner/error line. Will
 // reflect whatever was set when the server started; callers wanting the
@@ -209,12 +129,6 @@ export function _getDiscoveryPathForTests() {
   return getDiscoveryPath();
 }
 
-// Exposed for tests — lets the test harness see every ini layer the sidecar
-// consults for the token fallback, in precedence order.
-export function _getIniPathsForTests() {
-  return getIniPaths();
-}
-
 // Exposed for tests — point discovery at a temp file instead of the real
 // <Project>/Saved/UnrealNGGMCP/bridge.json so the test suite doesn't collide
 // with a live editor's discovery file. Pass null to restore the default.
@@ -224,16 +138,10 @@ export function _setDiscoveryPathForTests(p) {
   discoveryCacheAt = 0;
 }
 
-// Exposed for tests — collapse the ini token fallback to a single temp file
-// instead of the real UserEngine/DefaultEngine layers. Pass null to restore.
+// Exposed for tests — point the ini token fallback at a temp file instead of
+// the real <Project>/Config/DefaultEngine.ini. Pass null to restore the default.
 export function _setIniPathForTests(p) {
-  _setIniPathsForTests(p === null ? null : [p]);
-}
-
-// Exposed for tests — override the whole layer list, so precedence between
-// Saved/ and Config/ can be exercised. Pass null to restore the real layers.
-export function _setIniPathsForTests(paths) {
-  iniPathOverride = paths;
+  iniPathOverride = p;
   iniTokenCache = null;
   iniTokenCacheAt = 0;
 }
@@ -241,29 +149,6 @@ export function _setIniPathsForTests(paths) {
 // Exposed for tests — the resolved token (env var or ini fallback).
 export function _getAuthTokenForTests() {
   return authToken();
-}
-
-/**
- * Where the auth token is coming from, for diagnostics. Never returns the token
- * itself — callers surface this to the model and to logs.
- *
- * Without a token the bridge still serves every ordinary route, but exec_python
- * and the lifecycle routes stay disabled, which takes every pcg_* tool with
- * them. `disables` names that blast radius so the caller doesn't have to.
- *
- * @returns {{configured: boolean, source: string|null, disables: string[]}}
- */
-export function getAuthTokenStatus() {
-  const disables = ["exec_python", "all pcg_* tools", "shutdown", "build_and_run", "kill_and_restart"];
-  if (process.env.NGG_BRIDGE_TOKEN) {
-    return { configured: true, source: "NGG_BRIDGE_TOKEN env", disables: [] };
-  }
-  for (const iniPath of getIniPaths()) {
-    if (parseIniToken(iniPath)) {
-      return { configured: true, source: path.basename(iniPath), disables: [] };
-    }
-  }
-  return { configured: false, source: null, disables };
 }
 
 // ---------------------------------------------------------------------------
@@ -324,86 +209,15 @@ async function bridgeFetch(path, opts = {}) {
     const message = (typeof body === "object" && body?.error)
       ? body.error
       : JSON.stringify(body);
-    // 401 = a token was sent and rejected; 403 = the bridge has no token at
-    // all. Different fixes, so they get different explanations.
-    if (response.status === 401) {
-      throw new Error(`UE5 bridge error 401: ${message}. ${authMismatchHint()}`);
-    }
-    throw new Error(`UE5 bridge error ${response.status}: ${describeAuthFailure(response.status, message, path)}`);
+    throw new Error(`UE5 bridge error ${response.status}: ${message}`);
   }
 
   return body;
 }
 
-// The bridge disables exec_python and the lifecycle routes when no AuthToken is
-// configured, and answers 403. Its message points at DefaultEngine.ini, which is
-// the tracked file the token must NOT live in — and it says nothing about the
-// blast radius, so a failing `pcg_*` call reads as an unrelated bug. Rewrite the
-// tail into something the caller can act on.
-//
-// Matching is on the bridge's own wording; if it ever changes, the original
-// message still comes through unmodified.
-function describeAuthFailure(status, message, requestPath) {
-  const text = String(message ?? "");
-  if (status !== 403 || !/AuthToken/i.test(text)) return text;
-
-  const head = text.split("Set one in")[0].trim();
-  const viaPython = requestPath === "/editor/exec_python";
-  return (
-    `${head}\n\n` +
-    `Fix: run \`npm run set-token\` in ` +
-    `Plugins/UnrealNGGMCP/Source/ThirdParty/unrealngg-mcp/, then restart the editor. ` +
-    `It writes [UnrealNGGMCP] AuthToken to <Project>/Config/UserEngine.ini — the ` +
-    `gitignored config layer. Do not put the token in Config/DefaultEngine.ini: ` +
-    `that file is tracked in git.` +
-    (viaPython
-      ? `\n\nNote: every pcg_* tool runs through exec_python, so all of them stay ` +
-        `disabled until a token is set.`
-      : "")
-  );
-}
-
 // ---------------------------------------------------------------------------
 // Public API
 // ---------------------------------------------------------------------------
-
-/**
- * The bridge wire-protocol version this sidecar was written against. The plugin
- * reports its own as `bridge_protocol` from GET /health (NGG_BRIDGE_PROTOCOL in
- * NGGHttpServer.h). A mismatch means the two halves shipped separately — the
- * usual cause is a stale plugin binary left in Binaries/ after an update.
- */
-export const EXPECTED_BRIDGE_PROTOCOL = 1;
-
-/**
- * Compare what /health reported against what this sidecar expects.
- *
- * A missing `bridge_protocol` is not an error: it means the plugin predates the
- * version surface, which is exactly the situation where a scolding message
- * would be least useful.
- *
- * @param {object} health - parsed GET /health body
- * @returns {{ok: boolean, warning: string|null}}
- */
-export function checkBridgeProtocol(health) {
-  const reported = health?.bridge_protocol;
-  if (reported === undefined || reported === null) {
-    return { ok: true, warning: null };
-  }
-  if (reported === EXPECTED_BRIDGE_PROTOCOL) {
-    return { ok: true, warning: null };
-  }
-  const direction = reported > EXPECTED_BRIDGE_PROTOCOL
-    ? "The editor plugin is newer than this MCP server"
-    : "The editor plugin is older than this MCP server";
-  return {
-    ok: false,
-    warning:
-      `Bridge protocol mismatch: plugin reports ${reported}, this server expects ` +
-      `${EXPECTED_BRIDGE_PROTOCOL}. ${direction} — some tools may fail in confusing ways. ` +
-      `Rebuild the editor target so the plugin binary matches the shipped sidecar.`,
-  };
-}
 
 /** GET /health */
 export async function healthCheck() {
@@ -781,20 +595,10 @@ export async function openLevel(levelPath) {
 }
 
 /** Create a new empty level and open it in the editor. */
-/**
- * POST /editor/create_level
- *
- * @param {string}  levelPath
- * @param {object}  [opts]
- * @param {boolean} [opts.partitioned] - create a World Partition map
- */
-export async function createLevel(levelPath, { partitioned } = {}) {
+export async function createLevel(levelPath) {
   return bridgeFetch("/editor/create_level", {
     method: "POST",
-    body: JSON.stringify({
-      level_path: levelPath,
-      ...(partitioned != null ? { partitioned } : {}),
-    }),
+    body: JSON.stringify({ level_path: levelPath }),
   });
 }
 
@@ -2006,24 +1810,6 @@ export async function bpDeleteVariable({ blueprint, name, compile, save } = {}) 
       name,
       ...(compile != null ? { compile } : {}),
       ...(save    != null ? { save }    : {}),
-    }),
-  });
-}
-
-/**
- * POST /bp/heal_world_context — repair the __WorldContext static-function cook
- * corruption on one or more Blueprints. Accepts a single `blueprint` or a
- * `blueprints` array; `dry_run` reports per-function diagnostics with no mutation.
- */
-export async function bpHealWorldContext({ blueprint, blueprints, compile, save, dry_run } = {}) {
-  return bridgeFetch("/bp/heal_world_context", {
-    method: "POST",
-    body: JSON.stringify({
-      ...(blueprint  != null ? { blueprint }  : {}),
-      ...(blueprints != null ? { blueprints } : {}),
-      ...(compile    != null ? { compile }    : {}),
-      ...(save       != null ? { save }       : {}),
-      ...(dry_run    != null ? { dry_run }    : {}),
     }),
   });
 }

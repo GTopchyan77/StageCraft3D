@@ -1,0 +1,28 @@
+{
+	"FileVersion": 3,
+	"Version": 1,
+	"VersionName": "0.1.0",
+	"FriendlyName": "Placement Gizmo",
+	"Description": "Portable translate/rotate/scale gizmo for Warehouse Planner placed objects - attaches to the click-locked BP_BuildManager.SelectedPlaceableObject and drives moves through PreciseTransformLibrary::RepositionPlacedObject so grid occupancy stays correct.",
+	"Category": "Other",
+	"CreatedBy": "DamenTools internal",
+	"CreatedByURL": "",
+	"DocsURL": "",
+	"MarketplaceURL": "",
+	"SupportURL": "",
+	"EngineVersion": "5.7.0",
+	"CanContainContent": false,
+	"Installed": false,
+	"Modules": [
+		{
+			"Name": "PlacementGizmo",
+			"Type": "Runtime",
+			"LoadingPhase": "Default",
+			"PlatformAllowList": [
+				"Win64",
+				"Mac",
+				"Linux"
+			]
+		}
+	]
+}

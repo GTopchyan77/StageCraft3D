@@ -1,0 +1,46 @@
+{
+	"FileVersion": 3,
+	"Version": 1,
+	"VersionName": "0.1.0",
+	"FriendlyName": "Damen File Manager",
+	"Description": "Damen-specific wrapper around the vendor DlFileManager UMG file browser - adds native drag-and-drop FBX import that forwards dropped file paths to the level's DamenImporterBP actor's ImportMesh event (GitHub #28).",
+	"Category": "Other",
+	"CreatedBy": "DamenTools internal",
+	"CreatedByURL": "",
+	"DocsURL": "",
+	"MarketplaceURL": "",
+	"SupportURL": "",
+	"EngineVersion": "5.7.0",
+	"CanContainContent": false,
+	"Installed": false,
+	"Modules": [
+		{
+			"Name": "DamenFileManager",
+			"Type": "Runtime",
+			"LoadingPhase": "Default",
+			"PlatformAllowList": [
+				"Win64",
+				"Mac",
+				"Linux"
+			]
+		}
+	],
+	"Plugins": [
+		{
+			"Name": "DlFileManager",
+			"Enabled": true
+		},
+		{
+			"Name": "FileDropUMG",
+			"Enabled": true
+		},
+		{
+			"Name": "RealTimeImport",
+			"Enabled": true
+		},
+		{
+			"Name": "ProceduralMeshComponent",
+			"Enabled": true
+		}
+	]
+}

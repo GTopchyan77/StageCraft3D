@@ -1667,11 +1667,9 @@ bool FNGGHttpServer::HandleBpAddNode(
 		// Apply pin defaults (after pins exist)
 		if (PinDefaults.IsValid())
 		{
-			// UE5.8: FJsonObject::Values is keyed by UE::FSharedString, not FString.
-			// Deref to const TCHAR* so the FString& parameter binds.
 			for (const auto& KV : PinDefaults->Values)
 			{
-				UEdGraphPin* Pin = FindPinByName(Node, *KV.Key);
+				UEdGraphPin* Pin = FindPinByName(Node, FString(*KV.Key));
 				if (!Pin) continue;
 				FString ValStr;
 				if (KV.Value.IsValid() && KV.Value->Type == EJson::String)
@@ -2596,244 +2594,6 @@ bool FNGGHttpServer::HandleBpCreateFunction(
 }
 
 // ============================================================================
-// Handler: POST /bp/heal_world_context
-// Body: { blueprint?: "/Game/...", blueprints?: ["/Game/...", ...],
-//         compile?: bool=true, save?: bool=true, dry_run?: bool=false }
-// Repairs the UE5 migration corruption where a static Blueprint function's
-// signature holds an explicit user-defined "__WorldContext" parameter. That
-// name is reserved for the hidden auto world-context pin the engine adds to
-// every static function graph; having it as a real user pin makes
-// UK2Node_FunctionEntry::AllocateDefaultPins try to create the pin twice, which
-// trips an ensure ("World context parameter pin already exists...") — harmless
-// in-editor but fatal to a cook (run under -CrashForUAT). For each named
-// Blueprint we scan every function graph's entry node and remove any
-// user-defined pin literally named "__WorldContext", then compile + save.
-// ============================================================================
-bool FNGGHttpServer::HandleBpHealWorldContext(
-	const FHttpServerRequest& Req, const FHttpResultCallback& OnComplete)
-{
-	FHttpResultCallback Callback = OnComplete;
-
-	TSharedPtr<FJsonObject> Body;
-	FString ParseError;
-	if (!ParseJsonBody(Req, Body, ParseError)) { Callback(JsonError(400, ParseError)); return true; }
-
-	TArray<FString> BpPaths;
-	FString SinglePath;
-	if (Body->TryGetStringField(TEXT("blueprint"), SinglePath) && !SinglePath.IsEmpty())
-	{
-		BpPaths.Add(SinglePath);
-	}
-	const TArray<TSharedPtr<FJsonValue>>* PathsArr = nullptr;
-	if (Body->TryGetArrayField(TEXT("blueprints"), PathsArr) && PathsArr)
-	{
-		for (const auto& V : *PathsArr)
-		{
-			FString P = V->AsString();
-			if (!P.IsEmpty()) { BpPaths.Add(MoveTemp(P)); }
-		}
-	}
-	if (BpPaths.Num() == 0)
-	{
-		Callback(JsonError(400, TEXT("provide 'blueprint' (string) or 'blueprints' (array)")));
-		return true;
-	}
-
-	bool bCompile = true, bSave = true, bDryRun = false;
-	Body->TryGetBoolField(TEXT("compile"),  bCompile);
-	Body->TryGetBoolField(TEXT("save"),     bSave);
-	Body->TryGetBoolField(TEXT("dry_run"),  bDryRun);
-
-	AsyncTask(ENamedThreads::GameThread,
-		[Callback, BpPaths, bCompile, bSave, bDryRun]()
-	{
-		static const FName WorldContextName(TEXT("__WorldContext"));
-
-		TArray<TSharedPtr<FJsonValue>> Results;
-		int32 GrandTotalRemoved = 0;
-
-		for (const FString& BpPath : BpPaths)
-		{
-			TSharedRef<FJsonObject> Entry = MakeShared<FJsonObject>();
-			Entry->SetStringField(TEXT("blueprint"), BpPath);
-
-			UBlueprint* BP = LoadBlueprintFlexible(BpPath);
-			if (!BP)
-			{
-				Entry->SetBoolField  (TEXT("success"), false);
-				Entry->SetStringField(TEXT("error"), TEXT("blueprint not found"));
-				Results.Add(MakeShared<FJsonValueObject>(Entry));
-				continue;
-			}
-
-			TArray<TSharedPtr<FJsonValue>> HealedFns;
-			TArray<TSharedPtr<FJsonValue>> Diag;
-			int32 PinsRemoved = 0;
-
-			auto FuncHasWorldContextParam = [](UFunction* Fn) -> bool
-			{
-				if (!Fn) { return false; }
-				for (TFieldIterator<FProperty> It(Fn); It && (It->PropertyFlags & CPF_Parm); ++It)
-				{
-					if (It->GetFName() == WorldContextName) { return true; }
-				}
-				return false;
-			};
-
-			auto WcParamFlags = [](UFunction* Fn) -> uint64
-			{
-				if (!Fn) { return 0; }
-				for (TFieldIterator<FProperty> It(Fn); It && (It->PropertyFlags & CPF_Parm); ++It)
-				{
-					if (It->GetFName() == WorldContextName) { return (uint64)It->PropertyFlags; }
-				}
-				return 0;
-			};
-
-			static const FName WorldContextMetaKey(TEXT("WorldContext"));
-
-			for (UEdGraph* G : BP->FunctionGraphs)
-			{
-				if (!G) { continue; }
-
-				UK2Node_FunctionEntry* EntryNode = nullptr;
-				for (UEdGraphNode* N : G->Nodes)
-				{
-					if (UK2Node_FunctionEntry* E = Cast<UK2Node_FunctionEntry>(N))
-					{
-						EntryNode = E;
-						break;
-					}
-				}
-				if (!EntryNode) { continue; }
-
-				// Entry-node pin named __WorldContext (auto/hidden or promoted), if any.
-				UEdGraphPin* WcPin = EntryNode->FindPin(WorldContextName, EGPD_Output);
-
-				bool bUserDefHasWc = false;
-				for (const TSharedPtr<FUserPinInfo>& P : EntryNode->UserDefinedPins)
-				{
-					if (P.IsValid() && P->PinName == WorldContextName) { bUserDefHasWc = true; break; }
-				}
-
-				UFunction* SkelFn = BP->SkeletonGeneratedClass ? BP->SkeletonGeneratedClass->FindFunctionByName(G->GetFName()) : nullptr;
-				UFunction* GenFn  = BP->GeneratedClass         ? BP->GeneratedClass->FindFunctionByName(G->GetFName())         : nullptr;
-				const bool bSkelParam = FuncHasWorldContextParam(SkelFn);
-				const bool bGenParam  = FuncHasWorldContextParam(GenFn);
-
-				// Only report functions that touch __WorldContext in some way.
-				if (WcPin || bUserDefHasWc || bSkelParam || bGenParam)
-				{
-					TSharedRef<FJsonObject> D = MakeShared<FJsonObject>();
-					D->SetStringField(TEXT("fn"), G->GetName());
-					D->SetBoolField  (TEXT("entry_pin"),        WcPin != nullptr);
-					D->SetBoolField  (TEXT("entry_pin_hidden"), WcPin ? WcPin->bHidden : false);
-					D->SetBoolField  (TEXT("userdef_param"),    bUserDefHasWc);
-					D->SetBoolField  (TEXT("skel_param"),       bSkelParam);
-					D->SetBoolField  (TEXT("gen_param"),        bGenParam);
-					D->SetStringField(TEXT("func_ref"),   EntryNode->FunctionReference.GetMemberName().ToString());
-					D->SetStringField(TEXT("custom_name"), EntryNode->CustomGeneratedFunctionName.ToString());
-					D->SetStringField(TEXT("gen_wc_flags"), FString::Printf(TEXT("0x%llX"), WcParamFlags(GenFn)));
-					D->SetStringField(TEXT("skel_wc_flags"), FString::Printf(TEXT("0x%llX"), WcParamFlags(SkelFn)));
-#if WITH_EDITORONLY_DATA
-					D->SetBoolField  (TEXT("gen_has_wc_meta"), GenFn ? GenFn->HasMetaData(WorldContextMetaKey) : false);
-					D->SetStringField(TEXT("gen_wc_meta"), GenFn && GenFn->HasMetaData(WorldContextMetaKey) ? GenFn->GetMetaData(WorldContextMetaKey) : TEXT(""));
-					D->SetBoolField  (TEXT("entry_has_wc_meta"), EntryNode->MetaData.HasMetaData(WorldContextMetaKey));
-#endif
-					UClass* NodeClass = EntryNode->GetBlueprintClassFromNode();
-					UFunction* Resolved = EntryNode->FunctionReference.ResolveMember<UFunction>(NodeClass);
-					D->SetStringField(TEXT("node_class"), NodeClass ? NodeClass->GetName() : TEXT("null"));
-					D->SetBoolField  (TEXT("resolved_nonnull"), Resolved != nullptr);
-					D->SetBoolField  (TEXT("resolved_has_wc"), FuncHasWorldContextParam(Resolved));
-					D->SetBoolField  (TEXT("fref_self"), EntryNode->FunctionReference.IsSelfContext());
-					{
-						UClass* ParentCls = EntryNode->FunctionReference.GetMemberParentClass();
-						D->SetStringField(TEXT("fref_parent"), ParentCls ? ParentCls->GetPathName() : TEXT("null"));
-					}
-					D->SetBoolField  (TEXT("fref_guid_valid"), EntryNode->FunctionReference.GetMemberGuid().IsValid());
-					Diag.Add(MakeShared<FJsonValueObject>(D));
-				}
-
-				// The fix. Root cause: a healthy locally-defined static function has
-				// an UNRESOLVABLE entry FunctionReference (bSelfContext=false, no
-				// parent, invalid guid) — its name comes from GetMemberName(), so
-				// AllocateDefaultPins' path (A) (CreatePinsForFunctionEntryExit) is
-				// skipped and only path (C) runs, creating a HIDDEN auto
-				// __WorldContext pin. The corruption is that the entry
-				// FunctionReference resolves (bSelfContext=true + valid guid, as if
-				// it were an override), so path (A) rebuilds __WorldContext from the
-				// resolved signature as a VISIBLE pin; path (C)'s ensure then trips
-				// ("pin already exists") on reconstruct — fatal under the cook's
-				// -CrashForUAT. Detect via a visible __WorldContext pin backed by a
-				// resolvable self-reference, and reset the reference to the healthy
-				// unresolvable state (name preserved). On the next reconstruct the
-				// pin is regenerated hidden and the ensure never fires.
-				const bool bResolves = EntryNode->FunctionReference.ResolveMember<UFunction>(EntryNode->GetBlueprintClassFromNode()) != nullptr;
-				if (!bDryRun && WcPin && !WcPin->bHidden && bResolves)
-				{
-					const FName FnName = EntryNode->FunctionReference.GetMemberName();
-					EntryNode->Modify();
-					EntryNode->FunctionReference.SetDirect(FnName, FGuid(), nullptr, /*bIsConsideredSelfContext*/ false);
-					HealedFns.Add(MakeShared<FJsonValueString>(G->GetName()));
-					++PinsRemoved;
-				}
-			}
-
-			Entry->SetBoolField (TEXT("success"), true);
-			Entry->SetNumberField(TEXT("pins_fixed"), PinsRemoved);
-			Entry->SetArrayField (TEXT("functions_healed"), HealedFns);
-			Entry->SetArrayField (TEXT("diagnostics"), Diag);
-			GrandTotalRemoved += PinsRemoved;
-
-			if (PinsRemoved > 0 && !bDryRun)
-			{
-				FBlueprintEditorUtils::MarkBlueprintAsStructurallyModified(BP);
-
-				if (bCompile)
-				{
-					FCompilerResultsLog CompileResults;
-					CompileResults.bSilentMode = true;
-					FKismetEditorUtilities::CompileBlueprint(BP, EBlueprintCompileOptions::None, &CompileResults);
-					Entry->SetBoolField  (TEXT("compiled"),       CompileResults.NumErrors == 0);
-					Entry->SetNumberField(TEXT("compile_errors"), CompileResults.NumErrors);
-				}
-
-				bool bSaved = false;
-				if (bSave)
-				{
-					if (UPackage* Pkg = BP->GetOutermost())
-					{
-						Pkg->MarkPackageDirty();
-						const FString FileName = FPackageName::LongPackageNameToFilename(
-							Pkg->GetName(), FPackageName::GetAssetPackageExtension());
-						FSavePackageArgs Args;
-						Args.TopLevelFlags = RF_Public | RF_Standalone;
-						Args.SaveFlags     = SAVE_NoError;
-						Args.Error         = GError;
-						bSaved = UPackage::SavePackage(Pkg, nullptr, *FileName, Args);
-					}
-				}
-				Entry->SetBoolField(TEXT("saved"), bSaved);
-			}
-
-			UE_LOG(LogNGGBridge, Log,
-				TEXT("/bp/heal_world_context: %s pins_fixed=%d dry_run=%d"),
-				*BpPath, PinsRemoved, bDryRun ? 1 : 0);
-
-			Results.Add(MakeShared<FJsonValueObject>(Entry));
-		}
-
-		TSharedRef<FJsonObject> Out = MakeShared<FJsonObject>();
-		Out->SetBoolField  (TEXT("success"),            true);
-		Out->SetBoolField  (TEXT("dry_run"),            bDryRun);
-		Out->SetNumberField(TEXT("total_pins_fixed"), GrandTotalRemoved);
-		Out->SetArrayField (TEXT("results"),            Results);
-		Callback(JsonOk(SerializeJson(Out)));
-	});
-	return true;
-}
-
-// ============================================================================
 // Handler: POST /bp/create_macro
 // Body: { blueprint, name, inputs:[{name,type}], outputs:[{name,type}],
 //         category?, compile?, save? }
@@ -3575,10 +3335,9 @@ bool FNGGHttpServer::HandleBpAddLogic(
 			const TSharedPtr<FJsonObject>* DefaultsPtr = nullptr;
 			if (NodeObj->TryGetObjectField(TEXT("defaults"), DefaultsPtr) && DefaultsPtr && (*DefaultsPtr).IsValid())
 			{
-				// UE5.8: FJsonObject::Values is keyed by UE::FSharedString, not FString.
 				for (const auto& KV : (*DefaultsPtr)->Values)
 				{
-					UEdGraphPin* Pin = FindPinByName(Node, *KV.Key);
+					UEdGraphPin* Pin = FindPinByName(Node, FString(*KV.Key));
 					if (!Pin || !KV.Value.IsValid()) continue;
 					FString Val;
 					if (KV.Value->Type == EJson::Boolean) Val = KV.Value->AsBool() ? TEXT("true") : TEXT("false");

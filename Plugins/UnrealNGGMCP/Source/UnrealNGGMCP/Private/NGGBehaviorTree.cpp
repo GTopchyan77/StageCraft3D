@@ -1048,8 +1048,7 @@ namespace NGGBtPriv
 				continue;
 			}
 
-			// UE5.8: Pair.Key is UE::FSharedString — deref to const TCHAR* for the FString& param.
-			const FString Err = FNGGHttpServer::SetPropertyFromJson(Target, *Pair.Key, Pair.Value);
+			const FString Err = FNGGHttpServer::SetPropertyFromJson(Target, FString(*Pair.Key), Pair.Value);
 			if (!Err.IsEmpty())
 			{
 				OutWarnings.Add(FString::Printf(TEXT("%s: %s"), *Pair.Key, *Err));

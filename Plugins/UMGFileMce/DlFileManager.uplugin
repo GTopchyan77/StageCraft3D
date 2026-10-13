@@ -1,0 +1,31 @@
+{
+	"FileVersion": 3,
+	"Version": 0,
+	"VersionName": "1.4",
+	"FriendlyName": "DlFileManager",
+	"Description": "A UMG file manager framework with samples",
+	"Category": "UMG",
+	"CreatedBy": "Dragon Li Software Limited",
+	"CreatedByURL": "",
+	"DocsURL": "https://drive.google.com/file/d/1LvoVYG8jO2mUembJSgTRTChzxv1LYmMc/view?usp=sharing",
+	"MarketplaceURL": "com.epicgames.launcher://ue/marketplace/product/34df478b312a438cac9819ff0cf196fa",
+	"SupportURL": "mailto: DragonLiSoftwareLimited@outlook.com",
+	"EngineVersion": "5.7.0",
+	"CanContainContent": true,
+	"Installed": true,
+	"Modules": [
+		{
+			"Name": "DlFileManager",
+			"Type": "Runtime",
+			"LoadingPhase": "Default",
+			"PlatformAllowList": [
+				"Win64",
+				"Android",
+				"IOS",
+				"Mac",
+				"Linux",
+				"LinuxArm64"
+			]
+		}
+	]
+}

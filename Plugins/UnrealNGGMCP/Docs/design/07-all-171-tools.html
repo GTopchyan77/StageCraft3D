@@ -1,0 +1,403 @@
+<!-- @dsCard group="Docs images" -->
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>07 — All 171 tools</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body { width: 1920px; height: 1080px; overflow: hidden; }
+  body {
+    background: #0c0c10;
+    font-family: Arial, "Helvetica Neue", Helvetica, sans-serif;
+    color: #f2f2f5;
+    position: relative;
+  }
+  .head {
+    display: flex; align-items: center; gap: 24px;
+    padding: 40px 120px 0 120px;
+  }
+  .logo {
+    width: 68px; height: 68px; border-radius: 16px;
+    background: #16121e; border: 1px solid #2a2338;
+    display: flex; align-items: center; justify-content: center;
+    flex: 0 0 68px;
+  }
+  .head-text h1 { font-size: 42px; font-weight: 800; color: #f4f4f7; }
+  .head-text p { margin-top: 7px; font-size: 20px; color: #9a9aa5; }
+
+  .rule { margin: 24px 120px 0 120px; border-top: 1px solid #1d1d25; }
+
+  .cols {
+    display: flex; gap: 26px;
+    padding: 26px 120px 0 120px;
+  }
+  .col { width: 322px; flex: 0 0 322px; }
+
+  .cat { margin-bottom: 15px; }
+  .cat-head {
+    display: flex; align-items: center; gap: 10px;
+    margin-bottom: 7px;
+  }
+  .sq { width: 11px; height: 11px; border-radius: 3px; flex: 0 0 11px; }
+  .cat-head b { font-size: 15px; font-weight: 700; letter-spacing: 0.5px; }
+  .cat-head .n {
+    margin-left: auto;
+    font-family: "Cascadia Mono", Consolas, monospace;
+    font-size: 12.5px; color: #6d6d78;
+  }
+  .cat ul { list-style: none; }
+  .cat li {
+    font-family: "Cascadia Mono", Consolas, monospace;
+    font-size: 13px; line-height: 16.5px;
+    white-space: nowrap;
+  }
+  .cat li s { text-decoration: none; opacity: 0.5; }
+
+  .purple  { color: #a78bfa; } .bg-purple  { background: #a78bfa; }
+  .blue    { color: #60a5fa; } .bg-blue    { background: #60a5fa; }
+  .cyan    { color: #22d3ee; } .bg-cyan    { background: #22d3ee; }
+  .sky     { color: #38bdf8; } .bg-sky     { background: #38bdf8; }
+  .teal    { color: #2dd4bf; } .bg-teal    { background: #2dd4bf; }
+  .green   { color: #4ade80; } .bg-green   { background: #4ade80; }
+  .mint    { color: #34d399; } .bg-mint    { background: #34d399; }
+  .lime    { color: #a3e635; } .bg-lime    { background: #a3e635; }
+  .yellow  { color: #eab308; } .bg-yellow  { background: #eab308; }
+  .orange  { color: #fb923c; } .bg-orange  { background: #fb923c; }
+  .ember   { color: #f97316; } .bg-ember   { background: #f97316; }
+  .pink    { color: #f472b6; } .bg-pink    { background: #f472b6; }
+  .cat li.purple, .cat li.blue, .cat li.cyan, .cat li.sky, .cat li.teal,
+  .cat li.green, .cat li.mint, .cat li.lime, .cat li.yellow, .cat li.orange,
+  .cat li.ember, .cat li.pink { opacity: 0.66; }
+
+  footer {
+    position: absolute; left: 120px; right: 120px; bottom: 26px;
+    display: flex; justify-content: space-between;
+    font-family: "Cascadia Mono", Consolas, monospace;
+    font-size: 16px; color: #8b8b97; letter-spacing: 1px;
+  }
+</style>
+</head>
+<body>
+  <div class="head">
+    <div class="logo">
+      <svg width="40" height="40" viewBox="0 0 24 24" fill="none">
+        <circle cx="5.5" cy="5.5" r="2.4" stroke="#7a7a88" stroke-width="1.6"/>
+        <circle cx="5.5" cy="18.5" r="2.4" stroke="#7a7a88" stroke-width="1.6"/>
+        <circle cx="18.5" cy="5.5" r="2.4" fill="#a06af9"/>
+        <circle cx="12.5" cy="12.5" r="2.8" fill="#a06af9"/>
+        <path d="M7.5 7.2 L10.6 10.6 M7.6 16.9 L10.5 14.4" stroke="#7a7a88" stroke-width="1.6"/>
+        <path d="M14.5 10.5 L16.9 7.4" stroke="#a06af9" stroke-width="1.6"/>
+      </svg>
+    </div>
+    <div class="head-text">
+      <h1>171 tools, one MCP server</h1>
+      <p>Everything the ue5-ngg server exposes to Claude Code, across 22 editor systems. Type /mcp for live schemas.</p>
+    </div>
+  </div>
+  <div class="rule"></div>
+
+  <div class="cols">
+    <div class="col">
+      <div class="cat">
+        <div class="cat-head"><span class="sq bg-purple"></span><b class="purple">CORE &amp; LIFECYCLE</b><span class="n">8</span></div>
+        <ul>
+          <li class="purple"><s>ue5_</s>health_check</li>
+          <li class="purple"><s>ue5_</s>project_info</li>
+          <li class="purple"><s>ue5_</s>setup_skills</li>
+          <li class="purple"><s>ue5_</s>launch_editor</li>
+          <li class="purple"><s>ue5_</s>kill_editor</li>
+          <li class="purple"><s>ue5_</s>build</li>
+          <li class="purple"><s>ue5_</s>save_all</li>
+          <li class="purple"><s>ue5_</s>batch</li>
+        </ul>
+      </div>
+      <div class="cat">
+        <div class="cat-head"><span class="sq bg-blue"></span><b class="blue">ASSETS &amp; DATA</b><span class="n">11</span></div>
+        <ul>
+          <li class="blue"><s>ue5_</s>list_assets</li>
+          <li class="blue"><s>ue5_</s>get_asset</li>
+          <li class="blue"><s>ue5_</s>set_asset_property</li>
+          <li class="blue"><s>ue5_</s>set_asset_map_entries</li>
+          <li class="blue"><s>ue5_</s>create_data_asset</li>
+          <li class="blue"><s>ue5_</s>duplicate_asset</li>
+          <li class="blue"><s>ue5_</s>delete_asset</li>
+          <li class="blue"><s>ue5_</s>import_asset</li>
+          <li class="blue"><s>ue5_</s>reimport_asset</li>
+          <li class="blue"><s>ue5_</s>list_gameplay_tags</li>
+          <li class="blue"><s>ue5_</s>add_gameplay_tags</li>
+        </ul>
+      </div>
+      <div class="cat">
+        <div class="cat-head"><span class="sq bg-cyan"></span><b class="cyan">ADL EXERCISES</b><span class="n">4</span></div>
+        <ul>
+          <li class="cyan"><s>ue5_</s>get_exercise</li>
+          <li class="cyan"><s>ue5_</s>create_exercise</li>
+          <li class="cyan"><s>ue5_</s>add_phase_to_exercise</li>
+          <li class="cyan"><s>ue5_</s>add_step_to_exercise</li>
+        </ul>
+      </div>
+      <div class="cat">
+        <div class="cat-head"><span class="sq bg-sky"></span><b class="sky">ENHANCED INPUT</b><span class="n">1</span></div>
+        <ul>
+          <li class="sky"><s>ue5_</s>configure_imc</li>
+        </ul>
+      </div>
+      <div class="cat">
+        <div class="cat-head"><span class="sq bg-yellow"></span><b class="yellow">DOCS</b><span class="n">1</span></div>
+        <ul>
+          <li class="yellow">youtube_get_transcript</li>
+        </ul>
+      </div>
+      <div class="cat">
+        <div class="cat-head"><span class="sq bg-orange"></span><b class="orange">PROFILING &amp; INSIGHTS</b><span class="n">7</span></div>
+        <ul>
+          <li class="orange"><s>ue5_</s>profile_trace_start</li>
+          <li class="orange"><s>ue5_</s>profile_trace_stop</li>
+          <li class="orange"><s>ue5_</s>profile_trace_status</li>
+          <li class="orange"><s>ue5_</s>profile_bookmark</li>
+          <li class="orange"><s>ue5_</s>profile_region</li>
+          <li class="orange"><s>ue5_</s>profile_list_traces</li>
+          <li class="orange"><s>ue5_</s>profile_analyze</li>
+        </ul>
+      </div>
+    </div>
+
+    <div class="col">
+      <div class="cat">
+        <div class="cat-head"><span class="sq bg-cyan"></span><b class="cyan">BLUEPRINTS &amp; COMPONENTS</b><span class="n">10</span></div>
+        <ul>
+          <li class="cyan"><s>ue5_</s>create_blueprint</li>
+          <li class="cyan"><s>ue5_</s>set_blueprint_defaults</li>
+          <li class="cyan"><s>ue5_</s>reparent_blueprint</li>
+          <li class="cyan"><s>ue5_</s>set_component_defaults</li>
+          <li class="cyan"><s>ue5_</s>get_component_defaults</li>
+          <li class="cyan"><s>ue5_</s>add_component_to_blueprint</li>
+          <li class="cyan"><s>ue5_</s>remove_component_from_blueprint</li>
+          <li class="cyan"><s>ue5_</s>create_blueprint_struct</li>
+          <li class="cyan"><s>ue5_</s>create_blueprint_enum</li>
+          <li class="cyan"><s>ue5_</s>create_blueprint_interface</li>
+        </ul>
+      </div>
+      <div class="cat">
+        <div class="cat-head"><span class="sq bg-teal"></span><b class="teal">BLUEPRINT GRAPH AUTHORING</b><span class="n">18</span></div>
+        <ul>
+          <li class="teal"><s>ue5_</s>bp_create_function</li>
+          <li class="teal"><s>ue5_</s>bp_create_macro</li>
+          <li class="teal"><s>ue5_</s>bp_delete_function</li>
+          <li class="teal"><s>ue5_</s>bp_create_variable</li>
+          <li class="teal"><s>ue5_</s>bp_delete_variable</li>
+          <li class="teal"><s>ue5_</s>bp_list_variables</li>
+          <li class="teal"><s>ue5_</s>bp_add_logic</li>
+          <li class="teal"><s>ue5_</s>bp_add_node</li>
+          <li class="teal"><s>ue5_</s>bp_connect_pins</li>
+          <li class="teal"><s>ue5_</s>bp_compile</li>
+          <li class="teal"><s>ue5_</s>bp_delete_node</li>
+          <li class="teal"><s>ue5_</s>bp_read_graph</li>
+          <li class="teal"><s>ue5_</s>bp_get_selection</li>
+          <li class="teal"><s>ue5_</s>bp_lint</li>
+          <li class="teal"><s>ue5_</s>bp_lint_project</li>
+          <li class="teal"><s>ue5_</s>bp_add_interface</li>
+          <li class="teal"><s>ue5_</s>bp_implement_interface_function</li>
+          <li class="teal"><s>ue5_</s>bp_refresh_all_nodes</li>
+        </ul>
+      </div>
+      <div class="cat">
+        <div class="cat-head"><span class="sq bg-sky"></span><b class="sky">PLAY-IN-EDITOR</b><span class="n">3</span></div>
+        <ul>
+          <li class="sky"><s>ue5_</s>pie_start</li>
+          <li class="sky"><s>ue5_</s>pie_stop</li>
+          <li class="sky"><s>ue5_</s>pie_status</li>
+        </ul>
+      </div>
+    </div>
+
+    <div class="col">
+      <div class="cat">
+        <div class="cat-head"><span class="sq bg-green"></span><b class="green">LEVELS &amp; ACTORS</b><span class="n">9</span></div>
+        <ul>
+          <li class="green"><s>ue5_</s>open_level</li>
+          <li class="green"><s>ue5_</s>create_level</li>
+          <li class="green"><s>ue5_</s>list_actors</li>
+          <li class="green"><s>ue5_</s>spawn_actor</li>
+          <li class="green"><s>ue5_</s>update_actor</li>
+          <li class="green"><s>ue5_</s>delete_actor</li>
+          <li class="green"><s>ue5_</s>add_component_to_actor</li>
+          <li class="green"><s>ue5_</s>set_world_settings</li>
+          <li class="green"><s>ue5_</s>set_level_environment</li>
+        </ul>
+      </div>
+      <div class="cat">
+        <div class="cat-head"><span class="sq bg-mint"></span><b class="mint">UMG WIDGETS</b><span class="n">10</span></div>
+        <ul>
+          <li class="mint"><s>ue5_</s>create_widget_blueprint</li>
+          <li class="mint"><s>ue5_</s>add_widget_to_blueprint</li>
+          <li class="mint"><s>ue5_</s>get_widget_tree</li>
+          <li class="mint"><s>ue5_</s>remove_widget_from_blueprint</li>
+          <li class="mint"><s>ue5_</s>reparent_widget</li>
+          <li class="mint"><s>ue5_</s>rename_widget</li>
+          <li class="mint"><s>ue5_</s>style_widgets</li>
+          <li class="mint"><s>ue5_</s>set_widget_properties</li>
+          <li class="mint"><s>ue5_</s>widget_bind_event</li>
+          <li class="mint"><s>ue5_</s>compile_widget_blueprint</li>
+        </ul>
+      </div>
+      <div class="cat">
+        <div class="cat-head"><span class="sq bg-yellow"></span><b class="yellow">MATERIALS &amp; CURVES</b><span class="n">10</span></div>
+        <ul>
+          <li class="yellow"><s>ue5_</s>create_material</li>
+          <li class="yellow"><s>ue5_</s>create_material_instance</li>
+          <li class="yellow"><s>ue5_</s>read_material</li>
+          <li class="yellow"><s>ue5_</s>material_add_expression</li>
+          <li class="yellow"><s>ue5_</s>material_connect</li>
+          <li class="yellow"><s>ue5_</s>create_post_process_material</li>
+          <li class="yellow"><s>ue5_</s>spawn_post_process_volume</li>
+          <li class="yellow"><s>ue5_</s>create_color_curve</li>
+          <li class="yellow"><s>ue5_</s>create_float_curve</li>
+          <li class="yellow"><s>ue5_</s>read_curve</li>
+        </ul>
+      </div>
+      <div class="cat">
+        <div class="cat-head"><span class="sq bg-cyan"></span><b class="cyan">DATATABLES</b><span class="n">3</span></div>
+        <ul>
+          <li class="cyan"><s>ue5_</s>datatable_create</li>
+          <li class="cyan"><s>ue5_</s>datatable_read</li>
+          <li class="cyan"><s>ue5_</s>datatable_set_rows</li>
+        </ul>
+      </div>
+    </div>
+
+    <div class="col">
+      <div class="cat">
+        <div class="cat-head"><span class="sq bg-pink"></span><b class="pink">ANIMATION &amp; SKELETON</b><span class="n">12</span></div>
+        <ul>
+          <li class="pink"><s>ue5_</s>create_anim_blueprint</li>
+          <li class="pink"><s>ue5_</s>configure_anim_blueprint</li>
+          <li class="pink"><s>ue5_</s>anim_add_copy_bone</li>
+          <li class="pink"><s>ue5_</s>anim_add_hand_ik_retargeting</li>
+          <li class="pink"><s>ue5_</s>anim_add_two_bone_ik</li>
+          <li class="pink"><s>ue5_</s>anim_add_layered_bone_blend</li>
+          <li class="pink"><s>ue5_</s>anim_add_modify_bone</li>
+          <li class="pink"><s>ue5_</s>anim_add_look_at</li>
+          <li class="pink"><s>ue5_</s>anim_add_sequence_player</li>
+          <li class="pink"><s>ue5_</s>anim_add_aim_offset_blend_space</li>
+          <li class="pink"><s>ue5_</s>anim_delete_node</li>
+          <li class="pink"><s>ue5_</s>skeleton_add_virtual_bone</li>
+        </ul>
+      </div>
+      <div class="cat">
+        <div class="cat-head"><span class="sq bg-orange"></span><b class="orange">NIAGARA VFX</b><span class="n">3</span></div>
+        <ul>
+          <li class="orange"><s>ue5_</s>create_niagara_system</li>
+          <li class="orange"><s>ue5_</s>configure_niagara_system</li>
+          <li class="orange"><s>ue5_</s>set_niagara_emitter_params</li>
+        </ul>
+      </div>
+      <div class="cat">
+        <div class="cat-head"><span class="sq bg-orange"></span><b class="orange">MESH COMPOSITION</b><span class="n">10</span></div>
+        <ul>
+          <li class="orange"><s>ue5_</s>mesh_create</li>
+          <li class="orange"><s>ue5_</s>mesh_append_primitive</li>
+          <li class="orange"><s>ue5_</s>mesh_boolean</li>
+          <li class="orange"><s>ue5_</s>mesh_transform</li>
+          <li class="orange"><s>ue5_</s>mesh_deform</li>
+          <li class="orange"><s>ue5_</s>mesh_remesh</li>
+          <li class="orange"><s>ue5_</s>mesh_bake_static</li>
+          <li class="orange"><s>ue5_</s>mesh_delete_handle</li>
+          <li class="orange"><s>ue5_</s>mesh_add_socket</li>
+          <li class="orange"><s>ue5_</s>meshy_generate</li>
+        </ul>
+      </div>
+      <div class="cat">
+        <div class="cat-head"><span class="sq bg-pink"></span><b class="pink">SEQUENCER</b><span class="n">3</span></div>
+        <ul>
+          <li class="pink"><s>ue5_</s>sequencer_create</li>
+          <li class="pink"><s>ue5_</s>sequencer_bind_actor</li>
+          <li class="pink"><s>ue5_</s>sequencer_add_camera</li>
+        </ul>
+      </div>
+      <div class="cat">
+        <div class="cat-head"><span class="sq bg-yellow"></span><b class="yellow">AUDIO</b><span class="n">4</span></div>
+        <ul>
+          <li class="yellow"><s>ue5_</s>create_sound_cue</li>
+          <li class="yellow"><s>ue5_</s>create_sound_attenuation</li>
+          <li class="yellow"><s>ue5_</s>spawn_ambient_sound</li>
+          <li class="yellow"><s>ue5_</s>play_sound_preview</li>
+        </ul>
+      </div>
+      <div class="cat">
+        <div class="cat-head"><span class="sq bg-green"></span><b class="green">VIEWPORT &amp; FEEDBACK</b><span class="n">3</span></div>
+        <ul>
+          <li class="green"><s>ue5_</s>set_viewport_camera</li>
+          <li class="green"><s>ue5_</s>viewport_screenshot</li>
+          <li class="green"><s>ue5_</s>get_log</li>
+        </ul>
+      </div>
+    </div>
+
+    <div class="col">
+      <div class="cat">
+        <div class="cat-head"><span class="sq bg-purple"></span><b class="purple">PCG PROCEDURAL</b><span class="n">25</span></div>
+        <ul>
+          <li class="purple"><s>pcg_</s>list_node_types</li>
+          <li class="purple"><s>pcg_</s>create_graph</li>
+          <li class="purple"><s>pcg_</s>add_node</li>
+          <li class="purple"><s>pcg_</s>connect_pins</li>
+          <li class="purple"><s>pcg_</s>save_graph</li>
+          <li class="purple"><s>pcg_</s>read_graph</li>
+          <li class="purple"><s>pcg_</s>list_settings_properties</li>
+          <li class="purple"><s>pcg_</s>set_node_settings_property</li>
+          <li class="purple"><s>pcg_</s>set_node_transform_ranges</li>
+          <li class="purple"><s>pcg_</s>set_node_position</li>
+          <li class="purple"><s>pcg_</s>remove_node</li>
+          <li class="purple"><s>pcg_</s>disconnect_pins</li>
+          <li class="purple"><s>pcg_</s>rename_node</li>
+          <li class="purple"><s>pcg_</s>add_component_to_actor</li>
+          <li class="purple"><s>pcg_</s>set_component_property</li>
+          <li class="purple"><s>pcg_</s>generate_component</li>
+          <li class="purple"><s>pcg_</s>cleanup_component</li>
+          <li class="purple"><s>pcg_</s>set_graph_property</li>
+          <li class="purple"><s>pcg_</s>add_graph_parameter</li>
+          <li class="purple"><s>pcg_</s>list_graph_parameters</li>
+          <li class="purple"><s>pcg_</s>remove_graph_parameter</li>
+          <li class="purple"><s>pcg_</s>create_graph_instance</li>
+          <li class="purple"><s>pcg_</s>set_graph_instance_parameter</li>
+          <li class="purple"><s>pcg_</s>open_in_editor</li>
+          <li class="purple"><s>pcg_</s>regenerate_all</li>
+        </ul>
+      </div>
+      <div class="cat">
+        <div class="cat-head"><span class="sq bg-lime"></span><b class="lime">BEHAVIOR TREE &amp; STATETREE</b><span class="n">7</span></div>
+        <ul>
+          <li class="lime"><s>ue5_</s>bt_create_tree</li>
+          <li class="lime"><s>ue5_</s>bt_create_blackboard</li>
+          <li class="lime"><s>ue5_</s>bt_add_blackboard_keys</li>
+          <li class="lime"><s>ue5_</s>bt_add_logic</li>
+          <li class="lime"><s>ue5_</s>bt_read_tree</li>
+          <li class="lime"><s>ue5_</s>st_read_tree</li>
+          <li class="lime"><s>ue5_</s>st_repoint_node</li>
+        </ul>
+      </div>
+      <div class="cat">
+        <div class="cat-head"><span class="sq bg-ember"></span><b class="ember">GAMEPLAY ABILITY SYSTEM</b><span class="n">9</span></div>
+        <ul>
+          <li class="ember"><s>ue5_</s>gas_setup_actor</li>
+          <li class="ember"><s>ue5_</s>gas_create_attribute_set</li>
+          <li class="ember"><s>ue5_</s>gas_add_attribute</li>
+          <li class="ember"><s>ue5_</s>gas_list_attributes</li>
+          <li class="ember"><s>ue5_</s>gas_create_ability</li>
+          <li class="ember"><s>ue5_</s>gas_create_effect</li>
+          <li class="ember"><s>ue5_</s>gas_grant_on_beginplay</li>
+          <li class="ember"><s>ue5_</s>gas_configure_asc</li>
+          <li class="ember"><s>ue5_</s>gas_read_setup</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+
+  <footer>
+    <span>UnrealNGGMCP &middot; localhost:6776 &middot; HTTP bridge + Node MCP server</span>
+    <span>Neo Graph &middot; Editor Tools</span>
+  </footer>
+</body>
+</html>

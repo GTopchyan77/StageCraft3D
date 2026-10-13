@@ -33,9 +33,6 @@ public class UnrealNGGMCP : ModuleRules
 
 		PrivateDependencyModuleNames.AddRange(new string[]
 		{
-			// IPluginManager — locates this plugin's own folder, whatever it was
-			// renamed to on the way into the project (see FNGGPluginPaths).
-			"Projects",
 			// Editor-side asset creation, management, reimport
 			"UnrealEd",
 			// Niagara particle system creation (UNiagaraSystem)
@@ -115,8 +112,6 @@ public class UnrealNGGMCP : ModuleRules
 			"EditorStyle",
 			// Content browser selection query (FContentBrowserModule::GetSelectedAssets)
 			"ContentBrowser",
-			// ULevelEditorSubsystem::NewLevel — /editor/create_level
-			"LevelEditor",
 			// PNG encoding for clipboard image paste (IImageWrapperModule)
 			"ImageWrapper",
 		});

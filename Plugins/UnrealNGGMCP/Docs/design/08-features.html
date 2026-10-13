@@ -1,0 +1,156 @@
+<!-- @dsCard group="Docs images" -->
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>08 — Features</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body { width: 1920px; height: 1080px; overflow: hidden; }
+  body {
+    background: #0c0c10;
+    font-family: Arial, "Helvetica Neue", Helvetica, sans-serif;
+    color: #f2f2f5;
+    position: relative;
+  }
+  .mono { font-family: "Cascadia Mono", Consolas, "JetBrains Mono", monospace; }
+
+  .page { padding: 96px 120px 0 120px; }
+
+  .kicker { font-family: "Cascadia Mono", Consolas, monospace; font-size: 22px; letter-spacing: 7px; }
+  .kicker .num { color: #a06af9; font-weight: 700; }
+  .kicker .label { color: #8b8b97; }
+
+  h1 {
+    margin-top: 28px;
+    font-size: 68px;
+    font-weight: 800;
+    letter-spacing: -1px;
+    color: #f4f4f7;
+  }
+
+  .grid {
+    margin-top: 84px;
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 28px;
+  }
+  .card {
+    background: #14141a;
+    border: 1px solid #212129;
+    border-radius: 20px;
+    padding: 36px 34px 32px 34px;
+    min-height: 230px;
+  }
+  .card-head { display: flex; align-items: center; gap: 16px; }
+  .dot {
+    width: 26px; height: 26px; border-radius: 50%;
+    background: #1d1d25;
+    display: flex; align-items: center; justify-content: center;
+    flex: 0 0 26px;
+  }
+  .dot i { display: block; width: 12px; height: 12px; border-radius: 50%; }
+  .card h2 { font-size: 30px; font-weight: 700; color: #f0f0f4; }
+  .card p { margin-top: 18px; font-size: 22px; line-height: 1.4; color: #9a9aa5; }
+  .chip {
+    margin-top: 24px;
+    display: inline-block;
+    background: #0e0e13;
+    border: 1px solid #1e1e26;
+    border-radius: 10px;
+    padding: 10px 16px;
+    font-family: "Cascadia Mono", Consolas, monospace;
+    font-size: 18px;
+  }
+
+  .c-purple { background: #a06af9; } .t-purple { color: #b07df9; }
+  .c-blue   { background: #4f8df9; } .t-blue   { color: #6ea1fa; }
+  .c-green  { background: #2fd6a2; } .t-green  { color: #4fdcb0; }
+  .c-orange { background: #f99a4f; } .t-orange { color: #faa96b; }
+  .c-pink   { background: #ef6ab8; } .t-pink   { color: #f284c4; }
+  .c-yellow { background: #e8c94a; } .t-yellow { color: #edd469; }
+
+  footer {
+    position: absolute;
+    left: 120px; right: 120px; bottom: 40px;
+    display: flex; align-items: center; justify-content: space-between;
+  }
+  .brand { display: flex; align-items: center; gap: 18px; }
+  .logo {
+    width: 40px; height: 40px; border-radius: 10px;
+    background: #16121e;
+    border: 1px solid #2a2338;
+    display: flex; align-items: center; justify-content: center;
+  }
+  .brand-text b { display: block; font-size: 22px; font-weight: 700; color: #f0f0f4; }
+  .brand-text span {
+    display: block; margin-top: 4px;
+    font-family: "Cascadia Mono", Consolas, monospace;
+    font-size: 15px; letter-spacing: 2px; color: #8b8b97;
+  }
+  .foot-label { font-family: "Cascadia Mono", Consolas, monospace; font-size: 18px; color: #8b8b97; }
+  .statline { margin-top: 64px; font-size: 22px; color: #6d6d78; letter-spacing: 1px; }
+</style>
+</head>
+<body>
+  <div class="page">
+    <div class="kicker"><span class="num">/ 06</span>&nbsp; <span class="label">FEATURES</span></div>
+    <h1>Six features that do the heavy lifting</h1>
+
+    <div class="grid">
+      <div class="card">
+        <div class="card-head"><span class="dot"><i class="c-purple"></i></span><h2>Full editor coverage</h2></div>
+        <p>171 tools across 22 editor systems</p>
+        <span class="chip t-purple">ue5_* &middot; pcg_*</span>
+      </div>
+      <div class="card">
+        <div class="card-head"><span class="dot"><i class="c-blue"></i></span><h2>Prompt to Blueprint</h2></div>
+        <p>Author, wire, lint and compile graphs from chat</p>
+        <span class="chip t-blue">ue5_bp_add_logic</span>
+      </div>
+      <div class="card">
+        <div class="card-head"><span class="dot"><i class="c-green"></i></span><h2>In-editor AI chat</h2></div>
+        <p>Persistent Slate tab that survives editor restarts</p>
+        <span class="chip t-green">NGG Chat &middot; ws :6778</span>
+      </div>
+      <div class="card">
+        <div class="card-head"><span class="dot"><i class="c-orange"></i></span><h2>Zero-config discovery</h2></div>
+        <p>Port and auth token are found automatically</p>
+        <span class="chip t-orange">bridge.json &middot; DefaultEngine.ini</span>
+      </div>
+      <div class="card">
+        <div class="card-head"><span class="dot"><i class="c-pink"></i></span><h2>Authenticated bridge</h2></div>
+        <p>Bearer-token HTTP, arbitrary-code routes gated</p>
+        <span class="chip t-pink">Authorization: Bearer</span>
+      </div>
+      <div class="card">
+        <div class="card-head"><span class="dot"><i class="c-yellow"></i></span><h2>Sees &amp; plays the game</h2></div>
+        <p>Screenshots, PIE sessions and log checks</p>
+        <span class="chip t-yellow">viewport_screenshot &middot; pie_start</span>
+      </div>
+    </div>
+
+    <div class="statline mono">171 MCP tools &middot; 22 editor systems &middot; UE 5.4+ &middot; localhost:6776</div>
+  </div>
+
+  <footer>
+    <div class="brand">
+      <div class="logo">
+        <svg width="24" height="24" viewBox="0 0 24 24" fill="none">
+          <circle cx="5.5" cy="5.5" r="2.4" stroke="#7a7a88" stroke-width="1.6"/>
+          <circle cx="5.5" cy="18.5" r="2.4" stroke="#7a7a88" stroke-width="1.6"/>
+          <circle cx="18.5" cy="5.5" r="2.4" fill="#a06af9"/>
+          <circle cx="12.5" cy="12.5" r="2.8" fill="#a06af9"/>
+          <path d="M7.5 7.2 L10.6 10.6 M14.5 10.5 L16.9 7.4 M7.6 16.9 L10.5 14.4" stroke="#7a7a88" stroke-width="1.6"/>
+          <path d="M14.5 10.5 L16.9 7.4" stroke="#a06af9" stroke-width="1.6"/>
+        </svg>
+      </div>
+      <div class="brand-text">
+        <b>UnrealNGGMCP</b>
+        <span>Neo Graph &middot; Editor Tools</span>
+      </div>
+    </div>
+    <div class="foot-label">Feature highlights</div>
+  </footer>
+</body>
+</html>

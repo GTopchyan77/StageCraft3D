@@ -1,0 +1,26 @@
+{
+	"FileVersion": 3,
+	"Version": 1,
+	"VersionName": "1.0",
+	"EngineVersion": "5.7.0",
+	"FriendlyName": "NGG Video Recorder",
+	"Description": "Records the running game viewport (video + audio) straight to an MP4 file. Works in PIE and in packaged builds, driven from Blueprint, console commands or a hotkey.",
+	"Category": "Media",
+	"CreatedBy": "NGG",
+	"CreatedByURL": "",
+	"DocsURL": "",
+	"MarketplaceURL": "",
+	"SupportURL": "",
+	"CanContainContent": false,
+	"IsBetaVersion": false,
+	"IsExperimentalVersion": false,
+	"Installed": false,
+	"Modules": [
+		{
+			"Name": "NGGVideoRecorder",
+			"Type": "Runtime",
+			"LoadingPhase": "Default",
+			"PlatformAllowList": [ "Win64" ]
+		}
+	]
+}

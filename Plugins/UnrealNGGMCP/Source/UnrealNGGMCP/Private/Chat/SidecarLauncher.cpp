@@ -2,7 +2,6 @@
 
 #include "SidecarLauncher.h"
 
-#include "NGGPluginPaths.h"
 #include "HAL/PlatformProcess.h"
 #include "HAL/PlatformFileManager.h"
 #include "Misc/Paths.h"
@@ -62,10 +61,8 @@ const TCHAR* FSidecarLauncher::GetExpectedSidecarVersion()
 
 FString FSidecarLauncher::GetSidecarScriptPath()
 {
-	// Resolved from the plugin's own location: the folder is routinely renamed
-	// on the way out of an engine/Fab install into a project.
 	return FPaths::ConvertRelativePathToFull(
-		FPaths::Combine(FNGGPluginPaths::GetThirdPartyPackageDir(TEXT("ngg-sidecar")), TEXT("index.js")));
+		FPaths::Combine(FPaths::ProjectDir(), TEXT("Plugins/UnrealNGGMCP/Source/ThirdParty/ngg-sidecar/index.js")));
 }
 
 FString FSidecarLauncher::GetNodeExecutable()

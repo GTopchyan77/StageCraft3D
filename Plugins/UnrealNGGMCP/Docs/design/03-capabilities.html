@@ -1,0 +1,174 @@
+<!-- @dsCard group="Docs images" -->
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>03 — Capabilities</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body { width: 1920px; height: 1080px; overflow: hidden; }
+  body {
+    background: #0c0c10;
+    font-family: Arial, "Helvetica Neue", Helvetica, sans-serif;
+    color: #f2f2f5;
+    position: relative;
+  }
+  .page { padding: 82px 120px 0 120px; }
+  .kicker { font-family: "Cascadia Mono", Consolas, monospace; font-size: 22px; letter-spacing: 7px; }
+  .kicker .num { color: #a06af9; font-weight: 700; }
+  .kicker .label { color: #8b8b97; }
+  h1 { margin-top: 26px; font-size: 64px; font-weight: 800; letter-spacing: -1px; color: #f4f4f7; }
+
+  .grid {
+    margin-top: 56px;
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 22px;
+  }
+  .card {
+    background: #14141a;
+    border: 1px solid #212129;
+    border-radius: 18px;
+    padding: 28px 28px 26px 28px;
+    min-height: 176px;
+  }
+  .card-head { display: flex; align-items: center; gap: 14px; }
+  .dot {
+    width: 24px; height: 24px; border-radius: 50%;
+    background: #1d1d25;
+    display: flex; align-items: center; justify-content: center;
+    flex: 0 0 24px;
+  }
+  .dot i { display: block; width: 11px; height: 11px; border-radius: 50%; }
+  .card h2 { font-size: 25px; font-weight: 700; color: #f0f0f4; }
+  .card p { margin-top: 14px; font-size: 19px; line-height: 1.35; color: #9a9aa5; }
+  .chip {
+    margin-top: 18px;
+    display: inline-block;
+    background: #0e0e13;
+    border: 1px solid #1e1e26;
+    border-radius: 9px;
+    padding: 8px 13px;
+    font-family: "Cascadia Mono", Consolas, monospace;
+    font-size: 15px;
+  }
+  .c-purple { background: #a06af9; } .t-purple { color: #b07df9; }
+  .c-blue   { background: #4f8df9; } .t-blue   { color: #6ea1fa; }
+  .c-green  { background: #2fd6a2; } .t-green  { color: #4fdcb0; }
+  .c-orange { background: #f99a4f; } .t-orange { color: #faa96b; }
+  .c-pink   { background: #ef6ab8; } .t-pink   { color: #f284c4; }
+  .c-yellow { background: #e8c94a; } .t-yellow { color: #edd469; }
+  .c-cyan   { background: #38cbe8; } .t-cyan   { color: #5bd5ec; }
+  .c-lime   { background: #a3e635; } .t-lime   { color: #b5ec5f; }
+
+  footer {
+    position: absolute; left: 120px; right: 120px; bottom: 40px;
+    display: flex; align-items: center; justify-content: space-between;
+  }
+  .brand { display: flex; align-items: center; gap: 18px; }
+  .logo {
+    width: 40px; height: 40px; border-radius: 10px;
+    background: #16121e; border: 1px solid #2a2338;
+    display: flex; align-items: center; justify-content: center;
+  }
+  .brand-text b { display: block; font-size: 22px; font-weight: 700; color: #f0f0f4; }
+  .brand-text span {
+    display: block; margin-top: 4px;
+    font-family: "Cascadia Mono", Consolas, monospace;
+    font-size: 15px; letter-spacing: 2px; color: #8b8b97;
+  }
+  .foot-label { font-family: "Cascadia Mono", Consolas, monospace; font-size: 18px; color: #8b8b97; }
+</style>
+</head>
+<body>
+  <div class="page">
+    <div class="kicker"><span class="num">/ 02</span>&nbsp; <span class="label">CAPABILITIES</span></div>
+    <h1>171 tools across every editor system</h1>
+
+    <div class="grid">
+      <div class="card">
+        <div class="card-head"><span class="dot"><i class="c-blue"></i></span><h2>Assets and Reflection</h2></div>
+        <p>Read / write any UPROPERTY</p>
+        <span class="chip t-blue">/assets/*</span>
+      </div>
+      <div class="card">
+        <div class="card-head"><span class="dot"><i class="c-cyan"></i></span><h2>Blueprint Graphs</h2></div>
+        <p>Author, wire, lint, compile</p>
+        <span class="chip t-cyan">/bp/*</span>
+      </div>
+      <div class="card">
+        <div class="card-head"><span class="dot"><i class="c-green"></i></span><h2>Levels and Actors</h2></div>
+        <p>Spawn, light, world settings</p>
+        <span class="chip t-green">/editor/*</span>
+      </div>
+      <div class="card">
+        <div class="card-head"><span class="dot"><i class="c-lime"></i></span><h2>UMG Widgets</h2></div>
+        <p>Build and style widget trees</p>
+        <span class="chip t-lime">widget_blueprint</span>
+      </div>
+
+      <div class="card">
+        <div class="card-head"><span class="dot"><i class="c-yellow"></i></span><h2>Materials</h2></div>
+        <p>Node graphs and instances</p>
+        <span class="chip t-yellow">material_add_expression</span>
+      </div>
+      <div class="card">
+        <div class="card-head"><span class="dot"><i class="c-orange"></i></span><h2>Niagara VFX</h2></div>
+        <p>Systems and burst emitters</p>
+        <span class="chip t-orange">niagara_system</span>
+      </div>
+      <div class="card">
+        <div class="card-head"><span class="dot"><i class="c-pink"></i></span><h2>Animation</h2></div>
+        <p>State-machine Anim BPs</p>
+        <span class="chip t-pink">anim_blueprint</span>
+      </div>
+      <div class="card">
+        <div class="card-head"><span class="dot"><i class="c-orange"></i></span><h2>Mesh Composition</h2></div>
+        <p>Boolean, deform, bake</p>
+        <span class="chip t-orange">/mesh/*</span>
+      </div>
+
+      <div class="card">
+        <div class="card-head"><span class="dot"><i class="c-purple"></i></span><h2>PCG Procedural</h2></div>
+        <p>Graphs, nodes, pins</p>
+        <span class="chip t-purple">pcg_*</span>
+      </div>
+      <div class="card">
+        <div class="card-head"><span class="dot"><i class="c-green"></i></span><h2>Viewport and PIE</h2></div>
+        <p>See it, play it, read the log</p>
+        <span class="chip t-green">viewport_screenshot &middot; pie_*</span>
+      </div>
+      <div class="card">
+        <div class="card-head"><span class="dot"><i class="c-pink"></i></span><h2>Sequencer and Audio</h2></div>
+        <p>Cutscenes, cameras, sound cues</p>
+        <span class="chip t-pink">sequencer_* &middot; sound_cue</span>
+      </div>
+      <div class="card">
+        <div class="card-head"><span class="dot"><i class="c-cyan"></i></span><h2>Data and Tags</h2></div>
+        <p>DataTables and gameplay tags</p>
+        <span class="chip t-cyan">datatable_* &middot; gameplay_tags</span>
+      </div>
+    </div>
+  </div>
+
+  <footer>
+    <div class="brand">
+      <div class="logo">
+        <svg width="24" height="24" viewBox="0 0 24 24" fill="none">
+          <circle cx="5.5" cy="5.5" r="2.4" stroke="#7a7a88" stroke-width="1.6"/>
+          <circle cx="5.5" cy="18.5" r="2.4" stroke="#7a7a88" stroke-width="1.6"/>
+          <circle cx="18.5" cy="5.5" r="2.4" fill="#a06af9"/>
+          <circle cx="12.5" cy="12.5" r="2.8" fill="#a06af9"/>
+          <path d="M7.5 7.2 L10.6 10.6 M7.6 16.9 L10.5 14.4" stroke="#7a7a88" stroke-width="1.6"/>
+          <path d="M14.5 10.5 L16.9 7.4" stroke="#a06af9" stroke-width="1.6"/>
+        </svg>
+      </div>
+      <div class="brand-text">
+        <b>UnrealNGGMCP</b>
+        <span>Neo Graph &middot; Editor Tools</span>
+      </div>
+    </div>
+    <div class="foot-label">Capability map</div>
+  </footer>
+</body>
+</html>

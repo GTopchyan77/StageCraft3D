@@ -8,28 +8,6 @@
 #include "UObject/StrongObjectPtr.h"
 // TStrongObjectPtr<UDynamicMesh> in MeshHandles requires the full type (calls AddRef via templates).
 #include "UDynamicMesh.h"
-// ENGINE_MAJOR_VERSION / ENGINE_MINOR_VERSION / ENGINE_PATCH_VERSION, reported by GET /health.
-#include "Runtime/Launch/Resources/Version.h"
-
-/**
- * Plugin version, reported by GET /health. Keep in sync with the
- * "VersionName" field in UnrealNGGMCP.uplugin.
- */
-#define NGG_PLUGIN_VERSION "1.0"
-
-/**
- * Bridge wire-protocol version, reported by GET /health.
- *
- * Bump this when a change would break an older sidecar: a route removed or
- * renamed, a request field that becomes required, or a response shape that
- * changes meaning. Adding a route, or adding an optional field, does not need
- * a bump — the sidecar tolerates both.
- *
- * The sidecar warns when it sees a protocol it does not recognise, so this is
- * the mechanism that turns "plugin and sidecar are out of step" into one clear
- * message instead of a scattering of odd failures.
- */
-#define NGG_BRIDGE_PROTOCOL 1
 
 class IHttpRouter;
 
@@ -179,60 +157,12 @@ public:
 	 */
 	static bool ConstantTimeEquals(const FString& A, const FString& B);
 
-	/**
-	 * True if the request originated from this machine (127.0.0.0/8, ::1, or an
-	 * IPv4-mapped loopback address such as ::ffff:127.0.0.1).
-	 *
-	 * UE binds this listener to localhost by default (FHttpServerListenerConfig::
-	 * BindAddress), so out of the box the socket is unreachable from off-machine.
-	 * That default is overridable from ini — [HTTPServer.Listeners] with
-	 * DefaultBindAddress=any or +ListenerOverrides=(Port=6776, BindAddress=any)
-	 * binds 0.0.0.0 and exposes the bridge on every interface. This check is what
-	 * keeps that configuration from silently handing the editor to the network:
-	 * the socket still accepts, but every route refuses unless the peer is local.
-	 *
-	 * A request with no resolvable peer address cannot be proven local and is
-	 * therefore treated as remote.
-	 */
-	static bool IsLoopbackPeer(const FHttpServerRequest& Req);
-
 private:
 	// -----------------------------------------------------------------------
 	// Route registration helpers
 	// -----------------------------------------------------------------------
 	void RegisterRoutes();
 	void UnregisterRoutes();
-
-	// -----------------------------------------------------------------------
-	// Auth-token setup — called from Start(), before any route is registered
-	// -----------------------------------------------------------------------
-
-	/**
-	 * First-run setup for a project that has no [UnrealNGGMCP] AuthToken at all:
-	 * mints a random one, writes it into <Project>/Config/UserEngine.ini and
-	 * adopts it for this session. That file is one of the two the MCP sidecar
-	 * looks in for its bearer token, so a plugin dropped into a fresh project
-	 * comes up with exec_python and the lifecycle routes working instead of
-	 * refusing every call.
-	 *
-	 * UserEngine.ini rather than DefaultEngine.ini because it is gitignored:
-	 * DefaultEngine.ini is tracked, and a token written there ends up in the
-	 * repository history.
-	 *
-	 * Leaves the bridge unauthenticated (as before) if the project opted out via
-	 * AutoProvisionAuthToken=false, or if the ini could not be written — a token
-	 * the sidecar cannot read would only turn "some routes disabled" into "every
-	 * request 401".
-	 */
-	void ProvisionAuthToken();
-
-	/**
-	 * Logs a warning when the active token is in neither
-	 * <Project>/Config/UserEngine.ini nor <Project>/Config/DefaultEngine.ini —
-	 * i.e. it came from elsewhere in the config hierarchy, where the sidecar
-	 * will not find it.
-	 */
-	void WarnIfProjectIniTokenDiffers() const;
 
 	// -----------------------------------------------------------------------
 	// Handler declarations — each returns true to signal the response is sent.
@@ -333,7 +263,6 @@ private:
 	bool HandleBpCreateMacro         (const FHttpServerRequest& Req, const FHttpResultCallback& OnComplete);
 	bool HandleBpDeleteFunction      (const FHttpServerRequest& Req, const FHttpResultCallback& OnComplete);
 	bool HandleBpDeleteVariable      (const FHttpServerRequest& Req, const FHttpResultCallback& OnComplete);
-	bool HandleBpHealWorldContext    (const FHttpServerRequest& Req, const FHttpResultCallback& OnComplete);
 
 	// ---- Asset creation: structs/enums/interfaces/anim BPs (NGGHttpServer.cpp) -----
 	bool HandleCreateBlueprintStruct     (const FHttpServerRequest& Req, const FHttpResultCallback& OnComplete);
@@ -386,22 +315,8 @@ private:
 	TMap<FString, TStrongObjectPtr<UDynamicMesh>> MeshHandles;
 
 	uint32  Port;
-	/**
-	 * Bearer token every route requires. Empty = auth disabled, which also
-	 * disables exec_python and the lifecycle routes. Read in Start() from
-	 * [UnrealNGGMCP] AuthToken; if the project has never configured one,
-	 * ProvisionAuthToken generates and persists it instead.
-	 */
-	FString AuthToken;
+	FString AuthToken;   // empty = auth disabled
 	bool    bRunning = false;
-
-	/**
-	 * When false (the default), every route refuses requests whose peer is not
-	 * loopback. Set via [UnrealNGGMCP] AllowRemoteClients=true in
-	 * DefaultEngine.ini for the deliberate remote-access case (a second machine,
-	 * a container, CI). Read once in Start(), before any route is registered.
-	 */
-	bool    bAllowRemoteClients = false;
 
 	TSharedPtr<IHttpRouter> Router;
 	TArray<FHttpRouteHandle> RouteHandles;

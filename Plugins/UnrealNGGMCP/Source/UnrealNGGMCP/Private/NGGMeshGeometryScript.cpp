@@ -57,7 +57,7 @@
 namespace
 {
 	/** Serialise a FJsonObject to a string via FJsonSerializer. */
-	static FString MeshSerializeJson(const TSharedRef<FJsonObject>& Obj)
+	static FString SerializeJson(const TSharedRef<FJsonObject>& Obj)
 	{
 		FString Out;
 		TSharedRef<TJsonWriter<>> Writer = TJsonWriterFactory<>::Create(&Out);
@@ -71,7 +71,7 @@ namespace
 		TSharedRef<FJsonObject> Root = MakeShared<FJsonObject>();
 		Root->SetBoolField(TEXT("ok"), true);
 		Filler(Root);
-		return MeshSerializeJson(Root);
+		return SerializeJson(Root);
 	}
 
 	/** Read a JSON array of exactly 3 numbers into a FVector3-ish pack. */

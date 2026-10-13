@@ -97,42 +97,6 @@ test("stdio + ws transports are both wired up", () => {
   assert.match(SRC, /TRANSPORT_MODE\s*===\s*"ws"/);
 });
 
-test("docs quote the real tool count", () => {
-  // The catalog count is repeated across the plugin README, the sidecar README
-  // and the design slides. It drifted before (docs said 171, the server
-  // registered 172), so pin every three-digit "<N> tools" claim to the registry.
-  // Three digits on purpose: prose like "26 tools go dark" is a different claim
-  // about a subset, not the total.
-  const actual = collectToolNames().length;
-  const pluginRoot = path.resolve(__dirname, "..", "..", "..");   // Plugins/UnrealNGGMCP
-  const docs = [
-    path.join(__dirname, "README.md"),
-    path.join(pluginRoot, "README.md"),
-    path.join(pluginRoot, "Docs", "ReviewerTesting.md"),
-    path.join(pluginRoot, "Docs", "design", "01-cover.html"),
-    path.join(pluginRoot, "Docs", "design", "03-capabilities.html"),
-    path.join(pluginRoot, "Docs", "design", "07-all-tools.html"),
-    path.join(pluginRoot, "Docs", "design", "08-features.html"),
-  ];
-
-  const mismatches = [];
-  for (const doc of docs) {
-    if (!fs.existsSync(doc)) continue;   // design slides are optional in a trimmed checkout
-    const text = fs.readFileSync(doc, "utf8");
-    for (const m of text.matchAll(/\b(\d{3})\s+(?:MCP\s+)?tools\b/gi)) {
-      if (Number(m[1]) !== actual) {
-        mismatches.push(`${path.basename(doc)}: "${m[0]}"`);
-      }
-    }
-  }
-
-  assert.deepStrictEqual(
-    mismatches,
-    [],
-    `index.js registers ${actual} tools, but these docs disagree:\n  ${mismatches.join("\n  ")}`,
-  );
-});
-
 test("UE5_NGG_RULES.md exists and is non-empty", () => {
   // The rules file ships with the sidecar and is sent as the MCP server's
   // `instructions` field on connect. Missing or empty means every Claude
