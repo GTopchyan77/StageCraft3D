@@ -32,6 +32,21 @@ namespace StageCraftWidgetStyle
 	/** Dark search / input field: recessed background, accent outline while focused. */
 	FEditableTextBoxStyle MakeInputField(const UStageCraftUITheme& Theme);
 
+	/** Height of every value field (numeric, text, dropdown), so rows line up whatever editor they hold. */
+	constexpr float FieldHeight = 22.f;
+
+	/** Numeric field (spin box) matching MakeInputField: recessed, accent outline while dragged or typed into, a faint fill for ranged values. */
+	FSpinBoxStyle MakeNumericField(const UStageCraftUITheme& Theme);
+
+	/** Small outlined box with an accent check mark. */
+	FCheckBoxStyle MakeCheckBox(const UStageCraftUITheme& Theme);
+
+	/** Dropdown button matching MakeInputField, with a dark menu. */
+	FComboBoxStyle MakeComboBox(const UStageCraftUITheme& Theme);
+
+	/** Rows of a dropdown menu or list: transparent, hover surface, selection tint. */
+	FTableRowStyle MakeListRow(const UStageCraftUITheme& Theme);
+
 	/** Thin scroll bar that blends into the panel. */
 	FScrollBarStyle MakeScrollBar(const UStageCraftUITheme& Theme);
 

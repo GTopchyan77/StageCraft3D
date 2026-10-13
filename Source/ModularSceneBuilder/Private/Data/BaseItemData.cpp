@@ -4,6 +4,7 @@
 
 #include "Actors/ModularBaseActor.h"
 #include "Economy/StageEconomyTypes.h"
+#include "Engine/Texture2D.h"
 
 #if WITH_EDITOR
 #include "Misc/DataValidation.h"
@@ -20,6 +21,16 @@ const FName UBaseItemData::GameBundle(TEXT("Game"));
 UBaseItemData::UBaseItemData()
 	: ActorClass(AModularBaseActor::StaticClass())
 {
+}
+
+FText UBaseItemData::GetCatalogSubtitle() const
+{
+	return StaticEnum<EStageItemType>()->GetDisplayValueAsText(ItemType);
+}
+
+UObject* UBaseItemData::GetCatalogIcon() const
+{
+	return Icon.Get();
 }
 
 FPrimaryAssetId UBaseItemData::GetPrimaryAssetId() const

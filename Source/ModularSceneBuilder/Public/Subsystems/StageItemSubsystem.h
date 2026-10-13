@@ -8,6 +8,7 @@
 #include "StageItemSubsystem.generated.h"
 
 DECLARE_DYNAMIC_MULTICAST_DELEGATE(FOnStageItemCatalogLoaded);
+DECLARE_DYNAMIC_MULTICAST_DELEGATE(FOnStageItemCatalogChanged);
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_TwoParams(FOnStageItemSelectionChanged, class UBaseItemData*, NewItem, class UBaseItemData*, PreviousItem);
 
 /**
@@ -45,6 +46,10 @@ public:
 	UPROPERTY(BlueprintAssignable, Category = "StageCraft|Catalog")
 	FOnStageItemCatalogLoaded OnCatalogLoaded;
 
+	/** Fires when items are added after the initial load (a model imported at runtime). Views that list the catalog rebuild on it. */
+	UPROPERTY(BlueprintAssignable, Category = "StageCraft|Catalog")
+	FOnStageItemCatalogChanged OnCatalogChanged;
+
 	// --- Selection ---
 
 	/**
@@ -72,6 +77,16 @@ public:
 	FOnStageItemSelectionChanged OnSelectedItemChanged;
 
 private:
+	// Imported models are added by the import subsystem only, after it has built and checked them.
+	friend class UStageMeshImportSubsystem;
+
+	/**
+	 * Adds an item built at runtime. It stays in the catalog for the rest of the run, also when the catalog (re)loads.
+	 * Broadcasts OnCatalogChanged once the catalog has loaded; before that the item simply joins the initial load.
+	 */
+	void AddRuntimeItem(class UBaseItemData& Item);
+	void SortCatalog();
+
 	void LoadCatalog();
 	void HandleCatalogLoaded();
 	void HandleSelectionLoaded(TWeakObjectPtr<class UBaseItemData> LoadedItem);
@@ -79,6 +94,10 @@ private:
 
 	UPROPERTY(Transient)
 	TArray<TObjectPtr<class UBaseItemData>> Catalog;
+
+	/** Items added at runtime; merged into Catalog whenever it is built. */
+	UPROPERTY(Transient)
+	TArray<TObjectPtr<class UBaseItemData>> RuntimeItems;
 
 	UPROPERTY(Transient)
 	TObjectPtr<class UBaseItemData> SelectedItem = nullptr;

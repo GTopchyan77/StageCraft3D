@@ -196,6 +196,25 @@ public:
 	bool RequestExportBillOfMaterials();
 
 	/**
+	 * Imports model files into the Library (files dropped on a panel, Import Model...). The GameMode decides whether imports are
+	 * allowed; files that cannot be imported are reported on OnRequestRejected. Accepted files import in the background and report
+	 * through UStageMeshImportSubsystem::OnImportFinished. Returns how many files were queued.
+	 */
+	UFUNCTION(BlueprintCallable, Category = "StageCraft|Requests")
+	int32 RequestImportModelFiles(const TArray<FString>& Files);
+
+	/**
+	 * Lets the user pick model files in the operating system's file dialog, then imports them as RequestImportModelFiles does.
+	 * The dialog is modal. Returns how many files were queued (0 when cancelled or when this build has no file dialog).
+	 */
+	UFUNCTION(BlueprintCallable, Category = "StageCraft|Requests")
+	int32 RequestBrowseModelFiles();
+
+	/** True when this build can show the file dialog of RequestBrowseModelFiles (builds with developer tools). */
+	UFUNCTION(BlueprintPure, Category = "StageCraft|Requests")
+	static bool CanBrowseModelFiles();
+
+	/**
 	 * Removes every placed item as one undoable step. The caller must have asked the user to confirm (the Edit menu's
 	 * Clear Stage does); Ctrl+Z restores the whole stage. Same guards as delete. Returns how many items were removed.
 	 */
@@ -472,6 +491,9 @@ private:
 
 	bool bIsNavigatingCamera = false;
 	bool bPreviewRefreshQueued = false;
+
+	/** Folder the import dialog opens in: where the user last picked models, this session. */
+	FString LastImportDirectory;
 
 #if !UE_BUILD_SHIPPING
 	TOptional<FVector2D> SimulatedCursor;

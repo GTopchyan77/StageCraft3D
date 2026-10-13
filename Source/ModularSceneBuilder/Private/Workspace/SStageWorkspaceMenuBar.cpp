@@ -124,6 +124,17 @@ void SStageWorkspaceMenuBar::FillFileMenu(FMenuBuilder& MenuBuilder)
 		FUIAction(FExecuteAction::CreateLambda([Directory = Scenes->GetScenesDirectory()]() { OpenFolder(Directory); })));
 	MenuBuilder.EndSection();
 
+	MenuBuilder.BeginSection(TEXT("Import"), LOCTEXT("ImportSection", "Library"));
+	if (AModularPlayerController::CanBrowseModelFiles())
+	{
+		MenuBuilder.AddMenuEntry(LOCTEXT("ImportModels", "Import Models..."),
+			LOCTEXT("ImportModelsTip", "Add .glb, .gltf, .obj or .fbx models to the Library. Files can also be dragged from Explorer onto the Library or the viewport."),
+			FSlateIcon(), FUIAction(FExecuteAction::CreateLambda([WeakController]() { if (WeakController.IsValid()) { WeakController->RequestBrowseModelFiles(); } })));
+	}
+	MenuBuilder.AddMenuEntry(LOCTEXT("ShowLibrary", "Show Library"), LOCTEXT("ShowLibraryTip", "Show the Library panel. Imported models are listed under Imported."),
+		FSlateIcon(), FUIAction(FExecuteAction::CreateSP(this, &SStageWorkspaceMenuBar::ShowPanel, FGameplayTag(StageCraftTags::Panel_Library))));
+	MenuBuilder.EndSection();
+
 	FillReportSection(MenuBuilder, WeakController);
 }
 

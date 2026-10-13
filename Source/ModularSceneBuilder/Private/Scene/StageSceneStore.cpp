@@ -6,6 +6,7 @@
 #include "Dom/JsonObject.h"
 #include "Dom/JsonValue.h"
 #include "HAL/FileManager.h"
+#include "Import/StageMeshImportTypes.h"
 #include "Interaction/StageTransformRules.h"
 #include "Misc/Base64.h"
 #include "Misc/FileHelper.h"
@@ -82,9 +83,11 @@ namespace StageSceneStore
 		{
 			return false;
 		}
-		// Only content paths: catalog items live under /Game. Membership in the catalog is checked when the scene is applied.
+		// Only catalog paths: content items live under /Game, imported models under the import root. Membership in the catalog is
+		// checked when the scene is applied.
 		const FSoftObjectPath Path(ItemPath);
-		if (!Path.IsValid() || !Path.GetLongPackageName().StartsWith(TEXT("/Game/")))
+		const FString PackageName = Path.GetLongPackageName();
+		if (!Path.IsValid() || !(PackageName.StartsWith(TEXT("/Game/")) || StageMeshImport::IsImportedItemPath(PackageName)))
 		{
 			return false;
 		}

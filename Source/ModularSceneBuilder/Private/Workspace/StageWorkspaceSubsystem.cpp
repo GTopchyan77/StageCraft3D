@@ -9,6 +9,7 @@
 #include "Engine/StreamableManager.h"
 #include "Framework/Application/SlateApplication.h"
 #include "HAL/PlatformApplicationMisc.h"
+#include "Import/StageMeshImportSubsystem.h"
 #include "Misc/Paths.h"
 #include "Player/ModularPlayerController.h"
 #include "UI/StageStatusBarWidget.h"
@@ -178,6 +179,21 @@ void UStageWorkspaceSubsystem::InstallIfSupported()
 	{
 		UStageWorkspaceSubsystem* Self = WeakThis.Get();
 		return Self ? Self->CreateStatusBarContent() : SNullWidget::NullWidget;
+	};
+	Callbacks.CanImportFiles = [WeakThis](const TArray<FString>& Files)
+	{
+		const UStageWorkspaceSubsystem* Self = WeakThis.Get();
+		const UStageMeshImportSubsystem* Importer = Self && Self->GetGameInstance() ? Self->GetGameInstance()->GetSubsystem<UStageMeshImportSubsystem>() : nullptr;
+		return Importer && Importer->CanImportAny(Files);
+	};
+	Callbacks.FilesDropped = [WeakThis](const TArray<FString>& Files)
+	{
+		// Through the local controller's request bridge, so the GameMode decides and refusals are reported like any request.
+		const UStageWorkspaceSubsystem* Self = WeakThis.Get();
+		if (AModularPlayerController* Controller = Self ? Self->LocalController.Get() : nullptr)
+		{
+			Controller->RequestImportModelFiles(Files);
+		}
 	};
 	Callbacks.PanelHostChanged = [WeakThis](const FGameplayTag& PanelTag, EStagePanelHost NewHost, EStagePanelHost PreviousHost)
 	{

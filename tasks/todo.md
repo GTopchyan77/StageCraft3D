@@ -212,3 +212,14 @@ See `STATE.md` for detailed history of completed work.
 - [ ] Auto-numbered labels for repeated items ("Truss Run 1, 2…"); hide / lock keyboard shortcuts
 - [ ] Rigging loads per point and per-phase power distribution (amps) in the BOM
 - [ ] Quantity check on span Type swaps; user-defined layers
+
+## Phase 11 — Inspector polish, runtime model import (STATE.md #28, ADR 0006)
+- [x] Themed inspector editors (numeric, checkbox, dropdown, text, 22 px fields, X/Y/Z tags, swatch); WBP units column, padding, amber headers
+- [x] Runtime import subsystem (Interchange: glTF/GLB, OBJ, FBX where available), queue, validation, Imports.json restore, Imported category
+- [x] OS drag and drop on every panel (Slate drop target with hint), IMPORT button + File > Library (IDesktopPlatform, dev-tool builds)
+- [x] Library cards: format/size subtitle, clay thumbnails; GameMode EvaluateModelImport
+- [x] Editor / Game / Shipping builds clean; 33/33 automation; scripted Standalone runs R28_*
+- [ ] Manual verification (Gevor): STATE.md #28 "Not verified" list
+- [ ] Remove imported models from the Library; per-import units/axis for OBJ; weight/power for imports
+- [ ] Packaged build test of runtime import; repair engine InterchangeAssets material (Kmidden reference)
+- [ ] Datasmith scene import (DatasmithRuntime) if needed; native dialog in Shipping

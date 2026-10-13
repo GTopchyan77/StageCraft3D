@@ -26,7 +26,10 @@
 #include "InputMappingContext.h"
 #include "InputModifiers.h"
 #include "InputTriggers.h"
+#include "Misc/Paths.h"
 #include "History/StageEditHistoryComponent.h"
+#include "Import/StageFileDialog.h"
+#include "Import/StageMeshImportSubsystem.h"
 #include "Interaction/StageCraftCollision.h"
 #include "ModularSceneBuilder.h"
 #include "Placement/StagePlacementPreview.h"
@@ -1128,6 +1131,66 @@ bool AModularPlayerController::RequestExportBillOfMaterials()
 	}
 	ReportRejection(FStageEconomyResultInfo::Fail(EStageEconomyResult::InvalidRequest, Reason));
 	return false;
+}
+
+int32 AModularPlayerController::RequestImportModelFiles(const TArray<FString>& Files)
+{
+	const AStageCraftGameModeBase* GameMode = GetStageGameMode();
+	UStageMeshImportSubsystem* Importer = GetGameInstance() ? GetGameInstance()->GetSubsystem<UStageMeshImportSubsystem>() : nullptr;
+	const FStageEconomyResultInfo Verdict = GameMode && Importer
+		? GameMode->EvaluateModelImport(this)
+		: FStageEconomyResultInfo::Fail(EStageEconomyResult::InvalidRequest, LOCTEXT("NoImport", "Model import needs the StageCraft game mode."));
+	if (!Verdict.IsSuccess())
+	{
+		ReportRejection(Verdict);
+		return 0;
+	}
+
+	const TArray<FStageMeshImportOutcome> Refusals = Importer->RequestImport(Files);
+	if (!Refusals.IsEmpty())
+	{
+		// One message for the whole drop: the first reason, and how many other files were left out.
+		const FText Message = Refusals.Num() == 1
+			? Refusals[0].Message
+			: FText::Format(LOCTEXT("SeveralRefused", "{0} (and {1} more files were not imported)"), Refusals[0].Message, FText::AsNumber(Refusals.Num() - 1));
+		ReportRejection(FStageEconomyResultInfo::Fail(EStageEconomyResult::InvalidRequest, Message));
+	}
+	return Files.Num() - Refusals.Num();
+}
+
+int32 AModularPlayerController::RequestBrowseModelFiles()
+{
+	const UStageMeshImportSubsystem* Importer = GetGameInstance() ? GetGameInstance()->GetSubsystem<UStageMeshImportSubsystem>() : nullptr;
+	if (!Importer || !CanBrowseModelFiles())
+	{
+		ReportRejection(FStageEconomyResultInfo::Fail(EStageEconomyResult::InvalidRequest,
+			LOCTEXT("NoDialog", "This build has no file dialog. Drag model files onto the Library or the viewport instead.")));
+		return 0;
+	}
+
+	// Asked before the dialog opens, so a session without imports does not let the user browse for nothing.
+	const AStageCraftGameModeBase* GameMode = GetStageGameMode();
+	const FStageEconomyResultInfo Verdict = GameMode ? GameMode->EvaluateModelImport(this)
+		: FStageEconomyResultInfo::Fail(EStageEconomyResult::InvalidRequest, LOCTEXT("NoImportMode", "Model import needs the StageCraft game mode."));
+	if (!Verdict.IsSuccess())
+	{
+		ReportRejection(Verdict);
+		return 0;
+	}
+
+	TArray<FString> Files;
+	const FString Filter = StageMeshImport::MakeFileDialogFilter(Importer->GetSupportedExtensions());
+	if (!StageFileDialog::OpenFiles(LOCTEXT("ImportTitle", "Import Models into the Library"), LastImportDirectory, Filter, Files))
+	{
+		return 0;
+	}
+	LastImportDirectory = FPaths::GetPath(Files[0]);
+	return RequestImportModelFiles(Files);
+}
+
+bool AModularPlayerController::CanBrowseModelFiles()
+{
+	return StageFileDialog::IsAvailable();
 }
 
 int32 AModularPlayerController::RequestClearStage()

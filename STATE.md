@@ -2019,7 +2019,7 @@ The design record, with verified engine facts, alternatives and rollback, is `Do
   - Session limits with quantities: the test GameMode has no power/weight limits, so a refused long run (red ghost, "not allowed by this stage's limits") was not exercised at runtime.
 - Status: **implemented, awaiting manual verification** of the items above.
 
-**Commit:** uncommitted (working tree).
+**Commit:** `3313e01`.
 
 **Known issues / follow-ups**
 - Runs of the same item share the catalog name as label (as every item does); no auto-numbering ("Truss Run 1, 2…").
@@ -2031,3 +2031,147 @@ The design record, with verified engine facts, alternatives and rollback, is `Do
 - BOM: no rigging point loads or per-phase power distribution (amps) yet.
 - PIE has no dock panels (fixed HUD); the console commands work there.
 - **Obsidian vault.** `S:\` is still unreachable on this machine; the design record is ADR 0005 in the repo.
+
+---
+
+## #28 — Inspector visual polish, runtime model import (drag and drop, Import dialog, Library thumbnails) (2026-10-13)
+
+**What & why**
+Gevor asked for a dark, aligned GrandMA3 / Unreal-style inspector, and for importing `.obj` / `.fbx` / `.gltf` / `.glb` / `.datasmith` models at runtime, by dragging files from Explorer or through an Import button using the OS file dialog, straight into the Library and Place mode. Design record: `Docs/ADR/0006-inspector-polish-and-runtime-model-import.md`.
+
+- **Inspector (root cause):** the value editors are created in C++ inside the row Blueprint's `EditorSlot` and used UMG's default (light) styles. A combo box takes its font only before its Slate widget exists (default Roboto Bold 16). Rounded-box brushes have no size, and the units column ("cm", "°", "×") had content-dependent width, so field columns didn't line up from row to row.
+  - `UStageParameterRowWidget::SetTheme` (called by the inspector) themes every editor it creates:
+    - Numeric fields: dark, an amber outline while active, a faint fill for ranged values.
+    - Checkboxes: an outlined box with an amber check.
+    - Dropdowns: `UStageThemedComboBox`, dark with a dark menu.
+    - Text fields.
+  - Every editor sits in a 22 px box, and vector, rotator and colour components carry X/Y/Z (R/G/B) tags. The theme has new `AxisX/Y/ZColor` entries.
+  - Read-only rows collapse the empty editor slot and don't repeat their units.
+  - Widget Blueprints (edited through the editor bridge):
+    - `WBP_StageParameterRow`: units column min width 18 px, 8 px right padding.
+    - `WBP_StageParameterSection`: header text amber `#FFB300`.
+- **Import:** `UStageMeshImportSubsystem` (GameInstance) imports through Interchange at runtime.
+  - Pipeline: static meshes only, all meshes combined into one, no Nanite, material instances. OBJ files are assumed Y-up metres and corrected (×100, quarter turn).
+  - One file at a time, queued; results are collected on the game thread.
+  - Every file is validated first: format, exists, ≤ 512 MB, not a duplicate.
+  - Each model becomes a `UStageImportedItemData`:
+    - It lives in a never-saved package under `/Temp/StageCraft/Imported/IMP_<hash of path>`.
+    - It spawns as an `AModularBaseActor`, is free, has no specs, and its category is `StageCraft.Category.Imported`.
+  - The subsystem registers it with `UStageItemSubsystem::AddRuntimeItem` (friend-only), which broadcasts `OnCatalogChanged`. The Library rebuilds and the item is armable at once.
+  - Imports are remembered in `Saved/StageCraft/Imports.json`, re-imported at startup, and can be named in scene files.
+- **Rules path:**
+  - `AModularPlayerController::RequestImportModelFiles` / `RequestBrowseModelFiles` go through the new GameMode check `EvaluateModelImport` (session rule `bAllowModelImport`, default on).
+  - Refusals are reported once per drop on `OnRequestRejected`. The status bar shows "Importing…", "Imported X (GLB) into the Library. Click it in the Library to place it." and failures.
+- **Drag and drop:** `SStageFileDropTarget` wraps every dock tab's content (viewport and panels, docked or floating) in `FStageWorkspaceShell`. It shows an amber "Drop to import into the Library" or a red refusal while files hover, and hands drops to the controller.
+- **Import button:** a Library toolbar IMPORT button and File > Library > Import Models… open `IDesktopPlatform::OpenFileDialog`. The filter lists the formats this build supports, and the last folder is remembered for the session.
+  - `DesktopPlatform` is a Developer module that the engine licence doesn't allow in shipped builds. It is linked only when `Target.bBuildDeveloperTools`. In Shipping the button and menu entry are hidden, and drag and drop still works.
+- **Library cards:** imported items show their format and size ("GLB · 2.00 × 0.80 × 1.05 m") and a 128 px thumbnail. It is rendered once in a private game preview world, drawn with a uniform clay material (`M_ThumbnailClay`, set in `DefaultGame.ini`) for consistent, readable cards.
+- **Engine workarounds (see ADR E5/E6/E9):**
+  - In Standalone Game from editor binaries, `UStageInterchangeGameUtilities` makes Interchange use its runtime path. Without it, OBJ materials hit `check(GIsEditor)`.
+  - Packages go under `/Temp/`, not `/Memory/`; `/Memory/` crashed in `LongPackageNameToFilename`.
+  - `FPreviewScene` must be created with `SetEditor(false)`, or a game never renders it.
+- **Dev commands** (compiled out of Shipping):
+  - `StageCraft.Import.File <path>[|<path>…]`, `StageCraft.Import.Status`, `StageCraft.Import.SaveThumbnails`.
+  - `StageCraft.Import.DragEnter <x> <y> <files>` / `StageCraft.Import.DragDrop` drive Slate's real OS drag-and-drop entry points.
+  - `StageCraft.Edit.Arm` also accepts Library names.
+
+**Files changed**
+- **Build and config:**
+  - `ModularSceneBuilder.uproject`: `Interchange` plugin enabled.
+  - `ModularSceneBuilder.Build.cs`: InterchangeCore/Engine/Pipelines; DesktopPlatform plus `WITH_STAGECRAFT_FILE_DIALOG` for builds with developer tools.
+  - `Config/DefaultGame.ini`: `StageMeshImportSubsystem.ThumbnailMaterial`; `DirectoriesToAlwaysCook` += `/Game/StageCraft/UI/Thumbnails`, `/InterchangeAssets/Materials`, `/InterchangeAssets/gltf`.
+- **New:**
+  - `Public/Import/StageMeshImportTypes.h`, `Private/Import/StageMeshImportTypes.cpp`
+  - `Public/Import/StageMeshImportSubsystem.h`, `Private/Import/StageMeshImportSubsystem.cpp`
+  - `Private/Import/StageFileDialog.h/.cpp`, `StageInterchangeGameUtilities.h`, `StageModelThumbnailRenderer.h/.cpp`, `StageMeshImportConsoleCommands.cpp`, `Tests/StageMeshImportTests.cpp`
+  - `Public/Data/StageImportedItemData.h`, `Private/Data/StageImportedItemData.cpp`
+  - `Private/UI/StageThemedComboBox.h/.cpp`
+  - `Private/Workspace/SStageFileDropTarget.h/.cpp`
+- **Modified (data):**
+  - `BaseItemData.h/.cpp`: `RequiresAssetStreaming`, `GetCatalogSubtitle`, `GetCatalogIcon`.
+  - `StageItemTypes.h/.cpp`: `Category_Imported`.
+  - `StageItemSubsystem.h/.cpp`: `AddRuntimeItem`, `RuntimeItems`, `OnCatalogChanged`; no streaming for runtime items.
+  - `StageSceneStore.cpp`: accepts imported item paths.
+- **Modified (rules):**
+  - `StageSessionTypes.h`: `bAllowModelImport`.
+  - `StageCraftGameModeBase.h/.cpp`: `EvaluateModelImport`.
+  - `ModularPlayerController.h/.cpp`: import requests, `CanBrowseModelFiles`, `LastImportDirectory`.
+- **Modified (UI):**
+  - `StageCraftWidgetStyle.h/.cpp`: `FieldHeight`, `MakeNumericField`, `MakeCheckBox`, `MakeComboBox`, `MakeListRow`.
+  - `StageCraftUITheme.h/.cpp`: axis colours.
+  - `StageParameterRowWidget.h/.cpp`: theming, axis tags, swatch, read-only layout.
+  - `StageInspectorPanel.cpp`: passes the theme.
+  - `StageItemLibraryPanel.h/.cpp`: IMPORT button, catalog-change rebuild, subtitle and icon via virtuals.
+  - `StageStatusBarWidget.h/.cpp`: import messages.
+- **Modified (workspace and placement):**
+  - `StageWorkspaceShell.h/.cpp`: drop targets.
+  - `StageWorkspaceSubsystem.cpp`: drop callbacks.
+  - `SStageWorkspaceMenuBar.cpp`: File > Library section.
+  - `StagePlacementConsoleCommands.cpp`: Arm by Library name.
+- **Content:**
+  - `Content/StageCraft/UI/Inspector/WBP_StageParameterRow.uasset`, `WBP_StageParameterSection.uasset` (modified).
+  - `Content/StageCraft/UI/Thumbnails/M_ThumbnailClay.uasset` (new).
+- **Test models:** `Scripts/TestModels/make_test_models.ps1` and its outputs:
+  - `Speaker_Cabinet.gltf` (embedded buffer)
+  - `DJ_Booth.glb` (two meshes to combine)
+  - `Stage_Riser.obj` / `.mtl`
+  - `Not_A_Model.dae` (refusal path)
+- **Docs:**
+  - `Docs/ADR/0006-inspector-polish-and-runtime-model-import.md`
+  - `STATE.md` (this entry; #27 commit set to `3313e01`)
+  - `tasks/todo.md` (Phase 11)
+
+**Verification**
+- **Builds:** Editor Development, Game Development and Game Shipping are clean (0 errors, 0 warnings). The Shipping exe contains the drop hint but none of the `StageCraft.Import.*` commands and no DesktopPlatform.
+- **Automation:** 33/33 pass (29 existing + 4 new):
+  - `Import.Formats`: format filtering incl. no FBX translator, extension rules, the OBJ correction.
+  - `Import.Identity`: path normalization, stable `IMP_` names, the import root, display names.
+  - `Import.DialogFilter`.
+  - `Import.List`: round trip, invalid documents, mixed/duplicate/relative/over-long entries, 256 cap.
+  - The first run failed on my own wrong assumption about the OBJ rotation sense; the test now asserts the authored value and the runtime check below.
+- **Standalone `-game`, scripted by Claude** (`L_StageTest`; logs `Saved/Logs/R28_*.log`; screenshots checked):
+  - **Inspector, before vs after:** before, white fields, a huge label font, clipped units and a centred read-only value. After (Spot 101): dark fields, amber headers, X/Y/Z tags, aligned columns, a colour swatch, units once, fill bars on Pan/Tilt.
+  - **Imports:** results by format:
+
+    | File | Size | Detail |
+    |---|---|---|
+    | `Speaker_Cabinet.gltf` | 0.60 × 0.50 × 1.10 m | 1 slot, standing on Z 0 |
+    | `Stage_Riser.obj` | 2.00 × 1.00 × 0.40 m | Z 0–40 cm after the OBJ correction |
+    | `DJ_Booth.glb` | 2.00 × 0.80 × 1.05 m | two meshes combined, 2 slots |
+    | `Cube_Blue.fbx` (engine test file) | 1 m cube | through the Slate drop path |
+
+  - **Refusals:** `.dae` → "cannot be imported. Supported formats: .glb, .gltf, .obj, .fbx"; a missing file → "was not found"; re-importing the cabinet → "already in the Library"; four refusals in one drop give one message "(and 1 more files…)".
+  - **Library:** "Imported" category with format/size subtitles and clay thumbnails (PNG export checked); the IMPORT button is in the toolbar.
+  - **Place mode:** each imported model armed and placed at once (ModularBaseActor_0–2); the BOM lists them under Imported (0 kg / 0 W).
+  - **Scenes:** "R28 Import" saved 7 items and loaded 7, 0 unknown.
+  - **Drop overlay:** the screenshot shows "Drop to import into the Library" over the viewport while an FBX hovered; the drop imported it.
+  - **Restart:** `Imports.json` listed 3 files; at startup all 3 re-imported, and scene "R28 Restore" loaded 5 placed, 0 unknown.
+  - **Bugs found and fixed during the runs:**
+    - Formats were read before the translators registered: every import was refused.
+    - A `/Memory` package crash.
+    - `check(GIsEditor)` on OBJ materials.
+    - OBJ came in 100× small and on its side.
+    - Thumbnails were black: an editor preview world, then models with uncompiled materials.
+    - Axis tags and the swatch were invisible (zero-size brushes).
+- **Not verified (needs Gevor, Standalone Game via RunEditor.bat):**
+  - A real drag from Windows Explorer with the mouse (the scripted path calls the same Slate entry points Windows does, but not OLE itself). The scripted hover reported drop effect 0 because the OS cursor isn't really dragging; the drop itself was accepted.
+  - The IMPORT button / File > Library > Import Models… opening the native dialog and picking several files (the dialog is modal and was not driven by script).
+  - Typing in, dragging and tabbing between the restyled inspector fields, and opening the Type dropdown's menu.
+  - Real-world models (Blender/SketchUp exports, textured glTF, large FBX); only generated test models were used.
+  - A packaged (cooked) build: runtime import, FBX absence, cooked Interchange parent materials, thumbnails.
+  - PIE: imports are expected to work (editor utilities answer "PIE"), not run.
+- Status: **implemented, awaiting manual verification** of the items above.
+
+**Commit:** uncommitted (working tree).
+
+**Known issues / follow-ups**
+- **Datasmith (`.udatasmith`) is not supported:** the only runtime path is the beta DatasmithRuntime plugin, which loads whole scenes as actors (ADR 0006 §4.3).
+- **No FBX in packaged builds:** the engine's FBX translator is editor-only. glTF/GLB and OBJ work there.
+- **This machine's engine install is modified:** `/InterchangeAssets/Materials/PBRSurfaceMaterial_MR` references `/Game/KMidden/Items/Props/Textura_full_pg` and fails to compile, so OBJ materials render with the default material. Check or repair the UE 5.8 install (Verify in the Epic launcher).
+- No way to remove an imported model from the Library yet (workaround: delete `Saved/StageCraft/Imports.json` and restart). Imported items have no weight or power.
+- OBJ is always treated as Y-up metres; there is no per-import option for other conventions.
+- OBJ files without texture coordinates trigger an engine ensure inside the OBJ translator; the import still succeeds.
+- A model whose source file moved is reported at startup and stays listed.
+- In Shipping there is no Import button: drag and drop only. A Windows-native dialog could be added.
+- `StageCraft.Import.DragEnter` cannot make Windows report a copy cursor (synthetic drag).
+- **Obsidian vault:** `S:\` is still unreachable; the design record is ADR 0006 in the repo.

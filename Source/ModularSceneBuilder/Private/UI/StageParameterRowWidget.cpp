@@ -8,9 +8,15 @@
 #include "Components/EditableTextBox.h"
 #include "Components/HorizontalBoxSlot.h"
 #include "Components/Image.h"
+#include "Components/Overlay.h"
+#include "Components/OverlaySlot.h"
 #include "Components/PanelWidget.h"
+#include "Components/SizeBox.h"
 #include "Components/SpinBox.h"
 #include "Components/TextBlock.h"
+#include "UI/StageCraftUITheme.h"
+#include "UI/StageCraftWidgetStyle.h"
+#include "UI/StageThemedComboBox.h"
 
 #include UE_INLINE_GENERATED_CPP_BY_NAME(StageParameterRowWidget)
 
@@ -22,7 +28,8 @@ void UStageParameterRowWidget::OnInitializeControl()
 	}
 	if (UnitsText)
 	{
-		UnitsText->SetText(Descriptor.Units);
+		// Read-only rows show FormatValue, which already ends in the units ("24.5 kg"). The column stays, so fields still line up.
+		UnitsText->SetText(Descriptor.bReadOnly ? FText::GetEmpty() : Descriptor.Units);
 	}
 	if (GroupColorStrip)
 	{
@@ -37,6 +44,11 @@ void UStageParameterRowWidget::OnInitializeControl()
 	if (ValueText)
 	{
 		ValueText->SetVisibility(bEditable && HasEditor() ? ESlateVisibility::Collapsed : ESlateVisibility::HitTestInvisible);
+	}
+	if (EditorSlot && EditorSlot->GetChildrenCount() == 0)
+	{
+		// An empty slot would still take its share of the row and push a read-only value off the editors' left edge.
+		EditorSlot->SetVisibility(ESlateVisibility::Collapsed);
 	}
 
 	switch (Descriptor.GetType())
@@ -107,11 +119,80 @@ void UStageParameterRowWidget::OnInitializeControl()
 	}
 }
 
-USpinBox* UStageParameterRowWidget::CreateSpinBox(const TCHAR* Name)
+void UStageParameterRowWidget::SetTheme(const UStageCraftUITheme* InTheme)
+{
+	Theme = InTheme;
+}
+
+const UStageCraftUITheme& UStageParameterRowWidget::GetTheme() const
+{
+	return StageCraftWidgetStyle::ResolveTheme(Theme);
+}
+
+USpinBox* UStageParameterRowWidget::ConstructNumericField(const TCHAR* Name)
 {
 	USpinBox* Spin = WidgetTree->ConstructWidget<USpinBox>(USpinBox::StaticClass(), FName(Name));
-	AddToEditorSlot(*Spin, /*bFill*/ true);
+	// Styled before it joins the live row: a widget added to a built panel builds its Slate widget at that moment.
+	Spin->SetWidgetStyle(StageCraftWidgetStyle::MakeNumericField(GetTheme()));
+	Spin->SetFont(StageCraftWidgetStyle::MakeFont(9));
+	Spin->SetForegroundColor(GetTheme().TextPrimary);
+	Spin->SetMinDesiredWidth(0.f);
 	return Spin;
+}
+
+USpinBox* UStageParameterRowWidget::CreateSpinBox(const TCHAR* Name)
+{
+	USpinBox* Spin = ConstructNumericField(Name);
+	AddToEditorSlot(WrapInFieldBox(*Spin), /*bFill*/ true);
+	return Spin;
+}
+
+USpinBox* UStageParameterRowWidget::CreateComponentSpinBox(const TCHAR* Name, const FLinearColor& TagColor)
+{
+	USpinBox* Spin = ConstructNumericField(Name);
+
+	// The Unreal Editor convention: a short coloured bar at the left edge names the component. A rounded box brush has no
+	// size of its own, so the bar is given one; the slot stretches it to the field's height.
+	FSlateBrush TagBrush = StageCraftWidgetStyle::MakeBox(FLinearColor::White, 1.f);
+	TagBrush.ImageSize = FVector2D(3.0, 12.0);
+	UImage* Tag = WidgetTree->ConstructWidget<UImage>(UImage::StaticClass());
+	Tag->SetBrush(TagBrush);
+	Tag->SetColorAndOpacity(TagColor);
+
+	UOverlay* Field = WidgetTree->ConstructWidget<UOverlay>(UOverlay::StaticClass());
+	if (UOverlaySlot* SpinSlot = Field->AddChildToOverlay(Spin))
+	{
+		SpinSlot->SetHorizontalAlignment(HAlign_Fill);
+		SpinSlot->SetVerticalAlignment(VAlign_Fill);
+	}
+	if (UOverlaySlot* TagSlot = Field->AddChildToOverlay(Tag))
+	{
+		TagSlot->SetHorizontalAlignment(HAlign_Left);
+		TagSlot->SetVerticalAlignment(VAlign_Fill);
+		TagSlot->SetPadding(FMargin(1.f, 5.f, 0.f, 5.f));
+	}
+	AddToEditorSlot(WrapInFieldBox(*Field), /*bFill*/ true);
+	return Spin;
+}
+
+UImage* UStageParameterRowWidget::CreateColorSwatch()
+{
+	UImage* Swatch = WidgetTree->ConstructWidget<UImage>(UImage::StaticClass(), TEXT("ColorSwatch"));
+	// Sized by its brush: a rounded box brush has no size of its own.
+	const double Size = StageCraftWidgetStyle::FieldHeight - 4.f;
+	FSlateBrush SwatchBrush = StageCraftWidgetStyle::MakeBox(FLinearColor::White, StageCraftWidgetStyle::CornerRadius);
+	SwatchBrush.ImageSize = FVector2D(Size, Size);
+	Swatch->SetBrush(SwatchBrush);
+	AddToEditorSlot(*Swatch, /*bFill*/ false);
+	return Swatch;
+}
+
+UWidget& UStageParameterRowWidget::WrapInFieldBox(UWidget& Editor)
+{
+	USizeBox* Box = WidgetTree->ConstructWidget<USizeBox>(USizeBox::StaticClass());
+	Box->SetHeightOverride(StageCraftWidgetStyle::FieldHeight);
+	Box->SetContent(&Editor);
+	return *Box;
 }
 
 void UStageParameterRowWidget::AddToEditorSlot(UWidget& Widget, bool bFill)
@@ -158,32 +239,40 @@ void UStageParameterRowWidget::CreateMissingEditors()
 	case EStageParameterType::Color:
 		if (!ColorSwatch)
 		{
-			ColorSwatch = WidgetTree->ConstructWidget<UImage>(UImage::StaticClass(), TEXT("ColorSwatch"));
-			ColorSwatch->SetDesiredSizeOverride(FVector2D(18.0, 18.0));
-			AddToEditorSlot(*ColorSwatch, /*bFill*/ false);
+			ColorSwatch = CreateColorSwatch();
 		}
 		[[fallthrough]]; // Color also uses the three component boxes.
 	case EStageParameterType::Vector:
 	case EStageParameterType::Rotator:
-		SpinX = CreateSpinBox(TEXT("SpinX"));
-		SpinY = CreateSpinBox(TEXT("SpinY"));
-		SpinZ = CreateSpinBox(TEXT("SpinZ"));
+		SpinX = CreateComponentSpinBox(TEXT("SpinX"), GetTheme().AxisXColor);
+		SpinY = CreateComponentSpinBox(TEXT("SpinY"), GetTheme().AxisYColor);
+		SpinZ = CreateComponentSpinBox(TEXT("SpinZ"), GetTheme().AxisZColor);
 		break;
 
 	case EStageParameterType::Bool:
 		ValueCheckBox = WidgetTree->ConstructWidget<UCheckBox>(UCheckBox::StaticClass(), TEXT("ValueCheckBox"));
+		ValueCheckBox->SetWidgetStyle(StageCraftWidgetStyle::MakeCheckBox(GetTheme()));
 		AddToEditorSlot(*ValueCheckBox, /*bFill*/ false);
 		break;
 
 	case EStageParameterType::Text:
+	{
 		ValueTextBox = WidgetTree->ConstructWidget<UEditableTextBox>(UEditableTextBox::StaticClass(), TEXT("ValueTextBox"));
-		AddToEditorSlot(*ValueTextBox, /*bFill*/ true);
+		FEditableTextBoxStyle TextStyle = StageCraftWidgetStyle::MakeInputField(GetTheme());
+		TextStyle.SetPadding(FMargin(6.f, 2.f));
+		ValueTextBox->SetWidgetStyle(TextStyle);
+		AddToEditorSlot(WrapInFieldBox(*ValueTextBox), /*bFill*/ true);
 		break;
+	}
 
 	case EStageParameterType::Enum:
-		ValueComboBox = WidgetTree->ConstructWidget<UComboBoxString>(UComboBoxString::StaticClass(), TEXT("ValueComboBox"));
-		AddToEditorSlot(*ValueComboBox, /*bFill*/ true);
+	{
+		UStageThemedComboBox* Combo = WidgetTree->ConstructWidget<UStageThemedComboBox>(UStageThemedComboBox::StaticClass(), TEXT("ValueComboBox"));
+		Combo->ApplyTheme(GetTheme());
+		ValueComboBox = Combo;
+		AddToEditorSlot(WrapInFieldBox(*Combo), /*bFill*/ true);
 		break;
+	}
 	}
 }
 

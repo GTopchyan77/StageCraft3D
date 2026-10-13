@@ -30,6 +30,10 @@ struct MODULARSCENEBUILDER_API FStageSessionRules
 	/** Total weight of all placed gear. 0 = unlimited. */
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Session", meta = (ClampMin = "0.0", Units = "kg"))
 	float MaxTotalWeightKg = 0.f;
+
+	/** Users may import their own 3D models into the Library (drag and drop, Import Model...). Off for curated sessions. */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Session")
+	bool bAllowModelImport = true;
 };
 
 /** Live totals of the stage, recomputed whenever an item is added, removed or changes type. */

@@ -54,6 +54,7 @@ void UStageInspectorPanel::BuildView(UObject& Target, const TArray<FStageParamet
 
 			UStageParameterRowWidget* Row = CreateWidget<UStageParameterRowWidget>(this, RowClass);
 			SectionWidget->AddRow(*Row);
+			Row->SetTheme(Theme);
 			Row->InitializeControl(Descriptor, SectionColor);
 			RegisterControl(*Row);
 		}

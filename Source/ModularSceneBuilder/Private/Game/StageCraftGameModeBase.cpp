@@ -64,6 +64,19 @@ FStageEconomyResultInfo AStageCraftGameModeBase::EvaluatePlacement_Implementatio
 	return Session->EvaluateSessionLimits(Item, Quantity);
 }
 
+FStageEconomyResultInfo AStageCraftGameModeBase::EvaluateModelImport_Implementation(const APlayerController* Player) const
+{
+	if (!Player)
+	{
+		return FStageEconomyResultInfo::Fail(EStageEconomyResult::InvalidRequest, LOCTEXT("CannotImport", "Model import is not available."));
+	}
+	if (!SessionRules.bAllowModelImport)
+	{
+		return FStageEconomyResultInfo::Fail(EStageEconomyResult::SessionRuleViolation, LOCTEXT("ImportDisabled", "Importing models is switched off for this session."));
+	}
+	return FStageEconomyResultInfo::Ok();
+}
+
 FStageEconomyResultInfo AStageCraftGameModeBase::EvaluateParameterChange_Implementation(const APlayerController* Player, const UObject* Target, FGameplayTag ParameterId, const FStageParameterValue& Value) const
 {
 	const UStageEconomySubsystem* Economy = GetEconomy();

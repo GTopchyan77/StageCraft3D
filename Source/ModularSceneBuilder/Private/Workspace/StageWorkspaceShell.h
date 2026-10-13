@@ -23,6 +23,12 @@ struct FStageWorkspaceShellCallbacks
 	/** Builds the status bar under the panels. Called on install and on RefreshPanelContent. Must not return null. */
 	TFunction<TSharedRef<class SWidget>()> CreateStatusBarContent;
 
+	/** Whether files dragged in from the OS can be imported; drives the drop hint over a panel. Unbound: panels take no files. */
+	TFunction<bool(const TArray<FString>& Files)> CanImportFiles;
+
+	/** Files were dropped on a panel (the viewport or a widget panel), supported or not. */
+	TFunction<void(const TArray<FString>& Files)> FilesDropped;
+
 	/** A panel was docked, floated or closed. Not called while a layout is being restored. */
 	TFunction<void(const FGameplayTag& PanelTag, EStagePanelHost NewHost, EStagePanelHost PreviousHost)> PanelHostChanged;
 
@@ -125,6 +131,9 @@ private:
 	 * block their spawners, and for the embedded primary area it would request destroying the main window itself.
 	 */
 	void TearDownPanels();
+
+	/** A panel's content, wrapped so model files dropped on it from the OS go to Callbacks.FilesDropped. */
+	TSharedRef<class SWidget> MakeFileDropTarget(const TSharedRef<class SWidget>& Content) const;
 
 	/** The owner's status bar, or nothing when the owner does not provide one. */
 	TSharedRef<class SWidget> MakeStatusBarContent() const;

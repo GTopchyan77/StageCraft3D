@@ -6,6 +6,7 @@
 #include "Blueprint/UserWidget.h"
 #include "Economy/StageEconomyTypes.h"
 #include "History/StageEditCommand.h"
+#include "Import/StageMeshImportTypes.h"
 #include "Placement/StagePlacementTypes.h"
 #include "Placement/StageSpanToolComponent.h"
 #include "Render/StageRenderTypes.h"
@@ -112,6 +113,12 @@ private:
 	UFUNCTION()
 	void HandleReportExportFinished(const FStageReportExportResult& Result);
 
+	UFUNCTION()
+	void HandleModelImportStarted(const FString& SourceFile);
+
+	UFUNCTION()
+	void HandleModelImportFinished(const FStageMeshImportOutcome& Outcome);
+
 	UPROPERTY(Transient)
 	TObjectPtr<class UBorder> ModeChip = nullptr;
 
@@ -134,6 +141,7 @@ private:
 	TWeakObjectPtr<class UStageRenderSubsystem> Render;
 	TWeakObjectPtr<class UStageSpanToolComponent> SpanTool;
 	TWeakObjectPtr<class UStageBillOfMaterialsSubsystem> BillOfMaterials;
+	TWeakObjectPtr<class UStageMeshImportSubsystem> Importer;
 
 	FTimerHandle MessageTimer;
 };

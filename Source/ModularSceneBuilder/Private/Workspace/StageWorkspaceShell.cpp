@@ -11,6 +11,7 @@
 #include "Widgets/SNullWidget.h"
 #include "Widgets/SViewport.h"
 #include "Widgets/SWindow.h"
+#include "Workspace/SStageFileDropTarget.h"
 
 #define LOCTEXT_NAMESPACE "StageWorkspaceShell"
 
@@ -301,6 +302,33 @@ TSharedRef<SWidget> FStageWorkspaceShell::BuildWorkspaceContent(const TSharedRef
 		];
 }
 
+TSharedRef<SWidget> FStageWorkspaceShell::MakeFileDropTarget(const TSharedRef<SWidget>& Content) const
+{
+	if (!Callbacks.FilesDropped)
+	{
+		return Content;
+	}
+
+	// Tabs can outlive the shell (closing windows during shutdown), so the callbacks are reached through a weak pointer.
+	const TWeakPtr<const FStageWorkspaceShell> WeakThis = AsWeak();
+	return SNew(SStageFileDropTarget)
+		.CanDropFiles_Lambda([WeakThis](const TArray<FString>& Files)
+		{
+			const TSharedPtr<const FStageWorkspaceShell> This = WeakThis.Pin();
+			return This.IsValid() && This->Callbacks.CanImportFiles && This->Callbacks.CanImportFiles(Files);
+		})
+		.OnFilesDropped_Lambda([WeakThis](const TArray<FString>& Files)
+		{
+			if (const TSharedPtr<const FStageWorkspaceShell> This = WeakThis.Pin())
+			{
+				This->Callbacks.FilesDropped(Files);
+			}
+		})
+		[
+			Content
+		];
+}
+
 TSharedRef<SWidget> FStageWorkspaceShell::MakeStatusBarContent() const
 {
 	return Callbacks.CreateStatusBarContent ? Callbacks.CreateStatusBarContent() : SNullWidget::NullWidget;
@@ -395,7 +423,7 @@ void FStageWorkspaceShell::RefreshPanelContent()
 		}
 		if (TSharedPtr<SDockTab> Tab = FindLiveTab(PanelTag))
 		{
-			Tab->SetContent(Callbacks.CreatePanelContent(PanelTag));
+			Tab->SetContent(MakeFileDropTarget(Callbacks.CreatePanelContent(PanelTag)));
 		}
 	}
 	if (StatusBarSlot.IsValid())
@@ -460,7 +488,7 @@ TSharedRef<SDockTab> FStageWorkspaceShell::SpawnViewportTab(const FSpawnTabArgs&
 		.OnTabRelocated(FSimpleDelegate::CreateSP(this, &FStageWorkspaceShell::HandleTabRelocated, PanelTag))
 		.OnTabClosed(SDockTab::FOnTabClosedCallback::CreateSP(this, &FStageWorkspaceShell::HandleTabClosed, PanelTag))
 		[
-			Viewport.IsValid() ? Viewport.ToSharedRef() : SNullWidget::NullWidget
+			MakeFileDropTarget(Viewport.IsValid() ? Viewport.ToSharedRef() : SNullWidget::NullWidget)
 		];
 }
 
@@ -480,7 +508,7 @@ TSharedRef<SDockTab> FStageWorkspaceShell::SpawnWidgetPanelTab(const FSpawnTabAr
 		.OnTabRelocated(FSimpleDelegate::CreateSP(this, &FStageWorkspaceShell::HandleTabRelocated, PanelTag))
 		.OnTabClosed(SDockTab::FOnTabClosedCallback::CreateSP(this, &FStageWorkspaceShell::HandleTabClosed, PanelTag))
 		[
-			Callbacks.CreatePanelContent(PanelTag)
+			MakeFileDropTarget(Callbacks.CreatePanelContent(PanelTag))
 		];
 }
 

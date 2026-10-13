@@ -12,7 +12,12 @@
 	],
 	"Plugins": [
 		{
+			"Name": "Interchange",
+			"Enabled": true
+		},
+		{
 			"Name": "ModelingToolsEditorMode",
+
 			"Enabled": true,
 			"TargetAllowList": [
 				"Editor"

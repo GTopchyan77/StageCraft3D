@@ -75,6 +75,8 @@ namespace StageCraftTags
 	MODULARSCENEBUILDER_API UE_DECLARE_GAMEPLAY_TAG_EXTERN(Category_Lighting);
 	MODULARSCENEBUILDER_API UE_DECLARE_GAMEPLAY_TAG_EXTERN(Category_Prop);
 	MODULARSCENEBUILDER_API UE_DECLARE_GAMEPLAY_TAG_EXTERN(Category_Cable);
+	/** Models the user imported from files at runtime (UStageMeshImportSubsystem). Not used by content assets. */
+	MODULARSCENEBUILDER_API UE_DECLARE_GAMEPLAY_TAG_EXTERN(Category_Imported);
 
 	// Concert production sub-categories. Parents stay valid filters because GetCatalogByCategory matches children.
 	MODULARSCENEBUILDER_API UE_DECLARE_GAMEPLAY_TAG_EXTERN(Category_Stage_Deck);

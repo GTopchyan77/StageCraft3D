@@ -180,14 +180,14 @@ void UStageItemLibraryEntry::SetItem(UBaseItemData* InItem, const UStageCraftUIT
 	}
 	if (DetailText)
 	{
-		DetailText->SetText(StaticEnum<EStageItemType>()->GetDisplayValueAsText(Item->ItemType));
+		DetailText->SetText(Item->GetCatalogSubtitle());
 	}
 
 	// The catalog streams the UI bundle (icons) before OnCatalogLoaded; no synchronous load here.
-	UTexture2D* Icon = Item->Icon.Get();
+	UObject* Icon = Item->GetCatalogIcon();
 	if (IconImage)
 	{
-		IconImage->SetBrushFromTexture(Icon);
+		IconImage->SetBrushResourceObject(Icon);
 		IconImage->SetVisibility(Icon ? ESlateVisibility::HitTestInvisible : ESlateVisibility::Collapsed);
 	}
 	if (InitialText)
@@ -424,6 +424,12 @@ void UStageItemLibraryPanel::NativeOnInitialized()
 	{
 		PlaceModeButton->OnClicked.AddUniqueDynamic(this, &ThisClass::HandlePlaceModeClicked);
 	}
+	if (ImportButton)
+	{
+		ImportButton->OnClicked.AddUniqueDynamic(this, &ThisClass::HandleImportClicked);
+		// Builds without a file dialog (Shipping) still import by drag and drop; the button would only refuse.
+		ImportButton->SetVisibility(AModularPlayerController::CanBrowseModelFiles() ? ESlateVisibility::Visible : ESlateVisibility::Collapsed);
+	}
 }
 
 const UStageCraftUITheme& UStageItemLibraryPanel::GetTheme() const
@@ -485,6 +491,13 @@ UWidget* UStageItemLibraryPanel::BuildToolbar()
 		CountSlot->SetSize(FSlateChildSize(ESlateSizeRule::Fill));
 	}
 
+	ImportButton = BuildImportButton();
+	if (UHorizontalBoxSlot* ImportSlot = Row->AddChildToHorizontalBox(ImportButton))
+	{
+		ImportSlot->SetVerticalAlignment(VAlign_Center);
+		ImportSlot->SetPadding(FMargin(0.f, 0.f, 6.f, 0.f));
+	}
+
 	PlaceModeButton = WidgetTree->ConstructWidget<UButton>(UStageToolButton::StaticClass(), TEXT("PlaceModeButton"));
 	PlaceModeButton->SetToolTipText(LOCTEXT("PlaceTip",
 		"Place mode (P): the armed item follows the cursor and every click places a copy. Click again or press Esc to return to Select."));
@@ -498,6 +511,40 @@ UWidget* UStageItemLibraryPanel::BuildToolbar()
 		ButtonSlot->SetVerticalAlignment(VAlign_Center);
 	}
 	return Toolbar;
+}
+
+UButton* UStageItemLibraryPanel::BuildImportButton()
+{
+	using namespace StageCraftWidgetStyle;
+	const UStageCraftUITheme& Palette = GetTheme();
+
+	UButton* Button = WidgetTree->ConstructWidget<UButton>(UStageToolButton::StaticClass(), TEXT("ImportButton"));
+	FButtonStyle Style = MakeFlatButton(FLinearColor::Transparent, Palette.RowHover, Palette.Divider);
+	Style.SetNormal(MakeBox(FLinearColor::Transparent, CornerRadius, Palette.Divider, 1.f));
+	Button->SetStyle(Style);
+	Button->SetToolTipText(LOCTEXT("ImportTip",
+		"Import 3D models (.glb, .gltf, .obj, .fbx) into the Library.\nYou can also drag model files from Explorer onto the Library or the viewport."));
+
+	UHorizontalBox* Content = WidgetTree->ConstructWidget<UHorizontalBox>(UHorizontalBox::StaticClass(), TEXT("ImportContent"));
+	UImage* Icon = WidgetTree->ConstructWidget<UImage>(UImage::StaticClass(), TEXT("ImportIcon"));
+	Icon->SetBrush(*AppBrush(TEXT("Icons.Import")));
+	Icon->SetDesiredSizeOverride(FVector2D(12.0, 12.0));
+	Icon->SetColorAndOpacity(Palette.TextSecondary);
+	if (UHorizontalBoxSlot* IconSlot = Content->AddChildToHorizontalBox(Icon))
+	{
+		IconSlot->SetVerticalAlignment(VAlign_Center);
+		IconSlot->SetPadding(FMargin(0.f, 0.f, 5.f, 0.f));
+	}
+	UTextBlock* Label = StageItemLibrary::MakeText(*WidgetTree, LOCTEXT("ImportLabel", "IMPORT"), 8, TEXT("Bold"), Palette.TextSecondary, TEXT("ImportText"));
+	if (UHorizontalBoxSlot* LabelSlot = Content->AddChildToHorizontalBox(Label))
+	{
+		LabelSlot->SetVerticalAlignment(VAlign_Center);
+	}
+	if (UButtonSlot* ContentSlot = Cast<UButtonSlot>(Button->AddChild(Content)))
+	{
+		ContentSlot->SetPadding(FMargin(8.f, 4.f, 10.f, 4.f));
+	}
+	return Button;
 }
 
 UWidget* UStageItemLibraryPanel::BuildSearchRow()
@@ -565,6 +612,7 @@ void UStageItemLibraryPanel::NativeConstruct()
 	if (Items)
 	{
 		Items->OnCatalogLoaded.AddUniqueDynamic(this, &ThisClass::HandleCatalogLoaded);
+		Items->OnCatalogChanged.AddUniqueDynamic(this, &ThisClass::HandleCatalogLoaded);
 	}
 
 	const AModularPlayerController* Controller = GetStageController();
@@ -584,6 +632,7 @@ void UStageItemLibraryPanel::NativeDestruct()
 	if (UStageItemSubsystem* Items = ItemSubsystem.Get())
 	{
 		Items->OnCatalogLoaded.RemoveDynamic(this, &ThisClass::HandleCatalogLoaded);
+		Items->OnCatalogChanged.RemoveDynamic(this, &ThisClass::HandleCatalogLoaded);
 	}
 	if (UStagePlacementToolComponent* Tool = PlacementTool.Get())
 	{
@@ -776,6 +825,15 @@ void UStageItemLibraryPanel::HandlePlaceModeClicked()
 void UStageItemLibraryPanel::HandleCatalogLoaded()
 {
 	RebuildEntries();
+}
+
+void UStageItemLibraryPanel::HandleImportClicked()
+{
+	// The controller asks the rules, opens the dialog and reports refusals; the Library updates through OnCatalogChanged.
+	if (AModularPlayerController* Controller = GetStageController())
+	{
+		Controller->RequestBrowseModelFiles();
+	}
 }
 
 void UStageItemLibraryPanel::HandleArmedItemChanged(UBaseItemData* ArmedItem)

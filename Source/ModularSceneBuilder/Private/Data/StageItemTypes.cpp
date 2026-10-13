@@ -12,6 +12,7 @@ namespace StageCraftTags
 	UE_DEFINE_GAMEPLAY_TAG_COMMENT(Category_Lighting,	"StageCraft.Category.Lighting",	"Moving heads, pars, washes and other fixtures.");
 	UE_DEFINE_GAMEPLAY_TAG_COMMENT(Category_Prop,		"StageCraft.Category.Prop",		"Instruments, furniture and set dressing.");
 	UE_DEFINE_GAMEPLAY_TAG_COMMENT(Category_Cable,		"StageCraft.Category.Cable",	"Cable runs, cable ramps and power distribution lines.");
+	UE_DEFINE_GAMEPLAY_TAG_COMMENT(Category_Imported,	"StageCraft.Category.Imported",	"Models imported from .glb, .gltf, .obj or .fbx files while the app runs.");
 
 	UE_DEFINE_GAMEPLAY_TAG_COMMENT(Category_Stage_Deck,				"StageCraft.Category.Stage.Deck",			"Modular stage decks (e.g. 2x1 m platforms).");
 	UE_DEFINE_GAMEPLAY_TAG_COMMENT(Category_Stage_Riser,			"StageCraft.Category.Stage.Riser",			"Drum and band risers, steps and ramps.");

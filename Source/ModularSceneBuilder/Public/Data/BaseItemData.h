@@ -40,6 +40,18 @@ public:
 	UFUNCTION(BlueprintPure, Category = "Stage Item")
 	bool IsLight() const { return ItemType == EStageItemType::Light; }
 
+	/**
+	 * True for catalog assets discovered by the Asset Manager, whose meshes stream in by bundle when the item is armed.
+	 * Items built at runtime (imported models) are already in memory and override this to false.
+	 */
+	virtual bool RequiresAssetStreaming() const { return true; }
+
+	/** Second line of the item in the Library ("Moving Head", "Prop"). Imported models show their format and size instead. */
+	virtual FText GetCatalogSubtitle() const;
+
+	/** Picture on the item's Library tile: the Icon texture (loaded with the UI bundle), or a rendered thumbnail. Null shows an initial. */
+	virtual UObject* GetCatalogIcon() const;
+
 	// --- Presentation ---
 
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Display")

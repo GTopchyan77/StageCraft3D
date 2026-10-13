@@ -148,16 +148,19 @@ private:
 };
 
 /**
- * Item Library dock panel (the asset browser of the stage): a toolbar with the Place-mode toggle, a search field,
- * and every catalog item in collapsible category groups.
+ * Item Library dock panel (the asset browser of the stage): a toolbar with Import and the Place-mode toggle, a
+ * search field, and every catalog item in collapsible category groups (imported models under "Imported").
  *
  * It changes nothing itself:
  * - Clicking an item asks the owning controller to arm it and enter Place mode (AModularPlayerController::RequestPlaceItem),
  *   so the rules decide and refusals are reported by the controller.
  * - The Place toggle switches the local player's placement tool, the same operation as P and the Edit menu.
+ * - Import asks the controller to open the OS file dialog (RequestBrowseModelFiles). Files can also be dropped on the panel
+ *   from Explorer (the workspace shell wraps every panel in a drop target).
  *
- * Push only, no tick: it reads the catalog once and rebuilds on UStageItemSubsystem::OnCatalogLoaded, and follows the
- * placement tool's OnArmedItemChanged / OnEditModeChanged. Searching only changes visibility, never rebuilds.
+ * Push only, no tick: it reads the catalog once and rebuilds on UStageItemSubsystem::OnCatalogLoaded and
+ * OnCatalogChanged (an import finished), and follows the placement tool's OnArmedItemChanged / OnEditModeChanged.
+ * Searching only changes visibility, never rebuilds.
  *
  * Usable without a Widget Blueprint (the panel definition points straight at this class). Colors come from Theme, or
  * the palette defaults of UStageCraftUITheme when none is assigned.
@@ -191,6 +194,10 @@ protected:
 	UPROPERTY(BlueprintReadOnly, Category = "StageCraft|Library", meta = (BindWidgetOptional))
 	TObjectPtr<class UTextBlock> PlaceModeText = nullptr;
 
+	/** Opens the OS file dialog to import models (AModularPlayerController::RequestBrowseModelFiles). Hidden in builds without one. */
+	UPROPERTY(BlueprintReadOnly, Category = "StageCraft|Library", meta = (BindWidgetOptional))
+	TObjectPtr<class UButton> ImportButton = nullptr;
+
 	/** Item count next to the title. */
 	UPROPERTY(BlueprintReadOnly, Category = "StageCraft|Library", meta = (BindWidgetOptional))
 	TObjectPtr<class UTextBlock> CountText = nullptr;
@@ -204,6 +211,7 @@ protected:
 private:
 	void BuildDefaultTree();
 	class UWidget* BuildToolbar();
+	class UButton* BuildImportButton();
 	class UWidget* BuildSearchRow();
 	class UWidget* BuildListArea();
 
@@ -231,6 +239,9 @@ private:
 
 	UFUNCTION()
 	void HandlePlaceModeClicked();
+
+	UFUNCTION()
+	void HandleImportClicked();
 
 	class AModularPlayerController* GetStageController() const;
 	const class UStageCraftUITheme& GetTheme() const;

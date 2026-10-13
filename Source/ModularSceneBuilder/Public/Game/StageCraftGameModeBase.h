@@ -48,6 +48,10 @@ public:
 	UFUNCTION(BlueprintNativeEvent, BlueprintCallable, Category = "StageCraft|Rules")
 	FStageEconomyResultInfo EvaluateParameterChange(const APlayerController* Player, const UObject* Target, FGameplayTag ParameterId, const FStageParameterValue& Value) const;
 
+	/** May Player import model files into the Library? Off when SessionRules.bAllowModelImport is false. */
+	UFUNCTION(BlueprintNativeEvent, BlueprintCallable, Category = "StageCraft|Rules")
+	FStageEconomyResultInfo EvaluateModelImport(const APlayerController* Player) const;
+
 	UFUNCTION(BlueprintPure, Category = "StageCraft|Rules")
 	const FStageSessionRules& GetSessionRules() const { return SessionRules; }
 

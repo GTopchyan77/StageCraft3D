@@ -63,6 +63,16 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "State")
 	FLinearColor WarningColor;
 
+	/** X / Y / Z (and R / G / B) component tags on vector, rotation and colour fields; matches the gizmo's axis colours. */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Fields")
+	FLinearColor AxisXColor;
+
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Fields")
+	FLinearColor AxisYColor;
+
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Fields")
+	FLinearColor AxisZColor;
+
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Feature Groups", meta = (Categories = "StageCraft.FeatureGroup"))
 	TMap<FGameplayTag, FLinearColor> FeatureGroupColors;
 };

@@ -27,6 +27,9 @@ UStageCraftUITheme::UStageCraftUITheme()
 	, AccentColor(Hex(TEXT("FFB300")))
 	, SelectionColor(Hex(TEXT("3D8BFD")))
 	, WarningColor(Hex(TEXT("FF5A4E")))
+	, AxisXColor(Hex(TEXT("E5484D")))
+	, AxisYColor(Hex(TEXT("46A758")))
+	, AxisZColor(Hex(TEXT("3E8EF0")))
 {
 	FeatureGroupColors.Add(StageCraftTags::FeatureGroup_Info,		Hex(TEXT("6C7380")));
 	FeatureGroupColors.Add(StageCraftTags::FeatureGroup_Transform,	Hex(TEXT("9AA3B2")));

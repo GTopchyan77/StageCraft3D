@@ -146,20 +146,22 @@ namespace StagePlacementCommands
 		const UStageItemSubsystem* Items = GameInstance ? GameInstance->GetSubsystem<UStageItemSubsystem>() : nullptr;
 		if (!Controller || !Items || Args.IsEmpty())
 		{
-			UE_LOG(LogStageCraft, Display, TEXT("Usage: StageCraft.Edit.Arm <ItemAssetName>"));
+			UE_LOG(LogStageCraft, Display, TEXT("Usage: StageCraft.Edit.Arm <ItemAssetName or Library name>"));
 			return;
 		}
 
+		// By asset name, or by Library name (imported models have generated asset names): "StageCraft.Edit.Arm Speaker Cabinet".
+		const FString Name = FString::Join(Args, TEXT(" "));
 		for (UBaseItemData* Item : Items->GetCatalog())
 		{
-			if (Item && Item->GetName().Equals(Args[0], ESearchCase::IgnoreCase))
+			if (Item && (Item->GetName().Equals(Name, ESearchCase::IgnoreCase) || Item->DisplayName.ToString().Equals(Name, ESearchCase::IgnoreCase)))
 			{
 				const FStageEconomyResultInfo Result = Controller->RequestPlaceItem(Item);
 				UE_LOG(LogStageCraft, Display, TEXT("StageCraft.Edit.Arm %s: %s"), *Item->GetName(), *UEnum::GetValueAsString(Result.Code));
 				return;
 			}
 		}
-		UE_LOG(LogStageCraft, Display, TEXT("StageCraft.Edit.Arm: no catalog item named %s (catalog loaded: %s)."), *Args[0], Items->IsCatalogLoaded() ? TEXT("yes") : TEXT("no"));
+		UE_LOG(LogStageCraft, Display, TEXT("StageCraft.Edit.Arm: no catalog item named %s (catalog loaded: %s)."), *Name, Items->IsCatalogLoaded() ? TEXT("yes") : TEXT("no"));
 	}
 
 	void PlaceMode(const TArray<FString>& Args, UWorld* World)

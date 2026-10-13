@@ -19,8 +19,10 @@ void UStageItemSubsystem::Initialize(FSubsystemCollectionBase& Collection)
 void UStageItemSubsystem::Deinitialize()
 {
 	OnCatalogLoaded.Clear();
+	OnCatalogChanged.Clear();
 	OnSelectedItemChanged.Clear();
 	Catalog.Reset();
+	RuntimeItems.Reset();
 	SelectedItem = nullptr;
 	PendingSelection = nullptr;
 	bCatalogLoaded = false;
@@ -55,6 +57,12 @@ void UStageItemSubsystem::SelectItem(UBaseItemData* Item)
 	}
 
 	PendingSelection = Item;
+
+	if (!Item->RequiresAssetStreaming())
+	{
+		HandleSelectionLoaded(Item);
+		return;
+	}
 
 	UAssetManager& AssetManager = UAssetManager::Get();
 	const FPrimaryAssetId ItemId = Item->GetPrimaryAssetId();
@@ -111,15 +119,38 @@ void UStageItemSubsystem::HandleCatalogLoaded()
 		}
 	}
 
-	Catalog.Sort([](const UBaseItemData& A, const UBaseItemData& B)
-	{
-		return A.DisplayName.CompareTo(B.DisplayName) < 0;
-	});
+	Catalog.Append(RuntimeItems);
+	SortCatalog();
 
 	bCatalogLoaded = true;
 	UE_LOG(LogStageCraft, Log, TEXT("Stage item catalog loaded: %d items."), Catalog.Num());
 
 	OnCatalogLoaded.Broadcast();
+}
+
+void UStageItemSubsystem::AddRuntimeItem(UBaseItemData& Item)
+{
+	if (RuntimeItems.Contains(&Item))
+	{
+		return;
+	}
+	RuntimeItems.Add(&Item);
+
+	if (bCatalogLoaded)
+	{
+		Catalog.Add(&Item);
+		SortCatalog();
+		UE_LOG(LogStageCraft, Log, TEXT("Stage item catalog: added %s (%d items)."), *Item.GetPathName(), Catalog.Num());
+		OnCatalogChanged.Broadcast();
+	}
+}
+
+void UStageItemSubsystem::SortCatalog()
+{
+	Catalog.Sort([](const UBaseItemData& A, const UBaseItemData& B)
+	{
+		return A.DisplayName.CompareTo(B.DisplayName) < 0;
+	});
 }
 
 void UStageItemSubsystem::HandleSelectionLoaded(TWeakObjectPtr<UBaseItemData> LoadedItem)

@@ -16,6 +16,8 @@
 #include "Engine/GameInstance.h"
 #include "Engine/World.h"
 #include "History/StageEditHistorySubsystem.h"
+#include "Import/StageMeshImportSubsystem.h"
+#include "Misc/Paths.h"
 #include "Placement/StagePlacementToolComponent.h"
 #include "Player/ModularPlayerController.h"
 #include "Player/StageCameraPawn.h"
@@ -219,6 +221,13 @@ void UStageStatusBarWidget::BindSources()
 		BillOfMaterials = Report;
 		Report->OnExportFinished.AddUniqueDynamic(this, &ThisClass::HandleReportExportFinished);
 	}
+
+	if (UStageMeshImportSubsystem* ImportSubsystem = GameInstance ? GameInstance->GetSubsystem<UStageMeshImportSubsystem>() : nullptr)
+	{
+		Importer = ImportSubsystem;
+		ImportSubsystem->OnImportStarted.AddUniqueDynamic(this, &ThisClass::HandleModelImportStarted);
+		ImportSubsystem->OnImportFinished.AddUniqueDynamic(this, &ThisClass::HandleModelImportFinished);
+	}
 }
 
 void UStageStatusBarWidget::UnbindSources()
@@ -262,6 +271,11 @@ void UStageStatusBarWidget::UnbindSources()
 	{
 		Report->OnExportFinished.RemoveDynamic(this, &ThisClass::HandleReportExportFinished);
 	}
+	if (UStageMeshImportSubsystem* ImportSubsystem = Importer.Get())
+	{
+		ImportSubsystem->OnImportStarted.RemoveDynamic(this, &ThisClass::HandleModelImportStarted);
+		ImportSubsystem->OnImportFinished.RemoveDynamic(this, &ThisClass::HandleModelImportFinished);
+	}
 	BindCameraPawn(nullptr);
 
 	Controller.Reset();
@@ -273,6 +287,7 @@ void UStageStatusBarWidget::UnbindSources()
 	Render.Reset();
 	SpanTool.Reset();
 	BillOfMaterials.Reset();
+	Importer.Reset();
 }
 
 void UStageStatusBarWidget::BindCameraPawn(APawn* Pawn)
@@ -328,6 +343,28 @@ void UStageStatusBarWidget::HandleSpanStatusChanged(const FStageSpanToolStatus& 
 void UStageStatusBarWidget::HandleReportExportFinished(const FStageReportExportResult& Result)
 {
 	ShowMessage(Result.Message, Result.bSucceeded ? EMessageSeverity::Info : EMessageSeverity::Warning);
+}
+
+void UStageStatusBarWidget::HandleModelImportStarted(const FString& SourceFile)
+{
+	const UStageMeshImportSubsystem* ImportSubsystem = Importer.Get();
+	const int32 Waiting = ImportSubsystem ? ImportSubsystem->GetPendingCount() - 1 : 0;
+	const FText File = FText::FromString(FPaths::GetCleanFilename(SourceFile));
+	ShowMessage(Waiting > 0
+		? FText::Format(LOCTEXT("ImportingQueued", "Importing {0}... ({1} more waiting)"), File, FText::AsNumber(Waiting))
+		: FText::Format(LOCTEXT("Importing", "Importing {0}..."), File), EMessageSeverity::Info);
+}
+
+void UStageStatusBarWidget::HandleModelImportFinished(const FStageMeshImportOutcome& Outcome)
+{
+	// Models restored at startup are expected to come back; only a failure to restore one is news.
+	if (Outcome.Origin == EStageMeshImportOrigin::Restore && Outcome.IsSuccess())
+	{
+		return;
+	}
+	ShowMessage(Outcome.IsSuccess()
+		? FText::Format(LOCTEXT("ImportedHint", "{0} Click it in the Library to place it."), Outcome.Message)
+		: Outcome.Message, Outcome.IsSuccess() ? EMessageSeverity::Info : EMessageSeverity::Warning);
 }
 
 void UStageStatusBarWidget::ShowMessage(const FText& Message, EMessageSeverity Severity)
