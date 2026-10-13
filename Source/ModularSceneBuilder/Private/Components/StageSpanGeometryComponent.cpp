@@ -53,7 +53,7 @@ void UStageSpanGeometryComponent::SetUsage(EStageSpanGeometryUsage InUsage, UMat
 	PreviewMaterial = InPreviewMaterial;
 }
 
-void UStageSpanGeometryComponent::Build(const UStageSpanData* Data, const FStageSpanLayout& Layout)
+void UStageSpanGeometryComponent::Build(const UStageSpanData* Data, const FStageSpanPathLayout& Layout)
 {
 	using namespace StageSpanGeometry;
 
@@ -73,18 +73,33 @@ void UStageSpanGeometryComponent::Build(const UStageSpanData* Data, const FStage
 	{
 		if (UStaticMesh* Mesh = Part.Mesh.LoadSynchronous())
 		{
-			StageSpanMath::MakeSegmentInstances(Layout, Data->SegmentLength, Part.Transform, PartTransforms);
+			StageSpanMath::MakePathSegmentInstances(Layout, Data->SegmentLength, Part.Transform, PartTransforms);
 			FindOrAddBatch(Pending, Mesh, Part.Material.LoadSynchronous()).Transforms.Append(PartTransforms);
 		}
 	}
-	for (const FStageSpanPart& Part : Data->JointParts)
+
+	// Joint and corner parts are authored relative to their joint point and placed in each joint's frame.
+	TArray<FTransform> Joints;
+	TArray<FTransform> Corners;
+	StageSpanMath::MakePathJointFrames(Layout, Joints, Corners);
+	const auto AddPartsAt = [&Pending](const TArray<FStageSpanPart>& Parts, const TArray<FTransform>& Frames)
 	{
-		if (UStaticMesh* Mesh = Part.Mesh.LoadSynchronous())
+		for (const FStageSpanPart& Part : Parts)
 		{
-			StageSpanMath::MakeJointInstances(Layout, Part.Transform, PartTransforms);
-			FindOrAddBatch(Pending, Mesh, Part.Material.LoadSynchronous()).Transforms.Append(PartTransforms);
+			UStaticMesh* Mesh = Frames.IsEmpty() ? nullptr : Part.Mesh.LoadSynchronous();
+			if (!Mesh)
+			{
+				continue;
+			}
+			TArray<FTransform>& Transforms = FindOrAddBatch(Pending, Mesh, Part.Material.LoadSynchronous()).Transforms;
+			for (const FTransform& Frame : Frames)
+			{
+				Transforms.Add(Part.Transform * Frame);
+			}
 		}
-	}
+	};
+	AddPartsAt(Data->JointParts, Joints);
+	AddPartsAt(Data->CornerParts.IsEmpty() ? Data->JointParts : Data->CornerParts, Corners);
 
 	for (int32 Index = 0; Index < Pending.Num(); ++Index)
 	{

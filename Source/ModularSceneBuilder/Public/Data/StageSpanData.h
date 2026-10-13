@@ -44,11 +44,12 @@ struct MODULARSCENEBUILDER_API FStageSpanPart
 };
 
 /**
- * Catalog entry for a linear element drawn from a start to an end point: truss runs, railings, cable runs
- * (AStageSpanActor, placed with UStageSpanToolComponent).
+ * Catalog entry for a linear element drawn as a path of straight legs: truss runs, railings, cable runs (AStageSpanActor,
+ * drawn with UStageSpanToolComponent; Docs/ADR/0007 §4).
  *
- * The run repeats SegmentParts once per segment and JointParts at every joint, both ends included. Specs (weight, power) are
- * per SEGMENT: a 6 m run of 2 m truss counts three times, in session totals and in the bill of materials.
+ * Each leg repeats SegmentParts once per segment; JointParts sit at every joint and at the path's two ends; CornerParts (or the
+ * joint parts) at the bends. Specs (weight, power) are per SEGMENT: a 6 m run of 2 m truss counts three times, in session
+ * totals and in the bill of materials.
  */
 UCLASS(BlueprintType, Const)
 class MODULARSCENEBUILDER_API UStageSpanData : public UBaseItemData
@@ -88,4 +89,18 @@ public:
 	/** Placed at every joint between segments and at both ends: couplers, railing posts, base plates. */
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Span", meta = (TitleProperty = "Mesh"))
 	TArray<FStageSpanPart> JointParts;
+
+	/**
+	 * Placed at the bends of a drawn path (and every vertex of a closed one) instead of the joint parts, turned to bisect the
+	 * two legs: corner blocks, corner posts. Empty: the joint parts are used at bends too.
+	 */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Span", meta = (TitleProperty = "Mesh"))
+	TArray<FStageSpanPart> CornerParts;
+
+	/**
+	 * Deepest sag a leg may be given, as a percentage of its length (cables hung between supports). 0 = rigid. Only Stretch
+	 * items sag: whole rental sections stay straight.
+	 */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Span", meta = (ClampMin = "0.0", ClampMax = "50.0", Units = "Percent"))
+	float MaxSagPercent = 0.f;
 };

@@ -83,6 +83,10 @@ struct MODULARSCENEBUILDER_API FStageParameterDescriptor
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Parameter")
 	FText DisplayName;
 
+	/** Optional abbreviation for narrow controls (fader and encoder strips), console style: "CTC", "Gobo Rot". Empty: DisplayName. */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Parameter")
+	FText ShortName;
+
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Parameter")
 	FStageParameterValue Value;
 
@@ -124,6 +128,9 @@ struct MODULARSCENEBUILDER_API FStageParameterDescriptor
 
 	EStageParameterType GetType() const { return Value.Type; }
 	bool HasRange() const { return Min < Max; }
+	const FText& GetShortName() const { return ShortName.IsEmpty() ? DisplayName : ShortName; }
+
+	FStageParameterDescriptor& Abbreviated(const FText& InShortName) { ShortName = InShortName; return *this; }
 
 	FStageParameterDescriptor& Range(double InMin, double InMax) { Min = InMin; Max = InMax; return *this; }
 	FStageParameterDescriptor& Display(double InScale, const FText& InUnits, double InStep = 0.0) { DisplayScale = InScale; Units = InUnits; Step = InStep; return *this; }
@@ -168,6 +175,8 @@ namespace StageCraftTags
 	MODULARSCENEBUILDER_API UE_DECLARE_GAMEPLAY_TAG_EXTERN(FeatureGroup_Audio);
 	MODULARSCENEBUILDER_API UE_DECLARE_GAMEPLAY_TAG_EXTERN(FeatureGroup_Rigging);
 	MODULARSCENEBUILDER_API UE_DECLARE_GAMEPLAY_TAG_EXTERN(FeatureGroup_Span);
+	MODULARSCENEBUILDER_API UE_DECLARE_GAMEPLAY_TAG_EXTERN(FeatureGroup_Shapers);
+	MODULARSCENEBUILDER_API UE_DECLARE_GAMEPLAY_TAG_EXTERN(FeatureGroup_Photometrics);
 
 	// Edit-only parameters.
 	MODULARSCENEBUILDER_API UE_DECLARE_GAMEPLAY_TAG_EXTERN(Param_Info_Label);
@@ -184,6 +193,7 @@ namespace StageCraftTags
 	MODULARSCENEBUILDER_API UE_DECLARE_GAMEPLAY_TAG_EXTERN(Param_Patch_Universe);
 	MODULARSCENEBUILDER_API UE_DECLARE_GAMEPLAY_TAG_EXTERN(Param_Patch_Address);
 	MODULARSCENEBUILDER_API UE_DECLARE_GAMEPLAY_TAG_EXTERN(Param_Patch_Footprint);
+	MODULARSCENEBUILDER_API UE_DECLARE_GAMEPLAY_TAG_EXTERN(Param_Patch_Mode);
 	MODULARSCENEBUILDER_API UE_DECLARE_GAMEPLAY_TAG_EXTERN(Param_Audio_Gain);
 	MODULARSCENEBUILDER_API UE_DECLARE_GAMEPLAY_TAG_EXTERN(Param_Audio_Mute);
 	MODULARSCENEBUILDER_API UE_DECLARE_GAMEPLAY_TAG_EXTERN(Param_Audio_Delay);
@@ -199,12 +209,22 @@ namespace StageCraftTags
 	MODULARSCENEBUILDER_API UE_DECLARE_GAMEPLAY_TAG_EXTERN(Param_Span_Segments);
 	MODULARSCENEBUILDER_API UE_DECLARE_GAMEPLAY_TAG_EXTERN(Param_Span_SegmentLength);
 	MODULARSCENEBUILDER_API UE_DECLARE_GAMEPLAY_TAG_EXTERN(Param_Span_Fit);
+	MODULARSCENEBUILDER_API UE_DECLARE_GAMEPLAY_TAG_EXTERN(Param_Span_Legs);
+	MODULARSCENEBUILDER_API UE_DECLARE_GAMEPLAY_TAG_EXTERN(Param_Span_Sag);
+	MODULARSCENEBUILDER_API UE_DECLARE_GAMEPLAY_TAG_EXTERN(Param_Photo_BeamAngle);
+	MODULARSCENEBUILDER_API UE_DECLARE_GAMEPLAY_TAG_EXTERN(Param_Photo_Intensity);
+	MODULARSCENEBUILDER_API UE_DECLARE_GAMEPLAY_TAG_EXTERN(Param_Photo_Throw);
+	MODULARSCENEBUILDER_API UE_DECLARE_GAMEPLAY_TAG_EXTERN(Param_Photo_Illuminance);
+	MODULARSCENEBUILDER_API UE_DECLARE_GAMEPLAY_TAG_EXTERN(Param_Photo_BeamDiameter);
 
 	/** Location, Rotation or Scale: the parameters that make up an item's world transform. */
 	MODULARSCENEBUILDER_API bool IsTransformParameter(const FGameplayTag& ParameterId);
 
 	/** Parameters that change how many catalog units an item consists of (AModularBaseActor::GetQuantity), and so its weight and power. */
 	MODULARSCENEBUILDER_API bool IsQuantityParameter(const FGameplayTag& ParameterId);
+
+	/** Parameters that reshape an item (a span's length or sag): undoable steps, refused while the item is locked. Includes the quantity parameters. */
+	MODULARSCENEBUILDER_API bool IsShapeParameter(const FGameplayTag& ParameterId);
 
 	/** Parameters that change how an item is listed (outliner, bill of materials): label, visibility, lock and quantity. */
 	MODULARSCENEBUILDER_API bool IsListingParameter(const FGameplayTag& ParameterId);
@@ -226,4 +246,16 @@ namespace StageCraftTags
 	MODULARSCENEBUILDER_API UE_DECLARE_GAMEPLAY_TAG_EXTERN(Attribute_ColorC);
 	MODULARSCENEBUILDER_API UE_DECLARE_GAMEPLAY_TAG_EXTERN(Attribute_ColorM);
 	MODULARSCENEBUILDER_API UE_DECLARE_GAMEPLAY_TAG_EXTERN(Attribute_ColorY);
+	MODULARSCENEBUILDER_API UE_DECLARE_GAMEPLAY_TAG_EXTERN(Attribute_ColorTemp);	// Kelvin, within the fixture's CTC range
+	MODULARSCENEBUILDER_API UE_DECLARE_GAMEPLAY_TAG_EXTERN(Attribute_Gobo);			// gobo wheel slot, 0 = open (stepped)
+	MODULARSCENEBUILDER_API UE_DECLARE_GAMEPLAY_TAG_EXTERN(Attribute_GoboRotation);	// degrees
+	MODULARSCENEBUILDER_API UE_DECLARE_GAMEPLAY_TAG_EXTERN(Attribute_Iris);			// 0 = open .. 1 = closed
+	MODULARSCENEBUILDER_API UE_DECLARE_GAMEPLAY_TAG_EXTERN(Attribute_BladeA);		// framing blade insertion 0..1, top
+	MODULARSCENEBUILDER_API UE_DECLARE_GAMEPLAY_TAG_EXTERN(Attribute_BladeB);		// right
+	MODULARSCENEBUILDER_API UE_DECLARE_GAMEPLAY_TAG_EXTERN(Attribute_BladeC);		// bottom
+	MODULARSCENEBUILDER_API UE_DECLARE_GAMEPLAY_TAG_EXTERN(Attribute_BladeD);		// left
+	MODULARSCENEBUILDER_API UE_DECLARE_GAMEPLAY_TAG_EXTERN(Attribute_BladeRotation);	// degrees
+
+	/** Read-only beam results derived from the fixture's attributes and position (StagePhotometry). */
+	MODULARSCENEBUILDER_API bool IsPhotometricParameter(const FGameplayTag& ParameterId);
 }

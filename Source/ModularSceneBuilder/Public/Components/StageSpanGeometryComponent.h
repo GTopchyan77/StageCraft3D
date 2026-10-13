@@ -17,7 +17,7 @@ enum class EStageSpanGeometryUsage : uint8
 };
 
 /**
- * Builds the visible run of a span: every segment part and joint part of a UStageSpanData, repeated along the run's +X as
+ * Builds the visible path of a span: every segment, joint and corner part of a UStageSpanData, repeated along each leg as
  * instances (StageSpanMath). Parts that share a mesh and material share one instanced component, so a run of any length costs
  * one draw batch per distinct mesh, not one per segment.
  *
@@ -36,11 +36,11 @@ public:
 	void SetUsage(EStageSpanGeometryUsage InUsage, class UMaterialInterface* InPreviewMaterial = nullptr);
 
 	/**
-	 * Shows Layout of Data. Null data or an invalid layout clears the run. Ignored while unregistered (a class default object);
+	 * Shows the path Layout of Data. Null data or an invalid layout clears the run. Ignored while unregistered (a class default object);
 	 * spawned actors register their components before construction, so a deferred spawn can build before it finishes. Part meshes
 	 * are normally resident (they stream with the item's Game bundle when it is armed); otherwise they load synchronously once.
 	 */
-	void Build(const class UStageSpanData* Data, const FStageSpanLayout& Layout);
+	void Build(const class UStageSpanData* Data, const FStageSpanPathLayout& Layout);
 
 	/** Removes every instance and instanced component. Idempotent. */
 	void Clear();

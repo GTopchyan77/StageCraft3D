@@ -20,15 +20,24 @@ public class ModularSceneBuilder : ModuleRules
 		PrivateDependencyModuleNames.AddRange(new string[] { "InterchangeCore", "InterchangeEngine", "InterchangePipelines" });
 
 		// The OS file dialog (IDesktopPlatform) lives in a Developer module, which the engine licence does not allow in shipped
-		// builds. It is linked where developer tools are built; elsewhere "Import Model..." is hidden and drag and drop remains.
+		// builds. It is linked where developer tools are built. Windows builds without it (Shipping) call the same Windows dialog
+		// through COM (ADR 0007 §7); on other platforms "Import Model..." is hidden and drag and drop remains.
 		if (Target.bBuildDeveloperTools)
 		{
 			PrivateDependencyModuleNames.Add("DesktopPlatform");
 			PrivateDefinitions.Add("WITH_STAGECRAFT_FILE_DIALOG=1");
+			PrivateDefinitions.Add("WITH_STAGECRAFT_NATIVE_FILE_DIALOG=0");
 		}
 		else
 		{
 			PrivateDefinitions.Add("WITH_STAGECRAFT_FILE_DIALOG=0");
+			bool bNativeDialog = Target.Platform == UnrealTargetPlatform.Win64;
+			PrivateDefinitions.Add("WITH_STAGECRAFT_NATIVE_FILE_DIALOG=" + (bNativeDialog ? "1" : "0"));
+			if (bNativeDialog)
+			{
+				// CoCreateInstance / CoTaskMemFree, and SHCreateItemFromParsingName.
+				PublicSystemLibraries.AddRange(new string[] { "ole32.lib", "shell32.lib" });
+			}
 		}
 
 		// DMX Engine (Art-Net/sACN) is deliberately not a dependency of this module. A separate

@@ -102,7 +102,7 @@ FStageEconomyResultInfo AStageCraftGameModeBase::EvaluateParameterChange_Impleme
 
 FStageEconomyResultInfo AStageCraftGameModeBase::EvaluateItemEdit(const AModularBaseActor& Item, const FGameplayTag& ParameterId, const FStageParameterValue& Value) const
 {
-	const bool bShapesItem = StageCraftTags::IsTransformParameter(ParameterId) || StageCraftTags::IsQuantityParameter(ParameterId);
+	const bool bShapesItem = StageCraftTags::IsTransformParameter(ParameterId) || StageCraftTags::IsShapeParameter(ParameterId);
 	if (bShapesItem && Item.IsTransformLocked())
 	{
 		// Not EStageEconomyResult::Locked: that code means "not owned" and makes the inspector offer a purchase.

@@ -6,6 +6,7 @@
 #include "Data/StageSpanData.h"
 #include "Materials/MaterialInstanceDynamic.h"
 #include "ModularSceneBuilder.h"
+#include "Render/StageRenderSubsystem.h"
 #include "UObject/ConstructorHelpers.h"
 
 #include UE_INLINE_GENERATED_CPP_BY_NAME(StageSpanPreview)
@@ -29,9 +30,24 @@ AStageSpanPreview::AStageSpanPreview()
 	SetActorHiddenInGame(true);
 }
 
+void AStageSpanPreview::EndPlay(const EEndPlayReason::Type EndPlayReason)
+{
+	if (UStageRenderSubsystem* Render = UStageRenderSubsystem::Get(this))
+	{
+		Render->UnregisterEditorHelper(this);
+	}
+	Super::EndPlay(EndPlayReason);
+}
+
 void AStageSpanPreview::BeginPlay()
 {
 	Super::BeginPlay();
+
+	// An editor helper: never part of a delivered render.
+	if (UStageRenderSubsystem* Render = UStageRenderSubsystem::Get(this))
+	{
+		Render->RegisterEditorHelper(this);
+	}
 
 	if (GhostMaterial)
 	{
@@ -52,14 +68,14 @@ void AStageSpanPreview::SetItem(const UStageSpanData* InItem)
 		return;
 	}
 	Item = InItem;
-	BuiltLayout = FStageSpanLayout();
+	BuiltLayout = FStageSpanPathLayout();
 	Geometry->Clear();
 	HidePreview();
 }
 
-void AStageSpanPreview::ShowRun(const FTransform& RunTransform, const FStageSpanLayout& Layout, EStagePlacementPreviewState State)
+void AStageSpanPreview::ShowPath(const FTransform& PathTransform, const FStageSpanPathLayout& Layout, EStagePlacementPreviewState State)
 {
-	if (!ensureMsgf(State != EStagePlacementPreviewState::Hidden, TEXT("ShowRun needs a visible state; call HidePreview instead.")) || !Item || !Layout.IsValid())
+	if (!ensureMsgf(State != EStagePlacementPreviewState::Hidden, TEXT("ShowPath needs a visible state; call HidePreview instead.")) || !Item || !Layout.IsValid())
 	{
 		HidePreview();
 		return;
@@ -71,7 +87,7 @@ void AStageSpanPreview::ShowRun(const FTransform& RunTransform, const FStageSpan
 		BuiltLayout = Layout;
 	}
 
-	SetActorTransform(RunTransform);
+	SetActorTransform(PathTransform);
 	if (GhostMaterialInstance)
 	{
 		GhostMaterialInstance->SetVectorParameterValue(StageSpanPreview::GhostColorParameter, State == EStagePlacementPreviewState::Refused ? RefusedColor : ValidColor);

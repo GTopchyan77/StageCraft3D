@@ -122,7 +122,9 @@ void UStageEncoderWidget::OnInitializeControl()
 {
 	if (NameText)
 	{
-		NameText->SetText(Descriptor.DisplayName);
+		NameText->SetText(Descriptor.GetShortName());
+		NameText->SetTextOverflowPolicy(ETextOverflowPolicy::Ellipsis);
+		NameText->SetToolTipText(Descriptor.DisplayName);
 	}
 	SetIsEnabled(!Descriptor.bReadOnly);
 	SetCursor(CanEdit() ? EMouseCursor::ResizeUpDown : EMouseCursor::Default); // Says "drag vertically".

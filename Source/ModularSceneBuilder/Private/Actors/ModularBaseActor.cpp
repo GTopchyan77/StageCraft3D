@@ -470,6 +470,7 @@ void AModularBaseActor::HandleRootTransformUpdated(USceneComponent* UpdatedCompo
 	NotifyParameterChanged(StageCraftTags::Param_Transform_Location);
 	NotifyParameterChanged(StageCraftTags::Param_Transform_Rotation);
 	NotifyParameterChanged(StageCraftTags::Param_Transform_Scale);
+	OnStageTransformChanged();
 }
 
 #undef LOCTEXT_NAMESPACE

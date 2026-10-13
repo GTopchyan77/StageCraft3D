@@ -7,8 +7,10 @@
 #include "Data/LightingFixtureData.h"
 #include "Engine/CollisionProfile.h"
 #include "Engine/StaticMesh.h"
+#include "Engine/Texture2D.h"
 #include "Engine/World.h"
 #include "Interaction/StageCraftCollision.h"
+#include "Materials/MaterialInstanceDynamic.h"
 #include "ModularSceneBuilder.h"
 #include "Subsystems/ShowControlSubsystem.h"
 
@@ -33,6 +35,47 @@ namespace
 		return Attribute == StageCraftTags::Attribute_ColorR
 			|| Attribute == StageCraftTags::Attribute_ColorG
 			|| Attribute == StageCraftTags::Attribute_ColorB;
+	}
+
+	/** Parameter names of the beam-shaping light-function material (Scripts/Content/create_lighting_content.py builds it). */
+	namespace BeamShapingParams
+	{
+		const FName GoboTexture(TEXT("GoboTexture"));
+		const FName GoboEnabled(TEXT("GoboEnabled"));
+		const FName GoboRotation(TEXT("GoboRotation"));
+		const FName IrisRadius(TEXT("IrisRadius"));
+		const FName BladeTop(TEXT("BladeTop"));
+		const FName BladeRight(TEXT("BladeRight"));
+		const FName BladeBottom(TEXT("BladeBottom"));
+		const FName BladeLeft(TEXT("BladeLeft"));
+		const FName BladeRotation(TEXT("BladeRotation"));
+	}
+
+	/** Rotations, strobe and tint move or flash the beam but change no photometric value. */
+	bool AffectsPhotometrics(const FGameplayTag& Attribute)
+	{
+		return Attribute != StageCraftTags::Attribute_GoboRotation
+			&& Attribute != StageCraftTags::Attribute_BladeRotation
+			&& Attribute != StageCraftTags::Attribute_Shutter
+			&& Attribute != StageCraftTags::Attribute_ColorTemp;
+	}
+
+	bool MovesBeamAxis(const FGameplayTag& Attribute)
+	{
+		return Attribute == StageCraftTags::Attribute_Pan || Attribute == StageCraftTags::Attribute_Tilt;
+	}
+
+	/** Additive white mix, renormalised so full RGB + full W stays a valid (brightest channel = 1) colour. */
+	FLinearColor MixBeamColor(const FLinearColor& Rgb, float White)
+	{
+		FLinearColor Mixed = Rgb + FLinearColor(White, White, White, 0.f);
+		const float Peak = Mixed.GetMax();
+		if (Peak > 1.f)
+		{
+			Mixed /= Peak;
+		}
+		Mixed.A = 1.f;
+		return Mixed;
 	}
 
 	/** C/M/Y channels are the inverse of R/G/B, so they read and write the RGB attribute they mirror. */
@@ -91,12 +134,15 @@ void ALightingFixtureActor::BeginPlay()
 	{
 		ShowControl->RegisterFixture(this);
 	}
+	// Item data (and a restored Shutter) was applied before play, when there was no strobe clock to join yet.
+	UpdateStrobeRegistration();
 }
 
 void ALightingFixtureActor::EndPlay(const EEndPlayReason::Type EndPlayReason)
 {
 	if (UShowControlSubsystem* ShowControl = GetShowControl())
 	{
+		// Unregistering also leaves the strobe clock.
 		ShowControl->UnregisterFixture(this);
 	}
 
@@ -122,8 +168,15 @@ void ALightingFixtureActor::ApplyItemData(const UBaseItemData& Data)
 	HeadMeshComponent->SetStaticMesh(Fixture->HeadMesh.LoadSynchronous());
 
 	BeamLight->SetAttenuationRadius(Fixture->BeamRange);
-	BeamLight->SetUseTemperature(Fixture->ColorSystem == EStageFixtureColorSystem::None);
-	BeamLight->SetTemperature(Fixture->ColorTemperatureK);
+	CachedThrowCm.Reset();
+
+	// A swapped-in model without beam shaping must not keep projecting the previous model's gobo.
+	if (!Fixture->HasBeamShaping())
+	{
+		BeamLight->SetLightFunctionMaterial(nullptr);
+		BeamShapingInstance = nullptr;
+	}
+	AppliedGoboSlot = INDEX_NONE;
 
 	// Keep values the instance already has (re-applied data, loaded shows); fill in new ones; drop ones the fixture cannot do.
 	const TArray<FGameplayTag> Supported = Fixture->GetSupportedAttributes();
@@ -143,6 +196,7 @@ void ALightingFixtureActor::ApplyItemData(const UBaseItemData& Data)
 	}
 
 	ApplyAttributesToComponents();
+	UpdateStrobeRegistration();
 }
 
 void ALightingFixtureActor::UpdateHighlight()
@@ -164,8 +218,17 @@ bool ALightingFixtureActor::StoreAttribute(const FGameplayTag& Attribute, float 
 		return false;
 	}
 
+	if (!FMath::IsFinite(Value))
+	{
+		return false;
+	}
+
 	float& Stored = Attributes.FindOrAdd(Attribute);
-	const float Clamped = FMath::Clamp(Value, Min, Max);
+	float Clamped = FMath::Clamp(Value, Min, Max);
+	if (ULightingFixtureData::IsSteppedAttribute(Attribute))
+	{
+		Clamped = FMath::RoundHalfFromZero(Clamped);
+	}
 	if (FMath::IsNearlyEqual(Stored, Clamped))
 	{
 		return false;
@@ -181,6 +244,30 @@ void ALightingFixtureActor::NotifyAttributeChanged(const FGameplayTag& Attribute
 	{
 		NotifyParameterChanged(StageCraftTags::Attribute_ColorRGB);
 	}
+	if (MovesBeamAxis(Attribute))
+	{
+		CachedThrowCm.Reset();
+	}
+	if (AffectsPhotometrics(Attribute))
+	{
+		NotifyPhotometricsChanged();
+	}
+}
+
+void ALightingFixtureActor::NotifyPhotometricsChanged()
+{
+	NotifyParameterChanged(StageCraftTags::Param_Photo_BeamAngle);
+	NotifyParameterChanged(StageCraftTags::Param_Photo_Intensity);
+	NotifyParameterChanged(StageCraftTags::Param_Photo_Throw);
+	NotifyParameterChanged(StageCraftTags::Param_Photo_Illuminance);
+	NotifyParameterChanged(StageCraftTags::Param_Photo_BeamDiameter);
+}
+
+void ALightingFixtureActor::OnStageTransformChanged()
+{
+	Super::OnStageTransformChanged();
+	CachedThrowCm.Reset();
+	NotifyPhotometricsChanged();
 }
 
 bool ALightingFixtureActor::SetAttribute(FGameplayTag Attribute, float Value)
@@ -190,6 +277,10 @@ bool ALightingFixtureActor::SetAttribute(FGameplayTag Attribute, float Value)
 		return false;
 	}
 	ApplyAttributesToComponents();
+	if (Attribute == StageCraftTags::Attribute_Shutter)
+	{
+		UpdateStrobeRegistration();
+	}
 	NotifyAttributeChanged(Attribute);
 	return true;
 }
@@ -211,15 +302,31 @@ bool ALightingFixtureActor::SetAttributes(const TMap<FGameplayTag, float>& Value
 	}
 
 	ApplyAttributesToComponents();
+	if (Changed.Contains(StageCraftTags::Attribute_Shutter))
+	{
+		UpdateStrobeRegistration();
+	}
+
+	// Composite and derived rows are announced once per frame of a fade, not once per changed attribute.
 	bool bColorNotified = false;
+	bool bPhotometricsNotified = false;
 	for (const FGameplayTag& Attribute : Changed)
 	{
 		NotifyParameterChanged(Attribute);
 		bColorNotified |= IsColorAttribute(Attribute);
+		bPhotometricsNotified |= AffectsPhotometrics(Attribute);
+		if (MovesBeamAxis(Attribute))
+		{
+			CachedThrowCm.Reset();
+		}
 	}
 	if (bColorNotified)
 	{
 		NotifyParameterChanged(StageCraftTags::Attribute_ColorRGB);
+	}
+	if (bPhotometricsNotified)
+	{
+		NotifyPhotometricsChanged();
 	}
 	return true;
 }
@@ -253,26 +360,169 @@ void ALightingFixtureActor::ApplyAttributesToComponents()
 		TiltPivot->SetRelativeRotation(FRotator(GetAttribute(StageCraftTags::Attribute_Tilt), 0.0, 0.0));
 	}
 
-	// Shutter/strobe is recorded and sent over DMX but not animated yet: that needs a central strobe clock (see STATE.md).
-	BeamLight->SetIntensity(Fixture->LuminousFlux * GetAttribute(StageCraftTags::Attribute_Dimmer));
+	// The strobe clock closes the output between flashes; the dimmer level is kept for the next flash.
+	BeamLight->SetIntensity(bStrobeOpen ? Fixture->LuminousFlux * GetAttribute(StageCraftTags::Attribute_Dimmer) : 0.f);
 
+	// The cone is the zoom; the iris and the blades crop inside it (the light function), so the projection scales with zoom.
 	const float HalfAngle = 0.5f * (Fixture->HasZoom() ? GetAttribute(StageCraftTags::Attribute_Zoom) : Fixture->BeamAngleMax);
 	BeamLight->SetOuterConeAngle(HalfAngle);
 	BeamLight->SetInnerConeAngle(HalfAngle * 0.7f);
 
 	if (Fixture->ColorSystem != EStageFixtureColorSystem::None)
 	{
-		// Additive white mix, renormalised so full RGB + full W stays a valid (brightest-channel = 1) color.
-		const float White = GetAttribute(StageCraftTags::Attribute_ColorW);
-		FLinearColor Mixed = GetColorRGB() + FLinearColor(White, White, White, 0.f);
-		const float Peak = Mixed.GetMax();
-		if (Peak > 1.f)
-		{
-			Mixed /= Peak;
-		}
-		Mixed.A = 1.f;
-		BeamLight->SetLightColor(Mixed, /*bSRGB*/ false);
+		BeamLight->SetLightColor(MixBeamColor(GetColorRGB(), GetAttribute(StageCraftTags::Attribute_ColorW)), /*bSRGB*/ false);
 	}
+
+	// The light's temperature tints relative to 6500 K: CTC on colour mixers, the fixed source temperature on white-only fixtures.
+	if (Fixture->HasColorTemperatureControl())
+	{
+		BeamLight->SetUseTemperature(true);
+		BeamLight->SetTemperature(GetAttribute(StageCraftTags::Attribute_ColorTemp));
+	}
+	else
+	{
+		BeamLight->SetUseTemperature(Fixture->ColorSystem == EStageFixtureColorSystem::None);
+		BeamLight->SetTemperature(Fixture->ColorTemperatureK);
+	}
+
+	if (Fixture->HasBeamShaping())
+	{
+		ApplyBeamShaping(*Fixture);
+	}
+}
+
+void ALightingFixtureActor::ApplyBeamShaping(const ULightingFixtureData& Fixture)
+{
+	if (!BeamShapingInstance)
+	{
+		if (bBeamShapingUnavailable)
+		{
+			return;
+		}
+		UMaterialInterface* Parent = BeamShapingMaterial.LoadSynchronous();
+		if (!Parent)
+		{
+			// Once per fixture: attribute changes would otherwise repeat it every frame of a fade.
+			bBeamShapingUnavailable = true;
+			UE_LOG(LogStageCraft, Warning, TEXT("%s: BeamShapingMaterial is not set ([/Script/ModularSceneBuilder.LightingFixtureActor] in DefaultGame.ini); gobo, iris and blades are not projected."),
+				*GetName());
+			return;
+		}
+		BeamShapingInstance = UMaterialInstanceDynamic::Create(Parent, this);
+		BeamLight->SetLightFunctionMaterial(BeamShapingInstance);
+		AppliedGoboSlot = INDEX_NONE;
+	}
+
+	// The texture is swapped only when the slot changes; the scalars are cheap to set on every attribute change.
+	const int32 GoboSlot = FMath::RoundToInt32(GetAttribute(StageCraftTags::Attribute_Gobo));
+	if (GoboSlot != AppliedGoboSlot)
+	{
+		UTexture2D* GoboTexture = Fixture.LoadGoboTexture(GoboSlot);
+		if (GoboTexture)
+		{
+			BeamShapingInstance->SetTextureParameterValue(BeamShapingParams::GoboTexture, GoboTexture);
+		}
+		BeamShapingInstance->SetScalarParameterValue(BeamShapingParams::GoboEnabled, GoboTexture ? 1.f : 0.f);
+		AppliedGoboSlot = GoboSlot;
+	}
+	BeamShapingInstance->SetScalarParameterValue(BeamShapingParams::GoboRotation, GetAttribute(StageCraftTags::Attribute_GoboRotation));
+
+	const float IrisRadius = Fixture.bHasIris ? FMath::Lerp(1.f, Fixture.IrisMinFraction, GetAttribute(StageCraftTags::Attribute_Iris)) : 1.f;
+	BeamShapingInstance->SetScalarParameterValue(BeamShapingParams::IrisRadius, IrisRadius);
+	BeamShapingInstance->SetScalarParameterValue(BeamShapingParams::BladeTop, GetAttribute(StageCraftTags::Attribute_BladeA));
+	BeamShapingInstance->SetScalarParameterValue(BeamShapingParams::BladeRight, GetAttribute(StageCraftTags::Attribute_BladeB));
+	BeamShapingInstance->SetScalarParameterValue(BeamShapingParams::BladeBottom, GetAttribute(StageCraftTags::Attribute_BladeC));
+	BeamShapingInstance->SetScalarParameterValue(BeamShapingParams::BladeLeft, GetAttribute(StageCraftTags::Attribute_BladeD));
+	BeamShapingInstance->SetScalarParameterValue(BeamShapingParams::BladeRotation, GetAttribute(StageCraftTags::Attribute_BladeRotation));
+}
+
+// --- Strobe ---
+
+float ALightingFixtureActor::GetStrobeRateHz() const
+{
+	const ULightingFixtureData* Fixture = GetFixtureData();
+	const float Shutter = GetAttribute(StageCraftTags::Attribute_Shutter);
+	if (!Fixture || !Fixture->bHasShutter || Shutter <= 0.f)
+	{
+		return 0.f;
+	}
+	return FMath::Lerp(static_cast<float>(Fixture->StrobeRateHz.X), static_cast<float>(Fixture->StrobeRateHz.Y), FMath::Clamp(Shutter, 0.f, 1.f));
+}
+
+void ALightingFixtureActor::SetStrobeOpen(bool bOpen)
+{
+	if (bStrobeOpen == bOpen)
+	{
+		return;
+	}
+	bStrobeOpen = bOpen;
+	// Only the output changes; nothing the inspector shows, so no parameter notification.
+	const ULightingFixtureData* Fixture = GetFixtureData();
+	BeamLight->SetIntensity(bStrobeOpen && Fixture ? Fixture->LuminousFlux * GetAttribute(StageCraftTags::Attribute_Dimmer) : 0.f);
+}
+
+void ALightingFixtureActor::UpdateStrobeRegistration()
+{
+	// Before BeginPlay (deferred spawn, editor construction) the subsystem may not exist; BeginPlay's data apply registers then.
+	if (UShowControlSubsystem* ShowControl = HasActorBegunPlay() ? GetShowControl() : nullptr)
+	{
+		ShowControl->SetFixtureStrobing(this, GetStrobeRateHz() > 0.f);
+	}
+}
+
+// --- Photometrics ---
+
+double ALightingFixtureActor::TraceThrow() const
+{
+	const ULightingFixtureData* Fixture = GetFixtureData();
+	const UWorld* World = GetWorld();
+	if (!Fixture || !World)
+	{
+		return 0.0;
+	}
+
+	const FVector Start = BeamLight->GetComponentLocation();
+	const FVector End = Start + BeamLight->GetForwardVector() * Fixture->BeamRange;
+	FCollisionQueryParams Params(SCENE_QUERY_STAT(StageFixtureThrow), /*bTraceComplex*/ false, this);
+	FHitResult Hit;
+	return World->LineTraceSingleByChannel(Hit, Start, End, ECC_Visibility, Params) ? Hit.Distance : 0.0;
+}
+
+StagePhotometry::FResult ALightingFixtureActor::ComputePhotometrics() const
+{
+	const ULightingFixtureData* Fixture = GetFixtureData();
+	if (!Fixture)
+	{
+		return StagePhotometry::FResult();
+	}
+
+	const double Zoom = Fixture->HasZoom() ? GetAttribute(StageCraftTags::Attribute_Zoom) : Fixture->BeamAngleMax;
+	const double Iris = Fixture->bHasIris ? GetAttribute(StageCraftTags::Attribute_Iris) : 0.0;
+
+	double Transmission = GetAttribute(StageCraftTags::Attribute_Dimmer)
+		* StagePhotometry::GetIrisTransmission(Iris, Fixture->IrisMinFraction)
+		* Fixture->GetGoboTransmission(FMath::RoundToInt32(GetAttribute(StageCraftTags::Attribute_Gobo)));
+	if (Fixture->ColorSystem != EStageFixtureColorSystem::None)
+	{
+		Transmission *= StagePhotometry::GetColorTransmission(MixBeamColor(GetColorRGB(), GetAttribute(StageCraftTags::Attribute_ColorW)));
+	}
+	if (Fixture->bHasFramingShutters)
+	{
+		Transmission *= StagePhotometry::GetShutterOpenFraction(GetAttribute(StageCraftTags::Attribute_BladeA), GetAttribute(StageCraftTags::Attribute_BladeB),
+			GetAttribute(StageCraftTags::Attribute_BladeC), GetAttribute(StageCraftTags::Attribute_BladeD));
+	}
+
+	if (!CachedThrowCm.IsSet())
+	{
+		CachedThrowCm = TraceThrow();
+	}
+
+	StagePhotometry::FInputs Inputs;
+	Inputs.LuminousFluxLm = Fixture->LuminousFlux;
+	Inputs.BeamAngleDegrees = StagePhotometry::ApplyIris(Zoom, Iris, Fixture->IrisMinFraction);
+	Inputs.Transmission = Transmission;
+	Inputs.ThrowCm = CachedThrowCm.GetValue();
+	return StagePhotometry::Compute(Inputs);
 }
 
 bool ALightingFixtureActor::SetFixtureId(int32 NewFixtureId)
@@ -335,9 +585,7 @@ void ALightingFixtureActor::WriteDMX(TArrayView<uint8> UniverseData) const
 	{
 		bool bInverted = false;
 		const FGameplayTag Attribute = ResolveDMXAttribute(Channel.Attribute, bInverted);
-		float Min = 0.f;
-		float Max = 1.f;
-		if (!Fixture->SupportsAttribute(Channel.Attribute) || !Fixture->GetAttributeRange(Attribute, Min, Max))
+		if (!Fixture->SupportsAttribute(Channel.Attribute) || !Fixture->SupportsAttribute(Attribute))
 		{
 			continue;
 		}
@@ -348,7 +596,7 @@ void ALightingFixtureActor::WriteDMX(TArrayView<uint8> UniverseData) const
 			continue;
 		}
 
-		float Normalized = Max > Min ? (GetAttribute(Attribute) - Min) / (Max - Min) : 0.f;
+		float Normalized = Fixture->NormalizeForDMX(Attribute, GetAttribute(Attribute));
 		Normalized = FMath::Clamp(bInverted ? 1.f - Normalized : Normalized, 0.f, 1.f);
 
 		if (Channel.b16Bit)
@@ -377,9 +625,7 @@ bool ALightingFixtureActor::ReadDMX(TConstArrayView<uint8> UniverseData)
 	{
 		bool bInverted = false;
 		const FGameplayTag Attribute = ResolveDMXAttribute(Channel.Attribute, bInverted);
-		float Min = 0.f;
-		float Max = 1.f;
-		if (!Fixture->SupportsAttribute(Channel.Attribute) || !Fixture->GetAttributeRange(Attribute, Min, Max))
+		if (!Fixture->SupportsAttribute(Channel.Attribute) || !Fixture->SupportsAttribute(Attribute))
 		{
 			continue;
 		}
@@ -398,7 +644,7 @@ bool ALightingFixtureActor::ReadDMX(TConstArrayView<uint8> UniverseData)
 			Normalized = 1.f - Normalized;
 		}
 
-		Values.Add(Attribute, FMath::Lerp(Min, Max, Normalized));
+		Values.Add(Attribute, Fixture->DenormalizeFromDMX(Attribute, Normalized));
 	}
 
 	return SetAttributes(Values);
@@ -428,17 +674,18 @@ void ALightingFixtureActor::GatherParameterSections(TArray<FStageParameterSectio
 	PatchSection.Add(StageCraftTags::Param_Patch_FixtureId, LOCTEXT("FixtureId", "Fixture ID"), FStageParameterValue::MakeInteger(FixtureId)).Range(1, 99999);
 	PatchSection.Add(StageCraftTags::Param_Patch_Universe, LOCTEXT("Universe", "Universe"), FStageParameterValue::MakeInteger(Patch.Universe)).Range(0, 63999);
 	PatchSection.Add(StageCraftTags::Param_Patch_Address, LOCTEXT("Address", "Address"), FStageParameterValue::MakeInteger(Patch.Address)).Range(0, 512);
-	PatchSection.Add(StageCraftTags::Param_Patch_Footprint, FText::Format(LOCTEXT("FootprintFormat", "Mode: {0}"), FText::FromName(Fixture->DMXModeName)),
-		FStageParameterValue::MakeInteger(Fixture->GetDMXFootprint())).Display(1.0, LOCTEXT("Channels", "ch")).ReadOnly();
+	PatchSection.Add(StageCraftTags::Param_Patch_Mode, LOCTEXT("DMXMode", "DMX Mode"), FStageParameterValue::MakeText(FText::FromName(Fixture->DMXModeName))).ReadOnly();
+	PatchSection.Add(StageCraftTags::Param_Patch_Footprint, LOCTEXT("Footprint", "Channels"),
+		FStageParameterValue::MakeInteger(Fixture->GetDMXFootprint())).Display(1.0, LOCTEXT("ChannelUnits", "ch")).ReadOnly();
 
-	auto AddAttribute = [this, Fixture](FStageParameterSection& Section, const FGameplayTag& Attribute, const FText& Name, double DisplayScale, const FText& Units)
+	auto AddAttribute = [this, Fixture](FStageParameterSection& Section, const FGameplayTag& Attribute, const FText& Name, double DisplayScale, const FText& Units, const FText& ShortName = FText::GetEmpty())
 	{
 		float Min = 0.f;
 		float Max = 1.f;
 		if (Fixture->GetAttributeRange(Attribute, Min, Max))
 		{
 			Section.Add(Attribute, Name, FStageParameterValue::MakeFloat(GetAttribute(Attribute))).Range(Min, Max).Display(DisplayScale, Units)
-				.WithDefault(FStageParameterValue::MakeFloat(Fixture->GetAttributeDefault(Attribute)));
+				.WithDefault(FStageParameterValue::MakeFloat(Fixture->GetAttributeDefault(Attribute))).Abbreviated(ShortName);
 		}
 	};
 
@@ -461,13 +708,52 @@ void ALightingFixtureActor::GatherParameterSections(TArray<FStageParameterSectio
 		FStageParameterSection& Color = OutSections.Emplace_GetRef(StageCraftTags::FeatureGroup_Color, LOCTEXT("ColorSection", "Color"));
 		Color.Add(StageCraftTags::Attribute_ColorRGB, LOCTEXT("ColorRGB", "Color"), FStageParameterValue::MakeColor(GetColorRGB()));
 		AddAttribute(Color, StageCraftTags::Attribute_ColorW, LOCTEXT("White", "White"), 100.0, Percent);
+		AddAttribute(Color, StageCraftTags::Attribute_ColorTemp, LOCTEXT("ColorTemp", "Color Temp"), 1.0, LOCTEXT("Kelvin", "K"), LOCTEXT("ColorTempShort", "CTC"));
 	}
 
-	if (Fixture->HasZoom())
+	if (Fixture->HasZoom() || Fixture->bHasIris || !Fixture->GoboWheel.IsEmpty())
 	{
 		FStageParameterSection& Beam = OutSections.Emplace_GetRef(StageCraftTags::FeatureGroup_Beam, LOCTEXT("BeamSection", "Beam"));
 		AddAttribute(Beam, StageCraftTags::Attribute_Zoom, LOCTEXT("Zoom", "Zoom"), 1.0, Degrees);
+		AddAttribute(Beam, StageCraftTags::Attribute_Iris, LOCTEXT("Iris", "Iris"), 100.0, Percent);
+		if (!Fixture->GoboWheel.IsEmpty())
+		{
+			// A wheel is picked by slot, so it is a dropdown here; cues and DMX see the slot index.
+			TArray<FText> Slots;
+			Slots.Reserve(Fixture->GetGoboSlotCount());
+			for (int32 Slot = 0; Slot < Fixture->GetGoboSlotCount(); ++Slot)
+			{
+				Slots.Add(Fixture->GetGoboSlotName(Slot));
+			}
+			Beam.Add(StageCraftTags::Attribute_Gobo, LOCTEXT("Gobo", "Gobo"), FStageParameterValue::MakeEnum(FMath::RoundToInt32(GetAttribute(StageCraftTags::Attribute_Gobo))))
+				.WithOptions(MoveTemp(Slots));
+			AddAttribute(Beam, StageCraftTags::Attribute_GoboRotation, LOCTEXT("GoboRotation", "Gobo Rotate"), 1.0, Degrees, LOCTEXT("GoboRotationShort", "Gobo Rot"));
+		}
 	}
+
+	if (Fixture->bHasFramingShutters)
+	{
+		FStageParameterSection& Shapers = OutSections.Emplace_GetRef(StageCraftTags::FeatureGroup_Shapers, LOCTEXT("ShapersSection", "Shapers"));
+		AddAttribute(Shapers, StageCraftTags::Attribute_BladeA, LOCTEXT("BladeA", "Blade Top"), 100.0, Percent, LOCTEXT("BladeAShort", "Blade T"));
+		AddAttribute(Shapers, StageCraftTags::Attribute_BladeB, LOCTEXT("BladeB", "Blade Right"), 100.0, Percent, LOCTEXT("BladeBShort", "Blade R"));
+		AddAttribute(Shapers, StageCraftTags::Attribute_BladeC, LOCTEXT("BladeC", "Blade Bottom"), 100.0, Percent, LOCTEXT("BladeCShort", "Blade B"));
+		AddAttribute(Shapers, StageCraftTags::Attribute_BladeD, LOCTEXT("BladeD", "Blade Left"), 100.0, Percent, LOCTEXT("BladeDShort", "Blade L"));
+		AddAttribute(Shapers, StageCraftTags::Attribute_BladeRotation, LOCTEXT("BladeRotation", "Shaper Rotate"), 1.0, Degrees, LOCTEXT("BladeRotationShort", "Shp Rot"));
+	}
+
+	// Approximate photometrics: read-only, refreshed by the same events as the attributes and position they follow.
+	const StagePhotometry::FResult Photo = ComputePhotometrics();
+	FStageParameterSection& Photometrics = OutSections.Emplace_GetRef(StageCraftTags::FeatureGroup_Photometrics, LOCTEXT("PhotometricsSection", "Photometrics"));
+	Photometrics.Add(StageCraftTags::Param_Photo_BeamAngle, LOCTEXT("PhotoBeamAngle", "Beam Angle"), FStageParameterValue::MakeFloat(Photo.BeamAngleDegrees))
+		.Display(1.0, Degrees).ReadOnly();
+	Photometrics.Add(StageCraftTags::Param_Photo_Intensity, LOCTEXT("PhotoIntensity", "Intensity"), FStageParameterValue::MakeFloat(Photo.IntensityCd))
+		.Display(0.001, LOCTEXT("Kilocandela", "kcd")).ReadOnly();
+	Photometrics.Add(StageCraftTags::Param_Photo_Throw, LOCTEXT("PhotoThrow", "Throw"), FStageParameterValue::MakeFloat(Photo.ThrowMetres * 100.0))
+		.Display(0.01, LOCTEXT("Metres", "m")).ReadOnly();
+	Photometrics.Add(StageCraftTags::Param_Photo_Illuminance, LOCTEXT("PhotoIlluminance", "Illuminance"), FStageParameterValue::MakeFloat(Photo.IlluminanceLux))
+		.Display(1.0, LOCTEXT("Lux", "lx")).ReadOnly();
+	Photometrics.Add(StageCraftTags::Param_Photo_BeamDiameter, LOCTEXT("PhotoBeamDiameter", "Beam Size"), FStageParameterValue::MakeFloat(Photo.BeamDiameterMetres * 100.0))
+		.Display(0.01, LOCTEXT("Metres", "m")).ReadOnly();
 }
 
 bool ALightingFixtureActor::ReadParameter(const FGameplayTag& ParameterId, FStageParameterValue& OutValue) const
@@ -476,6 +762,23 @@ bool ALightingFixtureActor::ReadParameter(const FGameplayTag& ParameterId, FStag
 	{
 		OutValue = FStageParameterValue::MakeColor(GetColorRGB());
 		return true;
+	}
+	if (ParameterId == StageCraftTags::Attribute_Gobo && Attributes.Contains(ParameterId))
+	{
+		// Matches the dropdown row; the stored attribute is the same slot index as a float.
+		OutValue = FStageParameterValue::MakeEnum(FMath::RoundToInt32(GetAttribute(ParameterId)));
+		return true;
+	}
+	if (StageCraftTags::IsPhotometricParameter(ParameterId))
+	{
+		const StagePhotometry::FResult Photo = ComputePhotometrics();
+		const double Value = ParameterId == StageCraftTags::Param_Photo_BeamAngle ? Photo.BeamAngleDegrees
+			: ParameterId == StageCraftTags::Param_Photo_Intensity ? Photo.IntensityCd
+			: ParameterId == StageCraftTags::Param_Photo_Throw ? Photo.ThrowMetres * 100.0
+			: ParameterId == StageCraftTags::Param_Photo_Illuminance ? Photo.IlluminanceLux
+			: Photo.BeamDiameterMetres * 100.0;
+		OutValue = FStageParameterValue::MakeFloat(Value);
+		return GetFixtureData() != nullptr;
 	}
 	if (ParameterId.MatchesTag(StageCraftTags::Attribute) && Attributes.Contains(ParameterId))
 	{
@@ -510,6 +813,16 @@ bool ALightingFixtureActor::WriteParameter(const FGameplayTag& ParameterId, cons
 		Rgb.Add(StageCraftTags::Attribute_ColorB, Value.Color.B);
 		SetAttributes(Rgb);
 		return true;
+	}
+	if (ParameterId == StageCraftTags::Attribute_Gobo && Value.Type == EStageParameterType::Enum && Attributes.Contains(ParameterId))
+	{
+		SetAttribute(ParameterId, static_cast<float>(Value.Integer));
+		return true;
+	}
+	if (StageCraftTags::IsPhotometricParameter(ParameterId))
+	{
+		// Derived, never written.
+		return false;
 	}
 	if (ParameterId.MatchesTag(StageCraftTags::Attribute) && Value.Type == EStageParameterType::Float && Attributes.Contains(ParameterId))
 	{

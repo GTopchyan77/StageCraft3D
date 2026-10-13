@@ -27,6 +27,27 @@ enum class EStageFixtureColorSystem : uint8
 	CMY		UMETA(DisplayName = "CMY"),
 };
 
+/** One gobo on the fixture's gobo wheel. Slot 0 of the wheel is always "Open" and is not listed. */
+USTRUCT(BlueprintType)
+struct MODULARSCENEBUILDER_API FStageGoboSlot
+{
+	GENERATED_BODY()
+
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Gobo")
+	FText Name;
+
+	/**
+	 * Greyscale projection mask, white = light passes. Projected across the full beam cone (the texture's edges touch the beam
+	 * edge), so the texture should be clamped with a black border.
+	 */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Gobo", meta = (AssetBundles = "Game"))
+	TSoftObjectPtr<class UTexture2D> Texture;
+
+	/** Fraction of the beam's light the gobo passes (its open area), for photometrics. */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Gobo", meta = (ClampMin = "0.0", ClampMax = "1.0"))
+	float Transmission = 0.4f;
+};
+
 /** One slot of the fixture's DMX mode (personality). */
 USTRUCT(BlueprintType)
 struct MODULARSCENEBUILDER_API FStageFixtureDMXChannel
@@ -90,9 +111,42 @@ public:
 
 	bool HasZoom() const { return BeamAngleMax > BeamAngleMin; }
 
+	bool HasColorTemperatureControl() const { return bHasColorTemperatureControl && ColorSystem != EStageFixtureColorSystem::None; }
+
+	/** Gobo slots including Open (slot 0); 1 when the fixture has no gobo wheel. */
+	int32 GetGoboSlotCount() const { return GoboWheel.Num() + 1; }
+
+	/** Display name of a gobo slot ("Open" for slot 0). */
+	FText GetGoboSlotName(int32 Slot) const;
+
+	/** Projection texture of a gobo slot; null for Open, out-of-range slots and unset textures. Loads the texture if needed. */
+	class UTexture2D* LoadGoboTexture(int32 Slot) const;
+
+	/** Light a gobo slot passes, 0..1 (1 for Open). */
+	float GetGoboTransmission(int32 Slot) const;
+
+	/** True when the beam needs a projected mask (gobo, iris or framing shutters): the fixture then carries a light function. */
+	bool HasBeamShaping() const { return !GoboWheel.IsEmpty() || bHasIris || bHasFramingShutters; }
+
+	/**
+	 * Attributes that hold a slot index rather than a continuous value (the gobo wheel). They are stored rounded, a cue fade
+	 * steps through them like a console snaps a wheel, and DMX maps each slot to an equal range.
+	 */
+	static bool IsSteppedAttribute(const FGameplayTag& Attribute);
+
+	/**
+	 * DMX encoding of an attribute value, 0..1 of the channel's range. Continuous attributes map their range linearly; stepped
+	 * ones (Gobo) map each slot to the centre of an equal share of the range, so a console sending any value inside a slot's
+	 * share selects that slot. Returns 0 for unsupported attributes.
+	 */
+	float NormalizeForDMX(const FGameplayTag& Attribute, float Value) const;
+
+	/** Inverse of NormalizeForDMX: the attribute value for a received 0..1 channel value (stepped: the slot whose share holds it). */
+	float DenormalizeFromDMX(const FGameplayTag& Attribute, float Normalized) const;
+
 #if WITH_EDITOR
 	/** Replaces DMXChannels with a typical layout for the current capabilities (16-bit pan/tilt first, then dimmer, shutter, color, zoom). */
-	UFUNCTION(CallInEditor, Category = "DMX")
+	UFUNCTION(CallInEditor, BlueprintCallable, Category = "DMX")
 	void GenerateDefaultDMXLayout();
 #endif
 
@@ -108,8 +162,20 @@ public:
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Fixture", meta = (ClampMin = "1700.0", ClampMax = "12000.0", Units = "K"))
 	float ColorTemperatureK = 6500.f;
 
+	/** Colour temperature correction (CTC) on a colour-mixing fixture: a Kelvin attribute that tints the beam. */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Fixture", meta = (EditCondition = "ColorSystem != EStageFixtureColorSystem::None"))
+	bool bHasColorTemperatureControl = false;
+
+	/** CTC range in Kelvin (X = warmest, Y = coolest). */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Fixture", meta = (EditCondition = "bHasColorTemperatureControl"))
+	FVector2D ColorTemperatureRangeK = FVector2D(2700.0, 8000.0);
+
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Fixture")
 	bool bHasShutter = true;
+
+	/** Strobe rate at the lowest and highest Shutter value above 0, in flashes per second. */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Fixture", meta = (EditCondition = "bHasShutter", ClampMin = "0.1", ClampMax = "50.0", Units = "Hz"))
+	FVector2D StrobeRateHz = FVector2D(1.0, 20.0);
 
 	// --- Optics ---
 
@@ -127,6 +193,21 @@ public:
 	/** Distance the beam light reaches. */
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Optics", meta = (ClampMin = "100.0", Units = "cm"))
 	float BeamRange = 4000.f;
+
+	/** Rotating gobo wheel, in wheel order. Empty: the fixture has no gobos. Slot 0 (Open) is implicit. */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Optics", meta = (TitleProperty = "Name"))
+	TArray<FStageGoboSlot> GoboWheel;
+
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Optics")
+	bool bHasIris = false;
+
+	/** Beam radius left by a fully closed iris, as a fraction of the open beam. */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Optics", meta = (EditCondition = "bHasIris", ClampMin = "0.02", ClampMax = "0.9"))
+	float IrisMinFraction = 0.1f;
+
+	/** Four framing blades (top, right, bottom, left) and a rotating shutter assembly, as on a profile fixture. */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Optics")
+	bool bHasFramingShutters = false;
 
 	// --- Motion ---
 

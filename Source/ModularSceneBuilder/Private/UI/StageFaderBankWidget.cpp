@@ -14,6 +14,7 @@
 #include "Interaction/StageParameterInterface.h"
 #include "UI/StageEncoderWidget.h"
 #include "UI/StageFaderWidget.h"
+#include "UI/StageWidgetTree.h"
 
 #include UE_INLINE_GENERATED_CPP_BY_NAME(StageFaderBankWidget)
 
@@ -42,6 +43,7 @@ UStageFaderBankWidget::UStageFaderBankWidget(const FObjectInitializer& ObjectIni
 		StageCraftTags::FeatureGroup_Color,
 		StageCraftTags::FeatureGroup_Position,
 		StageCraftTags::FeatureGroup_Beam,
+		StageCraftTags::FeatureGroup_Shapers,
 		StageCraftTags::FeatureGroup_Audio,
 	};
 	EncoderParameters.AddTag(StageCraftTags::Attribute_Pan);
@@ -57,6 +59,14 @@ void UStageFaderBankWidget::NativeOnInitialized()
 	if (WidgetTree && !WidgetTree->RootWidget)
 	{
 		BuildDefaultTree();
+	}
+
+	// A full profile fixture has more strips than any bar is wide: they scroll sideways, whatever container the Blueprint gave.
+	if (FaderContainer && !StageWidgetTree::FindAncestor<UScrollBox>(*FaderContainer))
+	{
+		UScrollBox* Scroll = WidgetTree->ConstructWidget<UScrollBox>(UScrollBox::StaticClass(), TEXT("FaderScroll"));
+		Scroll->SetOrientation(Orient_Horizontal);
+		StageWidgetTree::WrapInPlace(*FaderContainer, *Scroll);
 	}
 }
 

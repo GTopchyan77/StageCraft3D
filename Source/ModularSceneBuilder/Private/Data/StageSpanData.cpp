@@ -47,6 +47,12 @@ EDataValidationResult UStageSpanData::IsDataValid(FDataValidationContext& Contex
 	};
 	CheckParts(SegmentParts, LOCTEXT("SegmentParts", "Segment Parts"));
 	CheckParts(JointParts, LOCTEXT("JointParts", "Joint Parts"));
+	CheckParts(CornerParts, LOCTEXT("CornerParts", "Corner Parts"));
+
+	if (MaxSagPercent > 0.f && Fit != EStageSpanFit::Stretch)
+	{
+		Context.AddWarning(FText::Format(LOCTEXT("SagNeedsStretch", "{0}: Max Sag Percent is ignored: only Stretch spans sag (whole sections stay straight)."), AssetName));
+	}
 
 	if (MaxSegments < 1 || MaxSegments > AbsoluteMaxSegments)
 	{

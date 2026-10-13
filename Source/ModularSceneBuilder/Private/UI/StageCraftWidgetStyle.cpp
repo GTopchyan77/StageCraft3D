@@ -59,7 +59,7 @@ namespace StageCraftWidgetStyle
 			.SetActiveFillBrush(MakeBox(WithAlpha(Theme.AccentColor, 0.22f), CornerRadius))
 			.SetArrowsImage(FSlateNoResource())
 			.SetForegroundColor(Theme.TextPrimary)
-			.SetTextPadding(FMargin(6.f, 2.f));
+			.SetTextPadding(FMargin(FieldTextInset, 2.f));
 		return Style;
 	}
 
@@ -126,7 +126,7 @@ namespace StageCraftWidgetStyle
 
 		FComboBoxStyle Style = FAppStyle::Get().GetWidgetStyle<FComboBoxStyle>(TEXT("ComboBox"));
 		Style.SetComboButtonStyle(ComboButton)
-			.SetContentPadding(FMargin(6.f, 2.f))
+			.SetContentPadding(FMargin(FieldTextInset, 2.f))
 			.SetMenuRowPadding(FMargin(6.f, 3.f));
 		return Style;
 	}

@@ -76,21 +76,47 @@ bool FStageSpanHintTest::RunTest(const FString& Parameters)
 	TestTrue(TEXT("Start hint asks for the start point"), MakeSpanHint(Status).ToString().Contains(TEXT("starts")));
 
 	Status.Phase = EStageSpanToolPhase::PickEnd;
-	TestTrue(TEXT("End hint without a run asks for the end"), MakeSpanHint(Status).ToString().Contains(TEXT("ends")));
+	Status.PointCount = 1;
+	TestTrue(TEXT("Hint without a run asks for the next point"), MakeSpanHint(Status).ToString().Contains(TEXT("next point")));
 
 	Status.bHasRun = true;
 	Status.Length = 600.0;
 	Status.SegmentCount = 3;
+	Status.LegCount = 1;
 	const FString Run = MakeSpanHint(Status).ToString();
 	TestTrue(TEXT("Run hint gives the length in metres"), Run.Contains(TEXT("6.00 m")));
 	TestTrue(TEXT("Run hint counts segments"), Run.Contains(TEXT("3 segments")));
-	TestTrue(TEXT("Run hint explains chaining"), Run.Contains(TEXT("next run")));
+	TestTrue(TEXT("With only the start placed, a double-click places the run"), Run.Contains(TEXT("double-click")));
+	TestFalse(TEXT("Enter is not offered before a second point"), Run.Contains(TEXT("Enter")));
 
+	Status.PointCount = 3;
+	Status.LegCount = 3;
+	Status.Length = 1200.0;
+	Status.SegmentCount = 6;
+	const FString Path = MakeSpanHint(Status).ToString();
+	TestTrue(TEXT("Path hint counts legs"), Path.Contains(TEXT("in 3 legs")));
+	TestTrue(TEXT("Path hint offers Enter"), Path.Contains(TEXT("Enter")));
+	TestTrue(TEXT("Path hint offers Backspace"), Path.Contains(TEXT("Backspace")));
+
+	Status.bClosing = true;
+	TestTrue(TEXT("On the start point the hint offers closing"), MakeSpanHint(Status).ToString().Contains(TEXT("close the loop")));
+	Status.bClosing = false;
+
+	// A loop that cannot close shows a refused ghost; the hint must name the real reason, not the stage's limits.
+	Status.bCloseBlocked = true;
+	Status.bRefused = true;
+	const FString Blocked = MakeSpanHint(Status).ToString();
+	TestTrue(TEXT("Blocked close explains whole sections"), Blocked.Contains(TEXT("does not close in whole sections")));
+	TestFalse(TEXT("Blocked close is not blamed on limits"), Blocked.Contains(TEXT("not allowed")));
+	Status.bCloseBlocked = false;
+	Status.bRefused = false;
+
+	Status.LegCount = 1;
 	Status.SegmentCount = 1;
-	TestTrue(TEXT("Singular segment"), MakeSpanHint(Status).ToString().Contains(TEXT("1 segment,")) || MakeSpanHint(Status).ToString().Contains(TEXT("1 segment ")));
+	TestTrue(TEXT("Singular segment"), MakeSpanHint(Status).ToString().Contains(TEXT("1 segment ")));
 
 	Status.bRefused = true;
-	TestTrue(TEXT("Refused run says so"), MakeSpanHint(Status).ToString().Contains(TEXT("not allowed")));
+	TestTrue(TEXT("Refused path says so"), MakeSpanHint(Status).ToString().Contains(TEXT("not allowed")));
 	return true;
 }
 

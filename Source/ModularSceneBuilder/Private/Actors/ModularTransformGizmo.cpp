@@ -13,6 +13,7 @@
 #include "Placement/StageSnapGuidesComponent.h"
 #include "Placement/StageSnapMath.h"
 #include "ProceduralMeshComponent.h"
+#include "Render/StageRenderSubsystem.h"
 #include "UObject/ConstructorHelpers.h"
 
 #include UE_INLINE_GENERATED_CPP_BY_NAME(ModularTransformGizmo)
@@ -143,9 +144,24 @@ AModularTransformGizmo::AModularTransformGizmo()
 	SetActorEnableCollision(false);
 }
 
+void AModularTransformGizmo::EndPlay(const EEndPlayReason::Type EndPlayReason)
+{
+	if (UStageRenderSubsystem* Render = UStageRenderSubsystem::Get(this))
+	{
+		Render->UnregisterEditorHelper(this);
+	}
+	Super::EndPlay(EndPlayReason);
+}
+
 void AModularTransformGizmo::BeginPlay()
 {
 	Super::BeginPlay();
+
+	// An editor helper: never part of a delivered render.
+	if (UStageRenderSubsystem* Render = UStageRenderSubsystem::Get(this))
+	{
+		Render->RegisterEditorHelper(this);
+	}
 
 	for (int32 Axis = 0; Axis < 3; ++Axis)
 	{

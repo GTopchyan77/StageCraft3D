@@ -32,10 +32,8 @@
 #include "Import/StageMeshImportSubsystem.h"
 #include "Interaction/StageCraftCollision.h"
 #include "ModularSceneBuilder.h"
-#include "Placement/StagePlacementPreview.h"
 #include "Placement/StagePlacementToolComponent.h"
 #include "Placement/StageSnappingComponent.h"
-#include "Placement/StageSpanPreview.h"
 #include "Placement/StageSpanToolComponent.h"
 #include "Player/StageCameraPawn.h"
 #include "Player/StageCraftGameViewportClient.h"
@@ -219,7 +217,7 @@ void AModularPlayerController::SetupInputComponent()
 	Super::SetupInputComponent();
 
 	if (!EditorMappingContext || !PlaceAction || !NavigateAction || !DeleteAction || !CancelAction || !ToggleGizmoModeAction || !TogglePlaceModeAction
-		|| !UndoAction || !RedoAction)
+		|| !FinishPathAction || !RemovePathPointAction || !UndoAction || !RedoAction)
 	{
 		BuildDefaultInputMapping();
 	}
@@ -255,6 +253,8 @@ void AModularPlayerController::SetupInputComponent()
 	EnhancedInput->BindAction(CancelAction, ETriggerEvent::Started, this, &ThisClass::HandleCancel);
 	EnhancedInput->BindAction(ToggleGizmoModeAction, ETriggerEvent::Started, this, &ThisClass::HandleToggleGizmoMode);
 	EnhancedInput->BindAction(TogglePlaceModeAction, ETriggerEvent::Started, this, &ThisClass::HandleTogglePlaceMode);
+	EnhancedInput->BindAction(FinishPathAction, ETriggerEvent::Started, this, &ThisClass::HandleFinishPath);
+	EnhancedInput->BindAction(RemovePathPointAction, ETriggerEvent::Started, this, &ThisClass::HandleRemovePathPoint);
 	EnhancedInput->BindAction(UndoAction, ETriggerEvent::Started, this, &ThisClass::HandleUndo);
 	EnhancedInput->BindAction(RedoAction, ETriggerEvent::Started, this, &ThisClass::HandleRedo);
 
@@ -292,6 +292,14 @@ void AModularPlayerController::BuildDefaultInputMapping()
 	{
 		TogglePlaceModeAction = NewObject<UInputAction>(this, TEXT("IA_TogglePlaceMode_Default"));
 	}
+	if (!FinishPathAction)
+	{
+		FinishPathAction = NewObject<UInputAction>(this, TEXT("IA_FinishPath_Default"));
+	}
+	if (!RemovePathPointAction)
+	{
+		RemovePathPointAction = NewObject<UInputAction>(this, TEXT("IA_RemovePathPoint_Default"));
+	}
 	if (!UndoAction)
 	{
 		UndoAction = NewObject<UInputAction>(this, TEXT("IA_Undo_Default"));
@@ -302,7 +310,7 @@ void AModularPlayerController::BuildDefaultInputMapping()
 	}
 
 	// A fresh context, because an assigned one cannot be trusted to map actions it was not authored with.
-	// P, Z and Y are free in the camera context (which maps W/A/S/D/Q/E), so they are never consumed by navigation.
+	// P, Z, Y, Enter and Backspace are free in the camera context (which maps W/A/S/D/Q/E), so they are never consumed by navigation.
 	EditorMappingContext = NewObject<UInputMappingContext>(this, TEXT("IMC_StageEditor_Default"));
 	MapUndoRedoChords(*EditorMappingContext);
 	EditorMappingContext->MapKey(PlaceAction, EKeys::LeftMouseButton);
@@ -311,6 +319,8 @@ void AModularPlayerController::BuildDefaultInputMapping()
 	EditorMappingContext->MapKey(CancelAction, EKeys::Escape);
 	EditorMappingContext->MapKey(ToggleGizmoModeAction, EKeys::SpaceBar);
 	EditorMappingContext->MapKey(TogglePlaceModeAction, EKeys::P);
+	EditorMappingContext->MapKey(FinishPathAction, EKeys::Enter);
+	EditorMappingContext->MapKey(RemovePathPointAction, EKeys::BackSpace);
 }
 
 void AModularPlayerController::MapUndoRedoChords(UInputMappingContext& Context)
@@ -522,7 +532,7 @@ void AModularPlayerController::HandlePrimaryPressedAt(const FVector2D& ViewportP
 		GetPlacementHitAt(ViewportPosition, Hit);
 		if (SpanTool->IsToolActive())
 		{
-			// First click sets the start, each further click places a run and chains from its end.
+			// First click sets the start, each further click adds a point; a click on the last or the first point finishes the path.
 			SpanTool->HandleClick(Hit);
 			RequestPreviewRefresh();
 			return;
@@ -677,10 +687,10 @@ void AModularPlayerController::HandleCancel()
 		return;
 	}
 
-	// One level at a time: first drop a span's start point, then leave Place mode (the item stays armed for P), then clear everything.
+	// One level at a time: first drop the span path being drawn, then leave Place mode (the item stays armed for P), then clear everything.
 	if (PlacementTool->IsPlaceMode())
 	{
-		if (SpanTool->CancelStart())
+		if (SpanTool->CancelPath())
 		{
 			RequestPreviewRefresh();
 			return;
@@ -702,6 +712,22 @@ void AModularPlayerController::HandleToggleGizmoMode()
 	if (Gizmo && !IsGizmoDragging())
 	{
 		Gizmo->CycleMode();
+	}
+}
+
+void AModularPlayerController::HandleFinishPath()
+{
+	if (!bIsNavigatingCamera && SpanTool->IsToolActive() && SpanTool->FinishPath())
+	{
+		RequestPreviewRefresh();
+	}
+}
+
+void AModularPlayerController::HandleRemovePathPoint()
+{
+	if (!bIsNavigatingCamera && SpanTool->IsToolActive() && SpanTool->RemoveLastPoint())
+	{
+		RequestPreviewRefresh();
 	}
 }
 
@@ -951,9 +977,9 @@ FStageEconomyResultInfo AModularPlayerController::RequestParameterChange(UObject
 		}
 	}
 
-	// Edits that change what the item is made of (a span's length) are undoable steps, like placing or deleting.
+	// Edits that reshape the item (a span's length or sag) are undoable steps, like placing or deleting.
 	FStageParameterValue QuantityBefore;
-	const bool bRecordParameter = StageCraftTags::IsQuantityParameter(ParameterId) && Target->Implements<UStageParameterInterface>()
+	const bool bRecordParameter = StageCraftTags::IsShapeParameter(ParameterId) && Target->Implements<UStageParameterInterface>()
 		&& IStageParameterInterface::Execute_GetParameterValue(Target, ParameterId, QuantityBefore);
 
 	if (bGroupEdit)
@@ -1239,16 +1265,8 @@ bool AModularPlayerController::RequestRender()
 	}
 
 	FStageRenderRequest Request;
+	// Editor helpers (gizmo, ghosts) register with the render subsystem themselves and are left out of every image.
 	Request.View = PlayerCameraManager->GetCameraCacheView();
-	Request.HiddenActors.Add(Gizmo.Get());
-	if (AStagePlacementPreview* Preview = PlacementTool->GetPreviewActor())
-	{
-		Request.HiddenActors.Add(Preview);
-	}
-	if (AStageSpanPreview* SpanPreview = SpanTool->GetPreviewActor())
-	{
-		Request.HiddenActors.Add(SpanPreview);
-	}
 
 	FText Reason;
 	if (!Render->StartRender(Request, Reason))

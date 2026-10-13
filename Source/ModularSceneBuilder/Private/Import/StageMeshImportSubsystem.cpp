@@ -149,6 +149,13 @@ bool UStageMeshImportSubsystem::ValidateRequest(const FString& NormalizedFile, E
 		OutRefusal.Message = LOCTEXT("NoImporter", "Model import is not available in this build.");
 		return false;
 	}
+	if (StageMeshImport::IsDatasmithScene(NormalizedFile))
+	{
+		OutRefusal.Result = EStageMeshImportResult::UnsupportedFormat;
+		OutRefusal.Message = FText::Format(LOCTEXT("Datasmith", "{0} is a Datasmith scene, which cannot be imported while StageCraft runs. Export the model as {1} instead (Datasmith exporters and Twinmotion offer glTF/GLB)."),
+			FileLabel(NormalizedFile), ExtensionList(SupportedExtensions));
+		return false;
+	}
 	if (!StageMeshImport::HasSupportedExtension(NormalizedFile, SupportedExtensions))
 	{
 		OutRefusal.Result = EStageMeshImportResult::UnsupportedFormat;

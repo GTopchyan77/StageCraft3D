@@ -5,6 +5,7 @@
 #include "CoreMinimal.h"
 #include "Actors/ModularBaseActor.h"
 #include "Show/ShowControlTypes.h"
+#include "Show/StagePhotometry.h"
 #include "LightingFixtureActor.generated.h"
 
 /**
@@ -15,10 +16,19 @@
  * cue playback, incoming DMX) goes through SetAttribute/SetAttributes, which clamp to the
  * fixture's capabilities, update components once and broadcast OnParameterChanged.
  *
+ * Beam shaping (gobo, iris, framing shutters) is projected by a light-function material on the
+ * beam light (Docs/ADR/0007 §5.2). The dynamic instance is created only for fixtures whose data
+ * has beam shaping, and its parameters change only when an attribute does.
+ *
+ * Strobe: while Shutter is above 0 the fixture is registered with UShowControlSubsystem's strobe
+ * clock, which gates its output (SetStrobeOpen). Photometrics (intensity, throw, illuminance,
+ * beam diameter) are read-only parameters derived from the attributes and one line trace for the
+ * throw, made lazily after pan, tilt or the transform changed (StagePhotometry).
+ *
  * Registers with UShowControlSubsystem on BeginPlay, which assigns a free fixture ID and
  * auto-patches it if needed. Like every stage item it never ticks.
  */
-UCLASS(Blueprintable)
+UCLASS(Blueprintable, Config = Game)
 class MODULARSCENEBUILDER_API ALightingFixtureActor : public AModularBaseActor
 {
 	GENERATED_BODY()
@@ -47,6 +57,19 @@ public:
 
 	UFUNCTION(BlueprintPure, Category = "StageCraft|Fixture")
 	FLinearColor GetColorRGB() const;
+
+	// --- Strobe ---
+
+	/** Strobe rate in flashes per second for the current Shutter value; 0 when the shutter is open (not strobing). */
+	float GetStrobeRateHz() const;
+
+	/** Called by UShowControlSubsystem's strobe clock while the fixture strobes: opens or closes the light output. */
+	void SetStrobeOpen(bool bOpen);
+
+	// --- Photometrics ---
+
+	/** Approximate beam photometrics for the current attributes and position. Traces for the throw once after a move. */
+	StagePhotometry::FResult ComputePhotometrics() const;
 
 	// --- Patch ---
 
@@ -91,10 +114,18 @@ protected:
 	virtual void GatherParameterSections(TArray<FStageParameterSection>& OutSections) const override;
 	virtual bool ReadParameter(const FGameplayTag& ParameterId, FStageParameterValue& OutValue) const override;
 	virtual bool WriteParameter(const FGameplayTag& ParameterId, const FStageParameterValue& Value) override;
+	virtual void OnStageTransformChanged() override;
 	//~ End AModularBaseActor Interface
 
-	/** Pushes Attributes onto pivots and the beam light. */
+	/** Pushes Attributes onto pivots, the beam light and the beam-shaping projection. */
 	virtual void ApplyAttributesToComponents();
+
+	/**
+	 * Light-function material that projects gobo, iris and blades (parameters listed on ApplyBeamShaping). Set in
+	 * DefaultGame.ini; fixtures without beam shaping never load it.
+	 */
+	UPROPERTY(Config, EditDefaultsOnly, Category = "StageCraft|Fixture")
+	TSoftObjectPtr<class UMaterialInterface> BeamShapingMaterial;
 
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Components")
 	TObjectPtr<class USceneComponent> PanPivot = nullptr;
@@ -122,10 +153,36 @@ protected:
 	TMap<FGameplayTag, float> Attributes;
 
 private:
-	/** Clamps and stores without side effects. Returns true if the stored value changed. */
+	/** Clamps (and rounds stepped attributes) and stores without side effects. Returns true if the stored value changed. */
 	bool StoreAttribute(const FGameplayTag& Attribute, float Value);
 
+	/** Broadcasts an attribute change plus the composite and derived rows that follow from it. */
 	void NotifyAttributeChanged(const FGameplayTag& Attribute);
+	void NotifyPhotometricsChanged();
+
+	/** Creates the beam-shaping instance on first need and pushes the gobo / iris / blade attributes into it. */
+	void ApplyBeamShaping(const class ULightingFixtureData& Fixture);
+
+	/** Joins or leaves the subsystem's strobe clock to match the Shutter attribute. */
+	void UpdateStrobeRegistration();
+
+	/** Distance in cm to the first surface along the beam (0 = none within BeamRange). */
+	double TraceThrow() const;
 
 	class UShowControlSubsystem* GetShowControl() const;
+
+	UPROPERTY(Transient)
+	TObjectPtr<class UMaterialInstanceDynamic> BeamShapingInstance = nullptr;
+
+	/** Gobo slot whose texture the beam-shaping instance holds; INDEX_NONE until first applied. */
+	int32 AppliedGoboSlot = INDEX_NONE;
+
+	/** The beam-shaping material could not be loaded; not retried, so the warning is logged once. */
+	bool bBeamShapingUnavailable = false;
+
+	/** False while the strobe clock has the output closed. Always true while not strobing. */
+	bool bStrobeOpen = true;
+
+	/** Throw distance in cm from the last trace; unset after pan, tilt or the transform changed. */
+	mutable TOptional<double> CachedThrowCm;
 };

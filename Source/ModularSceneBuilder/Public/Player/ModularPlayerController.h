@@ -334,6 +334,14 @@ protected:
 	UPROPERTY(EditDefaultsOnly, Category = "StageCraft|Input")
 	TObjectPtr<class UInputAction> TogglePlaceModeAction = nullptr;
 
+	/** Finishes the span path being drawn (Enter). */
+	UPROPERTY(EditDefaultsOnly, Category = "StageCraft|Input")
+	TObjectPtr<class UInputAction> FinishPathAction = nullptr;
+
+	/** Removes the last point of the span path being drawn (Backspace). */
+	UPROPERTY(EditDefaultsOnly, Category = "StageCraft|Input")
+	TObjectPtr<class UInputAction> RemovePathPointAction = nullptr;
+
 	/** Undo (Ctrl+Z). An assigned action must be mapped with its own Ctrl chord in EditorMappingContext. */
 	UPROPERTY(EditDefaultsOnly, Category = "StageCraft|Input")
 	TObjectPtr<class UInputAction> UndoAction = nullptr;
@@ -430,6 +438,8 @@ private:
 	void HandleCancel();
 	void HandleToggleGizmoMode();
 	void HandleTogglePlaceMode();
+	void HandleFinishPath();
+	void HandleRemovePathPoint();
 	void HandleUndo();
 	void HandleRedo();
 

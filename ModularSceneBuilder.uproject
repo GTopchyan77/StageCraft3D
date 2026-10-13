@@ -32,10 +32,29 @@
 		},
 		{
 			"Name": "UnrealNGGMCP",
-			"Enabled": true,
+			"Enabled": false,
 			"TargetAllowList": [
 				"Editor"
 			]
-		}
+		},
+		{ "Name": "AdvancedFadeObjects", "Enabled": false },
+		{ "Name": "BuildManagerMath", "Enabled": false },
+		{ "Name": "CameraPresets", "Enabled": false },
+		{ "Name": "CraneControl", "Enabled": false },
+		{ "Name": "DamenFileManager", "Enabled": false },
+		{ "Name": "DynamicDatatable", "Enabled": false },
+		{ "Name": "FileDropUMG", "Enabled": false },
+		{ "Name": "GizmoTool", "Enabled": false },
+		{ "Name": "NGGVideoRecorder", "Enabled": false },
+		{ "Name": "OverCrowd", "Enabled": false },
+		{ "Name": "PlacementGizmo", "Enabled": false },
+		{ "Name": "PreciseTransform", "Enabled": false },
+		{ "Name": "RealTimeImport", "Enabled": false },
+		{ "Name": "SkyCreatorPlugin", "Enabled": false },
+		{ "Name": "SkyWeatherControls", "Enabled": false },
+		{ "Name": "SpaceCalculator", "Enabled": false },
+		{ "Name": "SplineRouteTool", "Enabled": false },
+		{ "Name": "DlFileManager", "Enabled": false },
+		{ "Name": "UMGInSequence", "Enabled": false }
 	]
 }

@@ -61,10 +61,42 @@ namespace
 		default:
 			break;
 		}
+		if (Data.HasColorTemperatureControl())
+		{
+			AddChannel(StageCraftTags::Attribute_ColorTemp, false);
+		}
+		if (!Data.GoboWheel.IsEmpty())
+		{
+			AddChannel(StageCraftTags::Attribute_Gobo, false);
+			AddChannel(StageCraftTags::Attribute_GoboRotation, false);
+		}
+		if (Data.bHasIris)
+		{
+			AddChannel(StageCraftTags::Attribute_Iris, false);
+		}
 		if (Data.HasZoom())
 		{
 			AddChannel(StageCraftTags::Attribute_Zoom, false);
 		}
+		if (Data.bHasFramingShutters)
+		{
+			AddChannel(StageCraftTags::Attribute_BladeA, false);
+			AddChannel(StageCraftTags::Attribute_BladeB, false);
+			AddChannel(StageCraftTags::Attribute_BladeC, false);
+			AddChannel(StageCraftTags::Attribute_BladeD, false);
+			AddChannel(StageCraftTags::Attribute_BladeRotation, false);
+		}
+	}
+
+	/** Gobo index angles and the shutter assembly turn this far either way. */
+	constexpr float GoboRotationLimit = 180.f;
+	constexpr float BladeRotationLimit = 45.f;
+
+	bool IsBladeAttribute(const FGameplayTag& Attribute)
+	{
+		return Attribute == StageCraftTags::Attribute_BladeA || Attribute == StageCraftTags::Attribute_BladeB
+			|| Attribute == StageCraftTags::Attribute_BladeC || Attribute == StageCraftTags::Attribute_BladeD
+			|| Attribute == StageCraftTags::Attribute_BladeRotation;
 	}
 }
 
@@ -109,7 +141,83 @@ bool ULightingFixtureData::SupportsAttribute(FGameplayTag Attribute) const
 	{
 		return ColorSystem == EStageFixtureColorSystem::CMY;
 	}
+	if (Attribute == StageCraftTags::Attribute_ColorTemp)
+	{
+		return HasColorTemperatureControl();
+	}
+	if (Attribute == StageCraftTags::Attribute_Gobo || Attribute == StageCraftTags::Attribute_GoboRotation)
+	{
+		return !GoboWheel.IsEmpty();
+	}
+	if (Attribute == StageCraftTags::Attribute_Iris)
+	{
+		return bHasIris;
+	}
+	if (IsBladeAttribute(Attribute))
+	{
+		return bHasFramingShutters;
+	}
 	return false;
+}
+
+bool ULightingFixtureData::IsSteppedAttribute(const FGameplayTag& Attribute)
+{
+	return Attribute == StageCraftTags::Attribute_Gobo;
+}
+
+float ULightingFixtureData::NormalizeForDMX(const FGameplayTag& Attribute, float Value) const
+{
+	float Min = 0.f;
+	float Max = 1.f;
+	if (!GetAttributeRange(Attribute, Min, Max) || !FMath::IsFinite(Value))
+	{
+		return 0.f;
+	}
+	if (IsSteppedAttribute(Attribute))
+	{
+		const int32 SlotCount = FMath::RoundToInt32(Max - Min) + 1;
+		const int32 Slot = FMath::Clamp(FMath::RoundToInt32(Value - Min), 0, SlotCount - 1);
+		return (Slot + 0.5f) / SlotCount;
+	}
+	return Max > Min ? FMath::Clamp((Value - Min) / (Max - Min), 0.f, 1.f) : 0.f;
+}
+
+float ULightingFixtureData::DenormalizeFromDMX(const FGameplayTag& Attribute, float Normalized) const
+{
+	float Min = 0.f;
+	float Max = 1.f;
+	if (!GetAttributeRange(Attribute, Min, Max))
+	{
+		return 0.f;
+	}
+	const float Clamped = FMath::IsFinite(Normalized) ? FMath::Clamp(Normalized, 0.f, 1.f) : 0.f;
+	if (IsSteppedAttribute(Attribute))
+	{
+		const int32 SlotCount = FMath::RoundToInt32(Max - Min) + 1;
+		return Min + FMath::Min(FMath::FloorToInt32(Clamped * SlotCount), SlotCount - 1);
+	}
+	return FMath::Lerp(Min, Max, Clamped);
+}
+
+FText ULightingFixtureData::GetGoboSlotName(int32 Slot) const
+{
+	if (Slot <= 0 || !GoboWheel.IsValidIndex(Slot - 1))
+	{
+		return LOCTEXT("GoboOpen", "Open");
+	}
+	const FText& Name = GoboWheel[Slot - 1].Name;
+	return Name.IsEmpty() ? FText::Format(LOCTEXT("GoboSlotFormat", "Gobo {0}"), Slot) : Name;
+}
+
+UTexture2D* ULightingFixtureData::LoadGoboTexture(int32 Slot) const
+{
+	// Gobo textures are in the Game bundle, so they are resident once the item is armed or placed; this load is a lookup then.
+	return Slot > 0 && GoboWheel.IsValidIndex(Slot - 1) ? GoboWheel[Slot - 1].Texture.LoadSynchronous() : nullptr;
+}
+
+float ULightingFixtureData::GetGoboTransmission(int32 Slot) const
+{
+	return Slot > 0 && GoboWheel.IsValidIndex(Slot - 1) ? FMath::Clamp(GoboWheel[Slot - 1].Transmission, 0.f, 1.f) : 1.f;
 }
 
 bool ULightingFixtureData::GetAttributeRange(FGameplayTag Attribute, float& OutMin, float& OutMax) const
@@ -136,6 +244,25 @@ bool ULightingFixtureData::GetAttributeRange(FGameplayTag Attribute, float& OutM
 		OutMin = BeamAngleMin;
 		OutMax = BeamAngleMax;
 	}
+	else if (Attribute == StageCraftTags::Attribute_ColorTemp)
+	{
+		OutMin = ColorTemperatureRangeK.X;
+		OutMax = ColorTemperatureRangeK.Y;
+	}
+	else if (Attribute == StageCraftTags::Attribute_Gobo)
+	{
+		OutMax = static_cast<float>(GoboWheel.Num());
+	}
+	else if (Attribute == StageCraftTags::Attribute_GoboRotation)
+	{
+		OutMin = -GoboRotationLimit;
+		OutMax = GoboRotationLimit;
+	}
+	else if (Attribute == StageCraftTags::Attribute_BladeRotation)
+	{
+		OutMin = -BladeRotationLimit;
+		OutMax = BladeRotationLimit;
+	}
 	return true;
 }
 
@@ -152,6 +279,11 @@ float ULightingFixtureData::GetAttributeDefault(FGameplayTag Attribute) const
 	if (Attribute == StageCraftTags::Attribute_Tilt)
 	{
 		return FMath::Clamp(0.f, TiltLimits.X, TiltLimits.Y);
+	}
+	if (Attribute == StageCraftTags::Attribute_ColorTemp)
+	{
+		// Neutral: the light's temperature white point, so CTC starts out not tinting the mix.
+		return FMath::Clamp(6500.f, static_cast<float>(ColorTemperatureRangeK.X), static_cast<float>(ColorTemperatureRangeK.Y));
 	}
 	// Placed fixtures should be visible immediately, so pre-vis defaults to open white at full.
 	if (Attribute == StageCraftTags::Attribute_Dimmer
@@ -176,7 +308,16 @@ TArray<FGameplayTag> ULightingFixtureData::GetSupportedAttributes() const
 		StageCraftTags::Attribute_ColorG,
 		StageCraftTags::Attribute_ColorB,
 		StageCraftTags::Attribute_ColorW,
+		StageCraftTags::Attribute_ColorTemp,
 		StageCraftTags::Attribute_Zoom,
+		StageCraftTags::Attribute_Iris,
+		StageCraftTags::Attribute_Gobo,
+		StageCraftTags::Attribute_GoboRotation,
+		StageCraftTags::Attribute_BladeA,
+		StageCraftTags::Attribute_BladeB,
+		StageCraftTags::Attribute_BladeC,
+		StageCraftTags::Attribute_BladeD,
+		StageCraftTags::Attribute_BladeRotation,
 	};
 
 	TArray<FGameplayTag> Result;
@@ -223,6 +364,32 @@ EDataValidationResult ULightingFixtureData::IsDataValid(FDataValidationContext& 
 	{
 		Context.AddError(FText::Format(LOCTEXT("MotionRange", "{0}: Pan/Tilt limits must be (min, max)."), AssetName));
 		Result = EDataValidationResult::Invalid;
+	}
+
+	if (HasColorTemperatureControl() && ColorTemperatureRangeK.X >= ColorTemperatureRangeK.Y)
+	{
+		Context.AddError(FText::Format(LOCTEXT("CtcRange", "{0}: ColorTemperatureRangeK must be (warmest, coolest) with warmest below coolest."), AssetName));
+		Result = EDataValidationResult::Invalid;
+	}
+
+	if (bHasShutter && !(StrobeRateHz.X > 0.0 && StrobeRateHz.X <= StrobeRateHz.Y))
+	{
+		Context.AddError(FText::Format(LOCTEXT("StrobeRange", "{0}: StrobeRateHz must be (slowest, fastest), both above 0."), AssetName));
+		Result = EDataValidationResult::Invalid;
+	}
+
+	// 8-bit DMX gives each gobo slot its own value range only up to 255 slots.
+	if (GoboWheel.Num() > 254)
+	{
+		Context.AddError(FText::Format(LOCTEXT("GoboCount", "{0}: a gobo wheel has at most 254 gobos."), AssetName));
+		Result = EDataValidationResult::Invalid;
+	}
+	for (int32 Index = 0; Index < GoboWheel.Num(); ++Index)
+	{
+		if (GoboWheel[Index].Texture.IsNull())
+		{
+			Context.AddWarning(FText::Format(LOCTEXT("GoboNoTexture", "{0}: gobo {1} has no texture; it projects like Open."), AssetName, Index + 1));
+		}
 	}
 
 	if (Mesh.IsNull() && HeadMesh.IsNull())

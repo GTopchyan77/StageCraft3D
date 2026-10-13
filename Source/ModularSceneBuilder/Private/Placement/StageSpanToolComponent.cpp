@@ -12,12 +12,6 @@
 
 #include UE_INLINE_GENERATED_CPP_BY_NAME(StageSpanToolComponent)
 
-namespace StageSpanTool
-{
-	/** A second click closer than this (cm, horizontally) to the start point places nothing: there is no direction to draw in. */
-	constexpr double MinRunDistance = 1.0;
-}
-
 UStageSpanToolComponent::UStageSpanToolComponent()
 {
 	PrimaryComponentTick.bCanEverTick = false;
@@ -65,8 +59,9 @@ void UStageSpanToolComponent::HandleEditModeChanged(EStageEditMode NewMode, ESta
 
 void UStageSpanToolComponent::HandleArmedItemChanged(UBaseItemData* ArmedItem)
 {
-	// A different item never continues the previous item's run.
+	// A different item never continues the previous item's path.
 	HidePreview();
+	PendingPoints.Reset();
 	SetPhase(EStageSpanToolPhase::Inactive);
 	RefreshActivation();
 }
@@ -77,6 +72,7 @@ void UStageSpanToolComponent::RefreshActivation()
 	if (!PlacementTool || !PlacementTool->IsPlaceMode() || !Span)
 	{
 		HidePreview();
+		PendingPoints.Reset();
 		SetPhase(EStageSpanToolPhase::Inactive);
 		return;
 	}
@@ -101,26 +97,73 @@ FVector UStageSpanToolComponent::ComputeSnappedPoint(const UStageSpanData& Span,
 	return StagePlacementMath::ComputePlacementTransform(Span.PlacementRules, Hit.ImpactPoint, Hit.ImpactNormal).GetLocation();
 }
 
-bool UStageSpanToolComponent::ComputeRun(const UStageSpanData& Span, const FHitResult& Hit, FTransform& OutRunTransform, FStageSpanLayout& OutLayout) const
+FVector UStageSpanToolComponent::ComputeNextPoint(const UStageSpanData& Span, const FHitResult& Hit) const
+{
+	return StageSpanMath::ConstrainPathPoint(StageSpanMath::MakeRules(Span), PendingPoints.Last(), ComputeSnappedPoint(Span, Hit), Span.AngleSnapDegrees);
+}
+
+bool UStageSpanToolComponent::IsNearPoint(const FVector& World, const FVector& Target) const
+{
+	return FVector::Dist2D(World, Target) <= PointPickRadius;
+}
+
+UStageSpanToolComponent::FCandidatePath UStageSpanToolComponent::MakePath(const UStageSpanData& Span, TConstArrayView<FVector> WorldPoints, bool bClosed) const
+{
+	FCandidatePath Candidate;
+	if (WorldPoints.IsEmpty())
+	{
+		return Candidate;
+	}
+
+	// Placed at the first vertex and facing along the first leg, so a one-leg path is exactly the old straight run.
+	const FVector Second = WorldPoints.Num() > 1 ? WorldPoints[1] : WorldPoints[0];
+	Candidate.Transform = StageSpanMath::MakeRunTransform(WorldPoints[0], Second, LastYawDegrees);
+
+	TArray<FVector, TInlineAllocator<16>> Local;
+	Local.Reserve(WorldPoints.Num());
+	for (const FVector& Point : WorldPoints)
+	{
+		Local.Add(Candidate.Transform.InverseTransformPosition(Point));
+	}
+	Candidate.Layout = StageSpanMath::ComputePathLayout(StageSpanMath::MakeRules(Span), Local, bClosed, 0.0);
+	return Candidate;
+}
+
+bool UStageSpanToolComponent::ComputeCandidate(const UStageSpanData& Span, const FHitResult& Hit, FCandidatePath& OutCandidate) const
 {
 	if (!Hit.bBlockingHit)
 	{
 		return false;
 	}
 
-	const StageSpanMath::FRules Rules = StageSpanMath::MakeRules(Span);
-	if (Phase != EStageSpanToolPhase::PickEnd)
+	const FVector Cursor = ComputeSnappedPoint(Span, Hit);
+	if (Phase != EStageSpanToolPhase::PickEnd || PendingPoints.IsEmpty())
 	{
-		// Before the first click: one segment where the run would start, pointing the way the last run went.
-		OutLayout = StageSpanMath::ComputeLayout(Rules, 0.0);
-		OutRunTransform = FTransform(FRotator(0.0, LastYawDegrees, 0.0), ComputeSnappedPoint(Span, Hit));
-		return OutLayout.IsValid();
+		// Before the first click: one segment where the path would start, pointing the way the last path went.
+		const FVector Direction = FRotator(0.0, LastYawDegrees, 0.0).Vector();
+		OutCandidate = MakePath(Span, { Cursor, Cursor + Direction * Span.SegmentLength }, false);
+		return OutCandidate.Layout.IsValid();
 	}
 
-	const FVector End = StageSpanMath::ConstrainEndPoint(StartPoint, ComputeSnappedPoint(Span, Hit), Span.AngleSnapDegrees);
-	OutLayout = StageSpanMath::ComputeLayout(Rules, FVector::Dist2D(StartPoint, End));
-	OutRunTransform = StageSpanMath::MakeRunTransform(StartPoint, End, LastYawDegrees);
-	return OutLayout.IsValid();
+	// On the start point of a path that can close: the loop the click would make.
+	if (PendingPoints.Num() >= 3 && IsNearPoint(Cursor, PendingPoints[0]))
+	{
+		FCandidatePath Loop = MakePath(Span, PendingPoints, true);
+		Loop.bClosing = Loop.Layout.bClosed;
+		// Not closable: the open path as drawn, so the click on the start point visibly does nothing.
+		Loop.bCloseBlocked = !Loop.Layout.bClosed;
+		OutCandidate = MoveTemp(Loop);
+		return OutCandidate.Layout.IsValid();
+	}
+
+	TArray<FVector, TInlineAllocator<16>> Points(PendingPoints);
+	const FVector Next = ComputeNextPoint(Span, Hit);
+	if (FVector::Dist(Next, PendingPoints.Last()) >= StageSpanMath::MinLegLength)
+	{
+		Points.Add(Next);
+	}
+	OutCandidate = MakePath(Span, Points, false);
+	return OutCandidate.Layout.IsValid();
 }
 
 EStagePlacementPreviewState UStageSpanToolComponent::EvaluateRun(const UStageSpanData& Span, int32 SegmentCount)
@@ -137,24 +180,32 @@ EStagePlacementPreviewState UStageSpanToolComponent::EvaluateRun(const UStageSpa
 void UStageSpanToolComponent::UpdateTarget(const FHitResult& Hit)
 {
 	const UStageSpanData* Span = GetArmedSpan();
-	FTransform RunTransform;
-	FStageSpanLayout Layout;
-	if (!IsToolActive() || !Span || !ComputeRun(*Span, Hit, RunTransform, Layout))
+	FCandidatePath Candidate;
+	if (!IsToolActive() || !Span || !ComputeCandidate(*Span, Hit, Candidate))
 	{
 		ClearTarget();
 		return;
 	}
 
-	const EStagePlacementPreviewState State = EvaluateRun(*Span, Layout.SegmentCount);
+	// More points than the layout kept means the item's segment cap cut the path: the click would be refused.
+	const bool bOnStart = Candidate.bClosing || Candidate.bCloseBlocked;
+	const int32 ExpectedPoints = PendingPoints.Num() + (Phase == EStageSpanToolPhase::PickEnd && !bOnStart ? 1 : 0);
+	const bool bTruncated = Phase == EStageSpanToolPhase::PickEnd && !bOnStart && Candidate.Layout.Points.Num() < ExpectedPoints
+		&& FVector::Dist(ComputeNextPoint(*Span, Hit), PendingPoints.Last()) >= StageSpanMath::MinLegLength;
+
+	const EStagePlacementPreviewState State = bTruncated || Candidate.bCloseBlocked ? EStagePlacementPreviewState::Refused : EvaluateRun(*Span, Candidate.Layout.GetSegmentCount());
 	if (AStageSpanPreview* Ghost = GetOrCreatePreview())
 	{
-		Ghost->ShowRun(RunTransform, Layout, State);
+		Ghost->ShowPath(Candidate.Transform, Candidate.Layout, State);
 	}
 
 	FStageSpanToolStatus NewStatus = MakeIdleStatus();
 	NewStatus.bHasRun = Phase == EStageSpanToolPhase::PickEnd;
-	NewStatus.Length = NewStatus.bHasRun ? Layout.Length : 0.0;
-	NewStatus.SegmentCount = NewStatus.bHasRun ? Layout.SegmentCount : 0;
+	NewStatus.Length = NewStatus.bHasRun ? Candidate.Layout.GetLength() : 0.0;
+	NewStatus.SegmentCount = NewStatus.bHasRun ? Candidate.Layout.GetSegmentCount() : 0;
+	NewStatus.LegCount = NewStatus.bHasRun ? Candidate.Layout.Legs.Num() : 0;
+	NewStatus.bClosing = Candidate.bClosing;
+	NewStatus.bCloseBlocked = Candidate.bCloseBlocked;
 	NewStatus.bRefused = State == EStagePlacementPreviewState::Refused;
 	SetStatus(NewStatus);
 }
@@ -168,57 +219,125 @@ void UStageSpanToolComponent::ClearTarget()
 AModularBaseActor* UStageSpanToolComponent::HandleClick(const FHitResult& Hit)
 {
 	UStageSpanData* Span = GetArmedSpan();
-	FTransform RunTransform;
-	FStageSpanLayout Layout;
-	if (!IsToolActive() || !Span || !SpawnSystem || !ComputeRun(*Span, Hit, RunTransform, Layout))
+	if (!IsToolActive() || !Span || !SpawnSystem || !Hit.bBlockingHit)
 	{
 		return nullptr;
 	}
 
+	const FVector Cursor = ComputeSnappedPoint(*Span, Hit);
 	if (Phase == EStageSpanToolPhase::PickStart)
 	{
-		StartPoint = RunTransform.GetLocation();
+		PendingPoints = { Cursor };
 		SetPhase(EStageSpanToolPhase::PickEnd);
 		return nullptr;
 	}
 
-	const FVector End = StageSpanMath::ConstrainEndPoint(StartPoint, ComputeSnappedPoint(*Span, Hit), Span->AngleSnapDegrees);
-	if (FVector::Dist2D(StartPoint, End) < StageSpanTool::MinRunDistance)
+	// A click on the start point closes the loop (or, when it cannot close, does nothing: never a stray point next to the start);
+	// a second click on the last point (a double-click) finishes the path.
+	if (PendingPoints.Num() >= 3 && IsNearPoint(Cursor, PendingPoints[0]))
+	{
+		return MakePath(*Span, PendingPoints, true).Layout.bClosed ? PlacePendingPath(/*bClosed*/ true) : nullptr;
+	}
+	if (PendingPoints.Num() >= 2 && IsNearPoint(Cursor, PendingPoints.Last()))
+	{
+		return PlacePendingPath(/*bClosed*/ false);
+	}
+
+	const FVector Next = ComputeNextPoint(*Span, Hit);
+	if (FVector::Dist(Next, PendingPoints.Last()) < StageSpanMath::MinLegLength)
 	{
 		return nullptr;
 	}
 
-	// The configured length is validated with the run's full segment count before the run finishes spawning.
-	AModularBaseActor* Placed = SpawnSystem->SpawnConfiguredItem(Span, RunTransform, [&Layout](AModularBaseActor& Actor)
+	TArray<FVector, TInlineAllocator<16>> Points(PendingPoints);
+	Points.Add(Next);
+	if (MakePath(*Span, Points, false).Layout.Points.Num() < Points.Num())
+	{
+		// The item's segment cap (or point cap) would cut the new leg off; the ghost already shows it refused.
+		UE_LOG(LogStageCraft, Verbose, TEXT("%s: span path point refused: %s allows no more segments."), *GetNameSafe(GetOwner()), *Span->GetName());
+		return nullptr;
+	}
+
+	PendingPoints.Add(Next);
+	VerdictSegmentCount = INDEX_NONE;
+	SetStatus(MakeIdleStatus());
+	return nullptr;
+}
+
+AModularBaseActor* UStageSpanToolComponent::FinishPath()
+{
+	if (Phase != EStageSpanToolPhase::PickEnd || PendingPoints.Num() < 2)
+	{
+		return nullptr;
+	}
+	return PlacePendingPath(/*bClosed*/ false);
+}
+
+AModularBaseActor* UStageSpanToolComponent::PlacePendingPath(bool bClosed)
+{
+	UStageSpanData* Span = GetArmedSpan();
+	if (!Span || !SpawnSystem)
+	{
+		return nullptr;
+	}
+
+	const FCandidatePath Path = MakePath(*Span, PendingPoints, bClosed);
+	if (!Path.Layout.IsValid())
+	{
+		return nullptr;
+	}
+
+	// The whole path is validated with its full segment count before it finishes spawning.
+	AModularBaseActor* Placed = SpawnSystem->SpawnConfiguredItem(Span, Path.Transform, [&Path](AModularBaseActor& Actor)
 	{
 		if (AStageSpanActor* Run = Cast<AStageSpanActor>(&Actor))
 		{
-			Run->InitializeSpanLength(Layout.Length);
+			Run->InitializePath(Path.Layout.Points, Path.Layout.bClosed);
 		}
 	});
 	if (!Placed)
 	{
-		// Refused (reported by the validator's owner) or failed: keep the start so the user can try a shorter run.
+		// Refused (reported by the validator's owner) or failed: keep the points so the user can shorten the path.
 		return nullptr;
 	}
-	UE_CLOG(!Placed->IsA<AStageSpanActor>(), LogStageCraft, Warning, TEXT("%s: span item %s spawns %s, which is not a span actor; its length was ignored."),
+	UE_CLOG(!Placed->IsA<AStageSpanActor>(), LogStageCraft, Warning, TEXT("%s: span item %s spawns %s, which is not a span actor; its path was ignored."),
 		*GetNameSafe(GetOwner()), *Span->GetName(), *Placed->GetClass()->GetName());
 
-	// Chained: the run's real end (whole segments may stop short of the cursor) is where the next one starts.
-	StartPoint += RunTransform.GetRotation().GetForwardVector() * Layout.Length;
-	LastYawDegrees = RunTransform.Rotator().Yaw;
-	// The placement used up part of the session's limits, so the next run's verdict is asked again.
-	VerdictSegmentCount = INDEX_NONE;
+	// The next path's start marker points the way this one ended.
+	const int32 LastLeg = Path.Layout.Legs.Num() - 1;
+	LastYawDegrees = Path.Transform.TransformVector(Path.Layout.GetLegEnd(LastLeg) - Path.Layout.GetLegStart(LastLeg)).Rotation().Yaw;
+	PendingPoints.Reset();
+	SetPhase(EStageSpanToolPhase::PickStart);
 	OnItemPlaced.Broadcast(Placed);
 	return Placed;
 }
 
-bool UStageSpanToolComponent::CancelStart()
+bool UStageSpanToolComponent::RemoveLastPoint()
+{
+	if (Phase != EStageSpanToolPhase::PickEnd || PendingPoints.IsEmpty())
+	{
+		return false;
+	}
+	PendingPoints.Pop();
+	VerdictSegmentCount = INDEX_NONE;
+	if (PendingPoints.IsEmpty())
+	{
+		SetPhase(EStageSpanToolPhase::PickStart);
+	}
+	else
+	{
+		SetStatus(MakeIdleStatus());
+	}
+	return true;
+}
+
+bool UStageSpanToolComponent::CancelPath()
 {
 	if (Phase != EStageSpanToolPhase::PickEnd)
 	{
 		return false;
 	}
+	PendingPoints.Reset();
 	SetPhase(EStageSpanToolPhase::PickStart);
 	return true;
 }
@@ -240,6 +359,7 @@ FStageSpanToolStatus UStageSpanToolComponent::MakeIdleStatus() const
 {
 	FStageSpanToolStatus Idle;
 	Idle.Phase = Phase;
+	Idle.PointCount = PendingPoints.Num();
 	if (const UStageSpanData* Span = Phase != EStageSpanToolPhase::Inactive ? GetArmedSpan() : nullptr)
 	{
 		Idle.ItemName = Span->DisplayName;
@@ -249,7 +369,7 @@ FStageSpanToolStatus UStageSpanToolComponent::MakeIdleStatus() const
 
 void UStageSpanToolComponent::SetStatus(const FStageSpanToolStatus& NewStatus)
 {
-	// Cursor moves along the same whole-segment run change nothing the user can read; only real changes are announced.
+	// Cursor moves that keep the same path change nothing the user can read; only real changes are announced.
 	if (!(NewStatus == Status))
 	{
 		Status = NewStatus;

@@ -162,6 +162,26 @@ FString UStageRenderSubsystem::GetOutputDirectory() const
 	return FPaths::ConvertRelativePathToFull(FPaths::Combine(FPaths::ProjectSavedDir(), TEXT("Renders")));
 }
 
+UStageRenderSubsystem* UStageRenderSubsystem::Get(const AActor* Actor)
+{
+	return Actor ? UWorld::GetSubsystem<UStageRenderSubsystem>(Actor->GetWorld()) : nullptr;
+}
+
+void UStageRenderSubsystem::RegisterEditorHelper(AActor* Helper)
+{
+	if (Helper)
+	{
+		// Pruned here rather than polled: registrations are rare (one per helper's lifetime).
+		EditorHelpers.RemoveAll([](const TWeakObjectPtr<AActor>& Entry) { return !Entry.IsValid(); });
+		EditorHelpers.AddUnique(Helper);
+	}
+}
+
+void UStageRenderSubsystem::UnregisterEditorHelper(AActor* Helper)
+{
+	EditorHelpers.RemoveAll([Helper](const TWeakObjectPtr<AActor>& Entry) { return !Entry.IsValid() || Entry.Get() == Helper; });
+}
+
 // --- Job ---
 
 void UStageRenderSubsystem::SetState(EStageRenderState NewState)
@@ -229,6 +249,8 @@ bool UStageRenderSubsystem::CreateCaptureResources(const FStageRenderRequest& Re
 
 	RenderTarget = NewObject<UTextureRenderTarget2D>(this, NAME_None, RF_Transient);
 	// RGBA8 is linear PF_B8G8R8A8: the capture writes display-ready (tonemapped, gamma-encoded) colour, read back byte for byte.
+	// SDR output on purpose: SCS_FinalToneCurveHDR selects the HDR output device and its tone curve, which does not match the
+	// viewport (A/B in STATE.md #30).
 	RenderTarget->RenderTargetFormat = RTF_RGBA8;
 	RenderTarget->ClearColor = FLinearColor::Black;
 	RenderTarget->bAutoGenerateMips = false;
@@ -262,9 +284,9 @@ void UStageRenderSubsystem::ConfigureCapture(USceneCaptureComponent2D& Capture, 
 	Capture.bAlwaysPersistRenderingState = true;
 
 	Capture.HiddenActors.Add(Capture.GetOwner());
-	for (const TWeakObjectPtr<AActor>& Hidden : Request.HiddenActors)
+	for (const TWeakObjectPtr<AActor>& Helper : EditorHelpers)
 	{
-		if (AActor* Actor = Hidden.Get())
+		if (AActor* Actor = Helper.Get())
 		{
 			Capture.HiddenActors.Add(Actor);
 		}

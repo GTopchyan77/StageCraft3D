@@ -43,6 +43,12 @@ bool FStageImportFormatsTest::RunTest(const FString& Parameters)
 	TestFalse(TEXT("Empty path"), HasSupportedExtension(TEXT(""), Supported));
 	TestFalse(TEXT("Nothing supported"), HasSupportedExtension(TEXT("C:/Models/Chair.glb"), {}));
 
+	// Datasmith scenes get their own refusal, under either name users give them.
+	TestTrue(TEXT(".udatasmith is a Datasmith scene"), IsDatasmithScene(TEXT("C:/Venue/Hall.udatasmith")));
+	TestTrue(TEXT(".datasmith (any case) is a Datasmith scene"), IsDatasmithScene(TEXT("C:/Venue/Hall.DataSmith")));
+	TestFalse(TEXT("A model is not a Datasmith scene"), IsDatasmithScene(TEXT("C:/Venue/Hall.glb")));
+	TestFalse(TEXT("A folder named .udatasmith is not a scene"), IsDatasmithScene(TEXT("C:/Venue.udatasmith/Hall")));
+
 	// Unit and axis correction: only OBJ, which stores neither, gets one (Y-up metres to Z-up centimetres).
 	const FImportOffset Obj = GetImportOffset(TEXT("OBJ"));
 	TestEqual(TEXT("OBJ metres become centimetres"), Obj.UniformScale, 100.0);

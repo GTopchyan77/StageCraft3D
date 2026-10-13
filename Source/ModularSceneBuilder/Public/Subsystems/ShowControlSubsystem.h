@@ -72,6 +72,20 @@ public:
 	UPROPERTY(BlueprintAssignable, Category = "StageCraft|Show")
 	FOnShowFixturesChanged OnFixturesChanged;
 
+	// --- Strobe clock ---
+
+	/**
+	 * Joins (bStrobing) or leaves the strobe clock. Called by fixtures when their Shutter attribute crosses 0. While at least one
+	 * fixture strobes the subsystem ticks and gates each fixture's output at its own rate; with none it does not tick.
+	 * A fixture that leaves is left open. Idempotent.
+	 */
+	void SetFixtureStrobing(class ALightingFixtureActor* Fixture, bool bStrobing);
+
+	int32 GetStrobingFixtureCount() const { return Strobes.Num(); }
+
+	/** Fraction of each strobe period the output is open: a short, punchy flash like a discharge strobe. */
+	static constexpr float StrobeDutyCycle = 0.3f;
+
 	// --- Cues ---
 
 	/** Records every fixture's current attributes as a cue. Overwrites an existing cue with the same number. */
@@ -164,7 +178,17 @@ private:
 		TMap<FGameplayTag, float> To;
 	};
 
+	struct FStrobeState
+	{
+		TWeakObjectPtr<class ALightingFixtureActor> Fixture;
+
+		/** Position in the current period, 0..1. */
+		double Phase = 0.0;
+		bool bOpen = true;
+	};
+
 	bool IsDMXOutputActive() const;
+	void TickStrobes(float DeltaTime);
 	void TickFades(float DeltaTime);
 	void TickDMXOutput(float DeltaTime);
 	void CompleteFade();
@@ -180,6 +204,7 @@ private:
 	TObjectPtr<class UStageDMXBridge> DMXBridge = nullptr;
 
 	TArray<FAttributeFade> Fades;
+	TArray<FStrobeState> Strobes;
 	float FadeDuration = 0.f;
 	float FadeElapsed = 0.f;
 	float ActiveCueNumber = -1.f;

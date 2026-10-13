@@ -484,6 +484,9 @@ UWidget* UStageItemLibraryPanel::BuildToolbar()
 	}
 
 	CountText = StageItemLibrary::MakeText(*WidgetTree, FText::GetEmpty(), 8, TEXT("Regular"), Palette.TextSecondary, TEXT("CountText"));
+	// A narrow Library leaves the count less room than its text: it is cut, not drawn under the buttons.
+	CountText->SetTextOverflowPolicy(ETextOverflowPolicy::Ellipsis);
+	CountText->SetClipping(EWidgetClipping::ClipToBounds);
 	if (UHorizontalBoxSlot* CountSlot = Row->AddChildToHorizontalBox(CountText))
 	{
 		CountSlot->SetVerticalAlignment(VAlign_Center);
@@ -707,7 +710,9 @@ void UStageItemLibraryPanel::RebuildEntries()
 
 	if (CountText)
 	{
-		CountText->SetText(FText::Format(LOCTEXT("ItemCount", "{0} {0}|plural(one=item,other=items)"), Entries.Num()));
+		const FText Count = FText::Format(LOCTEXT("ItemCount", "{0} {0}|plural(one=item,other=items)"), Entries.Num());
+		CountText->SetText(Count);
+		CountText->SetToolTipText(Count);
 	}
 	ApplySearch();
 	RefreshArmedHighlight();

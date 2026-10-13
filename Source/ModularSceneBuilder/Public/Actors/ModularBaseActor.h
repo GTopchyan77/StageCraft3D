@@ -167,6 +167,12 @@ protected:
 	void NotifyParameterChanged(const FGameplayTag& ParameterId);
 
 	/**
+	 * The item moved, turned or scaled (gizmo, inspector, undo, group edit), after the Transform rows were notified.
+	 * For state derived from where the item is (a fixture's throw distance). Fires per frame during a drag: keep it cheap.
+	 */
+	virtual void OnStageTransformChanged() {}
+
+	/**
 	 * Pushes data-driven visuals onto components. Subclasses call Super and then apply their own
 	 * fields. Must be idempotent because it runs from both InitializeFromItemData and OnConstruction.
 	 */

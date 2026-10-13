@@ -59,6 +59,12 @@ namespace StageMeshImport
 		return !Extension.IsEmpty() && Supported.Contains(Extension);
 	}
 
+	bool IsDatasmithScene(const FString& FilePath)
+	{
+		const FString Extension = GetExtension(FilePath);
+		return Extension == TEXT("udatasmith") || Extension == TEXT("datasmith");
+	}
+
 	TArray<FString> FilterSupportedExtensions(const TArray<FString>& ImporterFormats)
 	{
 		TSet<FString> Offered;

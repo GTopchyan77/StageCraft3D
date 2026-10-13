@@ -40,6 +40,8 @@ UStageCraftUITheme::UStageCraftUITheme()
 	FeatureGroupColors.Add(StageCraftTags::FeatureGroup_Beam,		Hex(TEXT("4CD964")));
 	FeatureGroupColors.Add(StageCraftTags::FeatureGroup_Audio,		Hex(TEXT("00C2C7")));
 	FeatureGroupColors.Add(StageCraftTags::FeatureGroup_Rigging,	Hex(TEXT("C08457")));
+	FeatureGroupColors.Add(StageCraftTags::FeatureGroup_Shapers,	Hex(TEXT("7CB342")));
+	FeatureGroupColors.Add(StageCraftTags::FeatureGroup_Photometrics, Hex(TEXT("FFD54F")));
 }
 
 FLinearColor UStageCraftUITheme::GetFeatureGroupColor(FGameplayTag FeatureGroup) const
@@ -49,6 +51,11 @@ FLinearColor UStageCraftUITheme::GetFeatureGroupColor(FGameplayTag FeatureGroup)
 		if (const FLinearColor* Color = FeatureGroupColors.Find(Tag))
 		{
 			return *Color;
+		}
+		// A theme asset saved before a feature group existed has no entry for it: use the authored default.
+		if (const FLinearColor* Default = this != GetDefault<UStageCraftUITheme>() ? GetDefault<UStageCraftUITheme>()->FeatureGroupColors.Find(Tag) : nullptr)
+		{
+			return *Default;
 		}
 	}
 	return AccentColor;

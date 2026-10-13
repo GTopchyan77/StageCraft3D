@@ -8,7 +8,8 @@
  * The operating system's "open file" dialog, through the engine's IDesktopPlatform.
  *
  * IDesktopPlatform is a Developer module, so it is only linked where developer tools are built (editor, Development and
- * DebugGame game builds); see ModularSceneBuilder.Build.cs. Elsewhere IsAvailable is false and nothing opens.
+ * DebugGame game builds); see ModularSceneBuilder.Build.cs. Windows builds without it (Shipping) open the same Windows dialog
+ * directly through COM (IFileOpenDialog). Elsewhere IsAvailable is false and nothing opens.
  * Game thread only. The dialog is modal: the call returns when the user closes it.
  */
 namespace StageFileDialog

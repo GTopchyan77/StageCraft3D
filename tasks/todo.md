@@ -223,3 +223,20 @@ See `STATE.md` for detailed history of completed work.
 - [ ] Remove imported models from the Library; per-import units/axis for OBJ; weight/power for imports
 - [ ] Packaged build test of runtime import; repair engine InterchangeAssets material (Kmidden reference)
 - [ ] Datasmith scene import (DatasmithRuntime) if needed; native dialog in Shipping
+
+## Phase 12 — Professional lighting, patch sheet, span paths, inspector grid, import/render hardening (STATE.md #30, ADR 0007)
+- [x] Unblock the build: 19 plugins from `b8448a5` + UnrealNGGMCP disabled in the `.uproject` (Gevor's choice for the 19; UnrealNGGMCP half-reverted)
+- [x] Inspector column grid: label/units fixed columns enforced in C++, ellipsis + tooltips, read-only values aligned with field text, DMX Mode / Channels rows
+- [x] Fixtures: CTC, stepped Gobo + rotation, Iris, four blades + rotation, capabilities, default DMX layout, validation, pure DMX mapping
+- [x] Projection: `M_StageBeamLightFunction` + eight generated gobos; MID only for fixtures with beam shaping
+- [x] Strobe clock in `UShowControlSubsystem` (ticks only while strobing)
+- [x] `StagePhotometry` + Photometrics section; fader short names, Shapers group, sideways-scrolling bar
+- [x] DMX Patch panel (table + channel map, conflicts, Patch Unpatched); `DA_Panel_Patch`; Default layout tab
+- [x] Span paths: path math + tests, actor state + `SpanLength` migration, multi-point tool, close refusal, corner hub, cable sag (undoable, lock-aware)
+- [x] Import: Win32 `IFileOpenDialog` in Shipping; Datasmith refusal
+- [x] Render: self-registering editor helpers; banding A/B (HDR rejected, cause = fog slicing without temporal AA; no change)
+- [x] Editor / Game / Shipping builds clean; 37/37 automation; scripted Standalone runs R30_Run1–8
+- [ ] Manual verification (Gevor): STATE.md #30 "Not verified" list
+- [ ] Re-enable plugins one by one once they compile with StageCraft (`PlacementGizmo` enum rename; UnrealNGGMCP pick one version)
+- [ ] Haze render banding in Off/FXAA: force temporal AA or finer fog Z for haze renders (measure first)
+- [ ] Undo for attribute and patch edits; cue list saved with scenes

@@ -85,6 +85,12 @@ namespace StageMeshImport
 	MODULARSCENEBUILDER_API bool HasSupportedExtension(const FString& FilePath, const TArray<FString>& Supported);
 
 	/**
+	 * True for a Datasmith scene (.udatasmith, or .datasmith as users often call it). There is no runtime static-mesh path for
+	 * them in UE 5.8 (ADR 0006 §4.3, ADR 0007 §7), so they get their own refusal with what to export instead.
+	 */
+	MODULARSCENEBUILDER_API bool IsDatasmithScene(const FString& FilePath);
+
+	/**
 	 * Extensions from importer format strings ("fbx;Filmbox", "gltf;GL Transmission Format") that are also candidates.
 	 * Keeps the candidate order. Unknown or malformed strings are ignored.
 	 */

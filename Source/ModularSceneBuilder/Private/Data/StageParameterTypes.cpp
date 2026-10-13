@@ -90,6 +90,8 @@ namespace StageCraftTags
 	UE_DEFINE_GAMEPLAY_TAG_COMMENT(FeatureGroup_Audio,			"StageCraft.FeatureGroup.Audio",		"Speaker and system settings.");
 	UE_DEFINE_GAMEPLAY_TAG_COMMENT(FeatureGroup_Rigging,		"StageCraft.FeatureGroup.Rigging",		"Truss and hoist specs.");
 	UE_DEFINE_GAMEPLAY_TAG_COMMENT(FeatureGroup_Span,			"StageCraft.FeatureGroup.Span",			"Length and segments of a linear run (truss, railing, cable).");
+	UE_DEFINE_GAMEPLAY_TAG_COMMENT(FeatureGroup_Shapers,		"StageCraft.FeatureGroup.Shapers",		"Framing shutters (blades) of a profile fixture.");
+	UE_DEFINE_GAMEPLAY_TAG_COMMENT(FeatureGroup_Photometrics,	"StageCraft.FeatureGroup.Photometrics",	"Beam intensity, throw and illuminance (read-only).");
 
 	UE_DEFINE_GAMEPLAY_TAG_COMMENT(Param_Info_Label,			"StageCraft.Param.Info.Label",			"User label of the placed instance.");
 	UE_DEFINE_GAMEPLAY_TAG_COMMENT(Param_Info_Model,			"StageCraft.Param.Info.Model",			"Catalog model name (read-only).");
@@ -105,6 +107,7 @@ namespace StageCraftTags
 	UE_DEFINE_GAMEPLAY_TAG_COMMENT(Param_Patch_Universe,		"StageCraft.Param.Patch.Universe",		"DMX universe (0 = unpatched).");
 	UE_DEFINE_GAMEPLAY_TAG_COMMENT(Param_Patch_Address,			"StageCraft.Param.Patch.Address",		"DMX start address 1..512.");
 	UE_DEFINE_GAMEPLAY_TAG_COMMENT(Param_Patch_Footprint,		"StageCraft.Param.Patch.Footprint",		"Channel count of the DMX mode (read-only).");
+	UE_DEFINE_GAMEPLAY_TAG_COMMENT(Param_Patch_Mode,			"StageCraft.Param.Patch.Mode",			"Name of the fixture's DMX mode (read-only).");
 	UE_DEFINE_GAMEPLAY_TAG_COMMENT(Param_Audio_Gain,			"StageCraft.Param.Audio.Gain",			"Output gain in dB.");
 	UE_DEFINE_GAMEPLAY_TAG_COMMENT(Param_Audio_Mute,			"StageCraft.Param.Audio.Mute",			"Muted.");
 	UE_DEFINE_GAMEPLAY_TAG_COMMENT(Param_Audio_Delay,			"StageCraft.Param.Audio.Delay",			"Alignment delay in ms.");
@@ -120,6 +123,13 @@ namespace StageCraftTags
 	UE_DEFINE_GAMEPLAY_TAG_COMMENT(Param_Span_Segments,			"StageCraft.Param.Span.Segments",		"Number of segments in the run (read-only).");
 	UE_DEFINE_GAMEPLAY_TAG_COMMENT(Param_Span_SegmentLength,	"StageCraft.Param.Span.SegmentLength",	"Length of one segment in cm (read-only).");
 	UE_DEFINE_GAMEPLAY_TAG_COMMENT(Param_Span_Fit,				"StageCraft.Param.Span.Fit",			"How the run fills its length (read-only).");
+	UE_DEFINE_GAMEPLAY_TAG_COMMENT(Param_Span_Legs,			"StageCraft.Param.Span.Legs",			"Straight legs of a drawn path (read-only).");
+	UE_DEFINE_GAMEPLAY_TAG_COMMENT(Param_Span_Sag,				"StageCraft.Param.Span.Sag",			"Mid-span sag of a hanging run (cables) in cm.");
+	UE_DEFINE_GAMEPLAY_TAG_COMMENT(Param_Photo_BeamAngle,		"StageCraft.Param.Photo.BeamAngle",		"Effective full beam angle after zoom and iris, in degrees (read-only).");
+	UE_DEFINE_GAMEPLAY_TAG_COMMENT(Param_Photo_Intensity,		"StageCraft.Param.Photo.Intensity",		"Approximate peak intensity in candela (read-only).");
+	UE_DEFINE_GAMEPLAY_TAG_COMMENT(Param_Photo_Throw,			"StageCraft.Param.Photo.Throw",			"Distance to the first surface along the beam, in cm (read-only).");
+	UE_DEFINE_GAMEPLAY_TAG_COMMENT(Param_Photo_Illuminance,	"StageCraft.Param.Photo.Illuminance",	"Approximate illuminance at the throw distance, in lux (read-only).");
+	UE_DEFINE_GAMEPLAY_TAG_COMMENT(Param_Photo_BeamDiameter,	"StageCraft.Param.Photo.BeamDiameter",	"Beam diameter at the throw distance, in cm (read-only).");
 
 	UE_DEFINE_GAMEPLAY_TAG_COMMENT(Attribute,					"StageCraft.Attribute",					"Root of fixture attributes (cue-recordable, DMX-addressable).");
 	UE_DEFINE_GAMEPLAY_TAG_COMMENT(Attribute_Dimmer,			"StageCraft.Attribute.Dimmer",			"Intensity 0..1.");
@@ -135,6 +145,15 @@ namespace StageCraftTags
 	UE_DEFINE_GAMEPLAY_TAG_COMMENT(Attribute_ColorC,			"StageCraft.Attribute.ColorC",			"Cyan DMX channel (1 - R).");
 	UE_DEFINE_GAMEPLAY_TAG_COMMENT(Attribute_ColorM,			"StageCraft.Attribute.ColorM",			"Magenta DMX channel (1 - G).");
 	UE_DEFINE_GAMEPLAY_TAG_COMMENT(Attribute_ColorY,			"StageCraft.Attribute.ColorY",			"Yellow DMX channel (1 - B).");
+	UE_DEFINE_GAMEPLAY_TAG_COMMENT(Attribute_ColorTemp,		"StageCraft.Attribute.ColorTemp",		"Colour temperature correction in Kelvin.");
+	UE_DEFINE_GAMEPLAY_TAG_COMMENT(Attribute_Gobo,				"StageCraft.Attribute.Gobo",			"Gobo wheel slot, 0 = open (stepped).");
+	UE_DEFINE_GAMEPLAY_TAG_COMMENT(Attribute_GoboRotation,		"StageCraft.Attribute.GoboRotation",	"Gobo index angle in degrees.");
+	UE_DEFINE_GAMEPLAY_TAG_COMMENT(Attribute_Iris,				"StageCraft.Attribute.Iris",			"Iris 0 = open .. 1 = closed.");
+	UE_DEFINE_GAMEPLAY_TAG_COMMENT(Attribute_BladeA,			"StageCraft.Attribute.BladeA",			"Top framing blade insertion 0..1.");
+	UE_DEFINE_GAMEPLAY_TAG_COMMENT(Attribute_BladeB,			"StageCraft.Attribute.BladeB",			"Right framing blade insertion 0..1.");
+	UE_DEFINE_GAMEPLAY_TAG_COMMENT(Attribute_BladeC,			"StageCraft.Attribute.BladeC",			"Bottom framing blade insertion 0..1.");
+	UE_DEFINE_GAMEPLAY_TAG_COMMENT(Attribute_BladeD,			"StageCraft.Attribute.BladeD",			"Left framing blade insertion 0..1.");
+	UE_DEFINE_GAMEPLAY_TAG_COMMENT(Attribute_BladeRotation,	"StageCraft.Attribute.BladeRotation",	"Framing shutter assembly rotation in degrees.");
 
 	bool IsTransformParameter(const FGameplayTag& ParameterId)
 	{
@@ -144,6 +163,17 @@ namespace StageCraftTags
 	bool IsQuantityParameter(const FGameplayTag& ParameterId)
 	{
 		return ParameterId == Param_Span_Length;
+	}
+
+	bool IsShapeParameter(const FGameplayTag& ParameterId)
+	{
+		return IsQuantityParameter(ParameterId) || ParameterId == Param_Span_Sag;
+	}
+
+	bool IsPhotometricParameter(const FGameplayTag& ParameterId)
+	{
+		return ParameterId == Param_Photo_BeamAngle || ParameterId == Param_Photo_Intensity || ParameterId == Param_Photo_Throw
+			|| ParameterId == Param_Photo_Illuminance || ParameterId == Param_Photo_BeamDiameter;
 	}
 
 	bool IsListingParameter(const FGameplayTag& ParameterId)

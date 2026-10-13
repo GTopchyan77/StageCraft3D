@@ -38,6 +38,7 @@ void UShowControlSubsystem::Deinitialize()
 	SetDMXBridge(nullptr);
 	Fixtures.Reset();
 	Fades.Reset();
+	Strobes.Reset();
 
 	Super::Deinitialize();
 }
@@ -49,15 +50,68 @@ TStatId UShowControlSubsystem::GetStatId() const
 
 bool UShowControlSubsystem::IsTickable() const
 {
-	return !Fades.IsEmpty() || IsDMXOutputActive();
+	return !Fades.IsEmpty() || !Strobes.IsEmpty() || IsDMXOutputActive();
 }
 
 void UShowControlSubsystem::Tick(float DeltaTime)
 {
 	Super::Tick(DeltaTime);
 
+	// Fades first: a fade may change a fixture's Shutter, which changes its strobe rate this frame.
 	TickFades(DeltaTime);
+	TickStrobes(DeltaTime);
 	TickDMXOutput(DeltaTime);
+}
+
+// --- Strobe clock ---
+
+void UShowControlSubsystem::SetFixtureStrobing(ALightingFixtureActor* Fixture, bool bStrobing)
+{
+	if (!Fixture)
+	{
+		return;
+	}
+
+	const int32 Index = Strobes.IndexOfByPredicate([Fixture](const FStrobeState& State) { return State.Fixture == Fixture; });
+	if (bStrobing && Index == INDEX_NONE)
+	{
+		// Starts open, so a strobe begins with a flash rather than a gap.
+		FStrobeState& State = Strobes.AddDefaulted_GetRef();
+		State.Fixture = Fixture;
+	}
+	else if (!bStrobing && Index != INDEX_NONE)
+	{
+		Strobes.RemoveAtSwap(Index);
+		Fixture->SetStrobeOpen(true);
+	}
+}
+
+void UShowControlSubsystem::TickStrobes(float DeltaTime)
+{
+	for (int32 Index = Strobes.Num() - 1; Index >= 0; --Index)
+	{
+		FStrobeState& State = Strobes[Index];
+		ALightingFixtureActor* Fixture = State.Fixture.Get();
+		const float Rate = Fixture ? Fixture->GetStrobeRateHz() : 0.f;
+		if (!Fixture || Rate <= 0.f)
+		{
+			// Destroyed without unregistering, or its shutter opened through a path that bypassed SetFixtureStrobing.
+			if (Fixture)
+			{
+				Fixture->SetStrobeOpen(true);
+			}
+			Strobes.RemoveAtSwap(Index);
+			continue;
+		}
+
+		State.Phase = FMath::Frac(State.Phase + static_cast<double>(DeltaTime) * Rate);
+		const bool bOpen = State.Phase < StrobeDutyCycle;
+		if (bOpen != State.bOpen)
+		{
+			State.bOpen = bOpen;
+			Fixture->SetStrobeOpen(bOpen);
+		}
+	}
 }
 
 // --- Fixtures & patch ---
@@ -90,6 +144,7 @@ void UShowControlSubsystem::UnregisterFixture(ALightingFixtureActor* Fixture)
 	if (Fixtures.Remove(Fixture) > 0)
 	{
 		Fades.RemoveAll([Fixture](const FAttributeFade& Fade) { return Fade.Fixture == Fixture; });
+		Strobes.RemoveAll([Fixture](const FStrobeState& State) { return State.Fixture == Fixture; });
 		OnFixturesChanged.Broadcast();
 	}
 }

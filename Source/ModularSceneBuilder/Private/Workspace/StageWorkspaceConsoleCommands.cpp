@@ -9,6 +9,10 @@
 #if !UE_BUILD_SHIPPING
 
 #include "CollisionQueryParams.h"
+#include "Blueprint/UserWidget.h"
+#include "Blueprint/WidgetTree.h"
+#include "Components/PanelSlot.h"
+#include "Components/ScrollBox.h"
 #include "Engine/GameEngine.h"
 #include "Engine/GameInstance.h"
 #include "Engine/HitResult.h"
@@ -20,6 +24,7 @@
 #include "HAL/IConsoleManager.h"
 #include "Player/ModularPlayerController.h"
 #include "Slate/SceneViewport.h"
+#include "UObject/UObjectIterator.h"
 #include "UnrealClient.h"
 #include "Widgets/SWindow.h"
 #include "Workspace/StageWorkspaceShell.h"
@@ -151,6 +156,52 @@ namespace StageWorkspaceCommands
 	{
 		FScreenshotRequest::RequestScreenshot(FString(), /*bShowUI*/ true, /*bAddFilenameSuffix*/ true);
 		UE_LOG(LogStageWorkspace, Display, TEXT("Screenshot requested (next frame, Saved/Screenshots)."));
+	}
+
+	/** Logs the widget tree of the first live user widget whose class name contains the argument: names, classes and slot types, for layout debugging. */
+	void DumpWidget(const TArray<FString>& Args, UWorld* World)
+	{
+		if (Args.IsEmpty())
+		{
+			UE_LOG(LogStageWorkspace, Display, TEXT("Usage: StageCraft.Workspace.DumpWidget <ClassNamePart>"));
+			return;
+		}
+		for (TObjectIterator<UUserWidget> It; It; ++It)
+		{
+			if (It->GetWorld() != World || It->IsTemplate() || !It->GetClass()->GetName().Contains(Args[0]) || !It->WidgetTree)
+			{
+				continue;
+			}
+			UE_LOG(LogStageWorkspace, Display, TEXT("DumpWidget %s (%s):"), *It->GetName(), *It->GetClass()->GetName());
+			It->WidgetTree->ForEachWidget([](UWidget* Widget)
+			{
+				int32 Depth = 0;
+				for (const UWidget* Parent = Widget->GetParent(); Parent; Parent = Parent->GetParent())
+				{
+					++Depth;
+				}
+				UE_LOG(LogStageWorkspace, Display, TEXT("  %s%s (%s) slot %s"), *FString::ChrN(Depth * 2, TEXT(' ')), *Widget->GetName(), *Widget->GetClass()->GetName(),
+					Widget->Slot ? *Widget->Slot->GetClass()->GetName() : TEXT("-"));
+			});
+			return;
+		}
+		UE_LOG(LogStageWorkspace, Display, TEXT("DumpWidget: no live widget class contains '%s'."), *Args[0]);
+	}
+
+	/** Scrolls every vertical panel list (inspector, outliner, patch) to its end or start, so a screenshot can show rows below the fold. */
+	void ScrollPanels(const TArray<FString>& Args, UWorld* World)
+	{
+		const bool bToEnd = Args.IsEmpty() || !Args[0].Equals(TEXT("start"), ESearchCase::IgnoreCase);
+		int32 Count = 0;
+		for (TObjectIterator<UScrollBox> It; It; ++It)
+		{
+			if (It->GetWorld() == World && It->GetOrientation() == Orient_Vertical && !It->IsTemplate())
+			{
+				bToEnd ? It->ScrollToEnd() : It->ScrollToStart();
+				++Count;
+			}
+		}
+		UE_LOG(LogStageWorkspace, Display, TEXT("ScrollPanels %s: %d lists."), bToEnd ? TEXT("end") : TEXT("start"), Count);
 	}
 
 	/** Only the viewport, filling the main window: the like-for-like comparison against -StageDirectViewport for frame-cost measurements. */
@@ -350,6 +401,10 @@ namespace StageWorkspaceCommands
 		FConsoleCommandWithWorldAndArgsDelegate::CreateStatic(&Reset));
 	FAutoConsoleCommandWithWorldAndArgs ScreenshotCommand(TEXT("StageCraft.Workspace.Screenshot"), TEXT("Saves the main window, with all panels, to Saved/Screenshots."),
 		FConsoleCommandWithWorldAndArgsDelegate::CreateStatic(&Screenshot));
+	FAutoConsoleCommandWithWorldAndArgs DumpWidgetCommand(TEXT("StageCraft.Workspace.DumpWidget"), TEXT("<ClassNamePart> Logs a live widget's tree (names, classes, slot types)."),
+		FConsoleCommandWithWorldAndArgsDelegate::CreateStatic(&DumpWidget));
+	FAutoConsoleCommandWithWorldAndArgs ScrollPanelsCommand(TEXT("StageCraft.Workspace.ScrollPanels"), TEXT("[end|start] Scrolls every vertical panel list to its end (default) or start, for screenshots."),
+		FConsoleCommandWithWorldAndArgsDelegate::CreateStatic(&ScrollPanels));
 	FAutoConsoleCommandWithWorldAndArgs ViewportOnlyCommand(TEXT("StageCraft.Workspace.ViewportOnly"), TEXT("Shows only the viewport, filling the main window (profiling comparison)."),
 		FConsoleCommandWithWorldAndArgsDelegate::CreateStatic(&ViewportOnly));
 	FAutoConsoleCommandWithWorldAndArgs UnknownTabCommand(TEXT("StageCraft.Workspace.TestUnknownTab"), TEXT("Restores a layout that names a panel which does not exist."),

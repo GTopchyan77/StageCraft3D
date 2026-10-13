@@ -9,6 +9,7 @@
 #include "Materials/MaterialInstanceDynamic.h"
 #include "ModularSceneBuilder.h"
 #include "Placement/StageSnapGuidesComponent.h"
+#include "Render/StageRenderSubsystem.h"
 #include "UObject/ConstructorHelpers.h"
 
 #include UE_INLINE_GENERATED_CPP_BY_NAME(StagePlacementPreview)
@@ -68,9 +69,24 @@ AStagePlacementPreview::AStagePlacementPreview()
 	SetActorHiddenInGame(true);
 }
 
+void AStagePlacementPreview::EndPlay(const EEndPlayReason::Type EndPlayReason)
+{
+	if (UStageRenderSubsystem* Render = UStageRenderSubsystem::Get(this))
+	{
+		Render->UnregisterEditorHelper(this);
+	}
+	Super::EndPlay(EndPlayReason);
+}
+
 void AStagePlacementPreview::BeginPlay()
 {
 	Super::BeginPlay();
+
+	// An editor helper: never part of a delivered render.
+	if (UStageRenderSubsystem* Render = UStageRenderSubsystem::Get(this))
+	{
+		Render->RegisterEditorHelper(this);
+	}
 
 	if (GhostMaterial)
 	{

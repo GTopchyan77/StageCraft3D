@@ -1,7 +1,7 @@
 // Copyright Epic Games, Inc. All Rights Reserved.
 
-// Unit tests for span geometry (Docs/ADR/0005-spans-outliner-and-bill-of-materials.md §2-3): run layout, the two-point placement
-// constraints and the repeated part transforms. No world and no assets.
+// Unit tests for span geometry (Docs/ADR/0005 §2-3, Docs/ADR/0007 §4): run layout, placement constraints, drawn paths
+// (normalisation, corners, closed loops, sag) and the repeated part transforms. No world and no assets.
 // Run: UnrealEditor-Cmd <project> -ExecCmds="Automation RunTests StageCraft.Span; Quit" -unattended -nullrhi
 
 #include "CoreMinimal.h"
@@ -116,41 +116,177 @@ bool FStageSpanInstancesTest::RunTest(const FString& Parameters)
 {
 	using namespace StageSpanTests;
 
-	// Three whole 2 m sections; a chord part authored at the segment's mid-point.
-	const FStageSpanLayout Whole = StageSpanMath::ComputeLayout(MakeRules(EStageSpanFit::WholeSegments, 200.0, 10), 600.0);
+	// A straight one-leg path is exactly the old straight run: three whole 2 m sections, a chord part at the mid-point.
+	const FStageSpanPathLayout Whole = StageSpanMath::ComputePathLayout(MakeRules(EStageSpanFit::WholeSegments, 200.0, 10),
+		{ FVector::ZeroVector, FVector(600.0, 0.0, 0.0) }, false, 0.0);
 	const FTransform Chord(FRotator::ZeroRotator, FVector(100.0, 15.0, 0.0), FVector(2.0, 0.05, 0.05));
 	TArray<FTransform> Instances;
-	StageSpanMath::MakeSegmentInstances(Whole, 200.0, Chord, Instances);
+	StageSpanMath::MakePathSegmentInstances(Whole, 200.0, Chord, Instances);
 	TestEqual(TEXT("One instance per section"), Instances.Num(), 3);
-	TestTrue(TEXT("Section 1 at its mid-point"), Instances[0].GetLocation().Equals(FVector(100.0, 15.0, 0.0)));
-	TestTrue(TEXT("Section 3 two pitches further"), Instances[2].GetLocation().Equals(FVector(500.0, 15.0, 0.0)));
-	TestTrue(TEXT("Whole sections are never stretched"), Instances[1].GetScale3D().Equals(Chord.GetScale3D()));
+	TestTrue(TEXT("Section 1 at its mid-point"), Instances[0].GetLocation().Equals(FVector(100.0, 15.0, 0.0), 1.e-4));
+	TestTrue(TEXT("Section 3 two pitches further"), Instances[2].GetLocation().Equals(FVector(500.0, 15.0, 0.0), 1.e-4));
+	TestTrue(TEXT("Whole sections are never stretched"), Instances[1].GetScale3D().Equals(Chord.GetScale3D(), 1.e-4));
 
 	// Stretched: 2.5 m of 1 m sections = 3 sections of 83.3 cm. A cylinder lying along the run (pitched 90 degrees, its
 	// height axis Z turned onto X) must get longer, not thicker.
-	const FStageSpanLayout Stretched = StageSpanMath::ComputeLayout(MakeRules(EStageSpanFit::Stretch, 100.0, 10), 250.0);
+	const FStageSpanPathLayout Stretched = StageSpanMath::ComputePathLayout(MakeRules(EStageSpanFit::Stretch, 100.0, 10),
+		{ FVector::ZeroVector, FVector(250.0, 0.0, 0.0) }, false, 0.0);
 	const FTransform Cable(FRotator(90.0, 0.0, 0.0), FVector(50.0, 0.0, 0.0), FVector(0.02, 0.02, 1.0));
-	StageSpanMath::MakeSegmentInstances(Stretched, 100.0, Cable, Instances);
-	const double Stretch = Stretched.SegmentPitch / 100.0;
+	StageSpanMath::MakePathSegmentInstances(Stretched, 100.0, Cable, Instances);
+	const double Pitch = 250.0 / 3.0;
+	const double Stretch = Pitch / 100.0;
 	TestEqual(TEXT("Three stretched sections"), Instances.Num(), 3);
-	TestTrue(TEXT("Stretched part centre follows the pitch"), Instances[1].GetLocation().Equals(FVector(Stretched.SegmentPitch + 50.0 * Stretch, 0.0, 0.0), 1.e-4));
+	TestTrue(TEXT("Stretched part centre follows the pitch"), Instances[1].GetLocation().Equals(FVector(Pitch + 50.0 * Stretch, 0.0, 0.0), 1.e-4));
 	TestTrue(TEXT("The cable gets longer along its own axis"), FMath::IsNearlyEqual(Instances[0].GetScale3D().Z, Stretch, 1.e-4));
 	TestTrue(TEXT("The cable keeps its thickness"), FMath::IsNearlyEqual(Instances[0].GetScale3D().X, 0.02, 1.e-4) && FMath::IsNearlyEqual(Instances[0].GetScale3D().Y, 0.02, 1.e-4));
 	TestTrue(TEXT("Rotation is kept"), Instances[0].GetRotation().Equals(Cable.GetRotation(), 1.e-4));
 
-	// Joints: both ends included, never stretched.
-	const FTransform Post(FRotator::ZeroRotator, FVector(0.0, 0.0, 50.0), FVector(0.05, 0.05, 1.0));
-	StageSpanMath::MakeJointInstances(Stretched, Post, Instances);
-	TestEqual(TEXT("Sections + 1 joints"), Instances.Num(), 4);
-	TestTrue(TEXT("First joint at the start"), Instances[0].GetLocation().Equals(FVector(0.0, 0.0, 50.0)));
-	TestTrue(TEXT("Last joint at the real end"), Instances.Last().GetLocation().Equals(FVector(250.0, 0.0, 50.0), 1.e-4));
-	TestTrue(TEXT("Joints are not stretched"), Instances[2].GetScale3D().Equals(Post.GetScale3D()));
+	// Joints of an open path: the two ends plus every joint between segments, no corners.
+	TArray<FTransform> Joints;
+	TArray<FTransform> Corners;
+	StageSpanMath::MakePathJointFrames(Stretched, Joints, Corners);
+	TestEqual(TEXT("Sections + 1 joints"), Joints.Num(), 4);
+	TestEqual(TEXT("A straight run has no corners"), Corners.Num(), 0);
+	bool bHasStart = false;
+	bool bHasEnd = false;
+	for (const FTransform& Joint : Joints)
+	{
+		bHasStart |= Joint.GetLocation().Equals(FVector::ZeroVector, 1.e-4);
+		bHasEnd |= Joint.GetLocation().Equals(FVector(250.0, 0.0, 0.0), 1.e-4);
+	}
+	TestTrue(TEXT("A joint at the start"), bHasStart);
+	TestTrue(TEXT("A joint at the real end"), bHasEnd);
 
-	// No run, no instances.
-	StageSpanMath::MakeSegmentInstances(FStageSpanLayout(), 100.0, Chord, Instances);
+	// No path, no instances.
+	StageSpanMath::MakePathSegmentInstances(FStageSpanPathLayout(), 100.0, Chord, Instances);
 	TestEqual(TEXT("Invalid layout: no segments"), Instances.Num(), 0);
-	StageSpanMath::MakeJointInstances(FStageSpanLayout(), Post, Instances);
-	TestEqual(TEXT("Invalid layout: no joints"), Instances.Num(), 0);
+	StageSpanMath::MakePathJointFrames(FStageSpanPathLayout(), Joints, Corners);
+	TestEqual(TEXT("Invalid layout: no joints"), Joints.Num() + Corners.Num(), 0);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FStageSpanPathTest, "StageCraft.Span.Path", StageSpanTests::Flags)
+
+bool FStageSpanPathTest::RunTest(const FString& Parameters)
+{
+	using namespace StageSpanTests;
+	using StageSpanMath::ComputePathLayout;
+	const StageSpanMath::FRules Truss = MakeRules(EStageSpanFit::WholeSegments, 200.0, 20);
+
+	// Normalisation keeps each leg's direction and shifts later points with it: 5.4 m -> 6 m (3 sections), then 3.7 m -> 4 m.
+	const FStageSpanPathLayout L = ComputePathLayout(Truss, { FVector::ZeroVector, FVector(540.0, 0.0, 0.0), FVector(540.0, 370.0, 0.0) }, false, 0.0);
+	TestEqual(TEXT("Two legs"), L.Legs.Num(), 2);
+	TestTrue(TEXT("First leg snapped to 6 m"), L.Points[1].Equals(FVector(600.0, 0.0, 0.0), 1.e-6));
+	TestTrue(TEXT("Second leg starts where the first ended and keeps its direction"), L.Points[2].Equals(FVector(600.0, 400.0, 0.0), 1.e-6));
+	TestEqual(TEXT("Segments across legs"), L.GetSegmentCount(), 5);
+	TestNearlyEqual(TEXT("Length across legs"), L.GetLength(), 1000.0, 1.e-6);
+
+	// Corner: the bend vertex is a corner, turned to the bisector (45 degrees between +X and +Y); ends and in-leg joints are joints.
+	TArray<FTransform> Joints;
+	TArray<FTransform> Corners;
+	StageSpanMath::MakePathJointFrames(L, Joints, Corners);
+	TestEqual(TEXT("One corner"), Corners.Num(), 1);
+	TestTrue(TEXT("Corner at the bend"), Corners[0].GetLocation().Equals(FVector(600.0, 0.0, 0.0), 1.e-6));
+	TestNearlyEqual(TEXT("Corner bisects the legs"), Corners[0].Rotator().Yaw, 45.0, 1.e-4);
+	// 2 ends + (3 - 1) + (2 - 1) in-leg joints.
+	TestEqual(TEXT("Joints without the corner"), Joints.Num(), 5);
+
+	// Segments of consecutive legs meet: section 3 ends exactly where section 4 (first of leg 2) starts.
+	TArray<FTransform> Sections;
+	const FTransform Unit(FRotator::ZeroRotator, FVector::ZeroVector, FVector::OneVector);
+	StageSpanMath::MakePathSegmentInstances(L, 200.0, Unit, Sections);
+	TestEqual(TEXT("Five sections"), Sections.Num(), 5);
+	TestTrue(TEXT("Leg 2 starts at the corner"), Sections[3].GetLocation().Equals(FVector(600.0, 0.0, 0.0), 1.e-4));
+	TestNearlyEqual(TEXT("Leg 2 sections face +Y"), Sections[3].Rotator().Yaw, 90.0, 1.e-4);
+	TestTrue(TEXT("Section 3 ends at the corner"), Sections[2].TransformPosition(FVector(200.0, 0.0, 0.0)).Equals(FVector(600.0, 0.0, 0.0), 1.e-4));
+
+	// Closed rectangle 6 x 4 m: four legs, four corners, no end joints, the start not doubled.
+	const TArray<FVector> Rectangle = { FVector::ZeroVector, FVector(600.0, 0.0, 0.0), FVector(600.0, 400.0, 0.0), FVector(0.0, 400.0, 0.0) };
+	const FStageSpanPathLayout Loop = ComputePathLayout(Truss, Rectangle, true, 0.0);
+	TestTrue(TEXT("Rectangle closes"), Loop.bClosed);
+	TestEqual(TEXT("Four legs"), Loop.Legs.Num(), 4);
+	TestEqual(TEXT("Four vertices"), Loop.Points.Num(), 4);
+	TestEqual(TEXT("Ten sections"), Loop.GetSegmentCount(), 10);
+	StageSpanMath::MakePathJointFrames(Loop, Joints, Corners);
+	TestEqual(TEXT("Four corners"), Corners.Num(), 4);
+	TestEqual(TEXT("In-leg joints only"), Joints.Num(), 2 + 1 + 2 + 1);
+	TestTrue(TEXT("CanClosePath agrees"), StageSpanMath::CanClosePath(Truss, Rectangle));
+
+	// A closing distance that is not whole stays open for whole-segment items, but closes when stretched. The third leg (4.5 m)
+	// normalises to 4 m, so the closing side runs from (200, 400) to the start: 4.47 m, not a whole number of 2 m sections.
+	const TArray<FVector> Skewed = { FVector::ZeroVector, FVector(600.0, 0.0, 0.0), FVector(600.0, 400.0, 0.0), FVector(150.0, 400.0, 0.0) };
+	TestFalse(TEXT("Non-whole closing leg stays open"), ComputePathLayout(Truss, Skewed, true, 0.0).bClosed);
+	TestFalse(TEXT("CanClosePath agrees"), StageSpanMath::CanClosePath(Truss, Skewed));
+	const StageSpanMath::FRules Railing = MakeRules(EStageSpanFit::Stretch, 100.0, 100);
+	TestTrue(TEXT("A stretched railing closes any loop"), ComputePathLayout(Railing, Skewed, true, 0.0).bClosed);
+	TestFalse(TEXT("Two points never close"), ComputePathLayout(Truss, { FVector::ZeroVector, FVector(600.0, 0.0, 0.0) }, true, 0.0).bClosed);
+
+	// Untrusted input: NaN, duplicates and too many points are dropped; the segment cap stops the path.
+	const double NaN = std::numeric_limits<double>::quiet_NaN();
+	const FStageSpanPathLayout Cleaned = ComputePathLayout(Truss, { FVector::ZeroVector, FVector(NaN, 0.0, 0.0), FVector(400.0, 0.0, 0.0), FVector(400.2, 0.0, 0.0) }, false, 0.0);
+	TestEqual(TEXT("NaN and duplicate dropped"), Cleaned.Points.Num(), 2);
+	const StageSpanMath::FRules Short = MakeRules(EStageSpanFit::WholeSegments, 200.0, 4);
+	const FStageSpanPathLayout Capped = ComputePathLayout(Short, { FVector::ZeroVector, FVector(600.0, 0.0, 0.0), FVector(600.0, 600.0, 0.0) }, false, 0.0);
+	TestEqual(TEXT("Cap shared by the legs"), Capped.GetSegmentCount(), 4);
+	TestTrue(TEXT("Second leg shortened to what is left"), Capped.Points.Last().Equals(FVector(600.0, 200.0, 0.0), 1.e-6));
+	TArray<FVector> Many;
+	for (int32 Index = 0; Index < 100; ++Index)
+	{
+		Many.Add(FVector(Index * 100.0, (Index % 2) * 100.0, 0.0));
+	}
+	TestTrue(TEXT("At most MaxPathPoints vertices"), ComputePathLayout(Railing, Many, false, 0.0).Points.Num() <= StageSpanMath::MaxPathPoints);
+	TestFalse(TEXT("One point is no path"), ComputePathLayout(Truss, { FVector::ZeroVector }, false, 0.0).IsValid());
+	TestFalse(TEXT("Invalid rules give no path"), ComputePathLayout(MakeRules(EStageSpanFit::Stretch, 0.0, 10), Rectangle, false, 0.0).IsValid());
+
+	// ConstrainPathPoint: the vertex the user sees is the stored one (whole segments from the last point).
+	const FVector Next = StageSpanMath::ConstrainPathPoint(Truss, FVector(0.0, 0.0, 10.0), FVector(530.0, 20.0, 50.0), 15.0);
+	TestTrue(TEXT("Polar snapped, level and whole"), Next.Equals(FVector(600.0, 0.0, 10.0), 1.e-6));
+
+	// Determinism.
+	TestTrue(TEXT("Same input, same path"), ComputePathLayout(Truss, Rectangle, true, 0.0) == Loop);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FStageSpanSagTest, "StageCraft.Span.Sag", StageSpanTests::Flags)
+
+bool FStageSpanSagTest::RunTest(const FString& Parameters)
+{
+	using namespace StageSpanTests;
+
+	StageSpanMath::FRules Cable = MakeRules(EStageSpanFit::Stretch, 100.0, 100);
+	Cable.MaxSagFraction = 0.1;
+	const FStageSpanPathLayout Hung = StageSpanMath::ComputePathLayout(Cable, { FVector::ZeroVector, FVector(800.0, 0.0, 0.0) }, false, 50.0);
+	TestNearlyEqual(TEXT("Sag kept"), Hung.SagDepth, 50.0, 1.e-9);
+	TestNearlyEqual(TEXT("Mid-span is the lowest point"), StageSpanMath::GetPathLegPoint(Hung, 0, 0.5).Z, -50.0, 1.e-9);
+	TestNearlyEqual(TEXT("Ends stay on their supports"), StageSpanMath::GetPathLegPoint(Hung, 0, 1.0).Z, 0.0, 1.e-9);
+
+	// Chords meet: the end of each segment is the start of the next, and every segment is stretched to its chord.
+	TArray<FTransform> Segments;
+	const FTransform Unit(FRotator::ZeroRotator, FVector::ZeroVector, FVector::OneVector);
+	StageSpanMath::MakePathSegmentInstances(Hung, 100.0, Unit, Segments);
+	TestEqual(TEXT("Eight segments"), Segments.Num(), 8);
+	bool bConnected = true;
+	for (int32 Index = 0; Index + 1 < Segments.Num(); ++Index)
+	{
+		bConnected &= Segments[Index].TransformPosition(FVector(100.0, 0.0, 0.0)).Equals(Segments[Index + 1].GetLocation(), 1.e-3);
+	}
+	TestTrue(TEXT("Consecutive chords meet at their joints"), bConnected);
+	TestTrue(TEXT("The first chord slopes down"), Segments[0].Rotator().Pitch < 0.0);
+	TestTrue(TEXT("The last chord slopes up"), Segments.Last().Rotator().Pitch > 0.0);
+
+	// Limits: deeper than the item allows is clamped; negative and NaN mean none; rigid and whole-segment items never sag.
+	TestNearlyEqual(TEXT("Clamped to 10 % of the leg"), StageSpanMath::ComputePathLayout(Cable, { FVector::ZeroVector, FVector(800.0, 0.0, 0.0) }, false, 500.0).SagDepth, 80.0, 1.e-9);
+	TestEqual(TEXT("Negative sag is none"), StageSpanMath::ComputePathLayout(Cable, { FVector::ZeroVector, FVector(800.0, 0.0, 0.0) }, false, -5.0).SagDepth, 0.0);
+	TestEqual(TEXT("NaN sag is none"), StageSpanMath::ComputePathLayout(Cable, { FVector::ZeroVector, FVector(800.0, 0.0, 0.0) }, false, std::numeric_limits<double>::quiet_NaN()).SagDepth, 0.0);
+	StageSpanMath::FRules Truss = MakeRules(EStageSpanFit::WholeSegments, 200.0, 10);
+	Truss.MaxSagFraction = 0.1;
+	TestEqual(TEXT("Whole sections never sag"), StageSpanMath::ComputePathLayout(Truss, { FVector::ZeroVector, FVector(800.0, 0.0, 0.0) }, false, 50.0).SagDepth, 0.0);
+	TestEqual(TEXT("Rigid items never sag"), StageSpanMath::ComputePathLayout(MakeRules(EStageSpanFit::Stretch, 100.0, 10), { FVector::ZeroVector, FVector(800.0, 0.0, 0.0) }, false, 50.0).SagDepth, 0.0);
+
+	// A short leg sags less than a long one: each is limited by its own length.
+	const FStageSpanPathLayout TwoLegs = StageSpanMath::ComputePathLayout(Cable, { FVector::ZeroVector, FVector(800.0, 0.0, 0.0), FVector(800.0, 200.0, 0.0) }, false, 60.0);
+	TestNearlyEqual(TEXT("Long leg sags fully"), TwoLegs.GetLegSag(0), 60.0, 1.e-9);
+	TestNearlyEqual(TEXT("Short leg limited to 10 %"), TwoLegs.GetLegSag(1), 20.0, 1.e-9);
 	return true;
 }
 

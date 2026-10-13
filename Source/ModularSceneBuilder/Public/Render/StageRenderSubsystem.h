@@ -17,9 +17,6 @@ struct FStageRenderRequest
 {
 	/** The view to render: the local player's camera position, rotation, field of view and camera post-processing. */
 	FMinimalViewInfo View;
-
-	/** Editor helpers that must never appear in a delivered image (gizmo, placement ghost and marker). */
-	TArray<TWeakObjectPtr<class AActor>> HiddenActors;
 };
 
 /**
@@ -79,6 +76,16 @@ public:
 	UFUNCTION(BlueprintPure, Category = "StageCraft|Render")
 	FString GetOutputDirectory() const;
 
+	/**
+	 * Editor helpers (gizmo, placement and span ghosts, snap guides) register on BeginPlay and unregister on EndPlay; every render
+	 * leaves them out of the image. A helper cannot be forgotten by a requester this way. Idempotent; null is ignored.
+	 */
+	void RegisterEditorHelper(class AActor* Helper);
+	void UnregisterEditorHelper(class AActor* Helper);
+
+	/** The render subsystem of Actor's world, or null (no world, editor preview worlds). */
+	static UStageRenderSubsystem* Get(const class AActor* Actor);
+
 	UPROPERTY(BlueprintAssignable, Category = "StageCraft|Render")
 	FOnStageRenderStateChanged OnRenderStateChanged;
 
@@ -122,6 +129,9 @@ private:
 
 	/** Shared with render-thread commands, which may still hold it after a job was cancelled. */
 	TSharedPtr<struct FStageRenderReadback, ESPMode::ThreadSafe> Readback;
+
+	/** Actors that never appear in a render (RegisterEditorHelper). Weak: a helper destroyed without unregistering is skipped. */
+	TArray<TWeakObjectPtr<class AActor>> EditorHelpers;
 
 	/** Items whose overlay is hidden for this job; restored when capturing ends. */
 	TArray<TWeakObjectPtr<class AModularBaseActor>> SuppressedItems;

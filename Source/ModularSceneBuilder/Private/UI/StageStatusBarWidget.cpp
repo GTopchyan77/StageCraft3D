@@ -56,20 +56,37 @@ namespace StageStatusBar
 	{
 		if (Status.Phase == EStageSpanToolPhase::PickStart)
 		{
-			return FText::Format(LOCTEXT("SpanStart", "Drawing {0}: click where the run starts   ·   Esc or P: finish"), Status.ItemName);
+			return FText::Format(LOCTEXT("SpanStart", "Drawing {0}: click where the path starts   ·   Esc or P: finish"), Status.ItemName);
 		}
 		if (!Status.bHasRun)
 		{
-			return FText::Format(LOCTEXT("SpanEndNoRun", "Drawing {0}: click where the run ends   ·   Esc: new start point"), Status.ItemName);
+			return FText::Format(LOCTEXT("SpanEndNoRun", "Drawing {0}: click the next point   ·   Backspace: remove last point   ·   Esc: drop the path"), Status.ItemName);
 		}
 
 		FNumberFormattingOptions TwoDecimals;
 		TwoDecimals.SetMinimumFractionalDigits(2).SetMaximumFractionalDigits(2);
 		const FText Run = FText::Format(LOCTEXT("SpanRun", "{0} m, {1} {1}|plural(one=segment,other=segments)"),
 			FText::AsNumber(Status.Length * 0.01, &TwoDecimals), Status.SegmentCount);
-		return Status.bRefused
-			? FText::Format(LOCTEXT("SpanRefused", "{0}: {1}, not allowed by this stage's limits   ·   Esc: new start point"), Status.ItemName, Run)
-			: FText::Format(LOCTEXT("SpanEnd", "{0}: {1}   ·   click to place; the next run starts at its end   ·   Esc: new start point"), Status.ItemName, Run);
+		const FText Shape = Status.LegCount > 1
+			? FText::Format(LOCTEXT("SpanLegs", "{0} in {1} legs"), Run, Status.LegCount)
+			: Run;
+		// Checked before bRefused: a loop that cannot close also shows a refused ghost, but the limits are not the reason.
+		if (Status.bCloseBlocked)
+		{
+			return FText::Format(LOCTEXT("SpanCloseBlocked", "{0}: the loop does not close in whole sections   ·   adjust a side, or press Enter to place it open"), Status.ItemName);
+		}
+		if (Status.bRefused)
+		{
+			return FText::Format(LOCTEXT("SpanRefused", "{0}: {1}, not allowed by this stage's limits   ·   Backspace: remove last point   ·   Esc: drop the path"), Status.ItemName, Shape);
+		}
+		if (Status.bClosing)
+		{
+			return FText::Format(LOCTEXT("SpanClosing", "{0}: {1}   ·   click to close the loop and place it"), Status.ItemName, Shape);
+		}
+		// Enter needs a placed point beyond the start; the leg under the cursor only becomes one with the next click.
+		return Status.PointCount >= 2
+			? FText::Format(LOCTEXT("SpanEnd", "{0}: {1}   ·   click: add point   ·   Enter or double-click: place   ·   Backspace: undo point   ·   Esc: drop"), Status.ItemName, Shape)
+			: FText::Format(LOCTEXT("SpanSecond", "{0}: {1}   ·   click: add point (double-click: place this run)   ·   Esc: drop"), Status.ItemName, Shape);
 	}
 }
 

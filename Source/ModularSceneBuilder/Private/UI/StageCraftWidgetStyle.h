@@ -35,6 +35,21 @@ namespace StageCraftWidgetStyle
 	/** Height of every value field (numeric, text, dropdown), so rows line up whatever editor they hold. */
 	constexpr float FieldHeight = 22.f;
 
+	/** Gap between a value field's outline and its text (numeric, text and dropdown fields). */
+	constexpr float FieldTextInset = 6.f;
+
+	/** Width of a value field's outline. Read-only values start FieldTextInset + FieldOutlineWidth in, so their text lines up with field text. */
+	constexpr float FieldOutlineWidth = 1.f;
+
+	/**
+	 * The inspector's column grid (Docs/ADR/0007 §3): every row's label column has this width, so every value starts at the same
+	 * X; a longer label is cut with an ellipsis (full name in its tooltip) instead of pushing the value right.
+	 */
+	constexpr float InspectorLabelWidth = 112.f;
+
+	/** Width of the units column ("cm", "°", "%"), kept even when a row has no units, so every field ends at the same X. */
+	constexpr float InspectorUnitsWidth = 22.f;
+
 	/** Numeric field (spin box) matching MakeInputField: recessed, accent outline while dragged or typed into, a faint fill for ranged values. */
 	FSpinBoxStyle MakeNumericField(const UStageCraftUITheme& Theme);
 

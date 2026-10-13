@@ -129,7 +129,11 @@ void UStageFaderWidget::OnInitializeControl()
 	if (NameText)
 	{
 		static const FText ChannelNames[3] = { LOCTEXT("Red", "Red"), LOCTEXT("Green", "Green"), LOCTEXT("Blue", "Blue") };
-		NameText->SetText(IsColorChannel() ? ChannelNames[FMath::Clamp(ColorComponent, 0, 2)] : Descriptor.DisplayName);
+		const FText Name = IsColorChannel() ? ChannelNames[FMath::Clamp(ColorComponent, 0, 2)] : Descriptor.GetShortName();
+		NameText->SetText(Name);
+		// Strips are narrow: a long name is cut with an ellipsis rather than clipped at both ends, and shown whole on hover.
+		NameText->SetTextOverflowPolicy(ETextOverflowPolicy::Ellipsis);
+		NameText->SetToolTipText(IsColorChannel() ? Name : Descriptor.DisplayName);
 	}
 	if (GroupColorStrip)
 	{

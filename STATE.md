@@ -2162,7 +2162,7 @@ Gevor asked for a dark, aligned GrandMA3 / Unreal-style inspector, and for impor
   - PIE: imports are expected to work (editor utilities answer "PIE"), not run.
 - Status: **implemented, awaiting manual verification** of the items above.
 
-**Commit:** uncommitted (working tree).
+**Commit:** `5409813`.
 
 **Known issues / follow-ups**
 - **Datasmith (`.udatasmith`) is not supported:** the only runtime path is the beta DatasmithRuntime plugin, which loads whole scenes as actors (ADR 0006 §4.3).
@@ -2175,3 +2175,167 @@ Gevor asked for a dark, aligned GrandMA3 / Unreal-style inspector, and for impor
 - In Shipping there is no Import button: drag and drop only. A Windows-native dialog could be added.
 - `StageCraft.Import.DragEnter` cannot make Windows report a copy cursor (synthetic drag).
 - **Obsidian vault:** `S:\` is still unreachable; the design record is ADR 0006 in the repo.
+
+---
+
+## #29 — Housekeeping: two commits made after #28 had no STATE.md entry (2026-10-13)
+
+**What & why**
+STATE.md was out of sync with `git log`: #28 still said "uncommitted", and two later commits by Gevor had no entry. Per Rules.md this is fixed before any new work.
+
+- **`085cc16` (Gevor): inspector label column.**
+  - `WBP_StageParameterRow`: the label sits in a fixed 112 px column (an Auto slot instead of a percentage share) with an 8 px gap. Label, fields, read-only value and units are centred vertically. Fields and the read-only value share the rest of the row.
+  - `StageParameterRowWidget.cpp` (`AddToEditorSlot`): the first created editor has no left margin, so fields start where read-only values start. There is a 4 px gap only between neighbouring editors (X / Y / Z).
+- **`b8448a5` (Gevor): "Remove exposed Anthropic API key from docs".**
+  - Moved `*.uasset` / `*.umap` to Git LFS (`.gitattributes`). The working tree has the real binaries (checked: `L_StageTest.umap` is 35 402 bytes; git-lfs 3.5.1).
+  - Added about 20 project plugins under `Plugins/`: AdvancedFadeObjects, BuildManagerMath, CameraPresets, CraneControl, DamenFileManager, DynamicDatatable, FileDropUMG, GizmoTool, NGGVideoRecorder, OverCrowd, PlacementGizmo, PreciseTransform, RealTimeImport, SkyCreator, SkyWeatherControls, SpaceCalculator, SplineRouteTool, DlFileManager and UMGInSequence. Also added the UnrealNGGMCP docs and config.
+
+**Files changed:** `STATE.md` only (#28 commit hash set to `5409813`, plus this entry).
+
+**Verification:** documentation only. Claude checked `git log`, `git show --stat` and the LFS working tree.
+
+**Commit:** uncommitted (working tree).
+
+**Known issues / follow-ups**
+- **Rotate the Anthropic API key.** Removing it in a later commit does not remove it from git history, or from any remote that already received it.
+- The new plugins broke the build and were disabled in #30. `RunEditor.bat`, which Rules.md mentions, does not exist in this project: Rules.md was written for another project.
+
+---
+
+## #30 — Inspector column grid, professional fixtures (gobo, CTC, iris, shutters, strobe, photometrics), DMX patch sheet, multi-point span paths, import and render hardening (2026-10-13)
+
+**Request (Gevor).** A "professional upgrade" under Rules.md:
+1. A strict two-column inspector.
+2. Blender-style procedural paths for linear elements.
+3. grandMA3-style fixtures: gobo, Kelvin, beam angle, shutter/blades, live photometrics; patch and attributes mapped to the inspector and faders with no polling.
+4. Finished runtime import (including `.datasmith`) and render with hidden UI.
+5. Rules.md standards throughout.
+
+Spans (#27), render (#26) and import / inspector theming (#28) already existed, so this entry covers the gaps. Gevor chose (2026-10-13):
+- multi-point paths;
+- projected gobos and blades;
+- Datasmith left unsupported, with a native dialog in Shipping;
+- disabling the plugins that broke the build.
+
+Design record: `Docs/ADR/0007-lighting-patch-paths-and-pipeline-hardening.md`.
+
+**What changed and why**
+
+- **Build unblocked (`.uproject`).**
+  - The 19 plugins from `b8448a5` are set to `"Enabled": false`. They were compiled into the project by default, and `PlacementGizmo` declares `UENUM EGizmoMode`, the same reflected name as StageCraft's gizmo enum.
+  - UnrealNGGMCP is also disabled. `b8448a5` reverted its `NGGHttpServer.cpp`/`.h` to an older all-in-one version while the newer split files remain: the header lost two version macros and every handler links twice. Repairing it means choosing between Gevor's two plugin versions.
+  - No plugin files were deleted or edited.
+- **Inspector column grid** (ADR §3). Root causes, from screenshots:
+  - a label longer than its column ("Mode: Standard 12ch") pushed its value right;
+  - read-only values started at the field outline while field text starts 7 px inside it;
+  - long read-only values ran into the units column.
+
+  The fix:
+  - `StageCraftWidgetStyle` holds the grid next to `FieldHeight`: `InspectorLabelWidth` 112 (Gevor's value), `InspectorUnitsWidth` 22, `FieldTextInset` 6, `FieldOutlineWidth` 1. Field styles use the inset constant.
+  - `UStageParameterRowWidget::ApplyColumnGrid` (`NativeOnInitialized`, before Slate is built) gives label and units fixed-width size boxes: the Blueprint's own, or one wrapped around them with `StageWidgetTree::WrapInPlace`. The engine reorders live UMG panels only on a full rebuild, hence this timing (ADR F4).
+  - Long labels and values end in an ellipsis with a tooltip. Read-only values are inset to the field text.
+  - Fixture patch rows: "DMX Mode" (text) and "Channels" replace the "Mode: …" label (new tag `Param.Patch.Mode`).
+- **Professional fixtures** (ADR §5).
+  - Data:
+    - `ULightingFixtureData` gains a gobo wheel (`FStageGoboSlot`: name, texture, transmission), CTC (`bHasColorTemperatureControl`, Kelvin range), iris (`IrisMinFraction`), framing shutters and a strobe rate range.
+    - Capabilities, ranges, defaults, default DMX layout and validation all derive from the data.
+    - New attributes: `ColorTemp`, `Gobo` (stepped: stored rounded, equal DMX share per slot, cue fades snap), `GoboRotation`, `Iris`, `BladeA-D`, `BladeRotation`.
+    - DMX encode/decode moved into pure `NormalizeForDMX` / `DenormalizeFromDMX` on the data.
+  - Projection: `M_StageBeamLightFunction` (light-function domain) draws gobo × iris × four rotated blades in cone space (ADR F1). One dynamic instance per fixture with beam shaping, updated only on attribute changes; no light function on pars and washes. CTC drives the light's temperature.
+  - Strobe clock: `UShowControlSubsystem::SetFixtureStrobing`. It ticks only while one or more fixtures strobe, and gates each fixture at its own rate with a 30 % duty cycle.
+  - Photometrics: `StagePhotometry` (pure) computes beam angle, peak intensity, throw, illuminance and beam diameter, with transmission from dimmer, colour filter, gobo, iris and blades. The throw is one line trace, cached until pan, tilt or the transform changes (new base hook `AModularBaseActor::OnStageTransformChanged`).
+  - Inspector: read-only "Photometrics" section; new "Shapers" section; Gobo is a dropdown. Theme colours exist for Shapers and Photometrics, with a fallback to class defaults for theme assets saved before a group existed.
+  - Faders: descriptors may carry a short name for narrow strips ("CTC", "Gobo Rot", "Blade T"…), with the full name as the tooltip. The bar gets a Shapers group and scrolls sideways whatever container its Blueprint gives.
+- **DMX patch sheet** (ADR §6): `UStagePatchPanel` (`StageCraft.Panel.Patch`, `DA_Panel_Patch`), a tab next to the faders in the Default layout.
+  - Fixture table: FID / universe / address fields with read-back, name, type and mode, footprint, red "!" on overlapping patches, and a header with counts and PATCH UNPATCHED.
+  - Live channel map of the selected fixture: absolute address, attribute, 8/16-bit, the value the fixture encodes.
+  - Push only: `OnFixturesChanged`, per-fixture `OnParameterChanged` (patch and label rebuild the table; attributes refresh the channel values) and the selection set.
+  - All writes go through `RequestParameterChange`.
+- **Multi-point span paths** (ADR §4).
+  - Math: `StageSpanMath` path layout normalises each leg to whole segments (later points follow), supports closed loops (the closing leg must be whole for whole-segment items) and shares the segment cap across legs. Corner frames sit on the bisector, sag is parabolic with chords that meet, and untrusted input is sanitised.
+  - Actor: `AStageSpanActor` stores `PathPoints` / `bClosedPath` / `SagDepth` (SaveGame). The old `SpanLength` is read once to migrate older scene files into a one-leg path. Length is editable on one-leg paths and read-only otherwise; new "Legs" and "Sag" rows. `IsShapeParameter` makes Sag an undo step that Lock refuses.
+  - Data: `UStageSpanData` gains `CornerParts` and `MaxSagPercent`.
+  - Tool: click points; finish with Enter, a double-click or a click on the start point (closes the loop); Backspace removes a point; Esc drops the path. A loop that cannot close refuses the click with a red ghost and a hint, instead of adding a stray point. New controller input `FinishPathAction` (Enter) and `RemovePathPointAction` (Backspace). The status bar shows legs.
+  - Content: the F34 truss gets a round hub at bends; the cable may sag 15 %.
+- **Import:**
+  - `StageFileDialog` opens the Windows `IFileOpenDialog` through COM in builds without DesktopPlatform, so Shipping has the IMPORT button.
+  - `.udatasmith` / `.datasmith` get their own refusal ("export as glTF/GLB or FBX"), via `StageMeshImport::IsDatasmithScene`.
+- **Render:**
+  - Editor helpers (gizmo, placement and span ghosts) register with `UStageRenderSubsystem` on BeginPlay and unregister on EndPlay, so every capture hides them. The controller's hand-kept list is gone.
+  - The banding follow-up from #26 was investigated with A/Bs and **not changed** (ADR §7). An HDR capture uses the HDR output device and did not match the viewport. The banding is volumetric-fog depth slicing in Off/FXAA renders, and it does not appear with Temporal/Supersampled (the default). 16 warm-up frames without temporal AA did not help.
+- **Library header:** the item count no longer draws under the IMPORT button (ellipsis + tooltip).
+- **Dev console** (compiled out of Shipping):
+  - `StageCraft.Show.{Set, Photometrics, Patch}`
+  - `StageCraft.Span.{Finish, Back, SetSag}` (Status/SetLength updated)
+  - `StageCraft.Workspace.{ScrollPanels, DumpWidget}`
+- **STATE.md housekeeping:** #29's known-issue line about the plugins is updated.
+
+**Files changed**
+- Project and config: `ModularSceneBuilder.uproject` (20 plugins disabled), `Config/DefaultGame.ini` (`LightingFixtureActor.BeamShapingMaterial`, cook `/Game/StageCraft/Lighting`), `Source/ModularSceneBuilder/ModularSceneBuilder.Build.cs` (`WITH_STAGECRAFT_NATIVE_FILE_DIALOG`, ole32/shell32 for Win64 without developer tools).
+- New source:
+  - `Public/Show/StagePhotometry.h`, `Private/Show/StagePhotometry.cpp`, `Private/Show/StageShowConsoleCommands.cpp`, `Private/Show/Tests/StageLightingTests.cpp`
+  - `Public/UI/StagePatchPanel.h`, `Private/UI/StagePatchPanel.cpp`
+  - `Private/UI/StageWidgetTree.h/.cpp`
+- Modified source (all under `Source/ModularSceneBuilder/`):
+  - Actors: `Actors/LightingFixtureActor.h/.cpp`, `Actors/ModularBaseActor.h/.cpp`, `Actors/StageSpanActor.h/.cpp`, `Actors/ModularTransformGizmo.h/.cpp`
+  - Data and rules: `Data/LightingFixtureData.h/.cpp`, `Data/StageParameterTypes.h/.cpp`, `Data/StageSpanData.h/.cpp`, `Game/StageCraftGameModeBase.cpp`
+  - Spans: `Components/StageSpanGeometryComponent.h/.cpp`, `Placement/StageSpanMath.h/.cpp`, `Placement/StageSpanToolComponent.h/.cpp`, `Placement/StageSpanPreview.h/.cpp`, `Placement/StagePlacementPreview.h/.cpp`, `Private/Placement/StageSpanConsoleCommands.cpp`, `Private/Placement/Tests/StageSpanTests.cpp`
+  - Controller and subsystems: `Player/ModularPlayerController.h/.cpp`, `Subsystems/ShowControlSubsystem.h/.cpp`, `Render/StageRenderSubsystem.h/.cpp`
+  - Import: `Private/Import/StageFileDialog.h/.cpp`, `Private/Import/StageMeshImportSubsystem.cpp`, `Import/StageMeshImportTypes.h/.cpp`, `Private/Import/Tests/StageMeshImportTests.cpp`
+  - UI: `UI/StageParameterRowWidget.h/.cpp`, `Private/UI/StageCraftWidgetStyle.h/.cpp`, `Private/UI/StageCraftUITheme.cpp`, `Private/UI/StageFaderWidget.cpp`, `StageEncoderWidget.cpp`, `StageFaderBankWidget.cpp`, `StageItemLibraryPanel.cpp`, `StageStatusBarWidget.cpp`, `Private/UI/Tests/StageUITests.cpp`
+  - Workspace: `Workspace/StageWorkspaceTypes.h/.cpp`, `Private/Workspace/StageWorkspaceShell.cpp`, `Private/Workspace/StageWorkspaceConsoleCommands.cpp`
+- Content:
+  - New: `Content/StageCraft/Lighting/M_StageBeamLightFunction.uasset`, `Content/StageCraft/Lighting/Gobos/T_Gobo_{Dots,Star,Bars,Ring,Fan,Breakup,Triangles,Grid}.uasset`, `Content/StageCraft/UI/Panels/DA_Panel_Patch.uasset`
+  - Modified: `Content/StageCraft/Data/DA_MovingHead_Test.uasset` (profile: CTC, 8-gobo wheel, iris, shutters, "Profile 21ch"), `DA_MovingHead_Wash_Test.uasset` (CTC, "Wash 13ch"), `Content/StageCraft/Items/DA_Span_TrussF34.uasset` (corner hub), `DA_Span_CableRun.uasset` (15 % sag)
+- Scripts (new): `Scripts/Content/make_gobos.ps1` + `Scripts/Content/Gobos/T_Gobo_*.png`, `Scripts/Content/create_lighting_content.py`, `Scripts/Content/update_span_path_content.py`.
+- Docs: `Docs/ADR/0007-lighting-patch-paths-and-pipeline-hardening.md` (new), `tasks/todo.md`, `STATE.md` (#29 line, this entry).
+- No maps, input assets or Widget Blueprints were changed. The row and fader Blueprints are restructured at runtime only.
+
+**Verification**
+- **Builds (Claude, UE 5.8):** Editor Development, Game Development and Game Shipping all Succeeded with 0 errors and 0 warnings. The Shipping exe contains none of the new dev command names (ASCII or UTF-16), and does contain the patch sheet and Datasmith strings. Shipping is the build that compiled the native dialog path; its first compile failed on a const cast (fixed).
+- **Automation (headless), StageCraft filter: 37/37 passed** (33 existing + 4 new):
+  - `Lighting.Photometry`: solid angle, a 20 klm / 20° known case, inverse square, transmission, iris keeps the peak intensity, shutters, colour filters, NaN/negative input.
+  - `Lighting.FixtureData`: capabilities, ranges, defaults, gobo names and transmission, overlap-free 21-channel default layout, stepped gobo DMX round trip and share boundaries.
+  - `Span.Path`: normalisation keeps directions, corners on the bisector, segments meet across legs, a closed 6 × 4 m rectangle (4 corners, start not doubled), non-whole closures stay open, stretch closes anything, NaN / duplicates / point cap / shared segment cap, `ConstrainPathPoint`, determinism.
+  - `Span.Sag`: lowest point at mid-span, chords meet, pitch signs, clamps, rigid and whole-segment items never sag, per-leg limit.
+  - Extended: `Span.Instances` (now on paths), `UI.SpanHint` (legs, Enter only after two points, closing, blocked close not blamed on limits), `Import.Formats` (Datasmith detection).
+  - The first run failed on my own test data: a "skewed" quad whose third leg normalised so that it closed exactly. The data was corrected.
+- **Standalone `-game`, scripted by Claude** (`L_StageTest`, logs `Saved/Logs/R30/R30_Run1`–`Run8.log`, screenshots checked; Gevor's workspace session file was backed up and restored):
+  - Patch: Address 10 on Spot 101 → both fixtures flagged CONFLICT (red rows, "2 conflicts"); back to 1 → none. The channel map shows 1.010 Pan 16-bit 32768.
+  - Strobe: Shutter 0.5 → "1 strobing"; 0 → "0 strobing".
+  - Photometrics match hand calculations:
+    - 25 klm at 40° → 65 977 cd.
+    - Iris 0.4 + Star gobo + blades + 20° zoom → 57 653 cd (computed 57 650).
+    - Tilted at the floor, 14°: throw 3.27 m, 534 kcd, 50 klx, beam 0.80 m.
+  - Projection: the Star gobo is projected on the floor (visible at 15 % dimmer; at full the spot over-exposes to white). The light function reports domain `MD_LightFunction`. CTC 3200 K warms the beam.
+  - Inspector after the grid fix: labels in a fixed column; read-only values (Model, Weight, DMX Mode, Channels) start where field text starts; the long model name has an ellipsis (screenshots 18–20, 30).
+  - Spans:
+    - A drawn 4-click truss path placed one item: 10 sections, 4 legs, hub corners, 211 instances.
+    - A 2-leg path rendered with the hub at the bend.
+    - Clicking the start of a non-closable loop left 3 points and a red ghost; Backspace removed a point; Esc dropped the path.
+    - Cable Sag 40 → one undo step; undo → 0, redo → 40; locked → refused "…is locked…".
+    - Scene save, clear and load restored both paths (quantities 6 and 4) and every other item.
+  - Render: the span ghost is absent from renders. Square 0.69 s, 4K Supersampled Cinematic 2.10 s, 1080p Temporal 0.43 s.
+- **Not verified (needs Gevor; Standalone Game, mouse and keyboard):**
+  - Drawing paths with the physical mouse, Enter/Backspace from the keyboard, double-clicking the last point, closing a real rectangle by clicking its start point.
+  - Inspector by hand: tooltips on cut labels, the Gobo dropdown, typing into fields.
+  - Patch sheet by hand: editing FID / universe / address, PATCH UNPATCHED, row clicks, Ctrl+Click.
+  - Fader strips: short names and sideways scrolling with a mouse.
+  - The native file dialog in a packaged Shipping build (compiled, never opened; Shipping cannot run from uncooked content).
+  - Loading a scene file written before this change (no such file on this machine; the migration is reviewed, not run).
+  - Strobe flashing on screen; gobo rotation and blade rotation visually.
+- Status: **implemented, awaiting manual verification** of the items above.
+
+**Commit:** uncommitted (working tree).
+
+**Known issues / follow-ups**
+- **Plugins disabled:** 19 from `b8448a5` plus UnrealNGGMCP (half-reverted, duplicate symbols). Enable any one in the `.uproject` once it compiles against StageCraft (`PlacementGizmo` needs its `EGizmoMode` renamed). Without UnrealNGGMCP the Claude ↔ editor MCP bridge is unavailable.
+- **Workspace session:** Gevor's saved layout now contains a floating Patch window. My first run opened the panel before the backup was taken; close it or use Layout > Reset.
+- **Render banding** remains in Off/FXAA renders with haze (fog depth slices); Temporal/Supersampled are clean. A possible fix is forcing temporal AA or a finer fog Z grid for haze renders, measured first.
+- **Sag** hangs a run below its supports: a cable drawn on the floor sinks below it. Lift the run first.
+- Photometrics assume a uniform cone; the beam angle is the full zoom angle (no separate field angle). The throw ignores a surface that moves under a fixture that did not move, until the next pan, tilt or move.
+- Patch fields commit on Enter or focus loss, not while dragging.
+- No undo for patch or attribute edits (unchanged behaviour).
+- Fader centred ellipsis did not take effect in the strip; the short names avoid it.
+- Rules.md mentions `RunEditor.bat` / `Scripts/Launch/RunEditor.ps1`, which do not exist in this project.
+- **Obsidian vault:** `S:\` is still unreachable on this machine; the design record is ADR 0007 in the repo.

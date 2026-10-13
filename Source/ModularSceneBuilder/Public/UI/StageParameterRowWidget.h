@@ -37,6 +37,10 @@ public:
 	void SetTheme(const class UStageCraftUITheme* InTheme);
 
 protected:
+	//~ Begin UUserWidget Interface
+	virtual void NativeOnInitialized() override;
+	//~ End UUserWidget Interface
+
 	//~ Begin UStageParameterControlWidget Interface
 	virtual void OnInitializeControl() override;
 	virtual void ApplyValue(const FStageParameterValue& InValue, bool bForce) override;
@@ -84,6 +88,13 @@ protected:
 	TObjectPtr<class UPanelWidget> EditorSlot = nullptr;
 
 private:
+	/**
+	 * Holds the row to the inspector's column grid (StageCraftWidgetStyle::InspectorLabelWidth / InspectorUnitsWidth): the label
+	 * and units get fixed-width columns (the Blueprint's size box, or one wrapped around them), long labels and values are cut
+	 * with an ellipsis, and read-only values start where field text starts. Runs before the row builds its Slate widget.
+	 */
+	void ApplyColumnGrid();
+
 	void CreateMissingEditors();
 	class USpinBox* ConstructNumericField(const TCHAR* Name);
 	class USpinBox* CreateSpinBox(const TCHAR* Name);

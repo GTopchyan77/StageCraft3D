@@ -14,17 +14,78 @@
 #include "Components/SizeBox.h"
 #include "Components/SpinBox.h"
 #include "Components/TextBlock.h"
+#include "ModularSceneBuilder.h"
 #include "UI/StageCraftUITheme.h"
 #include "UI/StageCraftWidgetStyle.h"
 #include "UI/StageThemedComboBox.h"
+#include "UI/StageWidgetTree.h"
 
 #include UE_INLINE_GENERATED_CPP_BY_NAME(StageParameterRowWidget)
+
+void UStageParameterRowWidget::NativeOnInitialized()
+{
+	Super::NativeOnInitialized();
+	ApplyColumnGrid();
+}
+
+void UStageParameterRowWidget::ApplyColumnGrid()
+{
+	using namespace StageCraftWidgetStyle;
+
+	// A column is fixed by the size box it sits in: the Blueprint's own, or one put around it here.
+	const auto FixColumnWidth = [this](UWidget& Column, float Width)
+	{
+		USizeBox* Box = Cast<USizeBox>(Column.GetParent());
+		if (!Box)
+		{
+			Box = WidgetTree->ConstructWidget<USizeBox>(USizeBox::StaticClass());
+			if (!StageWidgetTree::WrapInPlace(Column, *Box))
+			{
+				UE_LOG(LogStageCraft, Warning, TEXT("%s: %s has no parent panel; the inspector column grid cannot hold it."), *GetClass()->GetName(), *Column.GetName());
+				return;
+			}
+		}
+		Box->SetWidthOverride(Width);
+		Box->SetMinDesiredWidth(Width);
+		Box->SetMaxDesiredWidth(Width);
+	};
+
+	if (LabelText)
+	{
+		LabelText->SetTextOverflowPolicy(ETextOverflowPolicy::Ellipsis);
+		LabelText->SetClipping(EWidgetClipping::ClipToBounds);
+		FixColumnWidth(*LabelText, InspectorLabelWidth);
+	}
+	if (UnitsText)
+	{
+		FixColumnWidth(*UnitsText, InspectorUnitsWidth);
+	}
+	if (ValueText)
+	{
+		ValueText->SetTextOverflowPolicy(ETextOverflowPolicy::Ellipsis);
+		ValueText->SetClipping(EWidgetClipping::ClipToBounds);
+		// Read-only values start where the text inside a field starts, not at the field's outline.
+		const float Inset = FieldTextInset + FieldOutlineWidth;
+		if (UHorizontalBoxSlot* BoxSlot = Cast<UHorizontalBoxSlot>(ValueText->Slot))
+		{
+			const FMargin SlotPadding = BoxSlot->GetPadding();
+			BoxSlot->SetPadding(FMargin(Inset, SlotPadding.Top, SlotPadding.Right, SlotPadding.Bottom));
+		}
+		else if (UOverlaySlot* OverlaySlot = Cast<UOverlaySlot>(ValueText->Slot))
+		{
+			const FMargin SlotPadding = OverlaySlot->GetPadding();
+			OverlaySlot->SetPadding(FMargin(Inset, SlotPadding.Top, SlotPadding.Right, SlotPadding.Bottom));
+		}
+	}
+}
 
 void UStageParameterRowWidget::OnInitializeControl()
 {
 	if (LabelText)
 	{
 		LabelText->SetText(Descriptor.DisplayName);
+		// The label column cuts long names; the full name stays one hover away.
+		LabelText->SetToolTipText(Descriptor.DisplayName);
 	}
 	if (UnitsText)
 	{
@@ -261,7 +322,7 @@ void UStageParameterRowWidget::CreateMissingEditors()
 	{
 		ValueTextBox = WidgetTree->ConstructWidget<UEditableTextBox>(UEditableTextBox::StaticClass(), TEXT("ValueTextBox"));
 		FEditableTextBoxStyle TextStyle = StageCraftWidgetStyle::MakeInputField(GetTheme());
-		TextStyle.SetPadding(FMargin(6.f, 2.f));
+		TextStyle.SetPadding(FMargin(StageCraftWidgetStyle::FieldTextInset, 2.f));
 		ValueTextBox->SetWidgetStyle(TextStyle);
 		AddToEditorSlot(WrapInFieldBox(*ValueTextBox), /*bFill*/ true);
 		break;
@@ -377,7 +438,10 @@ void UStageParameterRowWidget::ApplyValue(const FStageParameterValue& InValue, b
 
 	if (ValueText)
 	{
-		ValueText->SetText(FormatValue(Descriptor, InValue));
+		const FText Formatted = FormatValue(Descriptor, InValue);
+		ValueText->SetText(Formatted);
+		// A long read-only value is cut with an ellipsis; its tooltip shows it whole.
+		ValueText->SetToolTipText(Formatted);
 	}
 }
 
