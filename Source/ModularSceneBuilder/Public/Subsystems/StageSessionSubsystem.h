@@ -12,6 +12,9 @@
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FOnStageSessionStatsChanged, const FStageSessionStats&, Stats);
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FOnStageSessionDirtyChanged, bool, bIsDirty);
 
+/** An item was added or removed, or changed how it is listed (label, type, visibility, lock, quantity). Views rebuild on the next tick. */
+DECLARE_DYNAMIC_MULTICAST_DELEGATE(FOnStageItemListChanged);
+
 /**
  * State of the stage being built in this world: which items are placed, their running totals
  * (power, weight), the session's rules, and whether there are unsaved edits.
@@ -62,11 +65,24 @@ public:
 	UPROPERTY(BlueprintAssignable, Category = "StageCraft|Session")
 	FOnStageSessionStatsChanged OnStatsChanged;
 
+	/** The outliner and the bill of materials listen here instead of binding every item. */
+	UPROPERTY(BlueprintAssignable, Category = "StageCraft|Session")
+	FOnStageItemListChanged OnItemListChanged;
+
 	// --- Rules support ---
 
-	/** Would adding Item break MaxPlacedItems, MaxTotalPowerWatts or MaxTotalWeightKg? */
+	/**
+	 * Would adding one new item of Quantity units of Item (a span of Quantity segments; 1 for a single piece) break
+	 * MaxPlacedItems, MaxTotalPowerWatts or MaxTotalWeightKg? A Quantity below 1 is an invalid request.
+	 */
 	UFUNCTION(BlueprintCallable, Category = "StageCraft|Session")
-	FStageEconomyResultInfo EvaluateSessionLimits(const class UBaseItemData* Item) const;
+	FStageEconomyResultInfo EvaluateSessionLimits(const class UBaseItemData* Item, int32 Quantity = 1) const;
+
+	/**
+	 * Would AddedQuantity more units of Item on an item already placed (a longer span) break the power or weight limit?
+	 * Zero or negative (a shorter span) is always allowed.
+	 */
+	FStageEconomyResultInfo EvaluateQuantityIncrease(const class UBaseItemData* Item, int32 AddedQuantity) const;
 
 	// --- Applying edits (after the GameMode allowed them) ---
 
@@ -107,6 +123,9 @@ private:
 
 	void RecomputeStats();
 	void SetDirty(bool bNewDirty);
+
+	/** The power and weight limits for Quantity more units of Item; shared by new items and longer spans. */
+	FStageEconomyResultInfo EvaluateResourceLimits(const class UBaseItemData& Item, int32 Quantity) const;
 
 	TArray<TWeakObjectPtr<class AModularBaseActor>> Items;
 	FStageSessionRules Rules;

@@ -74,6 +74,32 @@ void USelectionComponent::SelectActors(const TArray<AActor*>& Targets)
 	ApplySelection(NewSelection);
 }
 
+void USelectionComponent::AddActorsToSelection(const TArray<AActor*>& Targets)
+{
+	TArray<AActor*> NewSelection = GetSelectedActors();
+	for (AActor* Target : Targets)
+	{
+		// Re-adding an already selected item moves it to the end, so the group's last item becomes the primary.
+		if (IsSelectable(Target))
+		{
+			NewSelection.Remove(Target);
+			NewSelection.Add(Target);
+		}
+	}
+	ApplySelection(NewSelection);
+}
+
+void USelectionComponent::RemoveActorsFromSelection(const TArray<AActor*>& Targets)
+{
+	TArray<AActor*> NewSelection = GetSelectedActors();
+	const int32 Before = NewSelection.Num();
+	NewSelection.RemoveAll([&Targets](const AActor* Selected) { return Targets.Contains(Selected); });
+	if (NewSelection.Num() != Before)
+	{
+		ApplySelection(NewSelection);
+	}
+}
+
 void USelectionComponent::ClearSelection()
 {
 	ApplySelection({});

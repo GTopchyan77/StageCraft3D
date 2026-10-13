@@ -140,7 +140,8 @@ void UStageSnappingComponent::GatherNeighbourBounds(TConstArrayView<const AActor
 
 	for (const AModularBaseActor* Item : Session->GetPlacedItems())
 	{
-		if (Item && !Exclude.Contains(Item) && !Item->IsActorBeingDestroyed())
+		// Hidden items are invisible and unclickable, so snapping to them would look like snapping to nothing.
+		if (Item && !Exclude.Contains(Item) && !Item->IsActorBeingDestroyed() && !Item->IsHiddenOnStage())
 		{
 			const FBox Bounds = GetItemBounds(*Item);
 			if (Bounds.IsValid)

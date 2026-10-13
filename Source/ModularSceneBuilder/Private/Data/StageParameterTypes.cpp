@@ -89,12 +89,15 @@ namespace StageCraftTags
 	UE_DEFINE_GAMEPLAY_TAG_COMMENT(FeatureGroup_Beam,			"StageCraft.FeatureGroup.Beam",			"Zoom, focus and beam shaping.");
 	UE_DEFINE_GAMEPLAY_TAG_COMMENT(FeatureGroup_Audio,			"StageCraft.FeatureGroup.Audio",		"Speaker and system settings.");
 	UE_DEFINE_GAMEPLAY_TAG_COMMENT(FeatureGroup_Rigging,		"StageCraft.FeatureGroup.Rigging",		"Truss and hoist specs.");
+	UE_DEFINE_GAMEPLAY_TAG_COMMENT(FeatureGroup_Span,			"StageCraft.FeatureGroup.Span",			"Length and segments of a linear run (truss, railing, cable).");
 
 	UE_DEFINE_GAMEPLAY_TAG_COMMENT(Param_Info_Label,			"StageCraft.Param.Info.Label",			"User label of the placed instance.");
 	UE_DEFINE_GAMEPLAY_TAG_COMMENT(Param_Info_Model,			"StageCraft.Param.Info.Model",			"Catalog model name (read-only).");
 	UE_DEFINE_GAMEPLAY_TAG_COMMENT(Param_Info_Type,			"StageCraft.Param.Info.Type",			"Catalog item of the instance; changing it swaps the model in place.");
 	UE_DEFINE_GAMEPLAY_TAG_COMMENT(Param_Info_Weight,			"StageCraft.Param.Info.Weight",			"Weight in kg (read-only).");
 	UE_DEFINE_GAMEPLAY_TAG_COMMENT(Param_Info_Power,			"StageCraft.Param.Info.Power",			"Power draw in W (read-only).");
+	UE_DEFINE_GAMEPLAY_TAG_COMMENT(Param_Info_Visible,			"StageCraft.Param.Info.Visible",		"Shown on stage. Hidden items still count in the bill of materials.");
+	UE_DEFINE_GAMEPLAY_TAG_COMMENT(Param_Info_Locked,			"StageCraft.Param.Info.Locked",			"Transform and span length locked against edits.");
 	UE_DEFINE_GAMEPLAY_TAG_COMMENT(Param_Transform_Location,	"StageCraft.Param.Transform.Location",	"World location in cm.");
 	UE_DEFINE_GAMEPLAY_TAG_COMMENT(Param_Transform_Rotation,	"StageCraft.Param.Transform.Rotation",	"World rotation in degrees.");
 	UE_DEFINE_GAMEPLAY_TAG_COMMENT(Param_Transform_Scale,		"StageCraft.Param.Transform.Scale",		"Per-axis scale, clamped to StageTransformRules limits.");
@@ -113,6 +116,10 @@ namespace StageCraftTags
 	UE_DEFINE_GAMEPLAY_TAG_COMMENT(Param_Rigging_Profile,		"StageCraft.Param.Rigging.Profile",		"Truss profile (read-only).");
 	UE_DEFINE_GAMEPLAY_TAG_COMMENT(Param_Rigging_MaxPointLoad,	"StageCraft.Param.Rigging.MaxPointLoad","Max centre point load in kg (read-only).");
 	UE_DEFINE_GAMEPLAY_TAG_COMMENT(Param_Rigging_Points,		"StageCraft.Param.Rigging.Points",		"Number of rigging points (read-only).");
+	UE_DEFINE_GAMEPLAY_TAG_COMMENT(Param_Span_Length,			"StageCraft.Param.Span.Length",			"Run length in cm; the segment count follows from it.");
+	UE_DEFINE_GAMEPLAY_TAG_COMMENT(Param_Span_Segments,			"StageCraft.Param.Span.Segments",		"Number of segments in the run (read-only).");
+	UE_DEFINE_GAMEPLAY_TAG_COMMENT(Param_Span_SegmentLength,	"StageCraft.Param.Span.SegmentLength",	"Length of one segment in cm (read-only).");
+	UE_DEFINE_GAMEPLAY_TAG_COMMENT(Param_Span_Fit,				"StageCraft.Param.Span.Fit",			"How the run fills its length (read-only).");
 
 	UE_DEFINE_GAMEPLAY_TAG_COMMENT(Attribute,					"StageCraft.Attribute",					"Root of fixture attributes (cue-recordable, DMX-addressable).");
 	UE_DEFINE_GAMEPLAY_TAG_COMMENT(Attribute_Dimmer,			"StageCraft.Attribute.Dimmer",			"Intensity 0..1.");
@@ -132,5 +139,15 @@ namespace StageCraftTags
 	bool IsTransformParameter(const FGameplayTag& ParameterId)
 	{
 		return ParameterId == Param_Transform_Location || ParameterId == Param_Transform_Rotation || ParameterId == Param_Transform_Scale;
+	}
+
+	bool IsQuantityParameter(const FGameplayTag& ParameterId)
+	{
+		return ParameterId == Param_Span_Length;
+	}
+
+	bool IsListingParameter(const FGameplayTag& ParameterId)
+	{
+		return ParameterId == Param_Info_Label || ParameterId == Param_Info_Visible || ParameterId == Param_Info_Locked || IsQuantityParameter(ParameterId);
 	}
 }

@@ -30,6 +30,7 @@ void UStageSessionSubsystem::Deinitialize()
 	Items.Reset();
 	OnStatsChanged.Clear();
 	OnDirtyChanged.Clear();
+	OnItemListChanged.Clear();
 
 	Super::Deinitialize();
 }
@@ -57,6 +58,7 @@ void UStageSessionSubsystem::RegisterItem(AModularBaseActor* Item)
 	Items.Add(Item);
 	Item->OnParameterChanged.AddUniqueDynamic(this, &ThisClass::HandleItemParameterChanged);
 	RecomputeStats();
+	OnItemListChanged.Broadcast();
 
 	// Items present when the level starts are the loaded stage, not an edit.
 	const UWorld* World = GetWorld();
@@ -75,6 +77,7 @@ void UStageSessionSubsystem::UnregisterItem(AModularBaseActor* Item)
 
 	Item->OnParameterChanged.RemoveDynamic(this, &ThisClass::HandleItemParameterChanged);
 	RecomputeStats();
+	OnItemListChanged.Broadcast();
 
 	const UWorld* World = GetWorld();
 	if (World && World->GetBegunPlay() && !World->bIsTearingDown)
@@ -123,6 +126,7 @@ void UStageSessionSubsystem::HandleItemParameterChanged(AModularBaseActor* Item,
 	{
 		RecomputeStats();
 		SetDirty(true);
+		OnItemListChanged.Broadcast();
 		return;
 	}
 
@@ -131,6 +135,16 @@ void UStageSessionSubsystem::HandleItemParameterChanged(AModularBaseActor* Item,
 	if (StageCraftTags::IsTransformParameter(ParameterId))
 	{
 		SetDirty(true);
+		return;
+	}
+
+	if (StageCraftTags::IsQuantityParameter(ParameterId))
+	{
+		RecomputeStats();
+	}
+	if (StageCraftTags::IsListingParameter(ParameterId))
+	{
+		OnItemListChanged.Broadcast();
 	}
 }
 
@@ -149,8 +163,9 @@ void UStageSessionSubsystem::RecomputeStats()
 		++NewStats.PlacedItems;
 		if (const UBaseItemData* Data = Actor->GetItemData())
 		{
-			NewStats.TotalPowerWatts += Data->Specs.PowerDrawWatts;
-			NewStats.TotalWeightKg += Data->Specs.WeightKg;
+			const int32 Quantity = Actor->GetQuantity();
+			NewStats.TotalPowerWatts += Data->Specs.PowerDrawWatts * Quantity;
+			NewStats.TotalWeightKg += Data->Specs.WeightKg * Quantity;
 		}
 	}
 
@@ -161,9 +176,9 @@ void UStageSessionSubsystem::RecomputeStats()
 	}
 }
 
-FStageEconomyResultInfo UStageSessionSubsystem::EvaluateSessionLimits(const UBaseItemData* Item) const
+FStageEconomyResultInfo UStageSessionSubsystem::EvaluateSessionLimits(const UBaseItemData* Item, int32 Quantity) const
 {
-	if (!Item)
+	if (!Item || Quantity < 1)
 	{
 		return FStageEconomyResultInfo::Fail(EStageEconomyResult::InvalidRequest, LOCTEXT("NoItem", "No item."));
 	}
@@ -173,19 +188,37 @@ FStageEconomyResultInfo UStageSessionSubsystem::EvaluateSessionLimits(const UBas
 		return FStageEconomyResultInfo::Fail(EStageEconomyResult::SessionRuleViolation,
 			FText::Format(LOCTEXT("ItemLimit", "This stage allows at most {0} items."), FText::AsNumber(Rules.MaxPlacedItems)));
 	}
-	if (Rules.MaxTotalPowerWatts > 0.f && Stats.TotalPowerWatts + Item->Specs.PowerDrawWatts > Rules.MaxTotalPowerWatts)
+	return EvaluateResourceLimits(*Item, Quantity);
+}
+
+FStageEconomyResultInfo UStageSessionSubsystem::EvaluateQuantityIncrease(const UBaseItemData* Item, int32 AddedQuantity) const
+{
+	if (!Item)
+	{
+		return FStageEconomyResultInfo::Fail(EStageEconomyResult::InvalidRequest, LOCTEXT("NoItem", "No item."));
+	}
+	// Shrinking (a negative change) or keeping a span's length can never break a limit, even on a stage that is already over one.
+	return AddedQuantity <= 0 ? FStageEconomyResultInfo::Ok() : EvaluateResourceLimits(*Item, AddedQuantity);
+}
+
+FStageEconomyResultInfo UStageSessionSubsystem::EvaluateResourceLimits(const UBaseItemData& Item, int32 Quantity) const
+{
+	const double AddedPower = double(Item.Specs.PowerDrawWatts) * Quantity;
+	const double AddedWeight = double(Item.Specs.WeightKg) * Quantity;
+
+	if (Rules.MaxTotalPowerWatts > 0.f && Stats.TotalPowerWatts + AddedPower > Rules.MaxTotalPowerWatts)
 	{
 		return FStageEconomyResultInfo::Fail(EStageEconomyResult::SessionRuleViolation,
 			FText::Format(LOCTEXT("PowerLimit", "Not enough power: {0} W of {1} W in use, {2} needs {3} W."),
 				FText::AsNumber(FMath::RoundToInt(Stats.TotalPowerWatts)), FText::AsNumber(FMath::RoundToInt(Rules.MaxTotalPowerWatts)),
-				Item->DisplayName, FText::AsNumber(FMath::RoundToInt(Item->Specs.PowerDrawWatts))));
+				Item.DisplayName, FText::AsNumber(FMath::RoundToInt64(AddedPower))));
 	}
-	if (Rules.MaxTotalWeightKg > 0.f && Stats.TotalWeightKg + Item->Specs.WeightKg > Rules.MaxTotalWeightKg)
+	if (Rules.MaxTotalWeightKg > 0.f && Stats.TotalWeightKg + AddedWeight > Rules.MaxTotalWeightKg)
 	{
 		return FStageEconomyResultInfo::Fail(EStageEconomyResult::SessionRuleViolation,
 			FText::Format(LOCTEXT("WeightLimit", "Too heavy: {0} kg of {1} kg used, {2} weighs {3} kg."),
 				FText::AsNumber(FMath::RoundToInt(Stats.TotalWeightKg)), FText::AsNumber(FMath::RoundToInt(Rules.MaxTotalWeightKg)),
-				Item->DisplayName, FText::AsNumber(FMath::RoundToInt(Item->Specs.WeightKg))));
+				Item.DisplayName, FText::AsNumber(FMath::RoundToInt64(AddedWeight))));
 	}
 	return FStageEconomyResultInfo::Ok();
 }

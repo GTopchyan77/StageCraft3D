@@ -1910,7 +1910,7 @@ The design record, with verified engine facts, alternatives, measurements and ro
   - Loading a scene that contains locked items (the refusal summary is not exercised: the test level has no locked items placed).
 - Status: **implemented, awaiting manual verification** of the items above.
 
-**Commit:** uncommitted (working tree).
+**Commit:** `37af368`.
 
 **Known issues / follow-ups**
 - **Banding in renders.** Wide smooth gradients (beam cones, back wall) band visibly in the Square framing, independent of Clean/Standard and of supersampling (A/B in Run5).
@@ -1922,3 +1922,112 @@ The design record, with verified engine facts, alternatives, measurements and ro
 - **PIE has no File/Edit/Render menus or Render panel** (fixed HUD); the console commands work there.
 - **Square renders** keep the camera's horizontal field of view.
 - **Obsidian vault.** `S:\` is still unreachable on this machine; the design record is ADR 0004 in the repo.
+
+
+---
+
+## #27 — Parametric spans, Outliner (visibility, lock, groups), Bill of Materials (2026-10-13)
+
+**Request (Gevor).** Under Rules.md:
+1. **Spans.** A procedural placement tool for linear elements (truss, railings, cables) by start/end point, repeating whole mesh segments along the path instead of scaling one mesh.
+2. **Outliner.** A dockable panel with placed objects grouped by category (Truss, Lighting, Audio, Props), group selection, show/hide, and transform locking.
+3. **Bill of Materials.** A lightweight summary subsystem with item counts, combined weight and power (W), shown in a professional panel for production planning.
+
+The design record, with verified engine facts, alternatives and rollback, is `Docs/ADR/0005-spans-outliner-and-bill-of-materials.md`.
+
+**What changed and why**
+
+- **Spans** (ADR 0005 §3).
+  - `UStageSpanData`: fit (Whole Segments / Stretch), segment length, max segments (hard cap 500), angle snap, segment parts and joint parts (mesh + material + transform). Specs (weight, power) are per segment.
+  - `StageSpanMath` (pure): layout for a requested length, clamping of untrusted lengths, level end point with polar angle snap, run transform, per-segment and per-joint instance transforms.
+  - `UStageSpanGeometryComponent` builds a run as instanced meshes, one instanced component per distinct mesh + material.
+  - `AStageSpanActor`: one SaveGame value (`SpanLength`, normalised), so undo and scene files need no format change. Inspector "Span" section (Length editable; Segments, Segment, Fit read-only). Spans refuse Scale.
+  - `UStageSpanToolComponent` (controller): state machine Inactive → PickStart → PickEnd. Click the start; the ghost (`AStageSpanPreview`) shows the exact run; click the end. The end becomes the next start (chained runs); Esc drops the start, then leaves Place mode. The status bar shows e.g. "6.00 m, 3 segments".
+  - **Quantity:** `AModularBaseActor::GetQuantity / PredictQuantity / SupportsScaling`. Session totals and limits count specs × quantity. `FStagePlacementValidator` and `AStageCraftGameModeBase::EvaluatePlacement` take a quantity. `USpawnSystemComponent` now validates the prepared deferred actor (restore, or the new `SpawnConfiguredItem`) and destroys refused ones unfinished. Lengthening checks `UStageSessionSubsystem::EvaluateQuantityIncrease`; shrinking is always allowed.
+  - **Undo:** span length edits are one step ("Change Length of …"): `FStageParameterItemCommand`, `IStageItemEditor::SetItemParameter`, `UStageEditHistoryComponent::RecordParameterChange` + `ParameterApplier` (undo/redo go back through the GameMode). Span placements are recorded from `UStageSpanToolComponent::OnItemPlaced`.
+- **Visibility and lock** (ADR 0005 §4).
+  - `AModularBaseActor` SaveGame flags `bHiddenOnStage` / `bTransformLocked`, exposed as Bool parameters `Visible` / `Locked` (inspector rows, request bridge, scene files, undo snapshots).
+  - Hidden: not drawn, no collision, not snapped to, skipped by Select All, deselected when hidden; still saved and billed.
+  - Locked: the GameMode (`EvaluateItemEdit`) refuses Location / Rotation / Scale / span length (`SessionRuleViolation`, not `Locked`, which means "not owned"). Deleting is allowed.
+  - A gizmo drag or numeric group transform is checked for **every** selected item first (`AModularPlayerController::EvaluateSelectionTransform`): one locked item, or a span under Scale, refuses the whole edit.
+- **Outliner.**
+  - `StageOutliner` model (pure): discipline = direct child of `StageCraft.Category`; build order Stage, Truss, Rigging, Lighting, Audio, Screen, Cable, Prop, others, Other; natural item order with id tie-break; tri-state hidden/locked per group; filter.
+  - `UStageOutlinerPanel` + `UStageOutlinerRow` (code-built, themed): group rows (chevron, eye, lock, name, count) and item rows (eye, lock, label, model / segments), filter box, footer counts. Clicks select through the new `RequestSelectItems` (Ctrl adds/removes; a group click selects the group). Eye/lock write `Visible`/`Locked` through `RequestParameterChange`.
+  - Push only: `UStageSessionSubsystem::OnItemListChanged` (new; register, unregister, structure, label/visible/locked/quantity) → rebuild on the next tick; selection changes only restyle.
+  - `USelectionComponent::AddActorsToSelection / RemoveActorsFromSelection` (one notification each).
+- **Bill of Materials** (ADR 0005 §5).
+  - `StageBillOfMaterials` (pure): merge by catalog item (units, placements), group by discipline, subtotals, order-independent totals, defensive against bad specs; CSV with RFC 4180 escaping, UTF-8 BOM, CSV-injection guard; file names.
+  - `UStageBillOfMaterialsSubsystem` (world): derived cache marked stale on `OnItemListChanged`, rebuilt lazily; async atomic CSV export to `Saved/StageCraft/Reports` (`UE::Tasks`, weak result, one at a time).
+  - `UStageBillOfMaterialsPanel`: tiles (items, units, weight, power), table by discipline with subtotals, Export CSV, Open Folder. `RequestExportBillOfMaterials` on the controller. File menu: Production section (Bill of Materials..., Export Bill of Materials (CSV), Open Reports Folder). The status bar shows export results.
+- **Workspace.** Tags `StageCraft.Panel.Outliner` / `StageCraft.Panel.BillOfMaterials`. Default layout: Outliner under the Library; Bill of Materials as a third tab next to Inspector and Render.
+- **Tags.** Catalog `StageCraft.Category.Cable`, `StageCraft.Category.Stage.Railing`; parameters `Param.Info.Visible/Locked`, `Param.Span.Length/Segments/SegmentLength/Fit`, `FeatureGroup.Span`; helpers `IsQuantityParameter`, `IsListingParameter`.
+- **Dev console** (non-Shipping): `StageCraft.Span.{Status, SetLength}`, `StageCraft.Outliner.{List, Hide, Lock, Select}` (targets: actor name, label or `group:<Discipline>`), `StageCraft.Report.{Status, Export}`.
+- **STATE.md housekeeping.** #26's commit line said "uncommitted"; it now carries `37af368`.
+
+**Files changed**
+- New, in `Source/ModularSceneBuilder`:
+  - `Public/Data/StageSpanData.h`, `Private/Data/StageSpanData.cpp`
+  - `Public/Placement/StageSpanMath.h`, `StageSpanPreview.h`, `StageSpanToolComponent.h`; `Private/Placement/StageSpanMath.cpp`, `StageSpanPreview.cpp`, `StageSpanToolComponent.cpp`, `StageSpanConsoleCommands.cpp`, `Tests/StageSpanTests.cpp`
+  - `Public/Components/StageSpanGeometryComponent.h`, `Private/Components/StageSpanGeometryComponent.cpp`
+  - `Public/Actors/StageSpanActor.h`, `Private/Actors/StageSpanActor.cpp`
+  - `Public/Outliner/StageOutlinerModel.h`; `Private/Outliner/StageOutlinerModel.cpp`, `StageOutlinerConsoleCommands.cpp`, `Tests/StageOutlinerTests.cpp`
+  - `Public/Report/StageBillOfMaterials.h`, `StageBillOfMaterialsSubsystem.h`; `Private/Report/StageBillOfMaterials.cpp`, `StageBillOfMaterialsSubsystem.cpp`, `StageReportConsoleCommands.cpp`, `Tests/StageReportTests.cpp`
+  - `Public/UI/StageOutlinerPanel.h`, `StageBillOfMaterialsPanel.h`; `Private/UI/StageOutlinerPanel.cpp`, `StageBillOfMaterialsPanel.cpp`
+- Modified, in `Source/ModularSceneBuilder`:
+  - `Actors/ModularBaseActor.h/.cpp` (Visible/Locked, quantity hooks, `GetHighlightOverlay`)
+  - `Data/StageParameterTypes.h/.cpp`, `Data/StageItemTypes.h/.cpp` (tags, helpers)
+  - `Subsystems/StageSessionSubsystem.h/.cpp` (quantity totals, `OnItemListChanged`, quantity-aware limits)
+  - `Game/StageCraftGameModeBase.h/.cpp` (`EvaluatePlacement` quantity, `EvaluateItemEdit`)
+  - `Components/SpawnSystemComponent.h/.cpp` (quantity validator, `SpawnConfiguredItem`, validate the prepared actor)
+  - `Components/SelectionComponent.h/.cpp` (add/remove sets)
+  - `History/StageEditCommand.h`, `StageItemCommands.h/.cpp`, `StageEditHistoryComponent.h/.cpp`, `Private/History/Tests/StageHistoryTests.cpp`
+  - `Player/ModularPlayerController.h/.cpp` (span tool routing, selection-wide transform rules, `RequestSelectItems`, `RequestExportBillOfMaterials`, length undo, deselect on hide, Select All skips hidden, span ghost hidden from renders)
+  - `Private/Placement/StagePlacementToolComponent.cpp`, `StageSnappingComponent.cpp` (hidden items are not neighbours), `Private/Scene/StageSceneComponent.cpp`
+  - `UI/StageStatusBarWidget.h/.cpp` (`MakeSpanHint`, export messages), `Private/UI/Tests/StageUITests.cpp`
+  - `Workspace/StageWorkspaceTypes.h/.cpp`, `Private/Workspace/StageWorkspaceShell.cpp`, `Private/Workspace/SStageWorkspaceMenuBar.h/.cpp`
+- Content (new, made headless by `Scripts/Content/create_span_outliner_report_content.py`):
+  - `Content/StageCraft/UI/Panels/DA_Panel_Outliner.uasset`, `DA_Panel_BillOfMaterials.uasset` (tags read back correctly)
+  - `Content/StageCraft/Spans/M_SpanMetal.uasset`, `M_SpanCoupler.uasset`, `M_SpanCable.uasset`
+  - `Content/StageCraft/Items/DA_Span_TrussF34.uasset` (whole 2 m sections, 20 parts from engine BasicShapes + a coupler), `DA_Span_Railing.uasset` (1 m stretch, posts), `DA_Span_CableRun.uasset` (1 m stretch)
+- Scripts (new): `Scripts/Content/create_span_outliner_report_content.py`.
+- Docs: `Docs/ADR/0005-spans-outliner-and-bill-of-materials.md` (new), `tasks/todo.md`, `STATE.md` (#26 commit hash, this entry).
+- No maps, input assets or Blueprints were changed. No Blueprint referenced the changed `EvaluatePlacement` / `EvaluateSessionLimits` signatures (checked before changing them).
+
+**Verification**
+- **Build note.** The Kmidden editor was open (Live Coding mutex; its MCP bridge rejects this project's token), so builds used `-NoHotReloadFromIDE` and verification was headless and scripted.
+- **Builds (Claude):** Editor Development, Game Development and Game Shipping all Succeeded with 0 errors and 0 warnings. Shipping proves the new dev console commands compile out.
+- **Automation (headless), StageCraft filter: 29/29 passed** (20 existing + 9 new). The first full run (`R27_Tests.log`) logged all 29 and TEST COMPLETE. The two full re-runs on the final code (`R27_Tests2/3.log`) stop logging during `LayoutStore.Names` with exit code 0 and no failure; re-running `StageCraft.Workspace.LayoutStore` with stdout captured showed all 5 layout tests passing and `TEST COMPLETE. EXIT CODE: 0`, so the gap is an unflushed `-abslog` tail, not a failure. New tests:
+  - `Span.Layout` (whole/stretch rounding, clamps, NaN/∞/negative, caps, invalid rules, determinism), `Span.Placement` (free end, 15°/90° polar snap with projected length, level end, fallback yaw, run transform), `Span.Instances` (pitch, a stretched cable gets longer along its own axis without thickening, joints N+1, invalid layout).
+  - `Outliner.Model` (discipline mapping, build order, Other last, natural order, id tie-break, tri-state flags, filter, order independence).
+  - `Report.Build` (merge by item, units vs placements, subtotals/totals, order independence, bad data), `Report.Csv` (escaping, CSV injection, title block, rows, totals, UTF-8 BOM, file names), `Report.Format`.
+  - `History.Parameter` (undo/redo of a length, a refusal keeps the step, a missing item drops it, meaningful-change filter), `UI.SpanHint`.
+- **Standalone `-game`, scripted by Claude** (`L_StageTest`, simulated cursor; logs `Saved/Logs/R27_Run1`–`Run4.log`; 0 errors, 0 ensures):
+  - **Run1, spans:** Arm F34 truss → PickStart, ghost visible → click → PickEnd, ghost "600 cm, 3 segments" → click places StageSpanActor_0 (quantity 3) → a second click chains StageSpanActor_1 from the first run's end (quantity 2, 90° turn) → Esc back to PickStart → Esc to Select. Screenshot: ghost along the run; status bar "F34 Truss Run (2 m sections): 6.00 m, 3 segments · click to place; the next run starts at its end".
+  - **Run1, BOM:** truss 5 sections × 14 kg in 2 runs = 70 kg. SetLength 1000 → 5 segments, 106 instances; the BOM updated to 7 sections, 98 kg; total 212 kg / 940 W. Export wrote `BOM_Untitled_20261013-142846.csv` (UTF-8 BOM, subtotals, `TOTAL,,,11,6,,212.00,,940.00`).
+  - **Run1, lock / scale / hide / groups:** Lock group:Truss (3 items) → SetLength refused "…is locked. Unlock it in the Outliner or the inspector…"; a gizmo press on the Move handle was refused with the same message and consumed. Unlocked → SetScale on a span refused "…is sized by its Length, not by scale." Hide group:Lighting → both hidden; Select All → 4 (6 minus 2 hidden). Select group:Truss → 3; Ctrl group:Audio → 4; Ctrl again → 3.
+  - **Run1, scenes:** a span locked, Save "R27 A", Load → 6 restored with quantities 5 and 2, the lock and both hidden lights intact, 0 refused.
+  - **Bug found and fixed (Run1):** undoing the length increase was refused with "No item." `EvaluateQuantityIncrease` rejected a negative change (a shorter run) as an invalid request, so shortening a span from the inspector would have been refused too. It now allows zero and negative changes. Run2: SetLength 400 → undo → 1000 → redo → 400 → undo → 1000, all Succeeded.
+  - **Bug found and fixed (Run1 screenshot):** the Outliner list was empty while its footer counted 6 items. Rows were added to the list before their widget tree was built, and a `UUserWidget` added to a live panel builds its Slate widget from its tree at that moment. Rows are now built first (Run2 screenshot: rows, icons, greyed hidden rows, solid lock).
+  - **Run2:** a railing drawn 875 cm → 9 stretched sections with posts; a cable run of 4 units; undoing the cable placement removed its 4 units from the BOM (266.0 kg) and redo restored it. The BOM panel screenshot shows tiles (8 items, 24 units, 267.6 kg, 940 W), the table by discipline with subtotals, and Export CSV.
+  - **Run3/4:** outliner rows with long names overlapped their detail text; both texts now share the width, clip and truncate with an ellipsis (Run4 screenshot, cropped and checked).
+- **Not verified (needs Gevor, by mouse and keyboard, Standalone Game via RunEditor.bat):**
+  - Drawing spans with the physical mouse (only the simulated cursor path was driven), and Esc from the keyboard.
+  - Outliner clicks: eye / lock on items and groups, chevrons, Ctrl+Click rows, typing in the filter box.
+  - The inspector's Visible / Locked checkboxes and the Span Length field by hand.
+  - Bill of Materials panel buttons (Export CSV, Open Folder), the File > Production menu entries, opening the CSV in a spreadsheet.
+  - A gizmo **Scale** drag on a span (the refusal shares the path exercised by the locked Move drag, but the dev command only drags Move handles).
+  - Session limits with quantities: the test GameMode has no power/weight limits, so a refused long run (red ghost, "not allowed by this stage's limits") was not exercised at runtime.
+- Status: **implemented, awaiting manual verification** of the items above.
+
+**Commit:** uncommitted (working tree).
+
+**Known issues / follow-ups**
+- Runs of the same item share the catalog name as label (as every item does); no auto-numbering ("Truss Run 1, 2…").
+- No hover/selection overlay on spans or other items: the overlay materials are still unassigned (existing backlog item).
+- Stretched runs approximate rotated parts (diagonal lacing); whole-segment runs are exact. Spans are drawn level; tilt them with the gizmo.
+- Hide/Lock are not undo steps (like the Unreal Editor's eye); they mark the scene unsaved.
+- The Type dropdown on a span is not checked against quantity limits (same as other type swaps).
+- No keyboard shortcuts for hide/lock; no user-defined layers beyond the catalog disciplines.
+- BOM: no rigging point loads or per-phase power distribution (amps) yet.
+- PIE has no dock panels (fixed HUD); the console commands work there.
+- **Obsidian vault.** `S:\` is still unreachable on this machine; the design record is ADR 0005 in the repo.

@@ -7,7 +7,9 @@
 #include "Economy/StageEconomyTypes.h"
 #include "History/StageEditCommand.h"
 #include "Placement/StagePlacementTypes.h"
+#include "Placement/StageSpanToolComponent.h"
 #include "Render/StageRenderTypes.h"
+#include "Report/StageBillOfMaterialsSubsystem.h"
 #include "Scene/StageSceneTypes.h"
 #include "StageStatusBarWidget.generated.h"
 
@@ -18,6 +20,9 @@ namespace StageStatusBar
 	 * With more than one item selected (Select mode), the hint names the group actions instead.
 	 */
 	MODULARSCENEBUILDER_API FText MakeHint(EStageEditMode Mode, const FText& ArmedItemName, int32 SelectedCount = 0);
+
+	/** The hint while drawing a span: which point the next click sets and, with a run under the cursor, its length and segment count. */
+	MODULARSCENEBUILDER_API FText MakeSpanHint(const FStageSpanToolStatus& Status);
 }
 
 /**
@@ -101,6 +106,12 @@ private:
 	UFUNCTION()
 	void HandleRenderFinished(const FStageRenderResult& Result);
 
+	UFUNCTION()
+	void HandleSpanStatusChanged(const FStageSpanToolStatus& Status);
+
+	UFUNCTION()
+	void HandleReportExportFinished(const FStageReportExportResult& Result);
+
 	UPROPERTY(Transient)
 	TObjectPtr<class UBorder> ModeChip = nullptr;
 
@@ -121,6 +132,8 @@ private:
 	TWeakObjectPtr<class USelectionComponent> Selection;
 	TWeakObjectPtr<class UStageSceneComponent> SceneFiles;
 	TWeakObjectPtr<class UStageRenderSubsystem> Render;
+	TWeakObjectPtr<class UStageSpanToolComponent> SpanTool;
+	TWeakObjectPtr<class UStageBillOfMaterialsSubsystem> BillOfMaterials;
 
 	FTimerHandle MessageTimer;
 };

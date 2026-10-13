@@ -54,6 +54,13 @@ public:
 
 	/** Sets the item's world transform (scale is clamped like every other write). Invalid if it does not exist. */
 	virtual EStageCommandResult SetItemTransform(const FGuid& InstanceId, const FTransform& Transform) = 0;
+
+	/**
+	 * Writes one parameter of the item through the rules (e.g. a span's length, which must still fit the session limits and
+	 * is refused while the item is locked). Refused when the rules say no now, Invalid if the item does not exist or does not
+	 * accept the value.
+	 */
+	virtual EStageCommandResult SetItemParameter(const FGuid& InstanceId, const struct FGameplayTag& ParameterId, const struct FStageParameterValue& Value) = 0;
 };
 
 /**

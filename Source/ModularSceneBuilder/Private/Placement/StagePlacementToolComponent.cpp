@@ -220,7 +220,7 @@ void UStagePlacementToolComponent::SetArmedItem(UBaseItemData* NewItem)
 
 void UStagePlacementToolComponent::EvaluateArmedItem()
 {
-	const bool bAllowed = !ArmedItem || !PreviewEvaluator.IsBound() || PreviewEvaluator.Execute(*ArmedItem).IsSuccess();
+	const bool bAllowed = !ArmedItem || !PreviewEvaluator.IsBound() || PreviewEvaluator.Execute(*ArmedItem, 1).IsSuccess();
 	ArmedItemVerdict = bAllowed ? EStagePlacementPreviewState::Valid : EStagePlacementPreviewState::Refused;
 }
 

@@ -31,6 +31,7 @@ private:
 	void FillSaveSceneAsMenu(class FMenuBuilder& MenuBuilder);
 	void FillOpenSceneMenu(class FMenuBuilder& MenuBuilder);
 	void FillDeleteSceneMenu(class FMenuBuilder& MenuBuilder);
+	void FillReportSection(class FMenuBuilder& MenuBuilder, const TWeakObjectPtr<class AModularPlayerController>& WeakController);
 	void FillRenderMenu(class FMenuBuilder& MenuBuilder);
 	void FillEditMenu(class FMenuBuilder& MenuBuilder);
 	void FillSelectionSection(class FMenuBuilder& MenuBuilder, const TWeakObjectPtr<class AModularPlayerController>& WeakController);

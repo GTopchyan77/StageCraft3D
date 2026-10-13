@@ -17,6 +17,7 @@
 #include "Placement/StageSnappingComponent.h"
 #include "Player/ModularPlayerController.h"
 #include "Render/StageRenderSubsystem.h"
+#include "Report/StageBillOfMaterialsSubsystem.h"
 #include "Scene/StageSceneComponent.h"
 #include "Scene/StageSceneStore.h"
 #include "Subsystems/StageSessionSubsystem.h"
@@ -121,6 +122,31 @@ void SStageWorkspaceMenuBar::FillFileMenu(FMenuBuilder& MenuBuilder)
 	MenuBuilder.BeginSection(TEXT("SceneFolder"));
 	MenuBuilder.AddMenuEntry(LOCTEXT("OpenScenesFolder", "Open Scenes Folder"), FText::FromString(Scenes->GetScenesDirectory()), FSlateIcon(),
 		FUIAction(FExecuteAction::CreateLambda([Directory = Scenes->GetScenesDirectory()]() { OpenFolder(Directory); })));
+	MenuBuilder.EndSection();
+
+	FillReportSection(MenuBuilder, WeakController);
+}
+
+void SStageWorkspaceMenuBar::FillReportSection(FMenuBuilder& MenuBuilder, const TWeakObjectPtr<AModularPlayerController>& WeakController)
+{
+	const UStageBillOfMaterialsSubsystem* Report = WeakController.IsValid() ? UWorld::GetSubsystem<UStageBillOfMaterialsSubsystem>(WeakController->GetWorld()) : nullptr;
+	if (!Report)
+	{
+		return;
+	}
+
+	const FStageBillOfMaterials& Current = Report->GetReport();
+	MenuBuilder.BeginSection(TEXT("Report"), FText::Format(LOCTEXT("ReportSection", "Production  ({0} {0}|plural(one=unit,other=units))"), Current.Quantity));
+	MenuBuilder.AddMenuEntry(LOCTEXT("ShowBillOfMaterials", "Bill of Materials..."),
+		LOCTEXT("ShowBillOfMaterialsTip", "Show the Bill of Materials panel: quantities, weight and power of everything on stage."), FSlateIcon(),
+		FUIAction(FExecuteAction::CreateSP(this, &SStageWorkspaceMenuBar::ShowPanel, FGameplayTag(StageCraftTags::Panel_BillOfMaterials))));
+	MenuBuilder.AddMenuEntry(LOCTEXT("ExportBillOfMaterials", "Export Bill of Materials (CSV)"),
+		LOCTEXT("ExportBillOfMaterialsTip", "Write the bill of materials as a CSV file to the Reports folder, for spreadsheets and rental quotes."), FSlateIcon(),
+		FUIAction(
+			FExecuteAction::CreateLambda([WeakController]() { if (WeakController.IsValid()) { WeakController->RequestExportBillOfMaterials(); } }),
+			FCanExecuteAction::CreateLambda([bCanExport = !Report->IsExporting() && !Current.IsEmpty()]() { return bCanExport; })));
+	MenuBuilder.AddMenuEntry(LOCTEXT("OpenReportsFolder", "Open Reports Folder"), FText::FromString(Report->GetOutputDirectory()), FSlateIcon(),
+		FUIAction(FExecuteAction::CreateLambda([Directory = Report->GetOutputDirectory()]() { OpenFolder(Directory); })));
 	MenuBuilder.EndSection();
 }
 

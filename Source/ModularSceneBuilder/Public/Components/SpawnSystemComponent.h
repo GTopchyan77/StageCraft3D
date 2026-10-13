@@ -10,8 +10,11 @@
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FOnStageItemSpawned, class AModularBaseActor*, SpawnedActor);
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FOnStageItemDeleted, AActor*, DeletedActor);
 
-/** Decides whether an item may be placed now. Bound by the owning controller, which asks the GameMode. */
-DECLARE_DELEGATE_RetVal_OneParam(FStageEconomyResultInfo, FStagePlacementValidator, const class UBaseItemData& /*Item*/);
+/**
+ * Decides whether one new item of Item, made of Quantity catalog units (a span's segment count, otherwise 1), may be placed
+ * now. Bound by the owning controller, which asks the GameMode.
+ */
+DECLARE_DELEGATE_RetVal_TwoParams(FStageEconomyResultInfo, FStagePlacementValidator, const class UBaseItemData& /*Item*/, int32 /*Quantity*/);
 
 /**
  * Executes spawns and deletions of stage items. Stateless: it knows nothing about input, cursors,
@@ -34,6 +37,13 @@ public:
 	 */
 	UFUNCTION(BlueprintCallable, Category = "StageCraft|Spawning")
 	class AModularBaseActor* SpawnItem(class UBaseItemData* Item, const FTransform& Transform);
+
+	/**
+	 * SpawnItem with per-instance setup: Configure runs on the deferred actor before its item data is applied and before it is
+	 * validated, so the rules see the configured item (e.g. a span's length and therefore its segment count). Configure must not
+	 * keep the actor; it is destroyed again if the rules refuse it.
+	 */
+	class AModularBaseActor* SpawnConfiguredItem(class UBaseItemData* Item, const FTransform& Transform, TFunctionRef<void(class AModularBaseActor&)> Configure);
 
 	/**
 	 * Undo support: recreates a removed item from its snapshot, with the same instance id and SaveGame
@@ -63,6 +73,10 @@ public:
 	FOnStageItemDeleted OnItemDeleted;
 
 private:
-	/** Validate, then spawn deferred; Restore (optional) is applied before the item data, so BeginPlay sees the restored state. */
-	class AModularBaseActor* SpawnValidated(class UBaseItemData& Item, const FTransform& Transform, const struct FStageItemSnapshot* Restore);
+	/**
+	 * Spawns deferred, runs Prepare (restored id and state, or a caller's configuration) and applies the item data, then asks
+	 * PlacementValidator with the prepared item's quantity: refused items are destroyed before they ever begin play, approved ones
+	 * are finished, so BeginPlay sees the prepared state. LogVerb names the operation in the log ("Placed", "Restored").
+	 */
+	class AModularBaseActor* SpawnValidated(class UBaseItemData& Item, const FTransform& Transform, TFunctionRef<void(class AModularBaseActor&)> Prepare, const TCHAR* LogVerb);
 };

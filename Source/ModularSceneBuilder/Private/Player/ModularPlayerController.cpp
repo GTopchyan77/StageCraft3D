@@ -4,6 +4,7 @@
 
 #include "Actors/ModularBaseActor.h"
 #include "Actors/ModularTransformGizmo.h"
+#include "Algo/AllOf.h"
 #include "Audio/StageEditorAudioFeedbackComponent.h"
 #include "Blueprint/UserWidget.h"
 #include "Components/SceneComponent.h"
@@ -31,9 +32,12 @@
 #include "Placement/StagePlacementPreview.h"
 #include "Placement/StagePlacementToolComponent.h"
 #include "Placement/StageSnappingComponent.h"
+#include "Placement/StageSpanPreview.h"
+#include "Placement/StageSpanToolComponent.h"
 #include "Player/StageCameraPawn.h"
 #include "Player/StageCraftGameViewportClient.h"
 #include "Render/StageRenderSubsystem.h"
+#include "Report/StageBillOfMaterialsSubsystem.h"
 #include "Scene/StageSceneComponent.h"
 #include "Subsystems/StageEconomySubsystem.h"
 #include "Subsystems/StageItemSubsystem.h"
@@ -76,6 +80,7 @@ AModularPlayerController::AModularPlayerController()
 	Snapping = CreateDefaultSubobject<UStageSnappingComponent>(TEXT("Snapping"));
 	GroupTransform = CreateDefaultSubobject<UStageGroupTransformComponent>(TEXT("GroupTransform"));
 	SceneFiles = CreateDefaultSubobject<UStageSceneComponent>(TEXT("SceneFiles"));
+	SpanTool = CreateDefaultSubobject<UStageSpanToolComponent>(TEXT("SpanTool"));
 	GizmoClass = AModularTransformGizmo::StaticClass();
 }
 
@@ -127,7 +132,11 @@ void AModularPlayerController::BeginPlay()
 	PlacementTool->PlacementSnapper.BindUObject(Snapping.Get(), &UStageSnappingComponent::SnapPlacement);
 	PlacementTool->OnEditModeChanged.AddUniqueDynamic(this, &ThisClass::HandleEditModeChanged);
 	PlacementTool->OnArmedItemChanged.AddUniqueDynamic(this, &ThisClass::HandleArmedItemChanged);
+	SpanTool->PreviewEvaluator.BindUObject(this, &ThisClass::EvaluatePlacementPreview);
 	BindPreviewRefreshSources();
+
+	// Undoing a length change writes it back through the same rules as the inspector.
+	EditHistory->ParameterApplier.BindUObject(this, &ThisClass::ApplyHistoryParameter);
 
 	// Loading a scene asks the same rules per item, silently, and reports one summary instead of a refusal per item.
 	SceneFiles->PlacementEvaluator.BindUObject(this, &ThisClass::EvaluatePlacementPreview);
@@ -170,6 +179,8 @@ void AModularPlayerController::EndPlay(const EEndPlayReason::Type EndPlayReason)
 	PlacementTool->PlacementSnapper.Unbind();
 	PlacementTool->OnEditModeChanged.RemoveDynamic(this, &ThisClass::HandleEditModeChanged);
 	PlacementTool->OnArmedItemChanged.RemoveDynamic(this, &ThisClass::HandleArmedItemChanged);
+	SpanTool->PreviewEvaluator.Unbind();
+	EditHistory->ParameterApplier.Unbind();
 	SceneFiles->PlacementEvaluator.Unbind();
 	SceneFiles->OnSceneOperationFinished.RemoveDynamic(this, &ThisClass::HandleSceneOperationFinished);
 	if (UStageEconomySubsystem* Economy = GetEconomy())
@@ -506,6 +517,13 @@ void AModularPlayerController::HandlePrimaryPressedAt(const FVector2D& ViewportP
 		// A miss is passed on as an empty hit, so the tool reports "no surface" (error cue) instead of silence.
 		FHitResult Hit;
 		GetPlacementHitAt(ViewportPosition, Hit);
+		if (SpanTool->IsToolActive())
+		{
+			// First click sets the start, each further click places a run and chains from its end.
+			SpanTool->HandleClick(Hit);
+			RequestPreviewRefresh();
+			return;
+		}
 		if (PlacementTool->TryPlace(Hit))
 		{
 			// Stamping keeps the ghost out: re-trace so it lands on the new surface (the placed item) and shows the fresh verdict.
@@ -573,9 +591,22 @@ bool AModularPlayerController::TryBeginGizmoDragAt(const FVector2D& ViewportPosi
 
 	FHitResult GizmoHit;
 	FVector RayOrigin, RayDirection;
-	return GetGizmoHitAt(ViewportPosition, GizmoHit)
-		&& GetRayAt(ViewportPosition, RayOrigin, RayDirection)
-		&& Gizmo->TryBeginDrag(GizmoHit, RayOrigin, RayDirection);
+	if (!GetGizmoHitAt(ViewportPosition, GizmoHit) || !GetRayAt(ViewportPosition, RayOrigin, RayDirection))
+	{
+		return false;
+	}
+
+	// The drag moves the target and every selected item with it, so each must allow it (a locked item, a span's scale).
+	// A refused press still lands on a handle: it is consumed, so it never falls through to selecting what lies behind.
+	const FGameplayTag TransformParameter = Gizmo->GetMode() == EGizmoMode::Translate ? StageCraftTags::Param_Transform_Location
+		: (Gizmo->GetMode() == EGizmoMode::Rotate ? StageCraftTags::Param_Transform_Rotation : StageCraftTags::Param_Transform_Scale);
+	const FStageEconomyResultInfo Verdict = EvaluateSelectionTransform(TransformParameter);
+	if (!Verdict.IsSuccess())
+	{
+		ReportRejection(Verdict);
+		return true;
+	}
+	return Gizmo->TryBeginDrag(GizmoHit, RayOrigin, RayDirection);
 }
 
 // --- Keys ---
@@ -643,9 +674,14 @@ void AModularPlayerController::HandleCancel()
 		return;
 	}
 
-	// One level at a time: first leave Place mode (the item stays armed for P), then clear everything.
+	// One level at a time: first drop a span's start point, then leave Place mode (the item stays armed for P), then clear everything.
 	if (PlacementTool->IsPlaceMode())
 	{
+		if (SpanTool->CancelStart())
+		{
+			RequestPreviewRefresh();
+			return;
+		}
 		PlacementTool->EnterSelectMode();
 		return;
 	}
@@ -800,7 +836,21 @@ void AModularPlayerController::RefreshPlacementPreview()
 
 	FVector2D Position;
 	FHitResult Hit;
-	if (GetCursorViewportPosition(Position) && GetPlacementHitAt(Position, Hit))
+	const bool bHasSurface = GetCursorViewportPosition(Position) && GetPlacementHitAt(Position, Hit);
+	if (SpanTool->IsToolActive())
+	{
+		if (bHasSurface)
+		{
+			SpanTool->UpdateTarget(Hit);
+		}
+		else
+		{
+			SpanTool->ClearTarget();
+		}
+		return;
+	}
+
+	if (bHasSurface)
 	{
 		PlacementTool->UpdateTarget(Hit);
 	}
@@ -886,6 +936,23 @@ FStageEconomyResultInfo AModularPlayerController::RequestParameterChange(UObject
 	AActor* TransformTarget = StageCraftTags::IsTransformParameter(ParameterId) ? Cast<AActor>(Target) : nullptr;
 	const FTransform TransformBefore = TransformTarget ? TransformTarget->GetActorTransform() : FTransform::Identity;
 	const bool bGroupEdit = TransformTarget && !IsGizmoDragging();
+
+	// The rest of the selection moves too, so every selected item must allow the edit, as for a gizmo drag.
+	if (bGroupEdit && Selection->IsActorSelected(TransformTarget))
+	{
+		const FStageEconomyResultInfo GroupVerdict = EvaluateSelectionTransform(ParameterId);
+		if (!GroupVerdict.IsSuccess())
+		{
+			ReportRejection(GroupVerdict);
+			return GroupVerdict;
+		}
+	}
+
+	// Edits that change what the item is made of (a span's length) are undoable steps, like placing or deleting.
+	FStageParameterValue QuantityBefore;
+	const bool bRecordParameter = StageCraftTags::IsQuantityParameter(ParameterId) && Target->Implements<UStageParameterInterface>()
+		&& IStageParameterInterface::Execute_GetParameterValue(Target, ParameterId, QuantityBefore);
+
 	if (bGroupEdit)
 	{
 		GroupTransform->BeginGroupEdit(*TransformTarget);
@@ -911,7 +978,78 @@ FStageEconomyResultInfo AModularPlayerController::RequestParameterChange(UObject
 	{
 		EditHistory->RecordTransformChange(TransformTarget, TransformBefore);
 	}
+
+	if (bRecordParameter)
+	{
+		EditHistory->RecordParameterChange(Cast<AActor>(Target), ParameterId, FindParameterName(*Target, ParameterId), QuantityBefore);
+	}
+
+	// A hidden item can be neither seen nor clicked, so it must not keep the gizmo or the inspector.
+	if (ParameterId == StageCraftTags::Param_Info_Visible && Value.Type == EStageParameterType::Bool && !Value.bBool)
+	{
+		Selection->DeselectActor(Cast<AActor>(Target));
+	}
 	return FStageEconomyResultInfo::Ok();
+}
+
+FText AModularPlayerController::FindParameterName(const UObject& Target, const FGameplayTag& ParameterId)
+{
+	if (Target.Implements<UStageParameterInterface>())
+	{
+		for (const FStageParameterSection& Section : IStageParameterInterface::Execute_GetParameterSections(&Target))
+		{
+			if (const FStageParameterDescriptor* Descriptor = Section.Parameters.FindByPredicate([&ParameterId](const FStageParameterDescriptor& Candidate) { return Candidate.Id == ParameterId; }))
+			{
+				return Descriptor->DisplayName;
+			}
+		}
+	}
+	return FText::FromName(ParameterId.GetTagName());
+}
+
+FStageEconomyResultInfo AModularPlayerController::EvaluateSelectionTransform(const FGameplayTag& TransformParameter) const
+{
+	const AStageCraftGameModeBase* GameMode = GetStageGameMode();
+	if (!GameMode)
+	{
+		return FStageEconomyResultInfo::Fail(EStageEconomyResult::InvalidRequest, LOCTEXT("NoAuthorityMove", "Editing needs the StageCraft game mode."));
+	}
+
+	for (AActor* Selected : Selection->GetSelectedActors())
+	{
+		// The current value: the rules judge whether this item may be moved, rotated or scaled at all, not where to.
+		FStageParameterValue Current;
+		if (!IsValid(Selected) || !Selected->Implements<UStageParameterInterface>()
+			|| !IStageParameterInterface::Execute_GetParameterValue(Selected, TransformParameter, Current))
+		{
+			continue;
+		}
+		const FStageEconomyResultInfo Verdict = GameMode->EvaluateParameterChange(this, Selected, TransformParameter, Current);
+		if (!Verdict.IsSuccess())
+		{
+			return Verdict;
+		}
+	}
+	return FStageEconomyResultInfo::Ok();
+}
+
+EStageCommandResult AModularPlayerController::ApplyHistoryParameter(AModularBaseActor& Item, const FGameplayTag& ParameterId, const FStageParameterValue& Value)
+{
+	const AStageCraftGameModeBase* GameMode = GetStageGameMode();
+	UStageSessionSubsystem* Session = UWorld::GetSubsystem<UStageSessionSubsystem>(GetWorld());
+	if (!GameMode || !Session)
+	{
+		ReportRejection(FStageEconomyResultInfo::Fail(EStageEconomyResult::InvalidRequest, LOCTEXT("NoAuthorityUndo", "Undo needs the StageCraft game mode.")));
+		return EStageCommandResult::Refused;
+	}
+
+	const FStageEconomyResultInfo Verdict = GameMode->EvaluateParameterChange(this, &Item, ParameterId, Value);
+	if (!Verdict.IsSuccess())
+	{
+		ReportRejection(Verdict);
+		return EStageCommandResult::Refused;
+	}
+	return Session->ApplyParameterChange(&Item, ParameterId, Value) ? EStageCommandResult::Succeeded : EStageCommandResult::Invalid;
 }
 
 bool AModularPlayerController::IsBusyWithPointer() const
@@ -942,8 +1080,54 @@ void AModularPlayerController::RequestSelectAll()
 
 	// Selecting is a Select-mode activity; the ghost would otherwise sit on top of a selected group.
 	PlacementTool->EnterSelectMode();
-	const TArray<AModularBaseActor*> PlacedItems = Session->GetPlacedItems();
-	Selection->SelectActors(TArray<AActor*>(PlacedItems));
+	TArray<AActor*> VisibleItems;
+	for (AModularBaseActor* Item : Session->GetPlacedItems())
+	{
+		// As in the Unreal Editor: Select All picks what can be seen. Hidden items are selected from the outliner.
+		if (!Item->IsHiddenOnStage())
+		{
+			VisibleItems.Add(Item);
+		}
+	}
+	Selection->SelectActors(VisibleItems);
+}
+
+void AModularPlayerController::RequestSelectItems(const TArray<AModularBaseActor*>& Items, EStageSelectionClick Click)
+{
+	if (IsBusyWithPointer())
+	{
+		return;
+	}
+
+	PlacementTool->EnterSelectMode();
+	const TArray<AActor*> Targets(Items);
+	if (Click == EStageSelectionClick::Replace)
+	{
+		Selection->SelectActors(Targets);
+		return;
+	}
+
+	const bool bAllSelected = !Targets.IsEmpty() && Algo::AllOf(Targets, [this](const AActor* Target) { return Selection->IsActorSelected(Target); });
+	if (bAllSelected)
+	{
+		Selection->RemoveActorsFromSelection(Targets);
+	}
+	else
+	{
+		Selection->AddActorsToSelection(Targets);
+	}
+}
+
+bool AModularPlayerController::RequestExportBillOfMaterials()
+{
+	UStageBillOfMaterialsSubsystem* Report = UWorld::GetSubsystem<UStageBillOfMaterialsSubsystem>(GetWorld());
+	FText Reason = LOCTEXT("NoReport", "The bill of materials is not available in this level.");
+	if (Report && Report->StartExport(Reason))
+	{
+		return true;
+	}
+	ReportRejection(FStageEconomyResultInfo::Fail(EStageEconomyResult::InvalidRequest, Reason));
+	return false;
 }
 
 int32 AModularPlayerController::RequestClearStage()
@@ -997,6 +1181,10 @@ bool AModularPlayerController::RequestRender()
 	if (AStagePlacementPreview* Preview = PlacementTool->GetPreviewActor())
 	{
 		Request.HiddenActors.Add(Preview);
+	}
+	if (AStageSpanPreview* SpanPreview = SpanTool->GetPreviewActor())
+	{
+		Request.HiddenActors.Add(SpanPreview);
 	}
 
 	FText Reason;
@@ -1090,15 +1278,20 @@ void AModularPlayerController::HandlePurchaseCompleted(UStageProductData* Produc
 
 FStageEconomyResultInfo AModularPlayerController::CanPlaceItem(const UBaseItemData* Item) const
 {
+	return EvaluatePlacementRules(Item, 1);
+}
+
+FStageEconomyResultInfo AModularPlayerController::EvaluatePlacementRules(const UBaseItemData* Item, int32 Quantity) const
+{
 	const AStageCraftGameModeBase* GameMode = GetStageGameMode();
 	return GameMode
-		? GameMode->EvaluatePlacement(this, Item)
+		? GameMode->EvaluatePlacement(this, Item, Quantity)
 		: FStageEconomyResultInfo::Fail(EStageEconomyResult::InvalidRequest, LOCTEXT("NoAuthorityPlace", "Placement needs the StageCraft game mode."));
 }
 
-FStageEconomyResultInfo AModularPlayerController::ValidatePlacement(const UBaseItemData& Item)
+FStageEconomyResultInfo AModularPlayerController::ValidatePlacement(const UBaseItemData& Item, int32 Quantity)
 {
-	const FStageEconomyResultInfo Result = CanPlaceItem(&Item);
+	const FStageEconomyResultInfo Result = EvaluatePlacementRules(&Item, Quantity);
 	if (!Result.IsSuccess())
 	{
 		ReportRejection(Result);
@@ -1106,10 +1299,10 @@ FStageEconomyResultInfo AModularPlayerController::ValidatePlacement(const UBaseI
 	return Result;
 }
 
-FStageEconomyResultInfo AModularPlayerController::EvaluatePlacementPreview(const UBaseItemData& Item)
+FStageEconomyResultInfo AModularPlayerController::EvaluatePlacementPreview(const UBaseItemData& Item, int32 Quantity)
 {
 	// Same rules as a commit, without reporting: hovering a locked item must not raise toasts or error cues.
-	return CanPlaceItem(&Item);
+	return EvaluatePlacementRules(&Item, Quantity);
 }
 
 FStageEconomyResultInfo AModularPlayerController::RequestPlaceItem(UBaseItemData* Item)
@@ -1123,7 +1316,7 @@ FStageEconomyResultInfo AModularPlayerController::RequestPlaceItem(UBaseItemData
 		return Result;
 	}
 
-	const FStageEconomyResultInfo Verdict = ValidatePlacement(*Item);
+	const FStageEconomyResultInfo Verdict = ValidatePlacement(*Item, 1);
 	if (!Verdict.IsSuccess())
 	{
 		return Verdict;

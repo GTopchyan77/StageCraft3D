@@ -66,8 +66,18 @@ TSharedRef<FTabManager::FLayout> FStageWorkspaceShell::MakeDefaultLayout()
 			FTabManager::NewPrimaryArea()->SetOrientation(Orient_Horizontal)
 			->Split
 			(
-				FTabManager::NewStack()->SetSizeCoefficient(0.16f)
-				->AddTab(ToTabId(StageCraftTags::Panel_Library), ETabState::OpenedTab)
+				// The Library (what can be placed) above the Outliner (what is placed), like the Unreal Editor's content and outliner columns.
+				FTabManager::NewSplitter()->SetOrientation(Orient_Vertical)->SetSizeCoefficient(0.16f)
+				->Split
+				(
+					FTabManager::NewStack()->SetSizeCoefficient(0.55f)
+					->AddTab(ToTabId(StageCraftTags::Panel_Library), ETabState::OpenedTab)
+				)
+				->Split
+				(
+					FTabManager::NewStack()->SetSizeCoefficient(0.45f)
+					->AddTab(ToTabId(StageCraftTags::Panel_Outliner), ETabState::OpenedTab)
+				)
 			)
 			->Split
 			(
@@ -85,10 +95,11 @@ TSharedRef<FTabManager::FLayout> FStageWorkspaceShell::MakeDefaultLayout()
 			)
 			->Split
 			(
-				// The Render panel shares the Inspector's column as a second tab; the Inspector stays in front.
+				// Render and Bill of Materials share the Inspector's column as further tabs; the Inspector stays in front.
 				FTabManager::NewStack()->SetSizeCoefficient(0.22f)
 				->AddTab(ToTabId(StageCraftTags::Panel_Inspector), ETabState::OpenedTab)
 				->AddTab(ToTabId(StageCraftTags::Panel_Render), ETabState::OpenedTab)
+				->AddTab(ToTabId(StageCraftTags::Panel_BillOfMaterials), ETabState::OpenedTab)
 				->SetForegroundTab(ToTabId(StageCraftTags::Panel_Inspector))
 			)
 		);

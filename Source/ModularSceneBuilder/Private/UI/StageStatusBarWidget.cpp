@@ -49,6 +49,26 @@ namespace StageStatusBar
 			? LOCTEXT("SelectNoItem", "Click an item to select it   ·   Ctrl+Click: select several   ·   Space: Move / Rotate / Scale   ·   Right mouse + WASD: fly")
 			: FText::Format(LOCTEXT("SelectItem", "Click an item to select it   ·   Ctrl+Click: select several   ·   Space: Move / Rotate / Scale   ·   P: place {0}"), ArmedItemName);
 	}
+
+	FText MakeSpanHint(const FStageSpanToolStatus& Status)
+	{
+		if (Status.Phase == EStageSpanToolPhase::PickStart)
+		{
+			return FText::Format(LOCTEXT("SpanStart", "Drawing {0}: click where the run starts   ·   Esc or P: finish"), Status.ItemName);
+		}
+		if (!Status.bHasRun)
+		{
+			return FText::Format(LOCTEXT("SpanEndNoRun", "Drawing {0}: click where the run ends   ·   Esc: new start point"), Status.ItemName);
+		}
+
+		FNumberFormattingOptions TwoDecimals;
+		TwoDecimals.SetMinimumFractionalDigits(2).SetMaximumFractionalDigits(2);
+		const FText Run = FText::Format(LOCTEXT("SpanRun", "{0} m, {1} {1}|plural(one=segment,other=segments)"),
+			FText::AsNumber(Status.Length * 0.01, &TwoDecimals), Status.SegmentCount);
+		return Status.bRefused
+			? FText::Format(LOCTEXT("SpanRefused", "{0}: {1}, not allowed by this stage's limits   ·   Esc: new start point"), Status.ItemName, Run)
+			: FText::Format(LOCTEXT("SpanEnd", "{0}: {1}   ·   click to place; the next run starts at its end   ·   Esc: new start point"), Status.ItemName, Run);
+	}
 }
 
 void UStageStatusBarWidget::NativeOnInitialized()
@@ -187,6 +207,18 @@ void UStageStatusBarWidget::BindSources()
 		RenderSubsystem->OnRenderStateChanged.AddUniqueDynamic(this, &ThisClass::HandleRenderStateChanged);
 		RenderSubsystem->OnRenderFinished.AddUniqueDynamic(this, &ThisClass::HandleRenderFinished);
 	}
+
+	if (UStageSpanToolComponent* Tool = OwningController->GetSpanTool())
+	{
+		SpanTool = Tool;
+		Tool->OnStatusChanged.AddUniqueDynamic(this, &ThisClass::HandleSpanStatusChanged);
+	}
+
+	if (UStageBillOfMaterialsSubsystem* Report = UWorld::GetSubsystem<UStageBillOfMaterialsSubsystem>(GetWorld()))
+	{
+		BillOfMaterials = Report;
+		Report->OnExportFinished.AddUniqueDynamic(this, &ThisClass::HandleReportExportFinished);
+	}
 }
 
 void UStageStatusBarWidget::UnbindSources()
@@ -222,6 +254,14 @@ void UStageStatusBarWidget::UnbindSources()
 		RenderSubsystem->OnRenderStateChanged.RemoveDynamic(this, &ThisClass::HandleRenderStateChanged);
 		RenderSubsystem->OnRenderFinished.RemoveDynamic(this, &ThisClass::HandleRenderFinished);
 	}
+	if (UStageSpanToolComponent* Tool = SpanTool.Get())
+	{
+		Tool->OnStatusChanged.RemoveDynamic(this, &ThisClass::HandleSpanStatusChanged);
+	}
+	if (UStageBillOfMaterialsSubsystem* Report = BillOfMaterials.Get())
+	{
+		Report->OnExportFinished.RemoveDynamic(this, &ThisClass::HandleReportExportFinished);
+	}
 	BindCameraPawn(nullptr);
 
 	Controller.Reset();
@@ -231,6 +271,8 @@ void UStageStatusBarWidget::UnbindSources()
 	Selection.Reset();
 	SceneFiles.Reset();
 	Render.Reset();
+	SpanTool.Reset();
+	BillOfMaterials.Reset();
 }
 
 void UStageStatusBarWidget::BindCameraPawn(APawn* Pawn)
@@ -271,8 +313,21 @@ void UStageStatusBarWidget::RefreshMode()
 	if (HintText)
 	{
 		const USelectionComponent* SelectionComponent = Selection.Get();
-		HintText->SetText(StageStatusBar::MakeHint(Mode, ArmedName, SelectionComponent ? SelectionComponent->GetSelectionCount() : 0));
+		const UStageSpanToolComponent* Span = SpanTool.Get();
+		HintText->SetText(Span && Span->IsToolActive()
+			? StageStatusBar::MakeSpanHint(Span->GetStatus())
+			: StageStatusBar::MakeHint(Mode, ArmedName, SelectionComponent ? SelectionComponent->GetSelectionCount() : 0));
 	}
+}
+
+void UStageStatusBarWidget::HandleSpanStatusChanged(const FStageSpanToolStatus& Status)
+{
+	RefreshMode();
+}
+
+void UStageStatusBarWidget::HandleReportExportFinished(const FStageReportExportResult& Result)
+{
+	ShowMessage(Result.Message, Result.bSucceeded ? EMessageSeverity::Info : EMessageSeverity::Warning);
 }
 
 void UStageStatusBarWidget::ShowMessage(const FText& Message, EMessageSeverity Severity)

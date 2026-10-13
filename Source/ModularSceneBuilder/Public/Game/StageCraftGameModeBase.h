@@ -34,11 +34,17 @@ public:
 	virtual void StartPlay() override;
 	//~ End AGameModeBase Interface
 
-	/** May Player place Item now? */
+	/**
+	 * May Player place one new item of Item now? Quantity is how many catalog units it consists of (a span's segment count;
+	 * 1 for a single piece), so power and weight limits see the whole run.
+	 */
 	UFUNCTION(BlueprintNativeEvent, BlueprintCallable, Category = "StageCraft|Rules")
-	FStageEconomyResultInfo EvaluatePlacement(const APlayerController* Player, const class UBaseItemData* Item) const;
+	FStageEconomyResultInfo EvaluatePlacement(const APlayerController* Player, const class UBaseItemData* Item, int32 Quantity = 1) const;
 
-	/** May Player write Value to ParameterId on Target? */
+	/**
+	 * May Player write Value to ParameterId on Target? Besides ownership this enforces the item's own state: a locked item
+	 * refuses transform and length edits, a span refuses Scale, and lengthening a span must fit the session limits.
+	 */
 	UFUNCTION(BlueprintNativeEvent, BlueprintCallable, Category = "StageCraft|Rules")
 	FStageEconomyResultInfo EvaluateParameterChange(const APlayerController* Player, const UObject* Target, FGameplayTag ParameterId, const FStageParameterValue& Value) const;
 
@@ -51,6 +57,9 @@ protected:
 	FStageSessionRules SessionRules;
 
 private:
+	/** The rules a placed item's own state imposes on an edit (lock, scale, quantity limits), independent of ownership. */
+	FStageEconomyResultInfo EvaluateItemEdit(const class AModularBaseActor& Item, const FGameplayTag& ParameterId, const FStageParameterValue& Value) const;
+
 	class UStageSessionSubsystem* GetSession() const;
 	class UStageEconomySubsystem* GetEconomy() const;
 };

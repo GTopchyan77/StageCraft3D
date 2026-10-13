@@ -23,7 +23,17 @@ AModularBaseActor* USpawnSystemComponent::SpawnItem(UBaseItemData* Item, const F
 		UE_LOG(LogStageCraft, Warning, TEXT("%s: cannot spawn: no item."), *GetNameSafe(GetOwner()));
 		return nullptr;
 	}
-	return SpawnValidated(*Item, Transform, nullptr);
+	return SpawnValidated(*Item, Transform, [](AModularBaseActor&) {}, TEXT("Placed"));
+}
+
+AModularBaseActor* USpawnSystemComponent::SpawnConfiguredItem(UBaseItemData* Item, const FTransform& Transform, TFunctionRef<void(AModularBaseActor&)> Configure)
+{
+	if (!Item)
+	{
+		UE_LOG(LogStageCraft, Warning, TEXT("%s: cannot spawn: no item."), *GetNameSafe(GetOwner()));
+		return nullptr;
+	}
+	return SpawnValidated(*Item, Transform, Configure, TEXT("Placed"));
 }
 
 AModularBaseActor* USpawnSystemComponent::RestoreItem(const FStageItemSnapshot& Snapshot)
@@ -36,21 +46,19 @@ AModularBaseActor* USpawnSystemComponent::RestoreItem(const FStageItemSnapshot& 
 			*Snapshot.DisplayName.ToString(), *Snapshot.Item.ToString());
 		return nullptr;
 	}
-	return SpawnValidated(*Item, Snapshot.Transform, &Snapshot);
+	return SpawnValidated(*Item, Snapshot.Transform, [&Snapshot](AModularBaseActor& Actor)
+	{
+		Actor.AssignInstanceId(Snapshot.InstanceId);
+		Actor.RestoreSnapshotState(Snapshot);
+	}, TEXT("Restored"));
 }
 
-AModularBaseActor* USpawnSystemComponent::SpawnValidated(UBaseItemData& Item, const FTransform& Transform, const FStageItemSnapshot* Restore)
+AModularBaseActor* USpawnSystemComponent::SpawnValidated(UBaseItemData& Item, const FTransform& Transform, TFunctionRef<void(AModularBaseActor&)> Prepare, const TCHAR* LogVerb)
 {
 	UWorld* World = GetWorld();
 	if (!World)
 	{
 		UE_LOG(LogStageCraft, Warning, TEXT("%s: cannot spawn %s: no world."), *GetNameSafe(GetOwner()), *Item.GetName());
-		return nullptr;
-	}
-
-	if (PlacementValidator.IsBound() && !PlacementValidator.Execute(Item).IsSuccess())
-	{
-		// The validator's owner reports the refusal (toast, error cue); nothing to add here.
 		return nullptr;
 	}
 
@@ -69,15 +77,21 @@ AModularBaseActor* USpawnSystemComponent::SpawnValidated(UBaseItemData& Item, co
 		return nullptr;
 	}
 
-	if (Restore)
-	{
-		Actor->AssignInstanceId(Restore->InstanceId);
-		Actor->RestoreSnapshotState(*Restore);
-	}
+	Prepare(*Actor);
 	Actor->InitializeFromItemData(&Item);
+
+	// Validated on the prepared actor, because only it knows its quantity (a restored or configured span's segment count).
+	// A refused actor never finishes spawning, so it never begins play, registers with the session or reaches the history.
+	if (PlacementValidator.IsBound() && !PlacementValidator.Execute(Item, Actor->GetQuantity()).IsSuccess())
+	{
+		// The validator's owner reports the refusal (toast, error cue); nothing to add here.
+		Actor->Destroy();
+		return nullptr;
+	}
+
 	Actor->FinishSpawning(Transform);
 
-	UE_LOG(LogStageCraft, Log, TEXT("%s %s (%s) at %s."), Restore ? TEXT("Restored") : TEXT("Placed"), *Actor->GetName(), *Item.GetName(),
+	UE_LOG(LogStageCraft, Log, TEXT("%s %s (%s, quantity %d) at %s."), LogVerb, *Actor->GetName(), *Item.GetName(), Actor->GetQuantity(),
 		*Transform.GetLocation().ToCompactString());
 	OnItemSpawned.Broadcast(Actor);
 	return Actor;

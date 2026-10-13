@@ -105,6 +105,9 @@ void AModularBaseActor::BeginPlay()
 	// Only the root is watched: child moves (e.g. a moving head's pan/tilt pivots) are attributes, not transform.
 	RootTransformUpdatedHandle = MeshComponent->TransformUpdated.AddUObject(this, &ThisClass::HandleRootTransformUpdated);
 
+	// A restored or loaded item may arrive hidden.
+	ApplyStageVisibility();
+
 	if (UStageSessionSubsystem* Session = UWorld::GetSubsystem<UStageSessionSubsystem>(GetWorld()))
 	{
 		Session->RegisterItem(this);
@@ -154,9 +157,13 @@ void AModularBaseActor::ApplyItemData(const UBaseItemData& Data)
 
 void AModularBaseActor::UpdateHighlight()
 {
-	UMaterialInterface* Overlay = bHighlightSuppressed ? nullptr
+	MeshComponent->SetOverlayMaterial(GetHighlightOverlay());
+}
+
+UMaterialInterface* AModularBaseActor::GetHighlightOverlay() const
+{
+	return bHighlightSuppressed ? nullptr
 		: (bIsSelected ? SelectedOverlayMaterial.Get() : (bIsHovered ? HoverOverlayMaterial.Get() : nullptr));
-	MeshComponent->SetOverlayMaterial(Overlay);
 }
 
 void AModularBaseActor::SetHighlightSuppressed(bool bSuppressed)
@@ -166,6 +173,12 @@ void AModularBaseActor::SetHighlightSuppressed(bool bSuppressed)
 		bHighlightSuppressed = bSuppressed;
 		UpdateHighlight();
 	}
+}
+
+void AModularBaseActor::ApplyStageVisibility()
+{
+	SetActorHiddenInGame(bHiddenOnStage);
+	SetActorEnableCollision(!bHiddenOnStage);
 }
 
 void AModularBaseActor::OnHoverBegin_Implementation()
@@ -336,6 +349,9 @@ void AModularBaseActor::GatherParameterSections(TArray<FStageParameterSection>& 
 		}
 	}
 
+	Info.Add(StageCraftTags::Param_Info_Visible, LOCTEXT("Visible", "Visible"), FStageParameterValue::MakeBool(!bHiddenOnStage));
+	Info.Add(StageCraftTags::Param_Info_Locked, LOCTEXT("Locked", "Locked"), FStageParameterValue::MakeBool(bTransformLocked));
+
 	FStageParameterSection& Transform = OutSections.Emplace_GetRef(StageCraftTags::FeatureGroup_Transform, LOCTEXT("TransformSection", "Transform"));
 	Transform.Add(StageCraftTags::Param_Transform_Location, LOCTEXT("Location", "Location"), FStageParameterValue::MakeVector(GetActorLocation()))
 		.Display(1.0, LOCTEXT("Cm", "cm"), 1.0);
@@ -359,6 +375,16 @@ bool AModularBaseActor::ReadParameter(const FGameplayTag& ParameterId, FStagePar
 		GetSwappableItems(Swappable);
 		OutValue = FStageParameterValue::MakeEnum(Swappable.IndexOfByKey(ItemData));
 		return Swappable.Num() > 1;
+	}
+	if (ParameterId == StageCraftTags::Param_Info_Visible)
+	{
+		OutValue = FStageParameterValue::MakeBool(!bHiddenOnStage);
+		return true;
+	}
+	if (ParameterId == StageCraftTags::Param_Info_Locked)
+	{
+		OutValue = FStageParameterValue::MakeBool(bTransformLocked);
+		return true;
 	}
 	if (ParameterId == StageCraftTags::Param_Transform_Location)
 	{
@@ -399,6 +425,19 @@ bool AModularBaseActor::WriteParameter(const FGameplayTag& ParameterId, const FS
 		{
 			InitializeFromItemData(Swappable[Value.Integer]);
 		}
+		return true;
+	}
+	if (ParameterId == StageCraftTags::Param_Info_Visible && Value.Type == EStageParameterType::Bool)
+	{
+		bHiddenOnStage = !Value.bBool;
+		ApplyStageVisibility();
+		NotifyParameterChanged(ParameterId);
+		return true;
+	}
+	if (ParameterId == StageCraftTags::Param_Info_Locked && Value.Type == EStageParameterType::Bool)
+	{
+		bTransformLocked = Value.bBool;
+		NotifyParameterChanged(ParameterId);
 		return true;
 	}
 	// Transform writes notify through HandleRootTransformUpdated, so gizmo and inspector share one path.

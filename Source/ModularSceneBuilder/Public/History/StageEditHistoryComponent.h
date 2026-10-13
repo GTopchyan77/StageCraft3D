@@ -4,6 +4,7 @@
 
 #include "CoreMinimal.h"
 #include "Components/ActorComponent.h"
+#include "Data/StageParameterTypes.h"
 #include "History/StageEditCommand.h"
 #include "StageEditHistoryComponent.generated.h"
 
@@ -15,11 +16,19 @@ struct FStageTransformChange
 };
 
 /**
+ * Writes a parameter during undo / redo through the rules, without recording it again. Bound by the owning controller to the
+ * GameMode and the session; unbound means no rules apply (tests, tools) and the value is written straight to the item.
+ */
+DECLARE_DELEGATE_RetVal_ThreeParams(EStageCommandResult, FStageParameterApplier, class AModularBaseActor& /*Item*/, const FGameplayTag& /*ParameterId*/, const FStageParameterValue& /*Value*/);
+
+/**
  * The local player's link to the stage's undo history (Docs/ADR/0003-undo-redo-and-object-snapping.md):
  * it records what this player's tools did, and runs undo/redo against the live world.
  *
  * Recording (each user action becomes exactly one step, after it succeeded):
- *  - Place: UStagePlacementToolComponent::OnItemPlaced (bound here).
+ *  - Place: UStagePlacementToolComponent::OnItemPlaced and UStageSpanToolComponent::OnItemPlaced (bound here).
+ *  - Parameter: RecordParameterChange, called by the controller after a validated edit that changes what an item is made of
+ *    (a span's length); undo / redo write it back through ParameterApplier, so the rules decide again.
  *  - Delete: DeleteItem, which the controller's Delete key goes through.
  *  - Transform: RecordTransformChange, called by the controller when a gizmo drag ends and after a
  *    validated Location / Rotation / Scale edit.
@@ -73,6 +82,15 @@ public:
 	 */
 	void RecordTransformChanges(TConstArrayView<FStageTransformChange> Changes);
 
+	/**
+	 * Records that ParameterId of Target changed from Before to its current value (read back from the item, so a clamped value is
+	 * what is recorded). Ignored when nothing changed meaningfully or Target is not a stage item. ParameterName names the step.
+	 */
+	void RecordParameterChange(AActor* Target, const FGameplayTag& ParameterId, const FText& ParameterName, const FStageParameterValue& Before);
+
+	/** How undo / redo write parameters. See FStageParameterApplier. */
+	FStageParameterApplier ParameterApplier;
+
 	EStageCommandResult Undo();
 	EStageCommandResult Redo();
 
@@ -107,4 +125,7 @@ private:
 
 	UPROPERTY(Transient)
 	TObjectPtr<class UStagePlacementToolComponent> PlacementTool = nullptr;
+
+	UPROPERTY(Transient)
+	TObjectPtr<class UStageSpanToolComponent> SpanTool = nullptr;
 };

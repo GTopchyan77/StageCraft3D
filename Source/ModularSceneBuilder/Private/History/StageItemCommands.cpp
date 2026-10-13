@@ -78,6 +78,56 @@ EStageCommandResult FStageDeleteItemCommand::Redo(IStageItemEditor& Editor)
 	return StageItemCommands::RemoveCapturing(Editor, Item);
 }
 
+// --- Parameter ---
+
+FStageParameterItemCommand::FStageParameterItemCommand(const FGuid& InInstanceId, const FText& InItemName, const FText& InParameterName, const FGameplayTag& InParameterId,
+	const FStageParameterValue& InBefore, const FStageParameterValue& InAfter)
+	: InstanceId(InInstanceId)
+	, ItemName(InItemName)
+	, ParameterName(InParameterName)
+	, ParameterId(InParameterId)
+	, Before(InBefore)
+	, After(InAfter)
+{
+}
+
+FText FStageParameterItemCommand::GetDescription() const
+{
+	return FText::Format(LOCTEXT("ChangeParameter", "Change {0} of {1}"), ParameterName, ItemName);
+}
+
+EStageCommandResult FStageParameterItemCommand::Undo(IStageItemEditor& Editor)
+{
+	return Editor.SetItemParameter(InstanceId, ParameterId, Before);
+}
+
+EStageCommandResult FStageParameterItemCommand::Redo(IStageItemEditor& Editor)
+{
+	return Editor.SetItemParameter(InstanceId, ParameterId, After);
+}
+
+bool FStageParameterItemCommand::IsMeaningfulChange(const FStageParameterValue& InBefore, const FStageParameterValue& InAfter)
+{
+	using namespace StageItemCommands;
+
+	if (InBefore.Type != InAfter.Type)
+	{
+		return true;
+	}
+	switch (InBefore.Type)
+	{
+	case EStageParameterType::Float:	return !FMath::IsNearlyEqual(InBefore.Float, InAfter.Float, LocationTolerance);
+	case EStageParameterType::Integer:
+	case EStageParameterType::Enum:		return InBefore.Integer != InAfter.Integer;
+	case EStageParameterType::Bool:		return InBefore.bBool != InAfter.bBool;
+	case EStageParameterType::Color:	return !InBefore.Color.Equals(InAfter.Color);
+	case EStageParameterType::Vector:	return !InBefore.Vector.Equals(InAfter.Vector, LocationTolerance);
+	case EStageParameterType::Rotator:	return !InBefore.Rotator.Equals(InAfter.Rotator, RotationTolerance);
+	case EStageParameterType::Text:		return !InBefore.Text.EqualTo(InAfter.Text);
+	default:							return true;
+	}
+}
+
 // --- Transform ---
 
 FStageTransformItemCommand::FStageTransformItemCommand(const FGuid& InInstanceId, const FText& InItemName, const FTransform& InBefore, const FTransform& InAfter)

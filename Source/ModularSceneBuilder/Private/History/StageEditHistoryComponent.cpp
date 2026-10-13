@@ -11,9 +11,11 @@
 #include "History/StageEditHistorySubsystem.h"
 #include "History/StageItemCommands.h"
 #include "History/StageItemSnapshot.h"
+#include "Interaction/StageParameterInterface.h"
 #include "Interaction/StageTransformRules.h"
 #include "ModularSceneBuilder.h"
 #include "Placement/StagePlacementToolComponent.h"
+#include "Placement/StageSpanToolComponent.h"
 #include "Subsystems/StageSessionSubsystem.h"
 
 #include UE_INLINE_GENERATED_CPP_BY_NAME(StageEditHistoryComponent)
@@ -34,8 +36,8 @@ namespace StageEditHistory
 	class FLiveItemEditor final : public IStageItemEditor
 	{
 	public:
-		FLiveItemEditor(UStageSessionSubsystem& InSession, USpawnSystemComponent& InSpawnSystem, USelectionComponent& InSelection)
-			: Session(InSession), SpawnSystem(InSpawnSystem), Selection(InSelection)
+		FLiveItemEditor(UStageSessionSubsystem& InSession, USpawnSystemComponent& InSpawnSystem, USelectionComponent& InSelection, const FStageParameterApplier& InParameterApplier)
+			: Session(InSession), SpawnSystem(InSpawnSystem), Selection(InSelection), ParameterApplier(InParameterApplier)
 		{
 		}
 
@@ -91,10 +93,25 @@ namespace StageEditHistory
 			return EStageCommandResult::Succeeded;
 		}
 
+		virtual EStageCommandResult SetItemParameter(const FGuid& InstanceId, const FGameplayTag& ParameterId, const FStageParameterValue& Value) override
+		{
+			AModularBaseActor* Item = Session.FindItemById(InstanceId);
+			if (!Item)
+			{
+				return EStageCommandResult::Invalid;
+			}
+			if (ParameterApplier.IsBound())
+			{
+				return ParameterApplier.Execute(*Item, ParameterId, Value);
+			}
+			return Session.ApplyParameterChange(Item, ParameterId, Value) ? EStageCommandResult::Succeeded : EStageCommandResult::Invalid;
+		}
+
 	private:
 		UStageSessionSubsystem& Session;
 		USpawnSystemComponent& SpawnSystem;
 		USelectionComponent& Selection;
+		const FStageParameterApplier& ParameterApplier;
 	};
 }
 
@@ -117,6 +134,12 @@ void UStageEditHistoryComponent::BeginPlay()
 	{
 		PlacementTool->OnItemPlaced.AddUniqueDynamic(this, &ThisClass::HandleItemPlaced);
 	}
+
+	SpanTool = GetOwner()->FindComponentByClass<UStageSpanToolComponent>();
+	if (SpanTool)
+	{
+		SpanTool->OnItemPlaced.AddUniqueDynamic(this, &ThisClass::HandleItemPlaced);
+	}
 }
 
 void UStageEditHistoryComponent::EndPlay(const EEndPlayReason::Type EndPlayReason)
@@ -126,6 +149,12 @@ void UStageEditHistoryComponent::EndPlay(const EEndPlayReason::Type EndPlayReaso
 		PlacementTool->OnItemPlaced.RemoveDynamic(this, &ThisClass::HandleItemPlaced);
 		PlacementTool = nullptr;
 	}
+	if (SpanTool)
+	{
+		SpanTool->OnItemPlaced.RemoveDynamic(this, &ThisClass::HandleItemPlaced);
+		SpanTool = nullptr;
+	}
+	ParameterApplier.Unbind();
 	Super::EndPlay(EndPlayReason);
 }
 
@@ -250,6 +279,22 @@ void UStageEditHistoryComponent::RecordTransformChanges(TConstArrayView<FStageTr
 	RecordAsOneStep(MoveTemp(Commands), FText::Format(NSLOCTEXT("StageEditHistory", "TransformItems", "Transform {0} items"), FText::AsNumber(Count)));
 }
 
+void UStageEditHistoryComponent::RecordParameterChange(AActor* Target, const FGameplayTag& ParameterId, const FText& ParameterName, const FStageParameterValue& Before)
+{
+	AModularBaseActor* Item = Cast<AModularBaseActor>(Target);
+	if (!IsValid(Item))
+	{
+		return;
+	}
+
+	FStageParameterValue After;
+	if (!IStageParameterInterface::Execute_GetParameterValue(Item, ParameterId, After) || !FStageParameterItemCommand::IsMeaningfulChange(Before, After))
+	{
+		return;
+	}
+	Record(MakeShared<FStageParameterItemCommand>(Item->GetInstanceId(), Item->GetInstanceLabel(), ParameterName, ParameterId, Before, After));
+}
+
 EStageCommandResult UStageEditHistoryComponent::Undo()
 {
 	return Step(/*bUndo*/ true);
@@ -269,6 +314,6 @@ EStageCommandResult UStageEditHistoryComponent::Step(bool bUndo)
 		return EStageCommandResult::NothingToDo;
 	}
 
-	StageEditHistory::FLiveItemEditor Editor(*Session, *SpawnSystem, *Selection);
+	StageEditHistory::FLiveItemEditor Editor(*Session, *SpawnSystem, *Selection, ParameterApplier);
 	return bUndo ? History->Undo(Editor) : History->Redo(Editor);
 }

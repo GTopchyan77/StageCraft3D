@@ -29,7 +29,13 @@ enum class EStageSelectionClick : uint8
  *   USpawnSystemComponent (spawn/delete executor), USelectionComponent (selection),
  *   AModularTransformGizmo (move/rotate/scale), AStageCameraPawn (fly camera),
  *   UStageEditorAudioFeedbackComponent (feedback cues), UStageEditHistoryComponent (undo/redo),
- *   UStageSnappingComponent (object snapping for placement and gizmo moves).
+ *   UStageSnappingComponent (object snapping for placement and gizmo moves),
+ *   UStageSpanToolComponent (two-click placement of spans: truss runs, railings, cables).
+ *
+ * In Place mode with a span armed, clicks, cursor moves and the first Esc go to the span tool instead of the point placement tool.
+ *
+ * A gizmo drag or numeric transform edit is checked by the GameMode for every item it moves (the target and the rest of the
+ * selection), so a locked item, or a span being scaled, refuses the whole edit instead of being left behind.
  *
  * Mouse buttons have exclusive jobs, as in the Unreal Editor viewport:
  *  - Left, Place mode: places exactly one armed item where the ghost shows it; Place mode stays active for the next copy.
@@ -91,6 +97,9 @@ public:
 
 	UFUNCTION(BlueprintPure, Category = "StageCraft")
 	class UStageSceneComponent* GetSceneFiles() const { return SceneFiles; }
+
+	UFUNCTION(BlueprintPure, Category = "StageCraft")
+	class UStageSpanToolComponent* GetSpanTool() const { return SpanTool; }
 
 	UFUNCTION(BlueprintPure, Category = "StageCraft|UI")
 	class UUserWidget* GetHUDWidget() const { return HUDWidget; }
@@ -167,9 +176,24 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "StageCraft|Requests")
 	int32 RequestDeleteSelection();
 
-	/** Selects every placed item (Edit > Select All). Leaves Place mode first, like any selection. Same guards as delete. */
+	/** Selects every visible placed item (Edit > Select All). Leaves Place mode first, like any selection. Same guards as delete. */
 	UFUNCTION(BlueprintCallable, Category = "StageCraft|Requests")
 	void RequestSelectAll();
+
+	/**
+	 * Selects Items as a group (outliner rows and discipline headers). Replace: exactly these. Toggle (Ctrl): removes them when all are
+	 * already selected, otherwise adds them. Hidden items can be selected here, as in the Unreal Editor's outliner, so they can be found
+	 * and shown again. Leaves Place mode first; same guards as delete.
+	 */
+	void RequestSelectItems(const TArray<class AModularBaseActor*>& Items, EStageSelectionClick Click);
+
+	/**
+	 * Exports the bill of materials as CSV to Saved/StageCraft/Reports (Bill of Materials panel, File menu). Returns true when the
+	 * export started; the result arrives on UStageBillOfMaterialsSubsystem::OnExportFinished. A refusal (empty stage, already
+	 * exporting) is reported on OnRequestRejected.
+	 */
+	UFUNCTION(BlueprintCallable, Category = "StageCraft|Requests")
+	bool RequestExportBillOfMaterials();
 
 	/**
 	 * Removes every placed item as one undoable step. The caller must have asked the user to confirm (the Edit menu's
@@ -249,6 +273,9 @@ protected:
 
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Components")
 	TObjectPtr<class UStageSceneComponent> SceneFiles = nullptr;
+
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Components")
+	TObjectPtr<class UStageSpanToolComponent> SpanTool = nullptr;
 
 	/** Spawned once for the local player and re-targeted on every selection change. */
 	UPROPERTY(EditDefaultsOnly, Category = "StageCraft|Gizmo")
@@ -355,8 +382,21 @@ private:
 	UFUNCTION()
 	void HandlePossessedPawnChanged(APawn* PreviousPawn, APawn* NewPawn);
 
-	FStageEconomyResultInfo ValidatePlacement(const class UBaseItemData& Item);
-	FStageEconomyResultInfo EvaluatePlacementPreview(const class UBaseItemData& Item);
+	FStageEconomyResultInfo ValidatePlacement(const class UBaseItemData& Item, int32 Quantity);
+	FStageEconomyResultInfo EvaluatePlacementPreview(const class UBaseItemData& Item, int32 Quantity);
+	FStageEconomyResultInfo EvaluatePlacementRules(const class UBaseItemData* Item, int32 Quantity) const;
+
+	/**
+	 * Asks the GameMode whether every selected item may take a TransformParameter edit (Location, Rotation or Scale), as a gizmo
+	 * drag or group numeric edit would apply to all of them. The first refusal is returned; Ok when nothing is selected.
+	 */
+	FStageEconomyResultInfo EvaluateSelectionTransform(const FGameplayTag& TransformParameter) const;
+
+	/** The inspector label of ParameterId on Target ("Length"), for naming history steps; the tag name if Target does not list it. */
+	static FText FindParameterName(const UObject& Target, const FGameplayTag& ParameterId);
+
+	/** Undo / redo of a recorded parameter step: validated by the GameMode and applied by the session, never recorded again. */
+	EStageCommandResult ApplyHistoryParameter(class AModularBaseActor& Item, const FGameplayTag& ParameterId, const FStageParameterValue& Value);
 	void ReportRejection(const FStageEconomyResultInfo& Result);
 	class AStageCraftGameModeBase* GetStageGameMode() const;
 	class UStageEconomySubsystem* GetEconomy() const;

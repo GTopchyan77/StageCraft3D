@@ -272,7 +272,9 @@ FStageSceneOperationResult UStageSceneComponent::ApplyDocument(const FStageScene
 			++UnknownItems;
 			continue;
 		}
-		if (PlacementEvaluator.IsBound() && !PlacementEvaluator.Execute(**Item).IsSuccess())
+		// A pre-check of the item itself (ownership, item count). A span's full quantity is only known once its saved state is
+		// applied, so the spawn system's validator still checks that, and reports it, when the item is restored.
+		if (PlacementEvaluator.IsBound() && !PlacementEvaluator.Execute(**Item, 1).IsSuccess())
 		{
 			++RefusedItems;
 			continue;

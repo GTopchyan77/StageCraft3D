@@ -197,3 +197,18 @@ See `STATE.md` for detailed history of completed work.
 - [ ] Manual verification (Gevor): STATE.md #26 "Not verified" list
 - [ ] Render banding in wide gradients: compare with viewport at the same framing; HDR capture + dithered quantisation
 - [ ] Render cancel button; group edit of non-transform parameters; save cue list with scenes
+
+## Phase 10 — Spans, Outliner, Bill of Materials (STATE.md #27, ADR 0005)
+- [x] Span data (whole / stretch fit, segment + joint parts, caps), pure span math, instanced geometry component, span actor (Length parameter, quantity, no scale)
+- [x] Two-click span tool with ghost, polar angle snap, chained runs, Esc steps back; status bar length / segment readout
+- [x] Quantity-aware rules: validator + EvaluatePlacement quantity, spawn validates the prepared actor, lengthening checked, shrinking always allowed
+- [x] Undoable span length edits (parameter command through the GameMode)
+- [x] Visible / Locked item flags (SaveGame, inspector rows); GameMode lock rules; selection-wide transform checks; hidden items unclickable, unsnappable, skipped by Select All
+- [x] Outliner panel (disciplines, eye / lock tri-state, filter, group selection, Ctrl add / remove)
+- [x] Bill of Materials subsystem (derived cache), panel (tiles + table + subtotals), async atomic CSV export, File > Production menu
+- [x] Content: DA_Panel_Outliner, DA_Panel_BillOfMaterials, DA_Span_TrussF34 / Railing / CableRun, span materials
+- [x] Editor / Game / Shipping builds clean; 29/29 automation; scripted Standalone runs R27_Run1-4 (two bugs found and fixed)
+- [ ] Manual verification (Gevor): STATE.md #27 "Not verified" list
+- [ ] Auto-numbered labels for repeated items ("Truss Run 1, 2…"); hide / lock keyboard shortcuts
+- [ ] Rigging loads per point and per-phase power distribution (amps) in the BOM
+- [ ] Quantity check on span Type swaps; user-defined layers

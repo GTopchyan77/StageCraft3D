@@ -2,6 +2,7 @@
 
 #include "Game/StageCraftGameModeBase.h"
 
+#include "Actors/ModularBaseActor.h"
 #include "Engine/GameInstance.h"
 #include "Engine/World.h"
 #include "Player/ModularPlayerController.h"
@@ -42,11 +43,11 @@ UStageEconomySubsystem* AStageCraftGameModeBase::GetEconomy() const
 	return GameInstance ? GameInstance->GetSubsystem<UStageEconomySubsystem>() : nullptr;
 }
 
-FStageEconomyResultInfo AStageCraftGameModeBase::EvaluatePlacement_Implementation(const APlayerController* Player, const UBaseItemData* Item) const
+FStageEconomyResultInfo AStageCraftGameModeBase::EvaluatePlacement_Implementation(const APlayerController* Player, const UBaseItemData* Item, int32 Quantity) const
 {
 	const UStageSessionSubsystem* Session = GetSession();
 	const UStageEconomySubsystem* Economy = GetEconomy();
-	if (!Player || !Item || !Session || (SessionRules.bEnforceEntitlements && !Economy))
+	if (!Player || !Item || Quantity < 1 || !Session || (SessionRules.bEnforceEntitlements && !Economy))
 	{
 		// Deny by default: a request that cannot be checked is not allowed.
 		return FStageEconomyResultInfo::Fail(EStageEconomyResult::InvalidRequest, LOCTEXT("CannotPlace", "Placement is not available."));
@@ -60,7 +61,7 @@ FStageEconomyResultInfo AStageCraftGameModeBase::EvaluatePlacement_Implementatio
 			return Ownership;
 		}
 	}
-	return Session->EvaluateSessionLimits(Item);
+	return Session->EvaluateSessionLimits(Item, Quantity);
 }
 
 FStageEconomyResultInfo AStageCraftGameModeBase::EvaluateParameterChange_Implementation(const APlayerController* Player, const UObject* Target, FGameplayTag ParameterId, const FStageParameterValue& Value) const
@@ -71,9 +72,47 @@ FStageEconomyResultInfo AStageCraftGameModeBase::EvaluateParameterChange_Impleme
 		return FStageEconomyResultInfo::Fail(EStageEconomyResult::InvalidRequest, LOCTEXT("CannotEdit", "Editing is not available."));
 	}
 
+	// Targets are usually placed items; other parameter owners (future show objects) only have ownership rules.
+	if (const AModularBaseActor* Item = Cast<AModularBaseActor>(Target))
+	{
+		const FStageEconomyResultInfo ItemVerdict = EvaluateItemEdit(*Item, ParameterId, Value);
+		if (!ItemVerdict.IsSuccess())
+		{
+			return ItemVerdict;
+		}
+	}
+
 	return SessionRules.bEnforceEntitlements
 		? Economy->ValidateParameterChange(Target, ParameterId, Value)
 		: FStageEconomyResultInfo::Ok();
+}
+
+FStageEconomyResultInfo AStageCraftGameModeBase::EvaluateItemEdit(const AModularBaseActor& Item, const FGameplayTag& ParameterId, const FStageParameterValue& Value) const
+{
+	const bool bShapesItem = StageCraftTags::IsTransformParameter(ParameterId) || StageCraftTags::IsQuantityParameter(ParameterId);
+	if (bShapesItem && Item.IsTransformLocked())
+	{
+		// Not EStageEconomyResult::Locked: that code means "not owned" and makes the inspector offer a purchase.
+		return FStageEconomyResultInfo::Fail(EStageEconomyResult::SessionRuleViolation,
+			FText::Format(LOCTEXT("ItemLocked", "{0} is locked. Unlock it in the Outliner or the inspector to move or resize it."), Item.GetInstanceLabel()));
+	}
+
+	if (ParameterId == StageCraftTags::Param_Transform_Scale && !Item.SupportsScaling())
+	{
+		return FStageEconomyResultInfo::Fail(EStageEconomyResult::InvalidRequest,
+			FText::Format(LOCTEXT("NoScale", "{0} is sized by its Length, not by scale."), Item.GetInstanceLabel()));
+	}
+
+	if (StageCraftTags::IsQuantityParameter(ParameterId))
+	{
+		const UStageSessionSubsystem* Session = GetSession();
+		if (!Session)
+		{
+			return FStageEconomyResultInfo::Fail(EStageEconomyResult::InvalidRequest, LOCTEXT("CannotResize", "Resizing is not available."));
+		}
+		return Session->EvaluateQuantityIncrease(Item.GetItemData(), Item.PredictQuantity(ParameterId, Value) - Item.GetQuantity());
+	}
+	return FStageEconomyResultInfo::Ok();
 }
 
 #undef LOCTEXT_NAMESPACE

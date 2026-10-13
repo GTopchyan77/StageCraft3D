@@ -69,6 +69,32 @@ public:
 	void SetHighlightSuppressed(bool bSuppressed);
 
 	/**
+	 * Hidden by the user (outliner eye, inspector Visible row). A hidden item is not drawn and cannot be clicked or snapped to,
+	 * but it is still on the stage: it is saved, counted in totals and in the bill of materials. Written through the Visible parameter.
+	 */
+	UFUNCTION(BlueprintPure, Category = "StageCraft|Item")
+	bool IsHiddenOnStage() const { return bHiddenOnStage; }
+
+	/**
+	 * Locked by the user (outliner lock, inspector Locked row): the GameMode refuses transform edits (gizmo and numeric) and
+	 * length edits while set. Deleting is still allowed, as in the Unreal Editor. Written through the Locked parameter.
+	 */
+	UFUNCTION(BlueprintPure, Category = "StageCraft|Item")
+	bool IsTransformLocked() const { return bTransformLocked; }
+
+	/**
+	 * How many catalog units this item consists of: its specs (weight, power) count this many times in session totals and the
+	 * bill of materials. 1 for a single piece; a span (AStageSpanActor) returns its segment count.
+	 */
+	virtual int32 GetQuantity() const { return 1; }
+
+	/** The quantity this item would have after writing Value to ParameterId, so the rules can check limits before the write. */
+	virtual int32 PredictQuantity(const FGameplayTag& ParameterId, const FStageParameterValue& Value) const { return GetQuantity(); }
+
+	/** False for items whose size comes from a parameter instead of their scale (spans): the GameMode then refuses Scale edits. */
+	virtual bool SupportsScaling() const { return true; }
+
+	/**
 	 * Fires on select/deselect, and with bSelected = false when a selected actor is destroyed.
 	 * The gizmo (Phase 4) and details panel bind here instead of watching the actor.
 	 */
@@ -149,6 +175,9 @@ protected:
 	/** Refreshes hover/selection feedback. Override to highlight extra components. */
 	virtual void UpdateHighlight();
 
+	/** The overlay the current hover / selection state calls for, or null (none, or suppressed for a render). */
+	class UMaterialInterface* GetHighlightOverlay() const;
+
 	/** Blueprint hook that runs after the C++ ApplyItemData, for per-item setup without C++. */
 	UFUNCTION(BlueprintImplementableEvent, Category = "StageCraft|Item", meta = (DisplayName = "On Item Data Applied"))
 	void BP_OnItemDataApplied(const class UBaseItemData* AppliedData);
@@ -175,6 +204,9 @@ private:
 	/** Turns gizmo drags (and any other move) into Transform parameter notifications. */
 	void HandleRootTransformUpdated(class USceneComponent* UpdatedComponent, EUpdateTransformFlags UpdateTransformFlags, ETeleportType Teleport);
 
+	/** Shows or hides the item and its collision from bHiddenOnStage, so a hidden item can neither be seen nor clicked. */
+	void ApplyStageVisibility();
+
 	FDelegateHandle RootTransformUpdatedHandle;
 
 	UPROPERTY(Transient, VisibleInstanceOnly, Category = "StageCraft|Item")
@@ -188,4 +220,11 @@ private:
 
 	UPROPERTY(Transient)
 	bool bHighlightSuppressed = false;
+
+	/** Independent user flags, not a mode: an item can be hidden, locked, both or neither. SaveGame, so undo and scene files keep them. */
+	UPROPERTY(VisibleInstanceOnly, SaveGame, Category = "StageCraft|Item")
+	bool bHiddenOnStage = false;
+
+	UPROPERTY(VisibleInstanceOnly, SaveGame, Category = "StageCraft|Item")
+	bool bTransformLocked = false;
 };

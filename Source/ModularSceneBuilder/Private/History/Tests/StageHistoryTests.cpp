@@ -71,6 +71,25 @@ namespace StageHistoryTests
 			Found->Transform = Transform;
 			return EStageCommandResult::Succeeded;
 		}
+
+		/** Parameter values per item, written by SetItemParameter. */
+		TMap<FGuid, TMap<FGameplayTag, FStageParameterValue>> Parameters;
+		/** Models the rules refusing a parameter write now (a locked item, a session limit). */
+		bool bRefuseParameters = false;
+
+		virtual EStageCommandResult SetItemParameter(const FGuid& InstanceId, const FGameplayTag& ParameterId, const FStageParameterValue& Value) override
+		{
+			if (!Items.Contains(InstanceId))
+			{
+				return EStageCommandResult::Invalid;
+			}
+			if (bRefuseParameters)
+			{
+				return EStageCommandResult::Refused;
+			}
+			Parameters.FindOrAdd(InstanceId).Add(ParameterId, Value);
+			return EStageCommandResult::Succeeded;
+		}
 	};
 
 	/** Adds Delta to a shared counter on redo, subtracts on undo; a scripted result can override the outcome. */
@@ -326,6 +345,48 @@ bool FStageHistoryBatchTest::RunTest(const FString& Parameters)
 	Editor.Items.Remove(B.InstanceId);
 	TestEqual(TEXT("Group step with a missing item is Invalid"), Str(History.Undo(Editor)), Str(EStageCommandResult::Invalid));
 	TestTrue(TEXT("The surviving item is left exactly as the step found it"), Editor.Items[A.InstanceId].Transform.Equals(MovedA));
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FStageHistoryParameterTest, "StageCraft.History.Parameter", StageHistoryTests::Flags)
+
+bool FStageHistoryParameterTest::RunTest(const FString& Parameters)
+{
+	using namespace StageHistoryTests;
+
+	FFakeItemEditor Editor;
+	FStageCommandHistory History;
+	const FStageItemSnapshot Run = MakeItem(TEXT("Truss Run 1"), FVector::ZeroVector);
+	Editor.Items.Add(Run.InstanceId, Run);
+
+	// A span lengthened from 4 m to 6 m in the inspector.
+	const FStageParameterValue Short = FStageParameterValue::MakeFloat(400.0);
+	const FStageParameterValue Long = FStageParameterValue::MakeFloat(600.0);
+	History.Record(MakeShared<FStageParameterItemCommand>(Run.InstanceId, FText::FromString(TEXT("Truss Run 1")), FText::FromString(TEXT("Length")),
+		StageCraftTags::Param_Span_Length, Short, Long));
+	TestEqual(TEXT("Description names the parameter and item"), History.GetUndoDescription().ToString(), FString(TEXT("Change Length of Truss Run 1")));
+
+	TestEqual(TEXT("Undo succeeds"), Str(History.Undo(Editor)), Str(EStageCommandResult::Succeeded));
+	TestEqual(TEXT("Undo writes the old length"), Editor.Parameters[Run.InstanceId][StageCraftTags::Param_Span_Length].Float, 400.0);
+	TestEqual(TEXT("Redo succeeds"), Str(History.Redo(Editor)), Str(EStageCommandResult::Succeeded));
+	TestEqual(TEXT("Redo writes the new length"), Editor.Parameters[Run.InstanceId][StageCraftTags::Param_Span_Length].Float, 600.0);
+
+	// The rules say no now (the item was locked, or the longer run no longer fits the power budget): the step stays.
+	Editor.bRefuseParameters = true;
+	TestEqual(TEXT("Refused undo reports Refused"), Str(History.Undo(Editor)), Str(EStageCommandResult::Refused));
+	TestEqual(TEXT("The refused step stays undoable"), History.GetUndoCount(), 1);
+	TestEqual(TEXT("A refused write changes nothing"), Editor.Parameters[Run.InstanceId][StageCraftTags::Param_Span_Length].Float, 600.0);
+
+	Editor.bRefuseParameters = false;
+	Editor.Items.Remove(Run.InstanceId);
+	TestEqual(TEXT("A vanished item makes the step Invalid"), Str(History.Undo(Editor)), Str(EStageCommandResult::Invalid));
+	TestEqual(TEXT("An invalid step is dropped"), History.GetUndoCount(), 0);
+
+	// Only real changes become steps.
+	TestFalse(TEXT("Float noise is not a change"), FStageParameterItemCommand::IsMeaningfulChange(Short, FStageParameterValue::MakeFloat(400.001)));
+	TestTrue(TEXT("A different length is a change"), FStageParameterItemCommand::IsMeaningfulChange(Short, Long));
+	TestTrue(TEXT("A different type is a change"), FStageParameterItemCommand::IsMeaningfulChange(Short, FStageParameterValue::MakeInteger(400)));
+	TestFalse(TEXT("Same bool is not a change"), FStageParameterItemCommand::IsMeaningfulChange(FStageParameterValue::MakeBool(true), FStageParameterValue::MakeBool(true)));
 	return true;
 }
 

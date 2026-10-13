@@ -52,6 +52,14 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "StageCraft|Selection")
 	void SelectActors(const TArray<AActor*>& Targets);
 
+	/** Adds every selectable actor in Targets to the selection, in order (the last becomes the primary). One notification. */
+	UFUNCTION(BlueprintCallable, Category = "StageCraft|Selection")
+	void AddActorsToSelection(const TArray<AActor*>& Targets);
+
+	/** Removes every actor in Targets from the selection. One notification, none if nothing was selected. */
+	UFUNCTION(BlueprintCallable, Category = "StageCraft|Selection")
+	void RemoveActorsFromSelection(const TArray<AActor*>& Targets);
+
 	UFUNCTION(BlueprintCallable, Category = "StageCraft|Selection")
 	void ClearSelection();
 

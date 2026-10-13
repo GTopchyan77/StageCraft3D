@@ -14,4 +14,6 @@ namespace StageCraftTags
 	UE_DEFINE_GAMEPLAY_TAG_COMMENT(Panel_FaderBank,	"StageCraft.Panel.FaderBank",	"Fader and encoder bank for the selected item.");
 	UE_DEFINE_GAMEPLAY_TAG_COMMENT(Panel_Library,		"StageCraft.Panel.Library",		"Item library: pick a catalog item to place.");
 	UE_DEFINE_GAMEPLAY_TAG_COMMENT(Panel_Render,		"StageCraft.Panel.Render",		"Render panel: high-resolution stills of the current view.");
+	UE_DEFINE_GAMEPLAY_TAG_COMMENT(Panel_Outliner,		"StageCraft.Panel.Outliner",	"Outliner: placed items by discipline, with visibility, lock and group selection.");
+	UE_DEFINE_GAMEPLAY_TAG_COMMENT(Panel_BillOfMaterials, "StageCraft.Panel.BillOfMaterials", "Bill of materials: quantities, weight and power of everything on stage, with CSV export.");
 }

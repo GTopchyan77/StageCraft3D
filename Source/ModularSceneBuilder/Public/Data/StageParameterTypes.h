@@ -167,6 +167,7 @@ namespace StageCraftTags
 	MODULARSCENEBUILDER_API UE_DECLARE_GAMEPLAY_TAG_EXTERN(FeatureGroup_Beam);
 	MODULARSCENEBUILDER_API UE_DECLARE_GAMEPLAY_TAG_EXTERN(FeatureGroup_Audio);
 	MODULARSCENEBUILDER_API UE_DECLARE_GAMEPLAY_TAG_EXTERN(FeatureGroup_Rigging);
+	MODULARSCENEBUILDER_API UE_DECLARE_GAMEPLAY_TAG_EXTERN(FeatureGroup_Span);
 
 	// Edit-only parameters.
 	MODULARSCENEBUILDER_API UE_DECLARE_GAMEPLAY_TAG_EXTERN(Param_Info_Label);
@@ -174,6 +175,8 @@ namespace StageCraftTags
 	MODULARSCENEBUILDER_API UE_DECLARE_GAMEPLAY_TAG_EXTERN(Param_Info_Type);
 	MODULARSCENEBUILDER_API UE_DECLARE_GAMEPLAY_TAG_EXTERN(Param_Info_Weight);
 	MODULARSCENEBUILDER_API UE_DECLARE_GAMEPLAY_TAG_EXTERN(Param_Info_Power);
+	MODULARSCENEBUILDER_API UE_DECLARE_GAMEPLAY_TAG_EXTERN(Param_Info_Visible);
+	MODULARSCENEBUILDER_API UE_DECLARE_GAMEPLAY_TAG_EXTERN(Param_Info_Locked);
 	MODULARSCENEBUILDER_API UE_DECLARE_GAMEPLAY_TAG_EXTERN(Param_Transform_Location);
 	MODULARSCENEBUILDER_API UE_DECLARE_GAMEPLAY_TAG_EXTERN(Param_Transform_Rotation);
 	MODULARSCENEBUILDER_API UE_DECLARE_GAMEPLAY_TAG_EXTERN(Param_Transform_Scale);
@@ -192,9 +195,19 @@ namespace StageCraftTags
 	MODULARSCENEBUILDER_API UE_DECLARE_GAMEPLAY_TAG_EXTERN(Param_Rigging_Profile);
 	MODULARSCENEBUILDER_API UE_DECLARE_GAMEPLAY_TAG_EXTERN(Param_Rigging_MaxPointLoad);
 	MODULARSCENEBUILDER_API UE_DECLARE_GAMEPLAY_TAG_EXTERN(Param_Rigging_Points);
+	MODULARSCENEBUILDER_API UE_DECLARE_GAMEPLAY_TAG_EXTERN(Param_Span_Length);
+	MODULARSCENEBUILDER_API UE_DECLARE_GAMEPLAY_TAG_EXTERN(Param_Span_Segments);
+	MODULARSCENEBUILDER_API UE_DECLARE_GAMEPLAY_TAG_EXTERN(Param_Span_SegmentLength);
+	MODULARSCENEBUILDER_API UE_DECLARE_GAMEPLAY_TAG_EXTERN(Param_Span_Fit);
 
 	/** Location, Rotation or Scale: the parameters that make up an item's world transform. */
 	MODULARSCENEBUILDER_API bool IsTransformParameter(const FGameplayTag& ParameterId);
+
+	/** Parameters that change how many catalog units an item consists of (AModularBaseActor::GetQuantity), and so its weight and power. */
+	MODULARSCENEBUILDER_API bool IsQuantityParameter(const FGameplayTag& ParameterId);
+
+	/** Parameters that change how an item is listed (outliner, bill of materials): label, visibility, lock and quantity. */
+	MODULARSCENEBUILDER_API bool IsListingParameter(const FGameplayTag& ParameterId);
 
 	// Fixture attributes: recordable in cues and addressable over DMX. Stored as floats in physical units.
 	MODULARSCENEBUILDER_API UE_DECLARE_GAMEPLAY_TAG_EXTERN(Attribute);

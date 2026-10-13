@@ -3,6 +3,7 @@
 #pragma once
 
 #include "CoreMinimal.h"
+#include "Data/StageParameterTypes.h"
 #include "History/StageEditCommand.h"
 #include "History/StageItemSnapshot.h"
 
@@ -41,6 +42,33 @@ public:
 
 private:
 	FStageItemSnapshot Item;
+};
+
+/**
+ * One parameter of an item changed through the inspector and changes what the item is made of (a span's length, and so its
+ * segment count, weight and power). Undo and redo write the value through the rules again, so they can be refused.
+ */
+class MODULARSCENEBUILDER_API FStageParameterItemCommand final : public IStageEditCommand
+{
+public:
+	FStageParameterItemCommand(const FGuid& InInstanceId, const FText& InItemName, const FText& InParameterName, const FGameplayTag& InParameterId,
+		const FStageParameterValue& InBefore, const FStageParameterValue& InAfter);
+
+	/** "Change Length of Truss Run 1". */
+	virtual FText GetDescription() const override;
+	virtual EStageCommandResult Undo(IStageItemEditor& Editor) override;
+	virtual EStageCommandResult Redo(IStageItemEditor& Editor) override;
+
+	/** True when Before and After differ enough to be worth a history step (same type; numeric values beyond float noise). */
+	static bool IsMeaningfulChange(const FStageParameterValue& Before, const FStageParameterValue& After);
+
+private:
+	FGuid InstanceId;
+	FText ItemName;
+	FText ParameterName;
+	FGameplayTag ParameterId;
+	FStageParameterValue Before;
+	FStageParameterValue After;
 };
 
 /** An item's world transform changed (gizmo drag or numeric Location / Rotation / Scale edit). */

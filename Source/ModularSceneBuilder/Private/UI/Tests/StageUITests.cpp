@@ -64,4 +64,34 @@ bool FStageStatusHintTest::RunTest(const FString& Parameters)
 	return true;
 }
 
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FStageSpanHintTest, "StageCraft.UI.SpanHint", StageUITests::Flags)
+
+bool FStageSpanHintTest::RunTest(const FString& Parameters)
+{
+	using StageStatusBar::MakeSpanHint;
+
+	FStageSpanToolStatus Status;
+	Status.ItemName = FText::FromString(TEXT("F34 Truss"));
+	Status.Phase = EStageSpanToolPhase::PickStart;
+	TestTrue(TEXT("Start hint asks for the start point"), MakeSpanHint(Status).ToString().Contains(TEXT("starts")));
+
+	Status.Phase = EStageSpanToolPhase::PickEnd;
+	TestTrue(TEXT("End hint without a run asks for the end"), MakeSpanHint(Status).ToString().Contains(TEXT("ends")));
+
+	Status.bHasRun = true;
+	Status.Length = 600.0;
+	Status.SegmentCount = 3;
+	const FString Run = MakeSpanHint(Status).ToString();
+	TestTrue(TEXT("Run hint gives the length in metres"), Run.Contains(TEXT("6.00 m")));
+	TestTrue(TEXT("Run hint counts segments"), Run.Contains(TEXT("3 segments")));
+	TestTrue(TEXT("Run hint explains chaining"), Run.Contains(TEXT("next run")));
+
+	Status.SegmentCount = 1;
+	TestTrue(TEXT("Singular segment"), MakeSpanHint(Status).ToString().Contains(TEXT("1 segment,")) || MakeSpanHint(Status).ToString().Contains(TEXT("1 segment ")));
+
+	Status.bRefused = true;
+	TestTrue(TEXT("Refused run says so"), MakeSpanHint(Status).ToString().Contains(TEXT("not allowed")));
+	return true;
+}
+
 #endif // WITH_DEV_AUTOMATION_TESTS

@@ -11,9 +11,11 @@ namespace StageCraftTags
 	UE_DEFINE_GAMEPLAY_TAG_COMMENT(Category_Screen,		"StageCraft.Category.Screen",	"LED walls and projection surfaces.");
 	UE_DEFINE_GAMEPLAY_TAG_COMMENT(Category_Lighting,	"StageCraft.Category.Lighting",	"Moving heads, pars, washes and other fixtures.");
 	UE_DEFINE_GAMEPLAY_TAG_COMMENT(Category_Prop,		"StageCraft.Category.Prop",		"Instruments, furniture and set dressing.");
+	UE_DEFINE_GAMEPLAY_TAG_COMMENT(Category_Cable,		"StageCraft.Category.Cable",	"Cable runs, cable ramps and power distribution lines.");
 
 	UE_DEFINE_GAMEPLAY_TAG_COMMENT(Category_Stage_Deck,				"StageCraft.Category.Stage.Deck",			"Modular stage decks (e.g. 2x1 m platforms).");
 	UE_DEFINE_GAMEPLAY_TAG_COMMENT(Category_Stage_Riser,			"StageCraft.Category.Stage.Riser",			"Drum and band risers, steps and ramps.");
+	UE_DEFINE_GAMEPLAY_TAG_COMMENT(Category_Stage_Railing,			"StageCraft.Category.Stage.Railing",		"Handrails, barriers and edge protection.");
 	UE_DEFINE_GAMEPLAY_TAG_COMMENT(Category_Truss_Straight,			"StageCraft.Category.Truss.Straight",		"Straight truss segments.");
 	UE_DEFINE_GAMEPLAY_TAG_COMMENT(Category_Truss_Corner,			"StageCraft.Category.Truss.Corner",			"Corners, T-pieces and boxes.");
 	UE_DEFINE_GAMEPLAY_TAG_COMMENT(Category_Truss_Tower,			"StageCraft.Category.Truss.Tower",			"Ground-support towers and sleeve blocks.");
