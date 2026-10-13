@@ -197,12 +197,14 @@ UWidget& UStageParameterRowWidget::WrapInFieldBox(UWidget& Editor)
 
 void UStageParameterRowWidget::AddToEditorSlot(UWidget& Widget, bool bFill)
 {
+	// Gaps go only between editors: the first one starts flush with the label column, where read-only values start too.
+	const bool bFirstEditor = EditorSlot->GetChildrenCount() == 0;
 	UPanelSlot* ChildSlot = EditorSlot->AddChild(&Widget);
 	if (UHorizontalBoxSlot* BoxSlot = Cast<UHorizontalBoxSlot>(ChildSlot))
 	{
 		BoxSlot->SetSize(FSlateChildSize(bFill ? ESlateSizeRule::Fill : ESlateSizeRule::Automatic));
 		BoxSlot->SetVerticalAlignment(VAlign_Center);
-		BoxSlot->SetPadding(FMargin(2.f, 0.f));
+		BoxSlot->SetPadding(FMargin(bFirstEditor ? 0.f : 4.f, 0.f, 0.f, 0.f));
 	}
 }
 
