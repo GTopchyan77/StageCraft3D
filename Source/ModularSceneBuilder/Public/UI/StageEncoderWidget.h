@@ -29,10 +29,13 @@
  * needle eases toward the value (frame-rate independent), so cue and DMX jumps read as motion;
  * the readout text is always exact.
  *
+ * No per-frame work at idle: the easing and the popup linger run on a Slate active timer that is
+ * registered when a value arrives or the popup opens, and stops itself once both have settled.
+ *
  * Works without a Widget Blueprint (a default tree is built). A Blueprint subclass may provide
  * NameText, ValueText and DialArea (any widget; the dial is painted over its geometry).
  */
-UCLASS(Blueprintable)
+UCLASS(Blueprintable, meta = (DisableNativeTick))
 class MODULARSCENEBUILDER_API UStageEncoderWidget : public UStageParameterControlWidget
 {
 	GENERATED_BODY()
@@ -57,7 +60,6 @@ public:
 protected:
 	//~ Begin UUserWidget Interface
 	virtual void NativeOnInitialized() override;
-	virtual void NativeTick(const FGeometry& MyGeometry, float InDeltaTime) override;
 	virtual int32 NativePaint(const FPaintArgs& Args, const FGeometry& AllottedGeometry, const FSlateRect& MyCullingRect, FSlateWindowElementList& OutDrawElements, int32 LayerId, const FWidgetStyle& InWidgetStyle, bool bParentEnabled) const override;
 	virtual FReply NativeOnMouseButtonDown(const FGeometry& InGeometry, const FPointerEvent& InMouseEvent) override;
 	virtual FReply NativeOnMouseMove(const FGeometry& InGeometry, const FPointerEvent& InMouseEvent) override;
@@ -130,6 +132,15 @@ private:
 
 	void PaintPopup(const FGeometry& AllottedGeometry, const FGeometry& DialGeometry, FSlateWindowElementList& OutDrawElements, int32 LayerId) const;
 
+	/** Registers the animation timer unless it is already running. Without a Slate widget the needle snaps instead. */
+	void StartAnimating();
+
+	/** One animation step: eases the needle and counts down the popup. Returns false once both have settled. */
+	bool StepAnimation(float DeltaTime);
+
+	/** Non-owning: the Slate widget owns the timer and drops it when the timer stops or the widget dies. */
+	TWeakPtr<class FActiveTimerHandle> AnimationTimer;
+
 	EDragState DragState = EDragState::None;
 
 	/** Accumulated drag value in display units, clamped every step. */
@@ -144,7 +155,7 @@ private:
 	/** Set while switching to high-precision mouse: the re-capture reports our own capture as lost. */
 	bool bIgnoreNextCaptureLost = false;
 
-	/** Painted needle position, easing toward GetNormalizedValue(). Negative until the first tick snaps it. */
+	/** Painted needle position, easing toward GetNormalizedValue(). Negative means "snap": paint the exact value. */
 	float DisplayedNormalized = -1.f;
 
 	float PopupTimeRemaining = 0.f;

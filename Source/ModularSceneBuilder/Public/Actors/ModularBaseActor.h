@@ -166,6 +166,9 @@ protected:
 
 	void NotifyParameterChanged(const FGameplayTag& ParameterId);
 
+	/** Call after GetQuantity() changed: the Info Weight / Power rows show specs x quantity, as the bill of materials does. */
+	void NotifyQuantityChanged();
+
 	/**
 	 * The item moved, turned or scaled (gizmo, inspector, undo, group edit), after the Transform rows were notified.
 	 * For state derived from where the item is (a fixture's throw distance). Fires per frame during a drag: keep it cheap.

@@ -152,6 +152,7 @@ void AStageSpanActor::NotifyShapeChanged()
 	NotifyParameterChanged(StageCraftTags::Param_Span_SegmentLength);
 	NotifyParameterChanged(StageCraftTags::Param_Span_Legs);
 	NotifyParameterChanged(StageCraftTags::Param_Span_Sag);
+	NotifyQuantityChanged();
 }
 
 void AStageSpanActor::GatherParameterSections(TArray<FStageParameterSection>& OutSections) const

@@ -76,7 +76,10 @@ void UStageFaderWidget::BuildDefaultTree()
 	NameText = WidgetTree->ConstructWidget<UTextBlock>(UTextBlock::StaticClass(), TEXT("NameText"));
 	StyleText(*NameText, 8);
 	NameText->SetClipping(EWidgetClipping::ClipToBounds);
-	AddRow(*Column, *NameText, HAlign_Fill, FMargin(0.f, 0.f, 0.f, 2.f));
+	// Slate draws no ellipsis on centre-justified single-line text (it clips both ends instead). Left-justified text in a
+	// centred slot looks centred when it fits, and when it does not the slot clamps it to the strip so the ellipsis shows.
+	NameText->SetJustification(ETextJustify::Left);
+	AddRow(*Column, *NameText, HAlign_Center, FMargin(0.f, 0.f, 0.f, 2.f));
 
 	USizeBox* FaderBox = WidgetTree->ConstructWidget<USizeBox>(USizeBox::StaticClass(), TEXT("FaderSize"));
 	FaderBox->SetHeightOverride(FaderHeight);

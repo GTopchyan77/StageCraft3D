@@ -50,7 +50,8 @@ void AAudioEquipmentActor::GatherParameterSections(TArray<FStageParameterSection
 	Section.Add(StageCraftTags::Param_Audio_Gain, LOCTEXT("Gain", "Gain"), FStageParameterValue::MakeFloat(GainDb)).Range(-60.0, 12.0).Display(1.0, LOCTEXT("Db", "dB"), 0.5);
 	Section.Add(StageCraftTags::Param_Audio_Mute, LOCTEXT("Mute", "Mute"), FStageParameterValue::MakeBool(bMuted));
 	Section.Add(StageCraftTags::Param_Audio_Delay, LOCTEXT("Delay", "Delay"), FStageParameterValue::MakeFloat(DelayMs)).Range(0.0, 1000.0).Display(1.0, LOCTEXT("Ms", "ms"), 0.1);
-	Section.Add(StageCraftTags::Param_Audio_Polarity, LOCTEXT("Polarity", "Polarity Invert"), FStageParameterValue::MakeBool(bPolarityInverted));
+	Section.Add(StageCraftTags::Param_Audio_Polarity, LOCTEXT("Polarity", "Polarity Invert"), FStageParameterValue::MakeBool(bPolarityInverted))
+		.Abbreviated(LOCTEXT("PolarityShort", "Polarity"));
 
 	if (Audio->SupportsSplay())
 	{

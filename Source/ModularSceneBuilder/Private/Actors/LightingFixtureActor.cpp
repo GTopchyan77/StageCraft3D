@@ -88,6 +88,32 @@ namespace
 		bOutInverted = false;
 		return ChannelAttribute;
 	}
+
+	/** Throw, illuminance and beam size need a surface. A beam that hits nothing in range says so instead of showing "0.0 m". */
+	bool IsThrowDependentParameter(const FGameplayTag& ParameterId)
+	{
+		return ParameterId == StageCraftTags::Param_Photo_Throw || ParameterId == StageCraftTags::Param_Photo_Illuminance
+			|| ParameterId == StageCraftTags::Param_Photo_BeamDiameter;
+	}
+
+	FText FormatThrowDependent(const StagePhotometry::FResult& Photo, const FGameplayTag& ParameterId)
+	{
+		if (!Photo.bHasThrow)
+		{
+			return LOCTEXT("PhotoNoSurface", "No surface");
+		}
+
+		FNumberFormattingOptions Options;
+		if (ParameterId == StageCraftTags::Param_Photo_Illuminance)
+		{
+			Options.SetMaximumFractionalDigits(0);
+			return FText::Format(LOCTEXT("PhotoLux", "{0} lx"), FText::AsNumber(Photo.IlluminanceLux, &Options));
+		}
+		// Centimetre precision, as a rigging plot needs.
+		Options.SetMinimumFractionalDigits(2).SetMaximumFractionalDigits(2);
+		const double Metres = ParameterId == StageCraftTags::Param_Photo_Throw ? Photo.ThrowMetres : Photo.BeamDiameterMetres;
+		return FText::Format(LOCTEXT("PhotoMetres", "{0} m"), FText::AsNumber(Metres, &Options));
+	}
 }
 
 ALightingFixtureActor::ALightingFixtureActor()
@@ -748,12 +774,12 @@ void ALightingFixtureActor::GatherParameterSections(TArray<FStageParameterSectio
 		.Display(1.0, Degrees).ReadOnly();
 	Photometrics.Add(StageCraftTags::Param_Photo_Intensity, LOCTEXT("PhotoIntensity", "Intensity"), FStageParameterValue::MakeFloat(Photo.IntensityCd))
 		.Display(0.001, LOCTEXT("Kilocandela", "kcd")).ReadOnly();
-	Photometrics.Add(StageCraftTags::Param_Photo_Throw, LOCTEXT("PhotoThrow", "Throw"), FStageParameterValue::MakeFloat(Photo.ThrowMetres * 100.0))
-		.Display(0.01, LOCTEXT("Metres", "m")).ReadOnly();
-	Photometrics.Add(StageCraftTags::Param_Photo_Illuminance, LOCTEXT("PhotoIlluminance", "Illuminance"), FStageParameterValue::MakeFloat(Photo.IlluminanceLux))
-		.Display(1.0, LOCTEXT("Lux", "lx")).ReadOnly();
-	Photometrics.Add(StageCraftTags::Param_Photo_BeamDiameter, LOCTEXT("PhotoBeamDiameter", "Beam Size"), FStageParameterValue::MakeFloat(Photo.BeamDiameterMetres * 100.0))
-		.Display(0.01, LOCTEXT("Metres", "m")).ReadOnly();
+	Photometrics.Add(StageCraftTags::Param_Photo_Throw, LOCTEXT("PhotoThrow", "Throw"),
+		FStageParameterValue::MakeText(FormatThrowDependent(Photo, StageCraftTags::Param_Photo_Throw))).ReadOnly();
+	Photometrics.Add(StageCraftTags::Param_Photo_Illuminance, LOCTEXT("PhotoIlluminance", "Illuminance"),
+		FStageParameterValue::MakeText(FormatThrowDependent(Photo, StageCraftTags::Param_Photo_Illuminance))).ReadOnly();
+	Photometrics.Add(StageCraftTags::Param_Photo_BeamDiameter, LOCTEXT("PhotoBeamDiameter", "Beam Size"),
+		FStageParameterValue::MakeText(FormatThrowDependent(Photo, StageCraftTags::Param_Photo_BeamDiameter))).ReadOnly();
 }
 
 bool ALightingFixtureActor::ReadParameter(const FGameplayTag& ParameterId, FStageParameterValue& OutValue) const
@@ -772,12 +798,9 @@ bool ALightingFixtureActor::ReadParameter(const FGameplayTag& ParameterId, FStag
 	if (StageCraftTags::IsPhotometricParameter(ParameterId))
 	{
 		const StagePhotometry::FResult Photo = ComputePhotometrics();
-		const double Value = ParameterId == StageCraftTags::Param_Photo_BeamAngle ? Photo.BeamAngleDegrees
-			: ParameterId == StageCraftTags::Param_Photo_Intensity ? Photo.IntensityCd
-			: ParameterId == StageCraftTags::Param_Photo_Throw ? Photo.ThrowMetres * 100.0
-			: ParameterId == StageCraftTags::Param_Photo_Illuminance ? Photo.IlluminanceLux
-			: Photo.BeamDiameterMetres * 100.0;
-		OutValue = FStageParameterValue::MakeFloat(Value);
+		OutValue = IsThrowDependentParameter(ParameterId)
+			? FStageParameterValue::MakeText(FormatThrowDependent(Photo, ParameterId))
+			: FStageParameterValue::MakeFloat(ParameterId == StageCraftTags::Param_Photo_BeamAngle ? Photo.BeamAngleDegrees : Photo.IntensityCd);
 		return GetFixtureData() != nullptr;
 	}
 	if (ParameterId.MatchesTag(StageCraftTags::Attribute) && Attributes.Contains(ParameterId))

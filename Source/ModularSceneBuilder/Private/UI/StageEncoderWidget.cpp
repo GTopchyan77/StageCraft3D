@@ -16,6 +16,8 @@
 #include "Rendering/DrawElements.h"
 #include "Rendering/SlateRenderer.h"
 #include "Styling/CoreStyle.h"
+#include "Types/WidgetActiveTimerDelegate.h"
+#include "Widgets/SWidget.h"
 
 #include UE_INLINE_GENERATED_CPP_BY_NAME(StageEncoderWidget)
 
@@ -101,7 +103,10 @@ void UStageEncoderWidget::BuildDefaultTree()
 
 	NameText = WidgetTree->ConstructWidget<UTextBlock>(UTextBlock::StaticClass(), TEXT("NameText"));
 	StyleText(*NameText, 8);
-	Column->AddChildToVerticalBox(NameText)->SetHorizontalAlignment(HAlign_Fill);
+	NameText->SetClipping(EWidgetClipping::ClipToBounds);
+	// Left-justified in a centred slot, so a long name gets an ellipsis (see UStageFaderWidget::BuildDefaultTree).
+	NameText->SetJustification(ETextJustify::Left);
+	Column->AddChildToVerticalBox(NameText)->SetHorizontalAlignment(HAlign_Center);
 
 	USizeBox* DialBox = WidgetTree->ConstructWidget<USizeBox>(USizeBox::StaticClass(), TEXT("DialSize"));
 	DialBox->SetWidthOverride(DialSize);
@@ -135,11 +140,20 @@ void UStageEncoderWidget::OnInitializeControl()
 
 void UStageEncoderWidget::ApplyValue(const FStageParameterValue& InValue, bool bForce)
 {
-	// The dial is painted every frame; only the readout needs pushing. It is never "being typed
-	// into", so it always shows the live value, also during a drag.
+	// The readout is never "being typed into", so it always shows the live value, also during a drag.
 	if (ValueText)
 	{
 		ValueText->SetText(FormatValue(Descriptor, InValue));
+	}
+
+	// The first value of a parameter snaps the needle; later ones (cues, DMX, drags) ease toward it.
+	if (DisplayedNormalized < 0.f)
+	{
+		DisplayedNormalized = GetNormalizedValue();
+	}
+	else
+	{
+		StartAnimating();
 	}
 }
 
@@ -176,10 +190,32 @@ FText UStageEncoderWidget::GetPopupText() const
 	return FText::Format(LOCTEXT("Popup", "{0}: {1}"), Descriptor.DisplayName, Value);
 }
 
-void UStageEncoderWidget::NativeTick(const FGeometry& MyGeometry, float InDeltaTime)
+void UStageEncoderWidget::StartAnimating()
 {
-	Super::NativeTick(MyGeometry, InDeltaTime);
+	if (AnimationTimer.IsValid())
+	{
+		return;
+	}
 
+	const TSharedPtr<SWidget> SlateWidget = GetCachedWidget();
+	if (!SlateWidget.IsValid())
+	{
+		// Nothing is on screen to animate: the first paint after construction shows the exact value.
+		DisplayedNormalized = -1.f;
+		PopupTimeRemaining = 0.f;
+		return;
+	}
+
+	// Period 0 = every frame, but only until StepAnimation reports that everything has settled.
+	AnimationTimer = SlateWidget->RegisterActiveTimer(0.f, FWidgetActiveTimerDelegate::CreateWeakLambda(this,
+		[this](double /*CurrentTime*/, float DeltaTime)
+		{
+			return StepAnimation(DeltaTime) ? EActiveTimerReturnType::Continue : EActiveTimerReturnType::Stop;
+		}));
+}
+
+bool UStageEncoderWidget::StepAnimation(float DeltaTime)
+{
 	// Exponential easing, alpha = 1 - e^(-k dt): identical feel at any frame rate.
 	const float Target = GetNormalizedValue();
 	if (DisplayedNormalized < 0.f || NeedleSmoothing <= 0.f || FMath::IsNearlyEqual(DisplayedNormalized, Target, 1.e-4f))
@@ -188,10 +224,11 @@ void UStageEncoderWidget::NativeTick(const FGeometry& MyGeometry, float InDeltaT
 	}
 	else
 	{
-		DisplayedNormalized = FMath::Lerp(DisplayedNormalized, Target, 1.f - FMath::Exp(-NeedleSmoothing * InDeltaTime));
+		DisplayedNormalized = FMath::Lerp(DisplayedNormalized, Target, 1.f - FMath::Exp(-NeedleSmoothing * DeltaTime));
 	}
 
-	PopupTimeRemaining = FMath::Max(0.f, PopupTimeRemaining - InDeltaTime);
+	PopupTimeRemaining = FMath::Max(0.f, PopupTimeRemaining - DeltaTime);
+	return DisplayedNormalized != Target || PopupTimeRemaining > 0.f;
 }
 
 int32 UStageEncoderWidget::NativePaint(const FPaintArgs& Args, const FGeometry& AllottedGeometry, const FSlateRect& MyCullingRect, FSlateWindowElementList& OutDrawElements, int32 LayerId, const FWidgetStyle& InWidgetStyle, bool bParentEnabled) const
@@ -423,6 +460,7 @@ bool UStageEncoderWidget::ResetToDefault()
 void UStageEncoderWidget::ShowPopupBriefly()
 {
 	PopupTimeRemaining = PopupLingerTime;
+	StartAnimating();
 }
 
 void UStageEncoderWidget::Nudge(double DisplayDelta)

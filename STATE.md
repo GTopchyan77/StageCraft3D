@@ -2194,7 +2194,7 @@ STATE.md was out of sync with `git log`: #28 still said "uncommitted", and two l
 
 **Verification:** documentation only. Claude checked `git log`, `git show --stat` and the LFS working tree.
 
-**Commit:** uncommitted (working tree).
+**Commit:** `c3936d9` (together with #30).
 
 **Known issues / follow-ups**
 - **Rotate the Anthropic API key.** Removing it in a later commit does not remove it from git history, or from any remote that already received it.
@@ -2326,7 +2326,7 @@ Design record: `Docs/ADR/0007-lighting-patch-paths-and-pipeline-hardening.md`.
   - Strobe flashing on screen; gobo rotation and blade rotation visually.
 - Status: **implemented, awaiting manual verification** of the items above.
 
-**Commit:** uncommitted (working tree).
+**Commit:** `c3936d9`.
 
 **Known issues / follow-ups**
 - **Plugins disabled:** 19 from `b8448a5` plus UnrealNGGMCP (half-reverted, duplicate symbols). Enable any one in the `.uproject` once it compiles against StageCraft (`PlacementGizmo` needs its `EGizmoMode` renamed). Without UnrealNGGMCP the Claude ↔ editor MCP bridge is unavailable.
@@ -2339,3 +2339,110 @@ Design record: `Docs/ADR/0007-lighting-patch-paths-and-pipeline-hardening.md`.
 - Fader centred ellipsis did not take effect in the strip; the short names avoid it.
 - Rules.md mentions `RunEditor.bat` / `Scripts/Launch/RunEditor.ps1`, which do not exist in this project.
 - **Obsidian vault:** `S:\` is still unreachable on this machine; the design record is ADR 0007 in the repo.
+
+---
+
+## #31 — Milestone audit: inspector, lighting, patch/faders, BOM; idle encoder tick removed, span totals, photometrics "No surface", fader name ellipsis, instanced material usage, Shipping unity fix (2026-10-19)
+
+**Request (Gevor).** Under Rules.md, the next milestone:
+1. Strict two-column inspector alignment for fixtures, props and spans.
+2. Projected gobo and framing-shutter materials updated only on parameter changes, without Tick abuse; refined DMX patch attributes and fader integration.
+3. A BOM panel with placed-item counts, combined weight and power (W).
+4. Memory safety, encapsulation, modular subsystems, zero per-frame polling; STATE.md updated.
+
+Most of this already existed: the BOM came in #27, and the inspector grid, gobo/iris/shutter projection, patch sheet and fader short names in #30. This entry is an **audit of those features against the request and Rules.md**, plus fixes for everything the audit found. No new subsystems or panels were added.
+
+**Audit (code), no change needed**
+- **Tick / polling.** Every Tick in the module was reviewed:
+  - `UShowControlSubsystem` ticks only while a fade, DMX output or the strobe clock is active (`IsTickable`).
+  - `AModularTransformGizmo` ticks only while attached.
+  - `AStageCameraPawn` returns early at rest; it integrates fly input, which is its job.
+  - `UStageCraftGameEngine::Tick` does first-frame window setup only.
+  - `GetAllActorsOfClass` / `TActorIterator` appear only in development console commands, which are compiled out of Shipping.
+  - The only defect was the encoder (below).
+- **Gobo / iris / shutters.** `ALightingFixtureActor::ApplyBeamShaping` runs only from `ApplyAttributesToComponents`, which is driven by attribute writes (`NotifyAttributeChanged` path). It writes the one dynamic material instance per fixture; there is no per-frame update. The throw trace is cached until pan, tilt or the transform changes.
+- **Patch ↔ faders.** The patch sheet and the fader bank both bind to `OnParameterChanged`, and all writes go through `RequestParameterChange`. Unchanged.
+- **BOM.** `UStageBillOfMaterialsSubsystem` is a derived cache marked stale on `OnItemListChanged`. Verified at runtime (below); unchanged.
+
+**What changed and why**
+- **Encoder idle tick removed** (`UStageEncoderWidget`).
+  - Before: `NativeTick` re-read the value and eased the needle every frame on every Pan/Tilt encoder, even when nothing changed. This broke the "no per-frame polling" rule.
+  - Now: the easing and the popup linger run on a Slate active timer (`SWidget::RegisterActiveTimer`).
+    - The timer starts when a value arrives (`ApplyValue`) or the popup opens, and stops itself once the needle has settled and the popup has expired.
+    - The first value of a parameter snaps the needle.
+    - The handle is a `TWeakPtr`: the Slate widget owns the timer, and the lambda is a weak UObject lambda.
+  - The class carries `meta=(DisableNativeTick)`, so Blueprint subclasses do not tick either. Per `UUserWidget::UpdateCanTick`, code-built instances keep only the engine's empty base tick.
+- **Span Info totals** (`AModularBaseActor`, `AStageSpanActor`).
+  - Before: the inspector's Weight / Power showed the catalog spec per unit, so a 3-segment F34 run read "14.0 kg" while the BOM and session limits counted 42 kg.
+  - Now: the rows show spec × `GetQuantity()`, and are readable through `ReadParameter`.
+  - New protected `NotifyQuantityChanged()` refreshes them; spans call it from `NotifyShapeChanged`, so the row follows length, undo and redo live.
+  - Single items are unchanged (quantity 1). The tag comments are updated.
+- **Photometrics without a surface** (`ALightingFixtureActor`).
+  - Before: a beam that hit nothing in range showed Throw "0.0 m", Illuminance "0.0 lx" and Beam Size "0.0 m", which reads as real values.
+  - Now: these three read-only rows are text: "2.68 m", "9,186 lx", "1.95 m" (centimetre precision), or "No surface" when `FResult::bHasThrow` is false.
+  - Beam Angle and Intensity stay numeric. Nothing else reads these tags as numbers; they are not stored in cues or scenes. The tag comments are updated.
+- **Fader / encoder strip names** (`UStageFaderWidget`, `UStageEncoderWidget`). This closes the #30 known issue "Fader centred ellipsis did not take effect".
+  - Root cause, from engine source: Slate draws no ellipsis on centre-justified single-line text. `SlateTextLayout.cpp` sets `NoOverflow` for Center, so a long name was clipped at both ends ("olarity Inve").
+  - The default strip tree now uses a left-justified name in an `HAlign_Center` slot:
+    - a name that fits looks centred;
+    - a longer one is clamped to the strip by the slot (`LayoutUtils.h` `AlignChild`), so the ellipsis applies.
+  - Audio "Polarity Invert" also gets the short name "Polarity".
+- **Instanced material usage** (content).
+  - `M_SpanMetal`, `M_SpanCoupler`, `M_SpanCable` and `M_PlacementGhost` were drawn on instanced static meshes without `bUsedWithInstancedStaticMeshes`. Every span run since #27 logged "missing usage flag InstancedStaticMeshes! Default Material will be used in game". A cooked build would have drawn spans with the default material.
+  - The flag is now set and saved headless by the new idempotent `Scripts/Content/fix_instanced_material_usage.py`, which reads the flag back after saving.
+- **Shipping build fix** (`StageFileDialog.cpp`, latent since #30).
+  - `Microsoft/COMPointer.h` (`<Unknwn.h>`) and `<shobjidl.h>` included the raw `windows.h` without `NOMINMAX`. That leaked `min`/`max` macros into every later file in the unity blob.
+  - Today's edits changed the adaptive-unity grouping, and Shipping failed in `HittestGrid.h`.
+  - `Windows/WindowsHWrapper.h` is now included first.
+
+**Not changed, by design (checked)**
+- Read-only rows keep their units inline ("24.5 kg"), as designed in #28 (`StageParameterRowWidget.cpp`). Their values start at the field-text inset; the units column stays for editable rows.
+- A span's read-only Scale row shows "(1, 1, 1) ×"; spans are sized by Length (#27).
+
+**Files changed**
+- Source (all under `Source/ModularSceneBuilder/`):
+  - `Public/UI/StageEncoderWidget.h`, `Private/UI/StageEncoderWidget.cpp`
+  - `Private/UI/StageFaderWidget.cpp`
+  - `Public/Actors/ModularBaseActor.h`, `Private/Actors/ModularBaseActor.cpp`
+  - `Private/Actors/StageSpanActor.cpp`
+  - `Private/Actors/LightingFixtureActor.cpp`
+  - `Private/Actors/AudioEquipmentActor.cpp`
+  - `Private/Data/StageParameterTypes.cpp` (tag comments)
+  - `Private/Import/StageFileDialog.cpp`
+- Content (modified): `Content/StageCraft/Spans/M_SpanMetal.uasset`, `M_SpanCoupler.uasset`, `M_SpanCable.uasset`, `Content/StageCraft/Placement/M_PlacementGhost.uasset`.
+- Scripts (new): `Scripts/Content/fix_instanced_material_usage.py`.
+- Docs: `STATE.md` (#29 / #30 commit hash `c3936d9`, this entry), `tasks/todo.md`.
+- No maps, input assets, Widget Blueprints or config were changed.
+
+**Verification (Claude, 2026-10-19; logs in `Saved/Logs/R31/`)**
+- **Builds (UE 5.8), all with 0 errors and 0 warnings:**
+  - Editor Development and Game Development succeeded.
+  - Game Shipping succeeded on its final run, with `-DisableAdaptiveUnity`, so the full unity blob that had failed was compiled. The first Shipping run failed as described above (`Build_Game_Shipping.log`, `_2.log`); `_3.log` succeeded.
+- **Automation (headless), StageCraft filter: 37/37 passed**, `TEST COMPLETE. EXIT CODE: 0` (`R31_Tests.log`).
+- **Content script:** all 4 materials report "usage flag set, saved", then `used_with_instanced_static_meshes = True` on read-back (`Content_InstancedUsage.log`).
+- **Standalone `-game`, scripted by Claude** (`L_StageTest`, `R31_Run1`–`Run4.log`, screenshots `Saved/Screenshots/WindowsEditor/ScreenShot00031`–`00047`; Gevor's workspace session file backed up and restored):
+  - **Inspector grid on every item type:** prop (Test Crate), span (F34 run), audio (Main L 01), truss and fixture (Spot 101, scrolled through all sections).
+    - Labels sit in the 112 px column.
+    - Field outlines, checkboxes and dropdowns start at the same x, and read-only values start at the field-text inset.
+    - Editable units sit in the units column; long values end in an ellipsis.
+  - **Encoder:** `Show.Set Pan 180` → the needle reached 180° and the readout said 180.0° (screenshots 38–39); the timer path runs and settles.
+  - **Span totals:** Weight 42.0 kg (6 m, 3 segments) → `Span.SetLength 1000` → 70.0 kg live → undo → 42.0 kg (screenshots 41–43).
+  - **Audio faders:** the strip reads "Polarity"; Gain, Mute, Delay and Splay stay centred (screenshot 44).
+  - **Photometrics:** with the beam up, the rows read "No surface" (log "throw none"). At Tilt 120: Throw 2.68 m, Illuminance 9,186 lx, Beam Size 1.95 m, 66.0 kcd, matching `Show.Photometrics` (screenshots 45–46).
+  - **BOM:** 6 items, 8 units, 156.0 kg, 940 W. The table by discipline matches `Report.Status`: truss 4 units / 49 kg, lighting 2 / 49 kg / 940 W, audio 1 / 58 kg, prop 1 (screenshot 40).
+  - **Materials:** Run4 placed a cable span (6 units) and a truss span (3 units) with their ghosts: 0 "missing usage flag" warnings (each earlier span run had 3–4).
+- **Not verified (needs Gevor, by mouse and keyboard):**
+  - Encoder drag / wheel / double-click feel after the timer change, and the popup linger after a wheel step.
+  - A fader name long enough to need the ellipsis (all current names fit, so the ellipsis path is proven from engine source, not on screen).
+  - A packaged (cooked) build showing span materials. The usage flag is saved, but nothing was cooked.
+  - The #27 / #30 manual checklists still stand.
+- Status: **implemented, awaiting manual verification** of the items above.
+
+**Commit:** uncommitted (working tree).
+
+**Known issues / follow-ups**
+- The encoder's timer starts on value pushes. A Blueprint subclass that paints anything else per frame would need its own trigger (none exist).
+- Inspector Weight / Power are totals; the per-unit spec stays visible in the Library and the BOM ("3 x 14.00 kg").
+- BOM still has no current (A) or per-phase power distribution, and no rigging point loads (from #27).
+- Patch / attribute edits are still not undo steps (from #30).
+- **Obsidian vault** `S:\` is still unreachable on this machine, so no session log or lessons were written there. Rules.md's `RunEditor.bat` does not exist in this project.

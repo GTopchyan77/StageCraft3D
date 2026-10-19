@@ -96,8 +96,8 @@ namespace StageCraftTags
 	UE_DEFINE_GAMEPLAY_TAG_COMMENT(Param_Info_Label,			"StageCraft.Param.Info.Label",			"User label of the placed instance.");
 	UE_DEFINE_GAMEPLAY_TAG_COMMENT(Param_Info_Model,			"StageCraft.Param.Info.Model",			"Catalog model name (read-only).");
 	UE_DEFINE_GAMEPLAY_TAG_COMMENT(Param_Info_Type,			"StageCraft.Param.Info.Type",			"Catalog item of the instance; changing it swaps the model in place.");
-	UE_DEFINE_GAMEPLAY_TAG_COMMENT(Param_Info_Weight,			"StageCraft.Param.Info.Weight",			"Weight in kg (read-only).");
-	UE_DEFINE_GAMEPLAY_TAG_COMMENT(Param_Info_Power,			"StageCraft.Param.Info.Power",			"Power draw in W (read-only).");
+	UE_DEFINE_GAMEPLAY_TAG_COMMENT(Param_Info_Weight,			"StageCraft.Param.Info.Weight",			"Total weight in kg: catalog spec x quantity, e.g. per span segment (read-only).");
+	UE_DEFINE_GAMEPLAY_TAG_COMMENT(Param_Info_Power,			"StageCraft.Param.Info.Power",			"Total power draw in W: catalog spec x quantity (read-only).");
 	UE_DEFINE_GAMEPLAY_TAG_COMMENT(Param_Info_Visible,			"StageCraft.Param.Info.Visible",		"Shown on stage. Hidden items still count in the bill of materials.");
 	UE_DEFINE_GAMEPLAY_TAG_COMMENT(Param_Info_Locked,			"StageCraft.Param.Info.Locked",			"Transform and span length locked against edits.");
 	UE_DEFINE_GAMEPLAY_TAG_COMMENT(Param_Transform_Location,	"StageCraft.Param.Transform.Location",	"World location in cm.");
@@ -127,9 +127,9 @@ namespace StageCraftTags
 	UE_DEFINE_GAMEPLAY_TAG_COMMENT(Param_Span_Sag,				"StageCraft.Param.Span.Sag",			"Mid-span sag of a hanging run (cables) in cm.");
 	UE_DEFINE_GAMEPLAY_TAG_COMMENT(Param_Photo_BeamAngle,		"StageCraft.Param.Photo.BeamAngle",		"Effective full beam angle after zoom and iris, in degrees (read-only).");
 	UE_DEFINE_GAMEPLAY_TAG_COMMENT(Param_Photo_Intensity,		"StageCraft.Param.Photo.Intensity",		"Approximate peak intensity in candela (read-only).");
-	UE_DEFINE_GAMEPLAY_TAG_COMMENT(Param_Photo_Throw,			"StageCraft.Param.Photo.Throw",			"Distance to the first surface along the beam, in cm (read-only).");
-	UE_DEFINE_GAMEPLAY_TAG_COMMENT(Param_Photo_Illuminance,	"StageCraft.Param.Photo.Illuminance",	"Approximate illuminance at the throw distance, in lux (read-only).");
-	UE_DEFINE_GAMEPLAY_TAG_COMMENT(Param_Photo_BeamDiameter,	"StageCraft.Param.Photo.BeamDiameter",	"Beam diameter at the throw distance, in cm (read-only).");
+	UE_DEFINE_GAMEPLAY_TAG_COMMENT(Param_Photo_Throw,			"StageCraft.Param.Photo.Throw",			"Distance to the first surface along the beam, as text in metres, or \"No surface\" (read-only).");
+	UE_DEFINE_GAMEPLAY_TAG_COMMENT(Param_Photo_Illuminance,	"StageCraft.Param.Photo.Illuminance",	"Approximate illuminance at the throw distance, as text in lux, or \"No surface\" (read-only).");
+	UE_DEFINE_GAMEPLAY_TAG_COMMENT(Param_Photo_BeamDiameter,	"StageCraft.Param.Photo.BeamDiameter",	"Beam diameter at the throw distance, as text in metres, or \"No surface\" (read-only).");
 
 	UE_DEFINE_GAMEPLAY_TAG_COMMENT(Attribute,					"StageCraft.Attribute",					"Root of fixture attributes (cue-recordable, DMX-addressable).");
 	UE_DEFINE_GAMEPLAY_TAG_COMMENT(Attribute_Dimmer,			"StageCraft.Attribute.Dimmer",			"Intensity 0..1.");

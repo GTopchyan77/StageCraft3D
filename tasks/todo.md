@@ -240,3 +240,15 @@ See `STATE.md` for detailed history of completed work.
 - [ ] Re-enable plugins one by one once they compile with StageCraft (`PlacementGizmo` enum rename; UnrealNGGMCP pick one version)
 - [ ] Haze render banding in Off/FXAA: force temporal AA or finer fog Z for haze renders (measure first)
 - [ ] Undo for attribute and patch edits; cue list saved with scenes
+
+## Milestone audit (STATE.md #31, 2026-10-19)
+- [x] Audit every Tick / timer / polling path; gobo, iris and shutter MID updates only on attribute writes; patch sheet and faders push-only
+- [x] Encoder: per-frame NativeTick replaced by a self-stopping Slate active timer (`DisableNativeTick`)
+- [x] Span Info Weight / Power = spec x quantity, live on length / undo
+- [x] Photometrics: "No surface" instead of 0.0 m / 0.0 lx when the beam hits nothing
+- [x] Fader / encoder names: real ellipsis (left-justified text in a centred slot); audio "Polarity" short name
+- [x] `bUsedWithInstancedStaticMeshes` on span and ghost materials (`fix_instanced_material_usage.py`)
+- [x] Shipping unity fix: `WindowsHWrapper.h` before COM headers in `StageFileDialog.cpp`
+- [x] Editor / Game / Shipping (full unity) builds clean; 37/37 automation; scripted runs R31_Run1-4 with screenshots
+- [ ] Manual verification (Gevor): STATE.md #31 "Not verified" list
+- [ ] BOM: current (A) at a configured supply voltage and per-phase distribution; rigging point loads

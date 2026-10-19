@@ -9,6 +9,9 @@
 #include "DesktopPlatformModule.h"
 #include "IDesktopPlatform.h"
 #elif WITH_STAGECRAFT_NATIVE_FILE_DIALOG
+// UE's windows.h wrapper first (NOMINMAX, WIN32_LEAN_AND_MEAN): COMPointer.h (<Unknwn.h>) and <shobjidl.h> would otherwise
+// pull in the raw windows.h, whose min/max macros break engine headers after this file in the same unity blob (HittestGrid.h).
+#include "Windows/WindowsHWrapper.h"
 #include "Microsoft/COMPointer.h"
 #include "Windows/AllowWindowsPlatformTypes.h"
 #include <shobjidl.h>

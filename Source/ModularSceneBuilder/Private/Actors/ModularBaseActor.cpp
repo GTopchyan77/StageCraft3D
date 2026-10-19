@@ -323,15 +323,15 @@ void AModularBaseActor::GatherParameterSections(TArray<FStageParameterSection>& 
 			? ItemData->DisplayName
 			: FText::Format(LOCTEXT("ModelFormat", "{0} {1}"), ItemData->Specs.Manufacturer, ItemData->DisplayName))).ReadOnly();
 
-		if (ItemData->Specs.WeightKg > 0.f)
+		// Totals for the whole item (a span of N segments weighs N x the catalog spec), matching session limits and the bill of materials.
+		FStageParameterValue SpecTotal;
+		if (ItemData->Specs.WeightKg > 0.f && ReadParameter(StageCraftTags::Param_Info_Weight, SpecTotal))
 		{
-			Info.Add(StageCraftTags::Param_Info_Weight, LOCTEXT("Weight", "Weight"), FStageParameterValue::MakeFloat(ItemData->Specs.WeightKg))
-				.Display(1.0, LOCTEXT("Kg", "kg")).ReadOnly();
+			Info.Add(StageCraftTags::Param_Info_Weight, LOCTEXT("Weight", "Weight"), SpecTotal).Display(1.0, LOCTEXT("Kg", "kg")).ReadOnly();
 		}
-		if (ItemData->Specs.PowerDrawWatts > 0.f)
+		if (ItemData->Specs.PowerDrawWatts > 0.f && ReadParameter(StageCraftTags::Param_Info_Power, SpecTotal))
 		{
-			Info.Add(StageCraftTags::Param_Info_Power, LOCTEXT("Power", "Power"), FStageParameterValue::MakeFloat(ItemData->Specs.PowerDrawWatts))
-				.Display(1.0, LOCTEXT("Watt", "W")).ReadOnly();
+			Info.Add(StageCraftTags::Param_Info_Power, LOCTEXT("Power", "Power"), SpecTotal).Display(1.0, LOCTEXT("Watt", "W")).ReadOnly();
 		}
 
 		TArray<UBaseItemData*> Swappable;
@@ -375,6 +375,16 @@ bool AModularBaseActor::ReadParameter(const FGameplayTag& ParameterId, FStagePar
 		GetSwappableItems(Swappable);
 		OutValue = FStageParameterValue::MakeEnum(Swappable.IndexOfByKey(ItemData));
 		return Swappable.Num() > 1;
+	}
+	if (ParameterId == StageCraftTags::Param_Info_Weight || ParameterId == StageCraftTags::Param_Info_Power)
+	{
+		if (!ItemData)
+		{
+			return false;
+		}
+		const float PerUnit = ParameterId == StageCraftTags::Param_Info_Weight ? ItemData->Specs.WeightKg : ItemData->Specs.PowerDrawWatts;
+		OutValue = FStageParameterValue::MakeFloat(PerUnit * FMath::Max(0, GetQuantity()));
+		return true;
 	}
 	if (ParameterId == StageCraftTags::Param_Info_Visible)
 	{
@@ -463,6 +473,12 @@ bool AModularBaseActor::WriteParameter(const FGameplayTag& ParameterId, const FS
 void AModularBaseActor::NotifyParameterChanged(const FGameplayTag& ParameterId)
 {
 	OnParameterChanged.Broadcast(this, ParameterId);
+}
+
+void AModularBaseActor::NotifyQuantityChanged()
+{
+	NotifyParameterChanged(StageCraftTags::Param_Info_Weight);
+	NotifyParameterChanged(StageCraftTags::Param_Info_Power);
 }
 
 void AModularBaseActor::HandleRootTransformUpdated(USceneComponent* UpdatedComponent, EUpdateTransformFlags UpdateTransformFlags, ETeleportType Teleport)
