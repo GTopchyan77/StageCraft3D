@@ -54,6 +54,21 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "StageCraft|Camera")
 	void SetViewRotation(FRotator NewRotation, bool bSnap = false);
 
+	/**
+	 * Fixed view for orthographic projections (Docs/ADR/0008 §4.1): the view snaps to ViewRotation exactly (no pitch limit, so
+	 * Top can look straight down), look input is ignored, and fly input moves in the view plane (forward = screen up, right =
+	 * screen right, up/down ignored). Calling it again switches to another fixed rotation.
+	 */
+	void EnterFixedView(const FRotator& ViewRotation);
+
+	/** Leaves the fixed view and points the view at RestoreRotation instantly (pitch limited as usual). Idempotent. */
+	void ExitFixedView(const FRotator& RestoreRotation);
+
+	bool IsFixedView() const { return bFixedView; }
+
+	/** Moves the camera instantly (projection switches, orthographic pan and zoom) and stops any fly glide. */
+	void TeleportView(const FVector& NewLocation);
+
 	UFUNCTION(BlueprintPure, Category = "StageCraft|Camera")
 	float GetFlySpeed() const { return FlySpeed; }
 
@@ -155,6 +170,9 @@ private:
 	FRotator TargetRotation = FRotator::ZeroRotator;
 	FRotator CurrentRotation = FRotator::ZeroRotator;
 	bool bRotationInitialized = false;
+
+	/** Orthographic axis view: rotation is held exactly and motion is planar (EnterFixedView). */
+	bool bFixedView = false;
 
 	FVector PendingFlyInput = FVector::ZeroVector;
 	FVector Velocity = FVector::ZeroVector;

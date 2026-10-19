@@ -44,6 +44,7 @@
 #include "Subsystems/StageItemSubsystem.h"
 #include "Subsystems/StageSessionSubsystem.h"
 #include "TimerManager.h"
+#include "Viewport/StageViewportComponent.h"
 #include "Workspace/StageWorkspaceSubsystem.h"
 
 #include UE_INLINE_GENERATED_CPP_BY_NAME(ModularPlayerController)
@@ -82,6 +83,7 @@ AModularPlayerController::AModularPlayerController()
 	GroupTransform = CreateDefaultSubobject<UStageGroupTransformComponent>(TEXT("GroupTransform"));
 	SceneFiles = CreateDefaultSubobject<UStageSceneComponent>(TEXT("SceneFiles"));
 	SpanTool = CreateDefaultSubobject<UStageSpanToolComponent>(TEXT("SpanTool"));
+	ViewportView = CreateDefaultSubobject<UStageViewportComponent>(TEXT("ViewportView"));
 	GizmoClass = AModularTransformGizmo::StaticClass();
 }
 
@@ -136,6 +138,11 @@ void AModularPlayerController::BeginPlay()
 	SpanTool->PreviewEvaluator.BindUObject(this, &ThisClass::EvaluatePlacementPreview);
 	BindPreviewRefreshSources();
 
+	// The toolbar's global grid and angle snap reach the tools from here, now and on every change (ADR 0008 §4.5).
+	Snapping->OnSnapSettingsChanged.AddUniqueDynamic(this, &ThisClass::ApplySnapSettings);
+	ApplySnapSettings();
+	ViewportView->OnViewChanged.AddUniqueDynamic(this, &ThisClass::HandleViewChanged);
+
 	// Undoing a length change writes it back through the same rules as the inspector.
 	EditHistory->ParameterApplier.BindUObject(this, &ThisClass::ApplyHistoryParameter);
 
@@ -181,6 +188,8 @@ void AModularPlayerController::EndPlay(const EEndPlayReason::Type EndPlayReason)
 	PlacementTool->OnEditModeChanged.RemoveDynamic(this, &ThisClass::HandleEditModeChanged);
 	PlacementTool->OnArmedItemChanged.RemoveDynamic(this, &ThisClass::HandleArmedItemChanged);
 	SpanTool->PreviewEvaluator.Unbind();
+	Snapping->OnSnapSettingsChanged.RemoveDynamic(this, &ThisClass::ApplySnapSettings);
+	ViewportView->OnViewChanged.RemoveDynamic(this, &ThisClass::HandleViewChanged);
 	EditHistory->ParameterApplier.Unbind();
 	SceneFiles->PlacementEvaluator.Unbind();
 	SceneFiles->OnSceneOperationFinished.RemoveDynamic(this, &ThisClass::HandleSceneOperationFinished);
@@ -746,7 +755,12 @@ void AModularPlayerController::HandleCameraLook(const FInputActionValue& Value)
 {
 	if (bIsNavigatingCamera)
 	{
-		if (AStageCameraPawn* CameraPawn = GetCameraPawn())
+		// An orthographic view does not turn: the right-button drag pans it instead, as in the Unreal Editor.
+		if (ViewportView->IsOrthographic())
+		{
+			ViewportView->PanOrtho(Value.Get<FVector2D>());
+		}
+		else if (AStageCameraPawn* CameraPawn = GetCameraPawn())
 		{
 			CameraPawn->AddLookInput(Value.Get<FVector2D>());
 		}
@@ -775,8 +789,32 @@ void AModularPlayerController::HandleCameraSpeed(const FInputActionValue& Value)
 		return;
 	}
 
+	// Orthographic: the wheel zooms around the cursor (there is no depth to fly through).
+	float CursorX = 0.f;
+	float CursorY = 0.f;
+	if (ViewportView->IsOrthographic() && GetMousePosition(CursorX, CursorY))
+	{
+		ViewportView->ZoomOrtho(Steps, FVector2D(CursorX, CursorY));
+		return;
+	}
+
 	// The status bar shows the new speed through AStageCameraPawn::OnFlySpeedChanged.
 	CameraPawn->AdjustFlySpeed(Steps);
+}
+
+void AModularPlayerController::ApplySnapSettings()
+{
+	if (Gizmo)
+	{
+		Gizmo->SetDragSnapping(Snapping->GetGridSnap(), Snapping->GetAngleSnap());
+	}
+	PlacementTool->SetGridSnap(Snapping->GetGridSnap());
+	RequestPreviewRefresh(); // The ghost may land on a different cell now.
+}
+
+void AModularPlayerController::HandleViewChanged()
+{
+	RequestPreviewRefresh();
 }
 
 void AModularPlayerController::SetControlRotation(const FRotator& NewRotation)
@@ -1267,6 +1305,18 @@ bool AModularPlayerController::RequestRender()
 	FStageRenderRequest Request;
 	// Editor helpers (gizmo, ghosts) register with the render subsystem themselves and are left out of every image.
 	Request.View = PlayerCameraManager->GetCameraCacheView();
+
+	// The engine's rule (FMinimalViewInfo::CalculateProjectionMatrixGivenViewRectangle): the view keeps its horizontal
+	// extent under Maintain X FOV, or Major Axis FOV on a landscape viewport; otherwise its vertical one.
+	if (const ULocalPlayer* ViewingPlayer = GetLocalPlayer())
+	{
+		int32 SizeX = 0;
+		int32 SizeY = 0;
+		GetViewportSize(SizeX, SizeY);
+		const EAspectRatioAxisConstraint Constraint = Request.View.AspectRatioAxisConstraint.Get(ViewingPlayer->AspectRatioAxisConstraint);
+		const bool bSpansWidth = Constraint == AspectRatio_MaintainXFOV || (Constraint == AspectRatio_MajorAxisFOV && SizeX > SizeY);
+		Request.bViewSpansHeight = !bSpansWidth;
+	}
 
 	FText Reason;
 	if (!Render->StartRender(Request, Reason))

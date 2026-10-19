@@ -4,6 +4,7 @@
 
 #include "Audio/StageAudioTypes.h"
 #include "Engine/Engine.h"
+#include "Viewport/StageViewMath.h"
 
 #include UE_INLINE_GENERATED_CPP_BY_NAME(StageCraftUserSettings)
 
@@ -23,6 +24,9 @@ void UStageCraftUserSettings::SetToDefaults()
 	ResetAudioToDefaults();
 	bSnapToItems = true;
 	RenderSettings = FStageRenderSettings();
+	GridSnapCm = StageViewMath::DefaultGridSnapCm;
+	AngleSnapDegrees = StageViewMath::DefaultAngleSnapDegrees;
+	bViewportGridVisible = true;
 }
 
 void UStageCraftUserSettings::LoadSettings(bool bForceReload)
@@ -35,6 +39,9 @@ void UStageCraftUserSettings::LoadSettings(bool bForceReload)
 	}
 	SanitizeAudio();
 	RenderSettings = StageRender::Sanitize(RenderSettings);
+	// A hand-edited ini can only select a toolbar preset; anything else falls back to the default.
+	GridSnapCm = StageViewMath::SanitizeGridSnap(GridSnapCm);
+	AngleSnapDegrees = StageViewMath::SanitizeAngleSnap(AngleSnapDegrees);
 }
 
 bool UStageCraftUserSettings::SetMasterVolume(float Volume)
@@ -87,4 +94,33 @@ void UStageCraftUserSettings::SanitizeAudio()
 {
 	MasterVolume = StageAudioMath::SanitizeVolume(MasterVolume);
 	EffectsVolume = StageAudioMath::SanitizeVolume(EffectsVolume);
+}
+
+bool UStageCraftUserSettings::SetGridSnapCm(float Cm)
+{
+	if (!StageViewMath::IsGridSnapPreset(Cm))
+	{
+		return false;
+	}
+	const bool bChanged = !FMath::IsNearlyEqual(GridSnapCm, Cm);
+	GridSnapCm = Cm;
+	return bChanged;
+}
+
+bool UStageCraftUserSettings::SetAngleSnapDegrees(float Degrees)
+{
+	if (!StageViewMath::IsAngleSnapPreset(Degrees))
+	{
+		return false;
+	}
+	const bool bChanged = !FMath::IsNearlyEqual(AngleSnapDegrees, Degrees);
+	AngleSnapDegrees = Degrees;
+	return bChanged;
+}
+
+bool UStageCraftUserSettings::SetViewportGridVisible(bool bVisible)
+{
+	const bool bChanged = bViewportGridVisible != bVisible;
+	bViewportGridVisible = bVisible;
+	return bChanged;
 }

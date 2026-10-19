@@ -195,6 +195,7 @@ void FStageWorkspaceShell::Shutdown()
 	PendingPanelLayout.Reset();
 	MenuBarWidget.Reset();
 	StatusBarSlot.Reset();
+	ViewportToolbarSlot.Reset();
 	ReportedHosts.Reset();
 }
 
@@ -433,6 +434,10 @@ void FStageWorkspaceShell::RefreshPanelContent()
 	{
 		StatusBarSlot->SetContent(MakeStatusBarContent());
 	}
+	if (ViewportToolbarSlot.IsValid())
+	{
+		ViewportToolbarSlot->SetContent(MakeViewportToolbarContent());
+	}
 }
 
 bool FStageWorkspaceShell::OpenPanel(const FGameplayTag& PanelTag)
@@ -491,8 +496,27 @@ TSharedRef<SDockTab> FStageWorkspaceShell::SpawnViewportTab(const FSpawnTabArgs&
 		.OnTabRelocated(FSimpleDelegate::CreateSP(this, &FStageWorkspaceShell::HandleTabRelocated, PanelTag))
 		.OnTabClosed(SDockTab::FOnTabClosedCallback::CreateSP(this, &FStageWorkspaceShell::HandleTabClosed, PanelTag))
 		[
-			MakeFileDropTarget(Viewport.IsValid() ? Viewport.ToSharedRef() : SNullWidget::NullWidget)
+			// The toolbar belongs to the view, so it travels with the viewport when the tab is floated or re-docked.
+			SNew(SVerticalBox)
+			+ SVerticalBox::Slot()
+			.AutoHeight()
+			[
+				SAssignNew(ViewportToolbarSlot, SBox)
+				[
+					MakeViewportToolbarContent()
+				]
+			]
+			+ SVerticalBox::Slot()
+			.FillHeight(1.f)
+			[
+				MakeFileDropTarget(Viewport.IsValid() ? Viewport.ToSharedRef() : SNullWidget::NullWidget)
+			]
 		];
+}
+
+TSharedRef<SWidget> FStageWorkspaceShell::MakeViewportToolbarContent() const
+{
+	return Callbacks.CreateViewportToolbarContent ? Callbacks.CreateViewportToolbarContent() : SNullWidget::NullWidget;
 }
 
 TSharedRef<SDockTab> FStageWorkspaceShell::SpawnWidgetPanelTab(const FSpawnTabArgs& Args, FGameplayTag PanelTag)

@@ -73,6 +73,11 @@ float AStageCameraPawn::GetLookSpeedScale() const
 
 void AStageCameraPawn::AddLookInput(const FVector2D& MouseDelta)
 {
+	if (bFixedView)
+	{
+		return; // An orthographic view is defined by its axis; turning it would make it a different view.
+	}
+
 	// Scales the target, not the easing: RotationSmoothing still glides the view toward it, so a
 	// faster look is just as smooth, and a wheel notch mid-turn changes the rate without a jump.
 	const float DegreesPerCount = LookSensitivity * GetLookSpeedScale();
@@ -97,8 +102,42 @@ float AStageCameraPawn::AdjustFlySpeed(float Steps)
 	return FlySpeed;
 }
 
+void AStageCameraPawn::EnterFixedView(const FRotator& ViewRotation)
+{
+	bFixedView = true;
+	bRotationInitialized = true;
+	TargetRotation = CurrentRotation = FRotator(FRotator::NormalizeAxis(ViewRotation.Pitch), FRotator::NormalizeAxis(ViewRotation.Yaw), 0.0);
+	Velocity = FVector::ZeroVector;
+	if (AController* ViewController = GetController())
+	{
+		ViewController->SetControlRotation(CurrentRotation);
+	}
+}
+
+void AStageCameraPawn::ExitFixedView(const FRotator& RestoreRotation)
+{
+	if (!bFixedView)
+	{
+		return;
+	}
+	bFixedView = false;
+	Velocity = FVector::ZeroVector;
+	SetViewRotation(RestoreRotation, /*bSnap*/ true);
+}
+
+void AStageCameraPawn::TeleportView(const FVector& NewLocation)
+{
+	Velocity = FVector::ZeroVector;
+	SetActorLocation(NewLocation, /*bSweep*/ false, nullptr, ETeleportType::TeleportPhysics);
+}
+
 void AStageCameraPawn::SetViewRotation(FRotator NewRotation, bool bSnap)
 {
+	if (bFixedView)
+	{
+		return; // Held by the fixed view until ExitFixedView.
+	}
+
 	TargetRotation = FRotator(FMath::Clamp(FRotator::NormalizeAxis(NewRotation.Pitch), -MaxPitch, MaxPitch), FRotator::NormalizeAxis(NewRotation.Yaw), 0.0);
 	if (bSnap)
 	{
@@ -125,6 +164,11 @@ void AStageCameraPawn::Tick(float DeltaSeconds)
 void AStageCameraPawn::TickRotation(AController& ViewController, float DeltaSeconds)
 {
 	using namespace StageCameraPawn;
+
+	if (bFixedView)
+	{
+		return; // Set exactly once by EnterFixedView; adopting the control rotation would clamp Top's -90 pitch.
+	}
 
 	const FRotator ControlRotation = ViewController.GetControlRotation();
 	const bool bAtRest = CurrentRotation.Equals(TargetRotation, RotationRestToleranceDeg);
@@ -168,9 +212,12 @@ void AStageCameraPawn::TickMovement(float DeltaSeconds)
 	// Horizontal-plane input and vertical input are limited separately: holding E with W or A/D
 	// never slows the climb, and the climb never slows the forward/strafe motion.
 	const FRotationMatrix ViewAxes(CurrentRotation);
-	FVector ViewMove = ViewAxes.GetUnitAxis(EAxis::X) * Input.X + ViewAxes.GetUnitAxis(EAxis::Y) * Input.Y;
+	// A fixed (orthographic) view moves in its own plane: forward means up the screen, since moving along the view axis
+	// changes nothing on screen.
+	const FVector ForwardAxis = bFixedView ? ViewAxes.GetUnitAxis(EAxis::Z) : ViewAxes.GetUnitAxis(EAxis::X);
+	FVector ViewMove = ForwardAxis * Input.X + ViewAxes.GetUnitAxis(EAxis::Y) * Input.Y;
 	ViewMove = ViewMove.GetClampedToMaxSize(1.0);
-	const double Climb = FMath::Clamp(Input.Z, -1.0, 1.0);
+	const double Climb = bFixedView ? 0.0 : FMath::Clamp(Input.Z, -1.0, 1.0);
 
 	const FVector TargetVelocity = (ViewMove + FVector::UpVector * Climb) * FlySpeed;
 

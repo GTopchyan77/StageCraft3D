@@ -110,6 +110,23 @@ namespace StageRender
 	MODULARSCENEBUILDER_API FIntPoint GetOutputSize(EStageRenderResolution Resolution);
 
 	/**
+	 * Horizontal field of view, in degrees, for a capture of OutputAspect (width / height) that frames a perspective view
+	 * the way the viewport does. When bViewSpansHeight (ULocalPlayer's default AspectRatio_MaintainYFOV) the viewport keeps
+	 * a vertical angle of atan(tan(FOV / 2) / ViewAspectRatio), FOV being horizontal at the camera's own aspect ratio
+	 * (FMinimalViewInfo::CalculateProjectionMatrixGivenViewRectangle; APlayerCameraManager defaults to 4:3). A scene capture
+	 * reads its FOV horizontally at the output aspect, so the render keeps that vertical angle. Otherwise FOV is returned
+	 * unchanged. FOV is clamped to (1, 170) degrees.
+	 */
+	MODULARSCENEBUILDER_API double GetCaptureFOV(double ViewFOVDegrees, double ViewAspectRatio, bool bViewSpansHeight, double OutputAspect);
+
+	/**
+	 * The (horizontal) ortho width for a capture of OutputAspect that frames an orthographic view the way the viewport does.
+	 * When bViewSpansHeight the viewport's ortho width is its height (no aspect compensation in the engine), so the render
+	 * keeps that height.
+	 */
+	MODULARSCENEBUILDER_API double GetCaptureOrthoWidth(double ViewOrthoWidth, bool bViewSpansHeight, double OutputAspect);
+
+	/**
 	 * Render-size multiplier for supersampling: 2x where the internal image stays within MaxSupersampledPixels, less for
 	 * larger outputs (Square renders at 1.33x), never below 1, so a 4K output is already at the budget and renders at 1x.
 	 * Other anti-aliasing modes render at 1x.

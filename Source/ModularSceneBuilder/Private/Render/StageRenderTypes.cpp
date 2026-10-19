@@ -20,6 +20,24 @@ namespace StageRender
 		}
 	}
 
+	double GetCaptureFOV(double ViewFOVDegrees, double ViewAspectRatio, bool bViewSpansHeight, double OutputAspect)
+	{
+		const double FOV = FMath::IsFinite(ViewFOVDegrees) ? FMath::Clamp(ViewFOVDegrees, 1.0, 170.0) : 90.0;
+		if (!bViewSpansHeight || !FMath::IsFinite(ViewAspectRatio) || ViewAspectRatio <= 0.0 || !FMath::IsFinite(OutputAspect) || OutputAspect <= 0.0)
+		{
+			return FOV;
+		}
+		// The viewport's vertical half-angle, then the horizontal one at the output aspect.
+		const double HalfTanY = FMath::Tan(FMath::DegreesToRadians(FOV) * 0.5) / ViewAspectRatio;
+		return FMath::Clamp(FMath::RadiansToDegrees(2.0 * FMath::Atan(HalfTanY * OutputAspect)), 1.0, 170.0);
+	}
+
+	double GetCaptureOrthoWidth(double ViewOrthoWidth, bool bViewSpansHeight, double OutputAspect)
+	{
+		const double Width = FMath::IsFinite(ViewOrthoWidth) ? FMath::Max(ViewOrthoWidth, 1.0) : 1.0;
+		return bViewSpansHeight && FMath::IsFinite(OutputAspect) && OutputAspect > 0.0 ? Width * OutputAspect : Width;
+	}
+
 	double GetSupersampleFactor(const FStageRenderSettings& Settings)
 	{
 		if (Settings.AntiAliasing != EStageRenderAntiAliasing::Supersampled)

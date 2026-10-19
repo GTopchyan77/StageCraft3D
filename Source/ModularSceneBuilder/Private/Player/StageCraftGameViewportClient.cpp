@@ -3,8 +3,54 @@
 #include "Player/StageCraftGameViewportClient.h"
 
 #include "InputCoreTypes.h"
+#include "ModularSceneBuilder.h"
+#include "ShowFlags.h"
 
 #include UE_INLINE_GENERATED_CPP_BY_NAME(StageCraftGameViewportClient)
+
+void UStageCraftGameViewportClient::ApplyStageViewMode(EStageViewMode Mode)
+{
+	if (!BaseShowFlags.IsSet())
+	{
+		BaseShowFlags = EngineShowFlags;
+	}
+
+	FEngineShowFlags Flags = BaseShowFlags.GetValue();
+	EViewModeIndex Index = VMI_Lit;
+	switch (Mode)
+	{
+	case EStageViewMode::Unlit:
+		Index = VMI_Unlit;
+		ApplyViewMode(Index, /*bPerspective*/ true, Flags);
+		break;
+
+	case EStageViewMode::Lines:
+		Index = VMI_Unlit;
+		ApplyViewMode(Index, /*bPerspective*/ true, Flags);
+		// ApplyViewMode turns post-processing off for Unlit; the line material is a post-process (ADR 0008 F6).
+		Flags.SetPostProcessing(true);
+		// Scene colour keeps only emissive surfaces and the grid lines; the material draws the outlines over a flat background.
+		Flags.SetUnlitViewmode(false);
+		// The material compares neighbouring depth and normal texels: TAA jitter would make the lines crawl.
+		Flags.SetTemporalAA(false);
+		Flags.SetAntiAliasing(false);
+		Flags.SetEyeAdaptation(false);
+		Flags.SetBloom(false);
+		Flags.SetMotionBlur(false);
+		break;
+
+	case EStageViewMode::Lit:
+	default:
+		ApplyViewMode(Index, /*bPerspective*/ true, Flags);
+		break;
+	}
+
+	EngineShowFlags = Flags;
+	// Not SetViewMode: it forces Lit in Shipping and cooked builds (ADR 0008 F1). Draw reads ViewModeIndex every frame.
+	ViewModeIndex = Index;
+	StageViewMode = Mode;
+	UE_LOG(LogStageCraft, Log, TEXT("Viewport view mode %s."), *UEnum::GetValueAsString(Mode));
+}
 
 bool UStageCraftGameViewportClient::InputKey(const FInputKeyEventArgs& EventArgs)
 {

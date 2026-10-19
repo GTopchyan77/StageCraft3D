@@ -97,7 +97,7 @@ void UStagePlacementToolComponent::UpdateTarget(const FHitResult& Hit)
 		return;
 	}
 
-	const FStageItemPlacementRules& Rules = ArmedItem->PlacementRules;
+	const FStageItemPlacementRules Rules = GetEffectiveRules(*ArmedItem);
 	FStageSnapGuideList Guides;
 	const FTransform ItemTransform = ComputeLandingTransform(*ArmedItem, Hit, &Guides);
 	// The snapped point on the surface, before the item's pivot offset: what the marker highlights.
@@ -117,16 +117,22 @@ void UStagePlacementToolComponent::UpdateTarget(const FHitResult& Hit)
 	}
 }
 
+FStageItemPlacementRules UStagePlacementToolComponent::GetEffectiveRules(const UBaseItemData& Item) const
+{
+	return StagePlacementMath::WithGlobalGrid(Item.PlacementRules, GridSnapCm);
+}
+
 FTransform UStagePlacementToolComponent::ComputeLandingTransform(const UBaseItemData& Item, const FHitResult& Hit, FStageSnapGuideList* OutGuides)
 {
-	const FTransform GridTransform = StagePlacementMath::ComputePlacementTransform(Item.PlacementRules, Hit.ImpactPoint, Hit.ImpactNormal);
+	const FStageItemPlacementRules Rules = GetEffectiveRules(Item);
+	const FTransform GridTransform = StagePlacementMath::ComputePlacementTransform(Rules, Hit.ImpactPoint, Hit.ImpactNormal);
 	if (!PlacementSnapper.IsBound())
 	{
 		return GridTransform;
 	}
 
 	// Object snapping is measured where the cursor really is, not at the grid cell, or a neighbour off the grid could never be reached.
-	FStageItemPlacementRules FreeRules = Item.PlacementRules;
+	FStageItemPlacementRules FreeRules = Rules;
 	FreeRules.GridSize = FVector::ZeroVector;
 	const FTransform FreeTransform = StagePlacementMath::ComputePlacementTransform(FreeRules, Hit.ImpactPoint, Hit.ImpactNormal);
 

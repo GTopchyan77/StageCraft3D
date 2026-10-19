@@ -55,6 +55,22 @@ public:
 	/** Sanitized (out-of-range enums fall back to defaults). Returns true if the stored value changed. Does not save. */
 	bool SetRenderSettings(const FStageRenderSettings& Settings);
 
+	/** Toolbar grid snap in cm, 0 = Off; always one of StageViewMath::GetGridSnapPresets (UStageSnappingComponent is the only writer). */
+	float GetGridSnapCm() const { return GridSnapCm; }
+
+	/** Toolbar angle snap in degrees, 0 = Off; always one of StageViewMath::GetAngleSnapPresets (UStageSnappingComponent is the only writer). */
+	float GetAngleSnapDegrees() const { return AngleSnapDegrees; }
+
+	/** A value that is not a preset is refused (returns false, nothing stored). Returns true if the stored value changed. Does not save. */
+	bool SetGridSnapCm(float Cm);
+	bool SetAngleSnapDegrees(float Degrees);
+
+	/** Whether the viewport draws its grid (UStageViewportComponent is the only writer). */
+	bool IsViewportGridVisible() const { return bViewportGridVisible; }
+
+	/** Returns true if the stored value changed. Does not save. */
+	bool SetViewportGridVisible(bool bVisible);
+
 private:
 	void ResetAudioToDefaults();
 	void SanitizeAudio();
@@ -79,4 +95,13 @@ private:
 
 	UPROPERTY(Config)
 	FStageRenderSettings RenderSettings;
+
+	UPROPERTY(Config)
+	float GridSnapCm = 50.f;
+
+	UPROPERTY(Config)
+	float AngleSnapDegrees = 15.f;
+
+	UPROPERTY(Config)
+	bool bViewportGridVisible = true;
 };

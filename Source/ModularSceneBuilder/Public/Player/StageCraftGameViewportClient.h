@@ -4,6 +4,7 @@
 
 #include "CoreMinimal.h"
 #include "Engine/GameViewportClient.h"
+#include "Viewport/StageViewportTypes.h"
 #include "StageCraftGameViewportClient.generated.h"
 
 /**
@@ -31,6 +32,20 @@ public:
 	virtual void CapturedMouseMove(FViewport* InViewport, int32 X, int32 Y) override;
 	//~ End UGameViewportClient Interface
 
+	/**
+	 * Shades the viewport for a stage view mode (Docs/ADR/0008 §4.2-4.3). Sets ViewModeIndex and the show flags directly:
+	 * UGameViewportClient::SetViewMode forces Lit in Shipping and cooked builds, while Draw only reads ViewModeIndex (F1).
+	 * Each call starts again from the flags the viewport had before the first one, so returning to Lit restores everything.
+	 * - Lit: the engine's lit view.
+	 * - Unlit: VMI_Unlit (base colour, no lights, shadows or fog).
+	 * - Lines: Unlit without the base colour, with post-processing on for the line-view material, and without temporal AA,
+	 *   eye adaptation, bloom or motion blur, so the material sees stable, unjittered buffers at a fixed exposure.
+	 * Renders are unaffected: scene captures have their own show flags.
+	 */
+	void ApplyStageViewMode(EStageViewMode Mode);
+
+	EStageViewMode GetStageViewMode() const { return StageViewMode; }
+
 	/** True while the navigation button is held (as seen by the viewport, before gameplay input). */
 	bool IsNavigationButtonDown() const { return bNavigationButtonDown; }
 
@@ -42,6 +57,11 @@ public:
 	FSimpleMulticastDelegate OnCursorMoved;
 
 private:
+	/** The viewport's own flags before the first ApplyStageViewMode; every mode is derived from them. */
+	TOptional<FEngineShowFlags> BaseShowFlags;
+
+	EStageViewMode StageViewMode = EStageViewMode::Lit;
+
 	bool bNavigationButtonDown = false;
 	bool bOtherMouseButtonDown = false;
 };

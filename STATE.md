@@ -2438,7 +2438,7 @@ Most of this already existed: the BOM came in #27, and the inspector grid, gobo/
   - The #27 / #30 manual checklists still stand.
 - Status: **implemented, awaiting manual verification** of the items above.
 
-**Commit:** uncommitted (working tree).
+**Commit:** `efb3605`.
 
 **Known issues / follow-ups**
 - The encoder's timer starts on value pushes. A Blueprint subclass that paints anything else per frame would need its own trigger (none exist).
@@ -2446,3 +2446,145 @@ Most of this already existed: the BOM came in #27, and the inspector grid, gobo/
 - BOM still has no current (A) or per-phase power distribution, and no rigging point loads (from #27).
 - Patch / attribute edits are still not undo steps (from #30).
 - **Obsidian vault** `S:\` is still unreachable on this machine, so no session log or lessons were written there. Rules.md's `RunEditor.bat` does not exist in this project.
+
+---
+
+## #32 — Viewport toolbar: orthographic projections, Lit / Unlit / Lines view modes, reference grid, global grid and angle snap (2026-10-19)
+
+**Request (Gevor).** Under Rules.md:
+1. A viewport projection selector: Perspective plus orthographic Top (XY), Front (XZ), Left/Right (YZ) and Back, with orthographic zoom.
+2. View modes: Lit, Unlit, and a wireframe/line view for CAD alignment. The grid must read clearly in the orthographic and unlit modes.
+3. A viewport header toolbar with projection, view mode, Move/Rotate/Scale, grid snap (10/50/100 cm) and angle snap (5°/15°/45°).
+4. Event-driven updates, no per-frame polling.
+
+**Decisions (Gevor, 2026-10-19), asked because the engine forces them:**
+- **"Wireframe" is a CAD line view** (post-process outlines). The engine's `Wireframe` show flag is a compile-time 0 in Shipping, so true wireframe cannot ship.
+- **The toolbar grid is global.** It replaces the per-item placement grids and drives placement, gizmo moves and the drawn grid.
+
+Design record, with verified engine facts F1–F11: `Docs/ADR/0008-viewport-toolbar-projections-and-view-modes.md`.
+
+**What changed and why**
+- **State and ownership** (Rules.md "Where state lives").
+  - `UStageViewportComponent` (new, on `AModularPlayerController`) owns projection, view mode, grid visibility and ortho width.
+  - It applies them through their owners:
+    - the camera manager: `bIsOrthographic`, `DefaultOrthoWidth`, explicit planes, pitch limits;
+    - `AStageCameraPawn`'s new fixed view;
+    - `UStageCraftGameViewportClient::ApplyStageViewMode`;
+    - `UStageLineViewCameraModifier`;
+    - `AStageGridActor`.
+  - Grid and angle snap live in `UStageSnappingComponent` (new `GetGridSnap/SetGridSnap/GetAngleSnap/SetAngleSnap`, `OnSnapSettingsChanged`). They are stored in `UStageCraftUserSettings` as presets only; a hand-edited ini falls back to the defaults.
+  - Projection and view mode are not saved: every session starts Lit Perspective.
+- **Projections.**
+  - Unreal Editor orientations (F8).
+  - Entering ortho centres on where the perspective view meets the floor, at the same scale (`FitOrthoWidth`), and remembers the camera. Perspective restores it exactly.
+  - Ortho → ortho keeps centre and zoom. A front or side view entered from above lifts the centre so the floor is on screen.
+  - The ortho camera stands 200 m back with explicit planes.
+  - The pawn's fixed view holds the exact axis rotation (look ignored, WASD pans in the view plane). The camera manager's pitch limit is widened to ±90 while ortho (F10), otherwise Top was 0.1° off vertical.
+  - **Ortho navigation:** right-drag grab-pans; the wheel zooms around the cursor (1–500 m). Both use the pixel size measured by deprojection, because the engine maps ortho width to the viewport height by default (F9). The first implementation assumed width and missed the zoom anchor by 149 cm; it now holds within a pixel.
+  - Gizmo and snap-guide screen sizes use the ortho-equivalent distance (`StageViewMath::GetScreenScaleDistance`).
+- **View modes.**
+  - `ApplyStageViewMode` sets `ViewModeIndex` and the show flags itself: `SetViewMode` forces Lit in Shipping and cooked builds (F1). Every mode starts from the viewport's original flags.
+  - **Unlit** = `VMI_Unlit`. It needs development shaders in cooked builds; `r.CompileShadersForDevelopment=1` is pinned in `DefaultEngine.ini` (F4).
+  - **Lines** = Unlit flags, with post-processing back on and base colour, TAA, eye adaptation, bloom and motion blur off. `M_StageLineView` is a post-process material after tonemapping:
+    - depth edges from the Laplacian of an affine depth (linear in ortho, inverse in perspective, so grazing floors are not edges), nearer side only;
+    - creases from GBuffer normals;
+    - a flat dark background, with scene colour (grid, emissive) added back.
+
+    It is delivered by a camera modifier enabled only in Lines, so it never reaches renders (F7).
+  - **Every projection or view-mode switch is a camera cut** (F11). Without it, Lit came back dark after Lines and took about 10 s to recover (floor brightness measured 22 → 44 → 119 → 144); with it, 144 at once.
+- **Grid** (`AStageGridActor`).
+  - 1-pixel batched lines with the batch's tick switched off; rebuilt only when plane, offset or cell changes.
+  - The floor plane (1 cm above Z=0; at 0 it z-fought with the floor and drew dashed) in Perspective and Top. Front/Back and Left/Right use a vertical plane 50 m behind the origin.
+  - Minor lines at the grid snap (100 cm when Off), major every 10 cells, axis lines red/green/blue, ±50 m (at most 1 001 lines per direction). Hidden from renders.
+  - Toggle on the toolbar, saved per machine.
+- **Global grid and angle snap.**
+  - `StagePlacementMath::WithGlobalGrid` replaces the item's X/Y grid (Z, offset and alignment kept). The placement tool and the span tool (which reads the placement tool's value) use it.
+  - Gizmo moves now snap the **absolute** world coordinate on the dragged axis (CAD alignment); before, they snapped the drag distance. Object snapping still wins.
+  - Gizmo rotation uses the angle snap. The new `AModularTransformGizmo::SetDragSnapping` replaces direct writes to its protected snap members.
+  - The controller pushes the values on `OnSnapSettingsChanged`.
+  - Defaults: 50 cm (the old truss/span grid) and 15°.
+- **Toolbar** (`UStageViewportToolbar`, code-built UMG).
+  - Placement: in the viewport tab above the 3D view, through the new shell callback `CreateViewportToolbarContent`, like the status bar. It moves with the viewport when floated and is rebuilt for a new controller.
+  - Controls: projection dropdown, LIT / UNLIT / LINES, GRID toggle, MOVE / ROTATE / SCALE, GRID and ANGLE snap dropdowns.
+  - It writes through the owners' setters, reads back after every write, and redraws from `OnViewChanged`, `OnSnapSettingsChanged` and `OnModeChanged`. Bound in NativeConstruct, unbound in NativeDestruct; no tick; non-focusable buttons.
+- **Renders.**
+  - The capture follows the projection, so an orthographic Top renders as a plan.
+  - FOV and ortho width are converted for the output aspect (F9), so renders frame like the viewport.
+  - **Pre-existing defect found and fixed:** since #26, perspective renders were cropped about 1.33× against the viewport. The viewport keeps the vertical angle of a FOV defined at the camera manager's default 4:3 aspect; a 16:9 capture read the FOV horizontally. Measured after the fix: the same features sit at the same frame-height fractions in viewport and render (spots ±0.157 vs ±0.157, floor edge −0.280 vs −0.281).
+- **Dev console** (non-Shipping): `StageCraft.View.{Status, Projection, Mode, Grid, Zoom, Pan}`, `StageCraft.Snap.{Grid, Angle}`. Zoom logs the deprojected anchor before and after.
+
+**Files changed**
+- New source (`Source/ModularSceneBuilder/`):
+  - `Public/Viewport/StageViewportTypes.h`, `StageViewMath.h`, `StageViewportComponent.h`, `StageGridActor.h`, `StageLineViewCameraModifier.h`
+  - `Private/Viewport/StageViewMath.cpp`, `StageViewportComponent.cpp`, `StageGridActor.cpp`, `StageLineViewCameraModifier.cpp`, `StageViewportConsoleCommands.cpp`, `Tests/StageViewportTests.cpp`
+  - `Public/UI/StageViewportToolbar.h`, `Private/UI/StageViewportToolbar.cpp`
+- Modified source:
+  - `Player/ModularPlayerController.h/.cpp` (component, snap push, ortho look/wheel routing, render aspect flag)
+  - `Player/StageCameraPawn.h/.cpp` (fixed view, `TeleportView`)
+  - `Player/StageCraftGameViewportClient.h/.cpp` (`ApplyStageViewMode`)
+  - `Actors/ModularTransformGizmo.h/.cpp` (`SetDragSnapping`, absolute grid moves, ortho screen size)
+  - `Placement/StageSnappingComponent.h/.cpp`, `Placement/StagePlacementToolComponent.h/.cpp`, `Placement/StagePlacementMath.h/.cpp`, `Private/Placement/StageSpanToolComponent.cpp`
+  - `Settings/StageCraftUserSettings.h/.cpp`
+  - `Render/StageRenderSubsystem.h/.cpp`, `Render/StageRenderTypes.h/.cpp`, `Private/Render/Tests/StageRenderTests.cpp`
+  - `Private/Workspace/StageWorkspaceShell.h/.cpp`, `Workspace/StageWorkspaceSubsystem.h/.cpp`
+- Config:
+  - `Config/DefaultGame.ini`: `StageViewportComponent.LineViewMaterial`, and cook `/Game/StageCraft/Viewport`.
+  - `Config/DefaultEngine.ini`: `[SystemSettings] r.CompileShadersForDevelopment=1`.
+- Content (new): `Content/StageCraft/Viewport/M_StageLineView.uasset`.
+- Scripts (new): `Scripts/Content/create_viewport_content.py`.
+- Docs: `Docs/ADR/0008-viewport-toolbar-projections-and-view-modes.md` (new), `tasks/todo.md`, `STATE.md` (#31 commit `efb3605`, this entry).
+- No maps, input assets or Widget Blueprints were changed. Catalog data is unchanged (per-item `GridSize` X/Y is now overridden at placement).
+
+**Verification (Claude, 2026-10-19; logs in `Saved/Logs/R32/`)**
+- **Builds, all with 0 errors and 0 warnings:**
+  - Editor Development.
+  - Game Development.
+  - Game Shipping with `-DisableAdaptiveUnity`. The Shipping exe contains the toolbar strings and none of the `StageCraft.View.*` / `StageCraft.Snap.*` command names (UTF-16 search).
+- **Automation: 42/42 passed** (37 existing + 5 new), `TEST COMPLETE. EXIT CODE: 0`:
+  - `Viewport.Projection`: axes of every view, grid planes and offsets.
+  - `Viewport.OrthoMath`: fit, steps and limits, zoom anchor at four cursor offsets, pan, screen-scale distance, NaN.
+  - `Viewport.Grid`: counts, axes, majors, vertical planes, line cap, invalid input.
+  - `Viewport.Snap`: presets, sanitising, global grid rules and landing.
+  - `Render.Framing`: FOV and ortho conversion.
+- **Content:** `M_StageLineView` saved and read back as `MD_POST_PROCESS` / `BL_SCENE_COLOR_AFTER_TONEMAPPING`. It compiled and rendered at runtime.
+- **Standalone `-game`, scripted by Claude** (`L_StageTest`, `R32_Run1`–`Run7.log`, screenshots `ScreenShot00048`–`00079`, renders `Saved/Renders/*20261019-23*`; Gevor's workspace session and `GameUserSettings.ini` backed up and restored):
+  - **Toolbar** drawn above the viewport in the dark theme. Its selection follows console changes (read-back).
+  - **Projections:**
+    - Top / Front / Left / Back work.
+    - Top pitch is exactly −90.00 after the F10 fix.
+    - Perspective is restored exactly (−800, 0, 600, P −35).
+    - **Zoom anchor:** after the F9 fix the point under the cursor moves 1.2 cm and 1.8 cm (under one pixel at 2–4 cm per pixel). It was 149 cm before.
+    - **Pan:** 100 px right / 50 px up moves the camera −454 / −227 cm at a measured 4.54 cm/px (1:1 grab).
+  - **View modes:**
+    - Unlit draws flat base colours.
+    - Lines draws clean outlines in perspective, Top and Left, with the grid.
+    - Lit after Lines is at full exposure at once (camera cut).
+  - **Grid:** 402 lines at 50 cm, 2 002 at 10 cm, hidden/shown by toggle. No z-fighting after the 1 cm lift. A vertical grid in Front/Left.
+  - **Snaps:**
+    - 25 cm and 7° are refused as non-presets.
+    - Gizmo and placement grids follow the setting (status log).
+    - A gizmo drag of +137 cm from X −450 landed on −300 (50 cm grid).
+  - **Renders:** an ortho Top render is a plan framed like the viewport (spots ±0.144 vs ±0.1435 of height). The perspective render matches the viewport after the framing fix. Gizmo and grid are absent from renders.
+- **Not verified (needs Gevor, mouse and keyboard, Standalone Game):**
+  - Clicking every toolbar control, including the dropdown lists.
+  - A physical right-drag pan, the wheel zoom and WASD in ortho (the same component calls were driven from the console).
+  - Placing items in ortho Top with the mouse.
+  - Rotate snapping by hand.
+  - A cooked or packaged build: Unlit depends on development shaders being cooked (pinned), and the Lines material must cook (directory added). Nothing was cooked.
+  - PIE: it has no workspace, so no toolbar; the console commands work there.
+- Status: **implemented, awaiting manual verification** of the items above.
+
+**Commit:** uncommitted (working tree).
+
+**Known issues / follow-ups**
+- **Behaviour changes to be aware of:**
+  - Per-item placement grids are replaced by the global grid (Gevor's choice).
+  - Gizmo moves now land on absolute grid positions; an off-grid item jumps onto the grid at its first snapped move.
+  - Angle snap now defaults to 15° (rotation was free).
+  - Perspective renders are framed wider than before (now matching the viewport).
+- The grid does not fade with distance in perspective; far lines crowd near the horizon. Batched lines cannot fade.
+- Lit ortho uses the same lighting as perspective. Lumen in orthographic views is the engine's, so it may differ slightly.
+- Lines mode outlines come from depth and normals. Very thin parts below a pixel and coplanar touching faces draw no line.
+- The ortho camera always stands 200 m back. Layouts larger than that behind the view centre would be clipped (none exist).
+- No keyboard shortcuts for projections or view modes yet.
+- **Obsidian vault** `S:\` is still unreachable; the design record is ADR 0008.

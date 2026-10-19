@@ -12,6 +12,8 @@
 #include "Misc/AutomationTest.h"
 #include "Render/StageRenderTypes.h"
 
+#include <limits>
+
 namespace StageRenderTests
 {
 	constexpr EAutomationTestFlags Flags = EAutomationTestFlags::EditorContext | EAutomationTestFlags::ClientContext | EAutomationTestFlags::EngineFilter;
@@ -144,6 +146,31 @@ bool FStageRenderRulesTest::RunTest(const FString& Parameters)
 	TestTrue(TEXT("Out-of-range values fall back to the defaults"), Repaired == FStageRenderSettings());
 	const FStageRenderSettings Valid = MakeSettings(EStageRenderResolution::Square, EStageRenderAntiAliasing::Off, EStageRenderPostProcess::Clean);
 	TestTrue(TEXT("Valid values are kept"), Sanitize(Valid) == Valid);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FStageRenderFramingTest, "StageCraft.Render.Framing", StageRenderTests::Flags)
+
+bool FStageRenderFramingTest::RunTest(const FString& Parameters)
+{
+	using namespace StageRender;
+
+	// Perspective: a 90 degree FOV at the camera manager's default 4:3, viewed with the vertical kept, rendered 16:9.
+	const double Aspect = 16.0 / 9.0;
+	const double Horizontal = GetCaptureFOV(90.0, 4.0 / 3.0, /*bViewSpansHeight*/ true, Aspect);
+	TestTrue(TEXT("The render keeps the viewport's vertical half-angle (tan 0.75)"),
+		FMath::IsNearlyEqual(FMath::Tan(FMath::DegreesToRadians(Horizontal) * 0.5) / Aspect, 0.75, 1.e-9));
+	TestTrue(TEXT("A render at the camera's own aspect keeps the FOV"), FMath::IsNearlyEqual(GetCaptureFOV(90.0, Aspect, true, Aspect), 90.0, 1.e-9));
+	TestEqual(TEXT("A width-keeping view keeps the FOV"), GetCaptureFOV(70.0, 4.0 / 3.0, false, Aspect), 70.0);
+	TestEqual(TEXT("NaN FOV falls back to 90"), GetCaptureFOV(std::numeric_limits<double>::quiet_NaN(), 4.0 / 3.0, false, Aspect), 90.0);
+	TestEqual(TEXT("Huge FOV is clamped"), GetCaptureFOV(400.0, 4.0 / 3.0, false, Aspect), 170.0);
+	TestEqual(TEXT("A bad view aspect keeps the FOV"), GetCaptureFOV(60.0, 0.0, true, Aspect), 60.0);
+
+	// Orthographic: a view 1000 cm tall rendered 2:1 is 2000 cm wide.
+	TestEqual(TEXT("Height-spanning ortho width"), GetCaptureOrthoWidth(1000.0, true, 2.0), 2000.0);
+	TestEqual(TEXT("Width-spanning ortho width"), GetCaptureOrthoWidth(1000.0, false, 2.0), 1000.0);
+	TestEqual(TEXT("NaN ortho width"), GetCaptureOrthoWidth(std::numeric_limits<double>::quiet_NaN(), false, 2.0), 1.0);
+	TestEqual(TEXT("Bad aspect keeps the width"), GetCaptureOrthoWidth(1000.0, true, 0.0), 1000.0);
 	return true;
 }
 

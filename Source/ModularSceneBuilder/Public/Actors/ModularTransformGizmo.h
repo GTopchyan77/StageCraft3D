@@ -69,6 +69,12 @@ public:
 	UPROPERTY(BlueprintAssignable, Category = "StageCraft|Gizmo")
 	FOnGizmoModeChanged OnModeChanged;
 
+	/** The toolbar's grid and angle snap, pushed by the controller (Docs/ADR/0008 §4.5). Negative or NaN values mean Off. */
+	void SetDragSnapping(float GridCm, float AngleDegrees);
+
+	float GetTranslationSnap() const { return TranslationSnap; }
+	float GetRotationSnapDegrees() const { return RotationSnapDegrees; }
+
 	/**
 	 * Starts a drag if HandleHit is one of this gizmo's visible handles. The ray is the cursor ray
 	 * in world space. Returns false (and does nothing) otherwise.
@@ -120,11 +126,14 @@ protected:
 	virtual void Tick(float DeltaSeconds) override;
 	//~ End AActor Interface
 
-	/** Translation step in cm while dragging. Zero disables snapping. */
+	/**
+	 * Grid in cm for moves: the dragged world coordinate lands on a multiple of it (absolute grid, not a step from the start).
+	 * Zero disables it. Set by the controller from the toolbar's grid snap; object snapping wins when it engages.
+	 */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "StageCraft|Gizmo|Snapping", meta = (ClampMin = "0.0", Units = "cm"))
 	float TranslationSnap = 0.f;
 
-	/** Rotation step in degrees while dragging. Zero disables snapping. */
+	/** Rotation step in degrees while dragging. Zero disables snapping. Set by the controller from the toolbar's angle snap. */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "StageCraft|Gizmo|Snapping", meta = (ClampMin = "0.0", ClampMax = "180.0", Units = "deg"))
 	float RotationSnapDegrees = 0.f;
 

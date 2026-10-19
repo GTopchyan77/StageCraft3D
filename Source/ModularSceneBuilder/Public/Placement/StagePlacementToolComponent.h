@@ -107,6 +107,13 @@ public:
 	 */
 	FStagePlacementSnapper PlacementSnapper;
 
+	/**
+	 * The global grid in cm (toolbar grid snap; 0 = free), pushed by the controller. It replaces the X/Y of every item's own
+	 * GridSize (StagePlacementMath::WithGlobalGrid); the item keeps its Z grid, offset and surface alignment.
+	 */
+	void SetGridSnap(double Cm) { GridSnapCm = Cm; }
+	double GetGridSnap() const { return GridSnapCm; }
+
 	UPROPERTY(BlueprintAssignable, Category = "StageCraft|Placement")
 	FOnStageEditModeChanged OnEditModeChanged;
 
@@ -161,6 +168,11 @@ private:
 	/** Spawned on first use, so controllers that never place (remote, tests) never create one. */
 	UPROPERTY(Transient)
 	TObjectPtr<class AStagePlacementPreview> Preview = nullptr;
+
+	/** The item's rules under the global grid: what both the preview and the spawn use. */
+	struct FStageItemPlacementRules GetEffectiveRules(const class UBaseItemData& Item) const;
+
+	double GridSnapCm = 0.0;
 
 	EStageEditMode EditMode = EStageEditMode::Select;
 	EStagePlacementPreviewState PreviewState = EStagePlacementPreviewState::Hidden;

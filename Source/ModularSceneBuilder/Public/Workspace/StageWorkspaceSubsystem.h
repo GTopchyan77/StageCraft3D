@@ -153,6 +153,9 @@ private:
 	/** The status bar for the local controller (UStageStatusBarWidget), or nothing until one registers. */
 	TSharedRef<class SWidget> CreateStatusBarContent();
 
+	/** The viewport toolbar for the local controller (UStageViewportToolbar), or nothing until one registers. */
+	TSharedRef<class SWidget> CreateViewportToolbarContent();
+
 	void HandlePanelHostChanged(const FGameplayTag& PanelTag, EStagePanelHost NewHost, EStagePanelHost PreviousHost);
 
 	/** Clamps, validates and applies a saved layout. Corrupt when Slate cannot read its panel layout. */

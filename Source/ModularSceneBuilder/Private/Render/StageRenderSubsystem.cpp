@@ -277,7 +277,17 @@ void UStageRenderSubsystem::ConfigureCapture(USceneCaptureComponent2D& Capture, 
 
 	Capture.TextureTarget = RenderTarget;
 	Capture.CaptureSource = SCS_FinalColorLDR;
-	Capture.FOVAngle = Request.View.FOV;
+	// The viewport may keep a vertical angle / height (the player's aspect constraint) while a capture reads FOV and ortho
+	// width horizontally at its own aspect: both are converted, so a render frames like the viewport (ADR 0008 F9).
+	const FIntPoint OutputSize = StageRender::GetOutputSize(JobSettings.Resolution);
+	const double OutputAspect = static_cast<double>(OutputSize.X) / OutputSize.Y;
+	Capture.FOVAngle = static_cast<float>(StageRender::GetCaptureFOV(Request.View.FOV, Request.View.AspectRatio, Request.bViewSpansHeight, OutputAspect));
+	// A render shows the viewport's projection: an orthographic top view renders as a plan (ADR 0008 §4.1). The planes
+	// match the viewport's explicit ones; the auto planes would move the capture origin.
+	Capture.ProjectionType = Request.View.ProjectionMode;
+	Capture.OrthoWidth = static_cast<float>(StageRender::GetCaptureOrthoWidth(Request.View.OrthoWidth, Request.bViewSpansHeight, OutputAspect));
+	Capture.bAutoCalculateOrthoPlanes = false;
+	Capture.bUpdateOrthoPlanes = false;
 	// Rendered every frame during the warm-up, with a persistent view state: temporal AA, eye adaptation and Lumen need history.
 	Capture.bCaptureEveryFrame = true;
 	Capture.bCaptureOnMovement = false;

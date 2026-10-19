@@ -252,3 +252,21 @@ See `STATE.md` for detailed history of completed work.
 - [x] Editor / Game / Shipping (full unity) builds clean; 37/37 automation; scripted runs R31_Run1-4 with screenshots
 - [ ] Manual verification (Gevor): STATE.md #31 "Not verified" list
 - [ ] BOM: current (A) at a configured supply voltage and per-phase distribution; rigging point loads
+
+## Phase 13 — Viewport toolbar, ortho projections, view modes, global grid snap (STATE.md #32, ADR 0008)
+- [x] Types + pure math: `EStageViewProjection`, `EStageViewMode`, `StageViewMath` (rotations, ortho fit/zoom, screen-scale distance, grid lines, snap presets), `StagePlacementMath::WithGlobalGrid`; tests
+- [x] Settings: grid snap, angle snap, grid visibility (sanitised to presets)
+- [x] `UStageSnappingComponent`: grid/angle snap + `OnSnapSettingsChanged`; controller pushes to gizmo, placement and span tools
+- [x] Gizmo: absolute grid alignment on moves; ortho-aware screen scale (gizmo + snap guides)
+- [x] Camera pawn fixed view (exact axis rotation, planar motion)
+- [x] `UStageCraftGameViewportClient::ApplyStageViewMode` (Lit / Unlit / Lines)
+- [x] `UStageLineViewCameraModifier` + `M_StageLineView` (content script)
+- [x] `AStageGridActor` (line batch, no tick, render helper)
+- [x] `UStageViewportComponent`: projection switch, ortho pan/zoom, view mode, grid; controller input routing (RMB pan, wheel zoom in ortho)
+- [x] Render capture follows projection
+- [x] `UStageViewportToolbar` + shell callback in the viewport tab
+- [x] Dev console `StageCraft.View.*`, `StageCraft.Snap.*`
+- [x] Builds (Editor / Game / Shipping full unity), automation, scripted runs with screenshots
+- [x] STATE.md #32
+- [ ] Manual verification (Gevor): STATE.md #32 "Not verified" list (toolbar clicks, right-drag pan, wheel zoom, WASD in ortho, packaged Unlit / Lines)
+- [ ] Grid fade with distance in perspective (batched lines cannot fade; would need a line material or a mesh grid)

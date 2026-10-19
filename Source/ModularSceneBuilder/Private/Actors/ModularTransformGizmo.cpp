@@ -15,6 +15,7 @@
 #include "ProceduralMeshComponent.h"
 #include "Render/StageRenderSubsystem.h"
 #include "UObject/ConstructorHelpers.h"
+#include "Viewport/StageViewMath.h"
 
 #include UE_INLINE_GENERATED_CPP_BY_NAME(ModularTransformGizmo)
 
@@ -337,11 +338,22 @@ void AModularTransformGizmo::UpdateDrag(const FVector& RayOrigin, const FVector&
 	}
 }
 
+void AModularTransformGizmo::SetDragSnapping(float GridCm, float AngleDegrees)
+{
+	TranslationSnap = FMath::IsFinite(GridCm) ? FMath::Max(GridCm, 0.f) : 0.f;
+	RotationSnapDegrees = FMath::IsFinite(AngleDegrees) ? FMath::Clamp(AngleDegrees, 0.f, 180.f) : 0.f;
+}
+
 void AModularTransformGizmo::UpdateTranslateDrag(const FVector& Point)
 {
 	const double Distance = (Point - DragStartPoint) | DragAxisDirection;
-	const double GridDistance = TranslationSnap > 0.f ? FMath::GridSnap(Distance, static_cast<double>(TranslationSnap)) : Distance;
-	FVector Location = DragStartLocation + DragAxisDirection * GridDistance;
+	FVector Location = DragStartLocation + DragAxisDirection * Distance;
+	if (TranslationSnap > 0.f && DragAxisIndex >= 0 && DragAxisIndex < 3)
+	{
+		// The handles are world axes, so the dragged coordinate lands on the absolute grid (CAD alignment, ADR 0008 §4.5),
+		// not on multiples of the drag distance from wherever the item started.
+		Location[DragAxisIndex] = FMath::GridSnap(Location[DragAxisIndex], static_cast<double>(TranslationSnap));
+	}
 
 	// Object snapping is measured at the unsnapped cursor position; when it engages it wins over the step grid.
 	if (TranslationSnapper.IsBound())
@@ -525,7 +537,8 @@ void AModularTransformGizmo::UpdateScreenScale()
 		return;
 	}
 
-	const double Distance = FVector::Dist(Viewer->PlayerCameraManager->GetCameraLocation(), GetActorLocation());
+	// Orthographic views use the equivalent distance, so the gizmo keeps its size on screen in every projection.
+	const double Distance = StageViewMath::GetScreenScaleDistance(Viewer->PlayerCameraManager->GetCameraCacheView(), GetActorLocation());
 	GizmoRoot->SetWorldScale3D(FVector(FMath::Max(Distance * ScreenSizeFactor, 0.01)));
 }
 

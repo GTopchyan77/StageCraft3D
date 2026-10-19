@@ -94,7 +94,9 @@ UStageSpanData* UStageSpanToolComponent::GetArmedSpan() const
 
 FVector UStageSpanToolComponent::ComputeSnappedPoint(const UStageSpanData& Span, const FHitResult& Hit) const
 {
-	return StagePlacementMath::ComputePlacementTransform(Span.PlacementRules, Hit.ImpactPoint, Hit.ImpactNormal).GetLocation();
+	// The global grid lives on the placement tool (the one value the controller pushes), so points and single items share it.
+	const double GridCm = PlacementTool ? PlacementTool->GetGridSnap() : 0.0;
+	return StagePlacementMath::ComputePlacementTransform(StagePlacementMath::WithGlobalGrid(Span.PlacementRules, GridCm), Hit.ImpactPoint, Hit.ImpactNormal).GetLocation();
 }
 
 FVector UStageSpanToolComponent::ComputeNextPoint(const UStageSpanData& Span, const FHitResult& Hit) const

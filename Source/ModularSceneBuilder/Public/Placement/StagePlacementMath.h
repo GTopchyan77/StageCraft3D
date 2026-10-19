@@ -19,4 +19,10 @@ namespace StagePlacementMath
 
 	/** True when at least one axis of the rules snaps to a grid. Snap feedback is only meaningful then. */
 	MODULARSCENEBUILDER_API bool UsesGridSnapping(const FStageItemPlacementRules& Rules);
+
+	/**
+	 * The item's rules under the toolbar's global grid (Docs/ADR/0008 §4.5): X and Y snap to GridCm, or not at all when
+	 * GridCm <= 0 (Off). Z, the pivot offset and surface alignment stay the item's own. Non-finite GridCm counts as Off.
+	 */
+	MODULARSCENEBUILDER_API FStageItemPlacementRules WithGlobalGrid(const FStageItemPlacementRules& Rules, double GridCm);
 }

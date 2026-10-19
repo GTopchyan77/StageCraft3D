@@ -15,8 +15,14 @@ DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FOnStageRenderSettingsChanged, const
 /** What a render needs from the requester, taken at the moment of the request. */
 struct FStageRenderRequest
 {
-	/** The view to render: the local player's camera position, rotation, field of view and camera post-processing. */
+	/** The view to render: the local player's camera position, rotation, projection, field of view or ortho width, and camera post-processing. */
 	FMinimalViewInfo View;
+
+	/**
+	 * Whether the viewport keeps View's vertical extent rather than its horizontal one (the player's aspect constraint; the
+	 * engine default keeps the vertical). The capture converts FOV and ortho width so the render frames like the viewport.
+	 */
+	bool bViewSpansHeight = false;
 };
 
 /**

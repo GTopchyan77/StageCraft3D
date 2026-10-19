@@ -13,6 +13,7 @@
 #include "Misc/Paths.h"
 #include "Player/ModularPlayerController.h"
 #include "UI/StageStatusBarWidget.h"
+#include "UI/StageViewportToolbar.h"
 #include "Widgets/SNullWidget.h"
 #include "Widgets/SViewport.h"
 #include "Widgets/SWindow.h"
@@ -179,6 +180,11 @@ void UStageWorkspaceSubsystem::InstallIfSupported()
 	{
 		UStageWorkspaceSubsystem* Self = WeakThis.Get();
 		return Self ? Self->CreateStatusBarContent() : SNullWidget::NullWidget;
+	};
+	Callbacks.CreateViewportToolbarContent = [WeakThis]() -> TSharedRef<SWidget>
+	{
+		UStageWorkspaceSubsystem* Self = WeakThis.Get();
+		return Self ? Self->CreateViewportToolbarContent() : SNullWidget::NullWidget;
 	};
 	Callbacks.CanImportFiles = [WeakThis](const TArray<FString>& Files)
 	{
@@ -399,6 +405,14 @@ TSharedRef<SWidget> UStageWorkspaceSubsystem::CreateStatusBarContent()
 	AModularPlayerController* Controller = LocalController.Get();
 	UStageStatusBarWidget* StatusBar = Controller ? CreateWidget<UStageStatusBarWidget>(Controller, UStageStatusBarWidget::StaticClass()) : nullptr;
 	return StatusBar ? StatusBar->TakeWidget() : SNullWidget::NullWidget;
+}
+
+TSharedRef<SWidget> UStageWorkspaceSubsystem::CreateViewportToolbarContent()
+{
+	// Owned by the controller like the status bar: it binds to the controller's viewport, snapping and gizmo in NativeConstruct.
+	AModularPlayerController* Controller = LocalController.Get();
+	UStageViewportToolbar* Toolbar = Controller ? CreateWidget<UStageViewportToolbar>(Controller, UStageViewportToolbar::StaticClass()) : nullptr;
+	return Toolbar ? Toolbar->TakeWidget() : SNullWidget::NullWidget;
 }
 
 bool UStageWorkspaceSubsystem::OpenPanel(FGameplayTag PanelTag)

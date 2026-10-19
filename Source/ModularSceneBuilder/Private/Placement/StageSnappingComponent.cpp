@@ -11,6 +11,7 @@
 #include "ModularSceneBuilder.h"
 #include "Settings/StageCraftUserSettings.h"
 #include "Subsystems/StageSessionSubsystem.h"
+#include "Viewport/StageViewMath.h"
 
 #include UE_INLINE_GENERATED_CPP_BY_NAME(StageSnappingComponent)
 
@@ -54,6 +55,54 @@ void UStageSnappingComponent::SetSnapToItemsEnabled(bool bEnabled)
 		Settings->SaveSettings();
 		UE_LOG(LogStageCraft, Log, TEXT("Snap to items %s."), bEnabled ? TEXT("on") : TEXT("off"));
 	}
+}
+
+float UStageSnappingComponent::GetGridSnap() const
+{
+	const UStageCraftUserSettings* Settings = UStageCraftUserSettings::Get();
+	return Settings ? Settings->GetGridSnapCm() : StageViewMath::DefaultGridSnapCm;
+}
+
+float UStageSnappingComponent::GetAngleSnap() const
+{
+	const UStageCraftUserSettings* Settings = UStageCraftUserSettings::Get();
+	return Settings ? Settings->GetAngleSnapDegrees() : StageViewMath::DefaultAngleSnapDegrees;
+}
+
+bool UStageSnappingComponent::SetGridSnap(float Cm)
+{
+	UStageCraftUserSettings* Settings = UStageCraftUserSettings::Get();
+	if (!Settings || !StageViewMath::IsGridSnapPreset(Cm))
+	{
+		UE_LOG(LogStageCraft, Warning, TEXT("%s: grid snap %.2f cm refused (%s)."), *GetNameSafe(GetOwner()), Cm,
+			Settings ? TEXT("not a toolbar preset") : TEXT("GameUserSettingsClassName is not StageCraftUserSettings"));
+		return false;
+	}
+	if (Settings->SetGridSnapCm(Cm))
+	{
+		Settings->SaveSettings();
+		UE_LOG(LogStageCraft, Log, TEXT("Grid snap %s."), Cm > 0.f ? *FString::Printf(TEXT("%.0f cm"), Cm) : TEXT("off"));
+		OnSnapSettingsChanged.Broadcast();
+	}
+	return true;
+}
+
+bool UStageSnappingComponent::SetAngleSnap(float Degrees)
+{
+	UStageCraftUserSettings* Settings = UStageCraftUserSettings::Get();
+	if (!Settings || !StageViewMath::IsAngleSnapPreset(Degrees))
+	{
+		UE_LOG(LogStageCraft, Warning, TEXT("%s: angle snap %.2f deg refused (%s)."), *GetNameSafe(GetOwner()), Degrees,
+			Settings ? TEXT("not a toolbar preset") : TEXT("GameUserSettingsClassName is not StageCraftUserSettings"));
+		return false;
+	}
+	if (Settings->SetAngleSnapDegrees(Degrees))
+	{
+		Settings->SaveSettings();
+		UE_LOG(LogStageCraft, Log, TEXT("Angle snap %s."), Degrees > 0.f ? *FString::Printf(TEXT("%.0f deg"), Degrees) : TEXT("off"));
+		OnSnapSettingsChanged.Broadcast();
+	}
+	return true;
 }
 
 FStageSnapOutcome UStageSnappingComponent::SnapPlacement(const UBaseItemData& Item, const FTransform& FreeTransform, const FTransform& GridTransform)
@@ -182,8 +231,9 @@ void UStageSnappingComponent::NoteEngagement(const StageSnapMath::FSnapResult& S
 double UStageSnappingComponent::ComputeGuideThickness(const FVector& At) const
 {
 	const APlayerController* Viewer = Cast<APlayerController>(GetOwner());
+	// In an orthographic view, distance does not change on-screen size; the equivalent distance does.
 	const double Distance = Viewer && Viewer->PlayerCameraManager
-		? FVector::Dist(Viewer->PlayerCameraManager->GetCameraLocation(), At)
+		? StageViewMath::GetScreenScaleDistance(Viewer->PlayerCameraManager->GetCameraCacheView(), At)
 		: 0.0;
 	return FMath::Max(Distance * GuideThicknessPerCm, StageSnapping::MinGuideThickness);
 }

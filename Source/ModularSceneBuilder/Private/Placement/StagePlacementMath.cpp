@@ -33,4 +33,13 @@ namespace StagePlacementMath
 	{
 		return Rules.GridSize.X > 0.0 || Rules.GridSize.Y > 0.0 || Rules.GridSize.Z > 0.0;
 	}
+
+	FStageItemPlacementRules WithGlobalGrid(const FStageItemPlacementRules& Rules, double GridCm)
+	{
+		const double Cell = FMath::IsFinite(GridCm) && GridCm > 0.0 ? GridCm : 0.0;
+		FStageItemPlacementRules Result = Rules;
+		Result.GridSize.X = Cell;
+		Result.GridSize.Y = Cell;
+		return Result;
+	}
 }

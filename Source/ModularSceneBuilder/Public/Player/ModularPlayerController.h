@@ -101,6 +101,9 @@ public:
 	UFUNCTION(BlueprintPure, Category = "StageCraft")
 	class UStageSpanToolComponent* GetSpanTool() const { return SpanTool; }
 
+	UFUNCTION(BlueprintPure, Category = "StageCraft")
+	class UStageViewportComponent* GetViewportView() const { return ViewportView; }
+
 	UFUNCTION(BlueprintPure, Category = "StageCraft|UI")
 	class UUserWidget* GetHUDWidget() const { return HUDWidget; }
 
@@ -296,6 +299,9 @@ protected:
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Components")
 	TObjectPtr<class UStageSpanToolComponent> SpanTool = nullptr;
 
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Components")
+	TObjectPtr<class UStageViewportComponent> ViewportView = nullptr;
+
 	/** Spawned once for the local player and re-targeted on every selection change. */
 	UPROPERTY(EditDefaultsOnly, Category = "StageCraft|Gizmo")
 	TSubclassOf<class AModularTransformGizmo> GizmoClass;
@@ -408,6 +414,14 @@ private:
 
 	UFUNCTION()
 	void HandlePossessedPawnChanged(APawn* PreviousPawn, APawn* NewPawn);
+
+	/** Pushes the toolbar's grid and angle snap to the gizmo and the placement tool (which the span tool reads). */
+	UFUNCTION()
+	void ApplySnapSettings();
+
+	/** Projection or zoom changed: the cursor now points elsewhere, so the placement preview re-traces. */
+	UFUNCTION()
+	void HandleViewChanged();
 
 	FStageEconomyResultInfo ValidatePlacement(const class UBaseItemData& Item, int32 Quantity);
 	FStageEconomyResultInfo EvaluatePlacementPreview(const class UBaseItemData& Item, int32 Quantity);

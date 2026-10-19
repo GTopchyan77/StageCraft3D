@@ -23,6 +23,9 @@ struct FStageWorkspaceShellCallbacks
 	/** Builds the status bar under the panels. Called on install and on RefreshPanelContent. Must not return null. */
 	TFunction<TSharedRef<class SWidget>()> CreateStatusBarContent;
 
+	/** Builds the toolbar above the 3D view in the viewport tab. Called on spawn and on RefreshPanelContent. Unbound or null: no toolbar. */
+	TFunction<TSharedRef<class SWidget>()> CreateViewportToolbarContent;
+
 	/** Whether files dragged in from the OS can be imported; drives the drop hint over a panel. Unbound: panels take no files. */
 	TFunction<bool(const TArray<FString>& Files)> CanImportFiles;
 
@@ -137,6 +140,7 @@ private:
 
 	/** The owner's status bar, or nothing when the owner does not provide one. */
 	TSharedRef<class SWidget> MakeStatusBarContent() const;
+	TSharedRef<class SWidget> MakeViewportToolbarContent() const;
 
 	/** The Workspace tab's content: the menu bar, the restored panel area and the status bar. */
 	TSharedRef<class SWidget> BuildWorkspaceContent(const TSharedRef<FTabManager::FLayout>& PanelLayout);
@@ -159,6 +163,9 @@ private:
 
 	/** Holds the status bar below the panels. Owned here so its content can be replaced for a new controller. */
 	TSharedPtr<class SBox> StatusBarSlot;
+
+	/** Holds the viewport toolbar inside the viewport tab, so it moves with the viewport and is replaced for a new controller. */
+	TSharedPtr<class SBox> ViewportToolbarSlot;
 
 	/** The major tab in the main window. Owns PanelTabManager. */
 	TWeakPtr<class SDockTab> WorkspaceTab;

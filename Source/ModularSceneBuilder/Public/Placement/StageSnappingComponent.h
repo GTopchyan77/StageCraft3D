@@ -9,6 +9,7 @@
 #include "StageSnappingComponent.generated.h"
 
 DECLARE_DYNAMIC_MULTICAST_DELEGATE(FOnStageSnapEngaged);
+DECLARE_DYNAMIC_MULTICAST_DELEGATE(FOnStageSnapSettingsChanged);
 
 /**
  * Object-to-object snapping for one local player's tools (Docs/ADR/0003-undo-redo-and-object-snapping.md):
@@ -25,6 +26,10 @@ DECLARE_DYNAMIC_MULTICAST_DELEGATE(FOnStageSnapEngaged);
  * which runs only on cursor or camera events, at most once per frame, and only in Place mode.
  *
  * The on/off preference is UStageCraftUserSettings::IsSnapToItemsEnabled; this component is its only writer.
+ *
+ * It also owns the toolbar's global grid and angle snap (Docs/ADR/0008 §4.5), stored in the same settings. The tools stay
+ * preference-agnostic: the controller pushes the values to the gizmo, the placement tool and the span tool on
+ * OnSnapSettingsChanged, and the viewport grid redraws from it.
  * No tick.
  */
 UCLASS(ClassGroup = (StageCraft), meta = (BlueprintSpawnableComponent))
@@ -41,6 +46,25 @@ public:
 	/** Stores and saves the preference. Takes effect on the next snap query. */
 	UFUNCTION(BlueprintCallable, Category = "StageCraft|Snapping")
 	void SetSnapToItemsEnabled(bool bEnabled);
+
+	/** Global grid in cm for placement, gizmo moves and the drawn grid; 0 = Off. Always a StageViewMath grid preset. */
+	UFUNCTION(BlueprintPure, Category = "StageCraft|Snapping")
+	float GetGridSnap() const;
+
+	/** Gizmo rotation step in degrees; 0 = Off. Always a StageViewMath angle preset. */
+	UFUNCTION(BlueprintPure, Category = "StageCraft|Snapping")
+	float GetAngleSnap() const;
+
+	/** Stores and saves a preset and broadcasts OnSnapSettingsChanged. A value that is not a preset is refused (false). */
+	UFUNCTION(BlueprintCallable, Category = "StageCraft|Snapping")
+	bool SetGridSnap(float Cm);
+
+	UFUNCTION(BlueprintCallable, Category = "StageCraft|Snapping")
+	bool SetAngleSnap(float Degrees);
+
+	/** Grid or angle snap changed (read the new values with the getters). */
+	UPROPERTY(BlueprintAssignable, Category = "StageCraft|Snapping")
+	FOnStageSnapSettingsChanged OnSnapSettingsChanged;
 
 	/**
 	 * Landing location for Item: X/Y lock onto neighbours measured at FreeTransform (no grid), other axes
