@@ -78,8 +78,13 @@ bool UStageSnappingComponent::SetGridSnap(float Cm)
 			Settings ? TEXT("not a toolbar preset") : TEXT("GameUserSettingsClassName is not StageCraftUserSettings"));
 		return false;
 	}
+	const float Previous = Settings->GetGridSnapCm();
 	if (Settings->SetGridSnapCm(Cm))
 	{
+		if (Previous > 0.f)
+		{
+			LastGridSnapOn = Previous;
+		}
 		Settings->SaveSettings();
 		UE_LOG(LogStageCraft, Log, TEXT("Grid snap %s."), Cm > 0.f ? *FString::Printf(TEXT("%.0f cm"), Cm) : TEXT("off"));
 		OnSnapSettingsChanged.Broadcast();
@@ -96,13 +101,28 @@ bool UStageSnappingComponent::SetAngleSnap(float Degrees)
 			Settings ? TEXT("not a toolbar preset") : TEXT("GameUserSettingsClassName is not StageCraftUserSettings"));
 		return false;
 	}
+	const float Previous = Settings->GetAngleSnapDegrees();
 	if (Settings->SetAngleSnapDegrees(Degrees))
 	{
+		if (Previous > 0.f)
+		{
+			LastAngleSnapOn = Previous;
+		}
 		Settings->SaveSettings();
 		UE_LOG(LogStageCraft, Log, TEXT("Angle snap %s."), Degrees > 0.f ? *FString::Printf(TEXT("%.0f deg"), Degrees) : TEXT("off"));
 		OnSnapSettingsChanged.Broadcast();
 	}
 	return true;
+}
+
+bool UStageSnappingComponent::PickGridSnap(float Cm)
+{
+	return SetGridSnap(StageViewMath::ResolveSnapPick(GetGridSnap(), Cm, LastGridSnapOn, StageViewMath::DefaultGridSnapCm));
+}
+
+bool UStageSnappingComponent::PickAngleSnap(float Degrees)
+{
+	return SetAngleSnap(StageViewMath::ResolveSnapPick(GetAngleSnap(), Degrees, LastAngleSnapOn, StageViewMath::DefaultAngleSnapDegrees));
 }
 
 FStageSnapOutcome UStageSnappingComponent::SnapPlacement(const UBaseItemData& Item, const FTransform& FreeTransform, const FTransform& GridTransform)

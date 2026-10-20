@@ -119,4 +119,19 @@ namespace StageViewMath
 
 	MODULARSCENEBUILDER_API bool IsGridSnapPreset(float Cm);
 	MODULARSCENEBUILDER_API bool IsAngleSnapPreset(float Degrees);
+
+	/**
+	 * The snap value a toolbar click on Picked produces, so each snap segment toggles:
+	 *  - picking the active step turns snapping off (0);
+	 *  - picking Off while already off restores LastOn, or Fallback when LastOn is not a positive step;
+	 *  - any other pick selects Picked.
+	 * Inputs are not validated here; the snapping component's setters refuse anything that is not a preset.
+	 */
+	MODULARSCENEBUILDER_API float ResolveSnapPick(float Current, float Picked, float LastOn, float Fallback);
+
+	/**
+	 * Whether this build can show Mode. Lighting Only, Detail Lighting and Reflections are engine view modes whose show flags
+	 * Shipping compiles out (UE_BUILD_OPTIMIZED_SHOWFLAGS), so they are unavailable there instead of silently rendering Lit.
+	 */
+	MODULARSCENEBUILDER_API bool IsViewModeAvailable(EStageViewMode Mode);
 }

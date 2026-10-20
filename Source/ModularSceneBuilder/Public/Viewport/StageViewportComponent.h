@@ -50,7 +50,10 @@ public:
 	UFUNCTION(BlueprintPure, Category = "StageCraft|Viewport")
 	EStageViewMode GetViewMode() const { return ViewMode; }
 
-	/** Returns false (mode unchanged) when the viewport is not a StageCraft viewport (e.g. PIE without the config) or, for Lines, when its material is missing. */
+	/**
+	 * Returns false (mode unchanged) when the viewport is not a StageCraft viewport (e.g. PIE without the config), when the
+	 * mode is not available in this build (StageViewMath::IsViewModeAvailable) or, for Lines, when its material is missing.
+	 */
 	UFUNCTION(BlueprintCallable, Category = "StageCraft|Viewport")
 	bool SetViewMode(EStageViewMode NewMode);
 

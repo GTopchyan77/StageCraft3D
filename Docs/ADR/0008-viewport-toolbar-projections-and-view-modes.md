@@ -94,10 +94,17 @@ Persisted per machine: grid snap, angle snap and grid visibility. Projection and
 - `UStageViewportToolbar`: a code-built UMG strip in the viewport tab, above the viewport. It is created through a new shell callback, like the status bar.
 - **Controls**, one horizontal row from left to right:
   - a projection dropdown;
-  - Lit / Unlit / Lines and a Grid toggle;
-  - grid snap (Off / 10 / 50 / 100 cm) and angle snap (Off / 5° / 15° / 45°);
+  - a View menu button (Unreal-style, labelled with the current mode). Its popup holds View Mode (Lit, Unlit, Wireframe / CAD Lines, Lighting Only, Detail Lighting, Reflections) and Show > Grid;
+  - grid snap (Off / 10 / 50 / 100 cm) and angle snap (Off / 5° / 15° / 45°) as button segments;
   - Move / Rotate / Scale.
-- **Layout:** every control except projection is a single-click button segment. The snap segments sit next to the grid toggle because the reference grid follows the grid snap size. (Revised in STATE.md #33: grid and angle snap were dropdowns placed after the gizmo segment.)
+- **View menu** (STATE.md #34):
+  - It is built with `FMenuBuilder` on every open, from the current state, so it holds no bindings.
+  - Picking an entry closes it.
+  - Lighting Only, Detail Lighting and Reflections are the engine's `VMI_LightingOnly` / `VMI_Lit_DetailLighting` / `VMI_ReflectionOverride`. Their show flags are compiled out of Shipping (`UE_BUILD_OPTIMIZED_SHOWFLAGS`), so `StageViewMath::IsViewModeAvailable` reports them unavailable there. The menu greys them out with a tooltip, and `UStageViewportComponent::SetViewMode` refuses them. Gevor chose this over hiding them or building post-process copies.
+- **Snap segments toggle** (`StageViewMath::ResolveSnapPick`, `UStageSnappingComponent::PickGridSnap` / `PickAngleSnap`):
+  - Clicking the active step turns snapping off.
+  - Clicking Off while off restores the last step used this session, or the default when there is none.
+- History: #33 made the snaps one-click segments; #34 moved the view modes and the grid toggle into the View menu.
 - **Binding:** it writes through the components' setters and redraws only from their delegates (`OnViewChanged`, `OnSnapSettingsChanged`, `OnModeChanged`). It reads values back, binds in `NativeConstruct`, unbinds in `NativeDestruct`, and has no tick.
 - PIE has no workspace and no toolbar; the dev console commands work there.
 

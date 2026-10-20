@@ -360,6 +360,12 @@ bool UStageViewportComponent::SetViewMode(EStageViewMode NewMode)
 	{
 		return true;
 	}
+	if (!StageViewMath::IsViewModeAvailable(NewMode))
+	{
+		UE_LOG(LogStageCraft, Warning, TEXT("%s: view mode %s refused: not available in this build (its engine show flags are compiled out)."),
+			*GetNameSafe(GetOwner()), *UEnum::GetValueAsString(NewMode));
+		return false;
+	}
 
 	UStageCraftGameViewportClient* ViewportClient = GetStageViewportClient();
 	if (!ViewportClient)

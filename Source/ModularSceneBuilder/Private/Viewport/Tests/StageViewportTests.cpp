@@ -10,6 +10,7 @@
 
 #include "Misc/AutomationTest.h"
 #include "Placement/StagePlacementMath.h"
+#include "ShowFlags.h"
 #include "Viewport/StageViewMath.h"
 
 #include <limits>
@@ -197,6 +198,34 @@ bool FStageViewSnapTest::RunTest(const FString& Parameters)
 	TestEqual(TEXT("A hand-edited angle falls back to the default"), SanitizeAngleSnap(-5.f), DefaultAngleSnapDegrees);
 	TestEqual(TEXT("Off is kept"), SanitizeAngleSnap(0.f), 0.f);
 	TestTrue(TEXT("Defaults are presets"), IsGridSnapPreset(DefaultGridSnapCm) && IsAngleSnapPreset(DefaultAngleSnapDegrees));
+
+	// Toolbar clicks toggle: the active step turns off, Off while off restores the last step (or the fallback).
+	TestEqual(TEXT("Picking another step selects it"), ResolveSnapPick(50.f, 10.f, 0.f, 50.f), 10.f);
+	TestEqual(TEXT("Picking the active step turns snap off"), ResolveSnapPick(50.f, 50.f, 0.f, 50.f), 0.f);
+	TestEqual(TEXT("Picking Off while on turns snap off"), ResolveSnapPick(100.f, 0.f, 10.f, 50.f), 0.f);
+	TestEqual(TEXT("Picking Off while off restores the last step"), ResolveSnapPick(0.f, 0.f, 100.f, 50.f), 100.f);
+	TestEqual(TEXT("Picking Off while off without a last step uses the fallback"), ResolveSnapPick(0.f, 0.f, 0.f, 15.f), 15.f);
+	TestEqual(TEXT("A NaN last step uses the fallback"), ResolveSnapPick(0.f, 0.f, std::numeric_limits<float>::quiet_NaN(), 15.f), 15.f);
+	TestEqual(TEXT("Picking a step while off selects it"), ResolveSnapPick(0.f, 45.f, 5.f, 15.f), 45.f);
+	float Value = 50.f;
+	float LastOn = 0.f;
+	for (int32 Click = 0; Click < 4; ++Click)
+	{
+		// Clicking the same step repeatedly alternates on / off and never sticks.
+		const float Next = ResolveSnapPick(Value, 50.f, LastOn, 50.f);
+		LastOn = Value > 0.f ? Value : LastOn;
+		Value = Next;
+		TestEqual(*FString::Printf(TEXT("Repeated click %d alternates"), Click), Value, Click % 2 == 0 ? 0.f : 50.f);
+	}
+
+	// Everyday modes always; the engine lighting diagnostics only where their show flags exist.
+	TestTrue(TEXT("Lit is available"), IsViewModeAvailable(EStageViewMode::Lit));
+	TestTrue(TEXT("Unlit is available"), IsViewModeAvailable(EStageViewMode::Unlit));
+	TestTrue(TEXT("Lines is available"), IsViewModeAvailable(EStageViewMode::Lines));
+	for (const EStageViewMode Mode : { EStageViewMode::LightingOnly, EStageViewMode::DetailLighting, EStageViewMode::Reflections })
+	{
+		TestEqual(*FString::Printf(TEXT("%s follows the build's show flags"), *UEnum::GetValueAsString(Mode)), IsViewModeAvailable(Mode), !UE_BUILD_OPTIMIZED_SHOWFLAGS);
+	}
 
 	// The global grid replaces the item's X/Y grid and keeps everything else.
 	FStageItemPlacementRules Rules;

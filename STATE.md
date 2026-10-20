@@ -2622,8 +2622,70 @@ Design record, with verified engine facts F1–F11: `Docs/ADR/0008-viewport-tool
 - **Not verified:** clicking each snap button with the mouse (Gevor, Standalone Game). The write path is the same setter the dropdowns used, which #32 verified.
 - Status: **implemented, awaiting manual verification** of the click behaviour.
 
-**Commit:** uncommitted (working tree).
+**Commit:** `40a0459`.
 
 **Known issues / follow-ups**
 - The row is about 890 px wide (measured in the screenshot). In a narrower viewport tab the right end (gizmo segment) is clipped; there is no overflow menu yet.
 - The #32 "Not verified" list still applies.
+
+## #34 — Viewport toolbar: Unreal-style View menu (six view modes + grid), toggling SNAP / ANGLE segments (2026-10-20)
+
+**What and why**
+- **Request (Gevor):**
+  1. SNAP and ANGLE buttons should toggle instead of sticking.
+  2. The flat LIT / UNLIT / LINES / GRID buttons should become one Unreal-style dropdown, with Lit, Unlit, Wireframe / CAD Lines, Lighting Only, Detail Lighting and Reflections. Picking an entry applies it and closes the menu.
+- **Snap toggle, root cause:** a snap button was a plain radio choice. Clicking the active step re-set the same value, so nothing changed, and clicking OFF while off did nothing. The buttons looked stuck.
+- **Snap toggle, new rule:** `StageViewMath::ResolveSnapPick`, which is pure and tested:
+  - clicking the active step turns snapping off;
+  - clicking OFF while on turns it off;
+  - clicking OFF while off restores the last step used this session, or the default (50 cm / 15°) when there is none;
+  - any other click selects that step.
+- **Snap toggle, where it lives:**
+  - `UStageSnappingComponent::PickGridSnap` / `PickAngleSnap` apply the rule through the existing validating setters.
+  - The component remembers the last non-zero step (`LastGridSnapOn` / `LastAngleSnapOn`, transient) inside `SetGridSnap` / `SetAngleSnap`, so console changes count too.
+  - The toolbar only calls `Pick*` and reads back.
+- **View menu:**
+  - `UStageMenuButton` (new, `Private/UI`) is a never-focusable UMG wrapper around `SComboButton`. It is styled like the projection dropdown, and its owner builds the popup on every open.
+  - `UStageViewportToolbar::BuildViewMenu` builds that popup with `FMenuBuilder`, the same menu system and look as the menu bar. It has a View Mode section (radio entries) and Show > Grid (a toggle).
+  - The menu reflects the state at the moment it opens and closes on a pick, so it holds no bindings. Its lambdas hold the viewport through `TWeakObjectPtr`.
+  - The button label reads back on `OnViewChanged`: Lit, Unlit, CAD Lines, Lighting Only, Detail Lighting, Reflections.
+- **New view modes:** `EStageViewMode` gains `LightingOnly`, `DetailLighting` and `Reflections`, applied by `UStageCraftGameViewportClient::ApplyStageViewMode` as `VMI_LightingOnly`, `VMI_Lit_DetailLighting` and `VMI_ReflectionOverride`.
+  - **Shipping:** their show flags are `SHOWFLAG_FIXED_IN_SHIPPING(0)` (engine `ShowFlagsValues.inl`), so in Shipping they would silently render Lit.
+  - Gevor chose to show them disabled. `StageViewMath::IsViewModeAvailable` returns false when `UE_BUILD_OPTIMIZED_SHOWFLAGS`. The menu greys them out with a "Not available in this build" tooltip, and `UStageViewportComponent::SetViewMode` refuses them with a warning.
+- "Wireframe / CAD Lines" is the existing Lines post-process mode. Engine wireframe is impossible in Shipping (ADR 0008 F2).
+- **Removed:** the view-mode and grid-toggle button segments, with their handlers and members.
+
+**Files changed**
+- New: `Source/ModularSceneBuilder/Private/UI/StageMenuButton.h`, `Source/ModularSceneBuilder/Private/UI/StageMenuButton.cpp`
+- `Source/ModularSceneBuilder/Public/UI/StageViewportToolbar.h`, `Source/ModularSceneBuilder/Private/UI/StageViewportToolbar.cpp`
+- `Source/ModularSceneBuilder/Public/Viewport/StageViewportTypes.h` (enum), `Source/ModularSceneBuilder/Public/Viewport/StageViewMath.h`, `Source/ModularSceneBuilder/Private/Viewport/StageViewMath.cpp`
+- `Source/ModularSceneBuilder/Public/Viewport/StageViewportComponent.h`, `Source/ModularSceneBuilder/Private/Viewport/StageViewportComponent.cpp`
+- `Source/ModularSceneBuilder/Private/Player/StageCraftGameViewportClient.cpp`
+- `Source/ModularSceneBuilder/Public/Placement/StageSnappingComponent.h`, `Source/ModularSceneBuilder/Private/Placement/StageSnappingComponent.cpp`
+- `Source/ModularSceneBuilder/Private/Viewport/StageViewportConsoleCommands.cpp` (usage text)
+- `Source/ModularSceneBuilder/Private/Viewport/Tests/StageViewportTests.cpp`
+- `Docs/ADR/0008-viewport-toolbar-projections-and-view-modes.md` (§4.6), `tasks/todo.md`, `STATE.md` (this entry; #33 commit hash `40a0459`)
+- No Widget Blueprints, maps, input assets or content.
+
+**Verification (Claude, 2026-10-20)**
+- Editor Development build: succeeded, 0 errors, 0 warnings.
+- Game Shipping build: succeeded, 0 errors, 0 warnings. Confirms the `UE_BUILD_OPTIMIZED_SHOWFLAGS` path compiles.
+- Automation `StageCraft`: 42/42 passed, `TEST COMPLETE. EXIT CODE: 0`. `Viewport.Snap` now covers:
+  - every `ResolveSnapPick` case, including NaN and a four-click on/off/on/off sequence;
+  - `IsViewModeAvailable` for all six modes against the build's show-flag setting.
+- **Standalone `-game` runs scripted by Claude** (`ScreenShot00002`–`00005`):
+  - `StageCraft.View.Mode LightingOnly`, `DetailLighting` and `Reflections` each switched (`ok`). Reflections renders mirror surfaces, and the View button label follows each mode.
+  - The second run had no unrequested mode changes. In the first run, Unlit and CAD Lines were picked from the View menu during the run, most likely by hand. That exercised the menu's write path and the label read-back (screenshots `00003` Unlit and `00004` CAD Lines).
+  - On exit the mode is restored to Lit.
+- **Not verified:**
+  - Opening the menu, picking an entry and closing it by mouse (Gevor).
+  - SNAP / ANGLE toggling by mouse (Gevor).
+  - Greyed-out entries in a packaged Shipping build.
+- Status: **implemented, awaiting manual verification** of the items above.
+
+**Commit:** uncommitted (working tree).
+
+**Known issues / follow-ups**
+- The grid toggle is now two clicks (View > Grid), as requested. There is no keyboard shortcut for it or for the view modes yet.
+- Lighting Only, Detail Lighting and Reflections are diagnostics: Development and editor builds only.
+- The last-used snap step is remembered per session, not saved.

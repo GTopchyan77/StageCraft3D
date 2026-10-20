@@ -62,6 +62,17 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "StageCraft|Snapping")
 	bool SetAngleSnap(float Degrees);
 
+	/**
+	 * A toolbar click on a grid snap preset, with toggle semantics (StageViewMath::ResolveSnapPick): the active step turns
+	 * snapping off, Off while off restores the last step used this session. Returns SetGridSnap's result.
+	 */
+	UFUNCTION(BlueprintCallable, Category = "StageCraft|Snapping")
+	bool PickGridSnap(float Cm);
+
+	/** The same for angle snap. */
+	UFUNCTION(BlueprintCallable, Category = "StageCraft|Snapping")
+	bool PickAngleSnap(float Degrees);
+
 	/** Grid or angle snap changed (read the new values with the getters). */
 	UPROPERTY(BlueprintAssignable, Category = "StageCraft|Snapping")
 	FOnStageSnapSettingsChanged OnSnapSettingsChanged;
@@ -120,4 +131,8 @@ private:
 	TArray<FBox> PlacementNeighbours;
 
 	uint32 LastSnapSignature = 0;
+
+	/** The last non-zero grid and angle steps replaced this session, restored by picking Off while off. 0 = none yet (the default is used). */
+	float LastGridSnapOn = 0.f;
+	float LastAngleSnapOn = 0.f;
 };

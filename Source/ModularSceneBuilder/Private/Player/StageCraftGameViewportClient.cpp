@@ -39,6 +39,22 @@ void UStageCraftGameViewportClient::ApplyStageViewMode(EStageViewMode Mode)
 		Flags.SetMotionBlur(false);
 		break;
 
+	// Engine lighting diagnostics; their override flags are no-ops in Shipping, where UStageViewportComponent refuses them.
+	case EStageViewMode::LightingOnly:
+		Index = VMI_LightingOnly;
+		ApplyViewMode(Index, /*bPerspective*/ true, Flags);
+		break;
+
+	case EStageViewMode::DetailLighting:
+		Index = VMI_Lit_DetailLighting;
+		ApplyViewMode(Index, /*bPerspective*/ true, Flags);
+		break;
+
+	case EStageViewMode::Reflections:
+		Index = VMI_ReflectionOverride;
+		ApplyViewMode(Index, /*bPerspective*/ true, Flags);
+		break;
+
 	case EStageViewMode::Lit:
 	default:
 		ApplyViewMode(Index, /*bPerspective*/ true, Flags);

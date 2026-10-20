@@ -100,7 +100,7 @@ namespace StageViewportCommands
 		EStageViewMode Value;
 		if (!Controller || Args.IsEmpty() || !ParseEnum(Args[0], Value))
 		{
-			UE_LOG(LogStageCraft, Display, TEXT("Usage: StageCraft.View.Mode <Lit|Unlit|Lines>"));
+			UE_LOG(LogStageCraft, Display, TEXT("Usage: StageCraft.View.Mode <Lit|Unlit|Lines|LightingOnly|DetailLighting|Reflections>"));
 			return;
 		}
 		UE_LOG(LogStageCraft, Display, TEXT("StageCraft.View.Mode %s: %s."), *Args[0], Controller->GetViewportView()->SetViewMode(Value) ? TEXT("ok") : TEXT("refused"));

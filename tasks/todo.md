@@ -269,5 +269,7 @@ See `STATE.md` for detailed history of completed work.
 - [x] Builds (Editor / Game / Shipping full unity), automation, scripted runs with screenshots
 - [x] STATE.md #32
 - [x] Toolbar layout revision (STATE.md #33): grid and angle snap as one-click segments beside LIT / UNLIT / LINES / GRID, gizmo segment last
+- [x] View menu (Unreal-style dropdown: Lit, Unlit, Wireframe / CAD Lines, Lighting Only, Detail Lighting, Reflections, Show > Grid) and toggling snap segments (STATE.md #34)
+- [ ] Manual verification (Gevor): View menu open/pick/close by mouse, snap and angle toggles by mouse (STATE.md #34)
 - [ ] Manual verification (Gevor): STATE.md #32 "Not verified" list (toolbar clicks, right-drag pan, wheel zoom, WASD in ortho, packaged Unlit / Lines)
 - [ ] Grid fade with distance in perspective (batched lines cannot fade; would need a line material or a mesh grid)

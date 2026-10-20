@@ -10,10 +10,12 @@
 #include "Components/Image.h"
 #include "Components/SizeBox.h"
 #include "Components/TextBlock.h"
+#include "Framework/MultiBox/MultiBoxBuilder.h"
 #include "Placement/StageSnappingComponent.h"
 #include "Player/ModularPlayerController.h"
 #include "UI/StageCraftUITheme.h"
 #include "UI/StageCraftWidgetStyle.h"
+#include "UI/StageMenuButton.h"
 #include "UI/StageThemedComboBox.h"
 #include "UI/StageToolButton.h"
 #include "Viewport/StageViewMath.h"
@@ -34,6 +36,45 @@ namespace StageViewportToolbar
 		EStageViewProjection::Back, EStageViewProjection::Left, EStageViewProjection::Right };
 
 	const EGizmoMode GizmoModes[] = { EGizmoMode::Translate, EGizmoMode::Rotate, EGizmoMode::Scale };
+
+	/** Order of the View menu: the everyday modes, then the engine lighting diagnostics. */
+	const EStageViewMode ViewModes[] = { EStageViewMode::Lit, EStageViewMode::Unlit, EStageViewMode::Lines,
+		EStageViewMode::LightingOnly, EStageViewMode::DetailLighting, EStageViewMode::Reflections };
+
+	/** Name in the View menu. */
+	FText GetViewModeName(EStageViewMode Mode)
+	{
+		switch (Mode)
+		{
+		case EStageViewMode::Unlit:				return LOCTEXT("Unlit", "Unlit");
+		case EStageViewMode::Lines:				return LOCTEXT("Lines", "Wireframe / CAD Lines");
+		case EStageViewMode::LightingOnly:		return LOCTEXT("LightingOnly", "Lighting Only");
+		case EStageViewMode::DetailLighting:	return LOCTEXT("DetailLighting", "Detail Lighting");
+		case EStageViewMode::Reflections:		return LOCTEXT("Reflections", "Reflections");
+		case EStageViewMode::Lit:
+		default:								return LOCTEXT("Lit", "Lit");
+		}
+	}
+
+	/** Name on the menu button, which has room for a short one. */
+	FText GetViewModeButtonLabel(EStageViewMode Mode)
+	{
+		return Mode == EStageViewMode::Lines ? LOCTEXT("LinesShort", "CAD Lines") : GetViewModeName(Mode);
+	}
+
+	FText GetViewModeTip(EStageViewMode Mode)
+	{
+		switch (Mode)
+		{
+		case EStageViewMode::Unlit:				return LOCTEXT("UnlitTip", "Base colours without lights, shadows or fog, for clean placement.");
+		case EStageViewMode::Lines:				return LOCTEXT("LinesTip", "CAD line view: outlines and edges on a flat background, no lights.");
+		case EStageViewMode::LightingOnly:		return LOCTEXT("LightingOnlyTip", "Lighting on neutral grey surfaces: fixture coverage without colours or textures.");
+		case EStageViewMode::DetailLighting:	return LOCTEXT("DetailLightingTip", "Lighting on neutral surfaces with their normal detail.");
+		case EStageViewMode::Reflections:		return LOCTEXT("ReflectionsTip", "Every surface as a smooth mirror, to check reflections.");
+		case EStageViewMode::Lit:
+		default:								return LOCTEXT("LitTip", "Full photometric lighting, as rendered.");
+		}
+	}
 
 	/** Index of Value in a preset list, or INDEX_NONE. */
 	int32 FindPreset(TConstArrayView<float> Presets, float Value)
@@ -175,24 +216,25 @@ void UStageViewportToolbar::BuildTree()
 	ProjectionBox->SetContent(ProjectionCombo);
 	Add(ProjectionBox, 0.f);
 
-	// View mode.
-	Add(MakeSegment({ LOCTEXT("Lit", "LIT"), LOCTEXT("Unlit", "UNLIT"), LOCTEXT("Lines", "LINES") },
-		{ LOCTEXT("LitTip", "Lit: full photometric lighting, as rendered."), LOCTEXT("UnlitTip", "Unlit: base colours without lights, shadows or fog, for clean placement."),
-		  LOCTEXT("LinesTip", "Lines: CAD line view. Outlines and edges on a flat background, no lights.") },
-		ViewModeButtons, &ThisClass::HandleViewModePicked), GroupGap);
+	// View menu: view modes and the grid toggle.
+	ViewMenuButton = WidgetTree->ConstructWidget<UStageMenuButton>(UStageMenuButton::StaticClass(), TEXT("ViewMenuButton"));
+	ViewMenuButton->ApplyTheme(Palette);
+	ViewMenuButton->SetLabel(GetViewModeButtonLabel(EStageViewMode::Lit));
+	ViewMenuButton->SetToolTipText(LOCTEXT("ViewMenuTip", "View mode and the reference grid."));
+	ViewMenuButton->OnGetMenuContent.BindUObject(this, &ThisClass::BuildViewMenu);
+	USizeBox* ViewMenuBox = WidgetTree->ConstructWidget<USizeBox>(USizeBox::StaticClass(), TEXT("ViewMenuBox"));
+	ViewMenuBox->SetWidthOverride(120.f);
+	ViewMenuBox->SetHeightOverride(BarHeight);
+	ViewMenuBox->SetContent(ViewMenuButton);
+	Add(ViewMenuBox, ChoiceGap * 3.f);
 
-	// Grid visibility.
-	Add(MakeSegment({ LOCTEXT("Grid", "GRID") }, { LOCTEXT("GridTip", "Show or hide the reference grid (it follows the grid snap size).") },
-		GridToggleButtons, &ThisClass::HandleGridTogglePicked), ChoiceGap * 3.f);
-
-	// Snaps, next to the grid toggle: the reference grid follows the grid snap size. Labels come from the presets, so the
-	// buttons and StageViewMath can never disagree.
+	// Snaps. Labels come from the presets, so the buttons and StageViewMath can never disagree.
 	TArray<FText> GridOptions;
 	for (float Preset : StageViewMath::GetGridSnapPresets())
 	{
 		GridOptions.Add(DescribePreset(Preset, LOCTEXT("Cm", " cm")));
 	}
-	const FText GridSnapTip = LOCTEXT("GridSnapTip", "Grid snap for placing and moving items; positions land on the grid. OFF places and moves freely.");
+	const FText GridSnapTip = LOCTEXT("GridSnapTip", "Grid snap for placing and moving items; positions land on the grid, which the reference grid shows.\nClick the active step to turn snapping off; click OFF again to restore the last step.");
 	TArray<FText> GridTips;
 	GridTips.Init(GridSnapTip, GridOptions.Num());
 
@@ -201,7 +243,7 @@ void UStageViewportToolbar::BuildTree()
 	{
 		AngleOptions.Add(DescribePreset(Preset, LOCTEXT("Degrees", "°")));
 	}
-	const FText AngleSnapTip = LOCTEXT("AngleSnapTip", "Rotation snap for the rotate tool. OFF rotates freely.");
+	const FText AngleSnapTip = LOCTEXT("AngleSnapTip", "Rotation snap for the rotate tool.\nClick the active step to turn snapping off; click OFF again to restore the last step.");
 	TArray<FText> AngleTips;
 	AngleTips.Init(AngleSnapTip, AngleOptions.Num());
 
@@ -304,8 +346,11 @@ void UStageViewportToolbar::Refresh()
 			}
 		}
 	};
-	StyleGroup(ViewModeButtons, Viewport ? int32(Viewport->GetViewMode()) : INDEX_NONE, Viewport != nullptr);
-	StyleGroup(GridToggleButtons, Viewport && Viewport->IsGridVisible() ? 0 : INDEX_NONE, Viewport != nullptr);
+	if (ViewMenuButton)
+	{
+		ViewMenuButton->SetLabel(GetViewModeButtonLabel(Viewport ? Viewport->GetViewMode() : EStageViewMode::Lit));
+		ViewMenuButton->SetIsEnabled(Viewport != nullptr);
+	}
 	StyleGroup(GizmoModeButtons, Gizmo ? int32(Gizmo->GetMode()) : INDEX_NONE, Gizmo != nullptr);
 	StyleGroup(GridSnapButtons, Snapping ? FindPreset(StageViewMath::GetGridSnapPresets(), Snapping->GetGridSnap()) : INDEX_NONE, Snapping != nullptr);
 	StyleGroup(AngleSnapButtons, Snapping ? FindPreset(StageViewMath::GetAngleSnapPresets(), Snapping->GetAngleSnap()) : INDEX_NONE, Snapping != nullptr);
@@ -342,22 +387,59 @@ void UStageViewportToolbar::HandleProjectionSelected(FString SelectedItem, ESele
 	Refresh();
 }
 
-void UStageViewportToolbar::HandleViewModePicked(int32 Index)
+TSharedRef<SWidget> UStageViewportToolbar::BuildViewMenu()
 {
-	if (UStageViewportComponent* Viewport = BoundViewport.Get(); Viewport && Index >= 0 && Index <= int32(EStageViewMode::Lines))
-	{
-		Viewport->SetViewMode(static_cast<EStageViewMode>(Index));
-	}
-	Refresh();
-}
+	using namespace StageViewportToolbar;
 
-void UStageViewportToolbar::HandleGridTogglePicked(int32 Index)
-{
-	if (UStageViewportComponent* Viewport = BoundViewport.Get())
+	// Built from the state at this moment; picking an entry closes the menu, so nothing in it needs to stay live. The
+	// lambdas hold the viewport weakly: the popup is Slate-owned and must not keep it alive or touch it after teardown.
+	const TWeakObjectPtr<UStageViewportComponent> WeakViewport = BoundViewport;
+	const UStageViewportComponent* Viewport = WeakViewport.Get();
+	const EStageViewMode CurrentMode = Viewport ? Viewport->GetViewMode() : EStageViewMode::Lit;
+
+	FMenuBuilder Menu(/*bInShouldCloseWindowAfterMenuSelection*/ true, /*InCommandList*/ nullptr);
+
+	Menu.BeginSection(TEXT("ViewMode"), LOCTEXT("ViewModeSection", "View Mode"));
+	for (const EStageViewMode Mode : ViewModes)
 	{
-		Viewport->SetGridVisible(!Viewport->IsGridVisible());
+		const bool bAvailable = StageViewMath::IsViewModeAvailable(Mode);
+		const bool bCanPick = Viewport && bAvailable;
+		const bool bChecked = Viewport && Mode == CurrentMode;
+		const FText Tip = bAvailable ? GetViewModeTip(Mode)
+			: FText::Format(LOCTEXT("UnavailableTip", "{0}\nNot available in this build: Shipping compiles out this engine view mode."), GetViewModeTip(Mode));
+
+		Menu.AddMenuEntry(GetViewModeName(Mode), Tip, FSlateIcon(),
+			FUIAction(
+				FExecuteAction::CreateLambda([WeakViewport, Mode]()
+				{
+					if (UStageViewportComponent* Target = WeakViewport.Get())
+					{
+						Target->SetViewMode(Mode); // Refused modes are logged by the component; the read-back keeps the label true.
+					}
+				}),
+				FCanExecuteAction::CreateLambda([bCanPick]() { return bCanPick; }),
+				FIsActionChecked::CreateLambda([bChecked]() { return bChecked; })),
+			NAME_None, EUserInterfaceActionType::RadioButton);
 	}
-	Refresh();
+	Menu.EndSection();
+
+	const bool bGridVisible = Viewport && Viewport->IsGridVisible();
+	Menu.BeginSection(TEXT("Show"), LOCTEXT("ShowSection", "Show"));
+	Menu.AddMenuEntry(LOCTEXT("Grid", "Grid"), LOCTEXT("GridTip", "Show or hide the reference grid (it follows the grid snap size)."), FSlateIcon(),
+		FUIAction(
+			FExecuteAction::CreateLambda([WeakViewport]()
+			{
+				if (UStageViewportComponent* Target = WeakViewport.Get())
+				{
+					Target->SetGridVisible(!Target->IsGridVisible());
+				}
+			}),
+			FCanExecuteAction::CreateLambda([bCanToggle = Viewport != nullptr]() { return bCanToggle; }),
+			FIsActionChecked::CreateLambda([bGridVisible]() { return bGridVisible; })),
+		NAME_None, EUserInterfaceActionType::ToggleButton);
+	Menu.EndSection();
+
+	return Menu.MakeWidget();
 }
 
 void UStageViewportToolbar::HandleGizmoModePicked(int32 Index)
@@ -374,7 +456,7 @@ void UStageViewportToolbar::HandleGridSnapPicked(int32 Index)
 	const TConstArrayView<float> Presets = StageViewMath::GetGridSnapPresets();
 	if (UStageSnappingComponent* Snapping = BoundSnapping.Get(); Snapping && Presets.IsValidIndex(Index))
 	{
-		Snapping->SetGridSnap(Presets[Index]);
+		Snapping->PickGridSnap(Presets[Index]);
 	}
 	Refresh();
 }
@@ -384,7 +466,7 @@ void UStageViewportToolbar::HandleAngleSnapPicked(int32 Index)
 	const TConstArrayView<float> Presets = StageViewMath::GetAngleSnapPresets();
 	if (UStageSnappingComponent* Snapping = BoundSnapping.Get(); Snapping && Presets.IsValidIndex(Index))
 	{
-		Snapping->SetAngleSnap(Presets[Index]);
+		Snapping->PickAngleSnap(Presets[Index]);
 	}
 	Refresh();
 }

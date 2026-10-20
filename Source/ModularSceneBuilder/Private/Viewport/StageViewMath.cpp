@@ -3,6 +3,7 @@
 #include "Viewport/StageViewMath.h"
 
 #include "Camera/CameraTypes.h"
+#include "ShowFlags.h"
 
 namespace StageViewMath
 {
@@ -202,5 +203,39 @@ namespace StageViewMath
 	float SanitizeAngleSnap(float Degrees)
 	{
 		return IsAngleSnapPreset(Degrees) ? Degrees : DefaultAngleSnapDegrees;
+	}
+
+	float ResolveSnapPick(float Current, float Picked, float LastOn, float Fallback)
+	{
+		constexpr float Tolerance = 1.e-3f;
+		const bool bPickedOff = FMath::IsNearlyZero(Picked, Tolerance);
+		if (!bPickedOff)
+		{
+			return FMath::IsNearlyEqual(Current, Picked, Tolerance) ? 0.f : Picked;
+		}
+		if (!FMath::IsNearlyZero(Current, Tolerance))
+		{
+			return 0.f;
+		}
+		return FMath::IsFinite(LastOn) && LastOn > Tolerance ? LastOn : Fallback;
+	}
+
+	bool IsViewModeAvailable(EStageViewMode Mode)
+	{
+		switch (Mode)
+		{
+		case EStageViewMode::LightingOnly:
+		case EStageViewMode::DetailLighting:
+		case EStageViewMode::Reflections:
+			return !UE_BUILD_OPTIMIZED_SHOWFLAGS;
+
+		case EStageViewMode::Lit:
+		case EStageViewMode::Unlit:
+		case EStageViewMode::Lines:
+			return true;
+
+		default:
+			return false;
+		}
 	}
 }

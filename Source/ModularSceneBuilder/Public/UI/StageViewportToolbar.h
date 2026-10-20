@@ -9,9 +9,9 @@
 
 /**
  * The viewport header toolbar (Docs/ADR/0008-viewport-toolbar-projections-and-view-modes.md §4.6), shown in the viewport tab
- * above the 3D view, as one horizontal row: projection dropdown, then single-click segments for Lit / Unlit / Lines, the grid
- * toggle, grid snap (Off / 10 / 50 / 100 cm), angle snap (Off / 5 / 15 / 45 degrees) and Move / Rotate / Scale. The view mode
- * and snap groups sit together because the reference grid follows the grid snap size.
+ * above the 3D view, as one horizontal row: the projection dropdown, the View menu button (an Unreal-style popup with the view
+ * modes and the Show > Grid toggle), grid snap (Off / 10 / 50 / 100 cm) and angle snap (Off / 5 / 15 / 45 degrees) as toggling
+ * segments, and Move / Rotate / Scale.
  *
  * A view in the project's binding pattern:
  *  - It writes only through the owners' setters: UStageViewportComponent (projection, view mode, grid), UStageSnappingComponent
@@ -21,6 +21,7 @@
  *    and OnModeChanged, so changes from the keyboard (Space) or the console show here too.
  *  - Bound in NativeConstruct, unbound in NativeDestruct. No tick. Its buttons never take keyboard focus, so viewport
  *    shortcuts keep working after a click.
+ *  - The View menu is built fresh on every open from the current state, so it holds no bindings and needs no redraw.
  *
  * The tree is built in code from the theme; there is no Widget Blueprint. Created by UStageWorkspaceSubsystem for the local
  * controller.
@@ -56,9 +57,10 @@ private:
 
 	class AModularPlayerController* GetStageController() const;
 
-	void HandleViewModePicked(int32 Index);
+	/** The View menu's popup: the view modes (radio) and Show > Grid (toggle), from the viewport's state at this moment. */
+	TSharedRef<class SWidget> BuildViewMenu();
+
 	void HandleGizmoModePicked(int32 Index);
-	void HandleGridTogglePicked(int32 Index);
 	void HandleGridSnapPicked(int32 Index);
 	void HandleAngleSnapPicked(int32 Index);
 
@@ -78,7 +80,7 @@ private:
 	TObjectPtr<class UStageThemedComboBox> ProjectionCombo = nullptr;
 
 	UPROPERTY(Transient)
-	TArray<TObjectPtr<class UStageChoiceButton>> ViewModeButtons;
+	TObjectPtr<class UStageMenuButton> ViewMenuButton = nullptr;
 
 	/** One button per StageViewMath::GetGridSnapPresets entry; the button index is the preset index. */
 	UPROPERTY(Transient)
@@ -90,10 +92,6 @@ private:
 
 	UPROPERTY(Transient)
 	TArray<TObjectPtr<class UStageChoiceButton>> GizmoModeButtons;
-
-	/** One toggle button, kept as a one-option segment so it styles like the others. */
-	UPROPERTY(Transient)
-	TArray<TObjectPtr<class UStageChoiceButton>> GridToggleButtons;
 
 	TWeakObjectPtr<class UStageViewportComponent> BoundViewport;
 	TWeakObjectPtr<class UStageSnappingComponent> BoundSnapping;
