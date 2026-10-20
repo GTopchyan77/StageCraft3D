@@ -92,7 +92,12 @@ Persisted per machine: grid snap, angle snap and grid visibility. Projection and
 
 ### 4.6 Toolbar
 - `UStageViewportToolbar`: a code-built UMG strip in the viewport tab, above the viewport. It is created through a new shell callback, like the status bar.
-- **Controls:** a projection dropdown, a Lit / Unlit / Lines segment, a Grid toggle, a Move / Rotate / Scale segment, and Grid and Angle snap dropdowns.
+- **Controls**, one horizontal row from left to right:
+  - a projection dropdown;
+  - Lit / Unlit / Lines and a Grid toggle;
+  - grid snap (Off / 10 / 50 / 100 cm) and angle snap (Off / 5° / 15° / 45°);
+  - Move / Rotate / Scale.
+- **Layout:** every control except projection is a single-click button segment. The snap segments sit next to the grid toggle because the reference grid follows the grid snap size. (Revised in STATE.md #33: grid and angle snap were dropdowns placed after the gizmo segment.)
 - **Binding:** it writes through the components' setters and redraws only from their delegates (`OnViewChanged`, `OnSnapSettingsChanged`, `OnModeChanged`). It reads values back, binds in `NativeConstruct`, unbinds in `NativeDestruct`, and has no tick.
 - PIE has no workspace and no toolbar; the dev console commands work there.
 

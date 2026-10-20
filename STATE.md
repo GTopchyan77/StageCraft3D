@@ -2574,7 +2574,7 @@ Design record, with verified engine facts F1–F11: `Docs/ADR/0008-viewport-tool
   - PIE: it has no workspace, so no toolbar; the console commands work there.
 - Status: **implemented, awaiting manual verification** of the items above.
 
-**Commit:** uncommitted (working tree).
+**Commit:** `d1fdf79`.
 
 **Known issues / follow-ups**
 - **Behaviour changes to be aware of:**
@@ -2588,3 +2588,42 @@ Design record, with verified engine facts F1–F11: `Docs/ADR/0008-viewport-tool
 - The ortho camera always stands 200 m back. Layouts larger than that behind the view centre would be clipped (none exist).
 - No keyboard shortcuts for projections or view modes yet.
 - **Obsidian vault** `S:\` is still unreachable; the design record is ADR 0008.
+
+## #33 — Viewport toolbar: grid and angle snap as one-click button segments beside the view modes (2026-10-20)
+
+**What and why**
+- **Request (Gevor):** the finalized design has one flat horizontal toolbar in the viewport header, with no dropdowns for primary view modes:
+  - LIT / UNLIT / LINES / GRID as single-click buttons;
+  - grid snap (10 / 50 / 100 cm) and angle snap directly beside them.
+- **Already in place from #32:** LIT / UNLIT / LINES and GRID were already single-click buttons.
+- **What changed:**
+  - Grid snap and angle snap were themed dropdowns placed after the Move / Rotate / Scale segment. They are now button segments, generated from `StageViewMath::GetGridSnapPresets()` / `GetAngleSnapPresets()` so labels and presets can never disagree: `SNAP  OFF 10 cm 50 cm 100 cm` and `ANGLE  OFF 5° 15° 45°`.
+  - Order is now: Projection ▾ | LIT UNLIT LINES · GRID | SNAP … | ANGLE … | MOVE ROTATE SCALE.
+  - The snap label is "SNAP" instead of "GRID", so it no longer reads like the grid toggle next to it.
+  - The projection dropdown stays: it is a camera selector with six options, not a view mode.
+- **Binding is unchanged:**
+  - Buttons write through `UStageSnappingComponent::SetGridSnap` / `SetAngleSnap`, then read back.
+  - Highlights redraw only from `OnSnapSettingsChanged` / `OnViewChanged` / `OnModeChanged`. No tick and no polling.
+  - The two combo `UFUNCTION` handlers and their `OnSelectionChanged` bindings were removed. Snap buttons are `UStageChoiceButton` (never keyboard-focusable) and are held in `UPROPERTY(Transient) TArray<TObjectPtr<UStageChoiceButton>>`.
+
+**Files changed**
+- `Source/ModularSceneBuilder/Public/UI/StageViewportToolbar.h`
+- `Source/ModularSceneBuilder/Private/UI/StageViewportToolbar.cpp`
+- `Docs/ADR/0008-viewport-toolbar-projections-and-view-modes.md` (§4.6 controls and layout)
+- `tasks/todo.md`, `STATE.md` (this entry; #32 commit hash `d1fdf79` filled in)
+- No Widget Blueprints, maps, input assets or content.
+
+**Verification (Claude, 2026-10-20)**
+- Editor Development build: succeeded, 0 errors, 0 warnings. It was built with `-NoHotReloadFromIDE`, because the Kmidden editor was open.
+- Automation `StageCraft`: all passed, `TEST COMPLETE. EXIT CODE: 0`.
+- Standalone `-game` run scripted by Claude (`Saved/Screenshots/WindowsEditor/ScreenShot00001.png`):
+  - the toolbar is drawn as one row in the designed order;
+  - the stored settings (50 cm, 15°) show highlighted on launch, so read-back from user settings works.
+- **Not verified:** clicking each snap button with the mouse (Gevor, Standalone Game). The write path is the same setter the dropdowns used, which #32 verified.
+- Status: **implemented, awaiting manual verification** of the click behaviour.
+
+**Commit:** uncommitted (working tree).
+
+**Known issues / follow-ups**
+- The row is about 890 px wide (measured in the screenshot). In a narrower viewport tab the right end (gizmo segment) is clipped; there is no overflow menu yet.
+- The #32 "Not verified" list still applies.

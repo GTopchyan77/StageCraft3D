@@ -45,7 +45,7 @@ namespace StageViewportToolbar
 	{
 		return Value > 0.f
 			? FText::Format(LOCTEXT("PresetValue", "{0}{1}"), FText::AsNumber(FMath::RoundToInt(Value)), Units)
-			: LOCTEXT("PresetOff", "Off");
+			: LOCTEXT("PresetOff", "OFF");
 	}
 }
 
@@ -69,14 +69,6 @@ void UStageViewportToolbar::NativeOnInitialized()
 	if (ProjectionCombo)
 	{
 		ProjectionCombo->OnSelectionChanged.AddUniqueDynamic(this, &ThisClass::HandleProjectionSelected);
-	}
-	if (GridSnapCombo)
-	{
-		GridSnapCombo->OnSelectionChanged.AddUniqueDynamic(this, &ThisClass::HandleGridSnapSelected);
-	}
-	if (AngleSnapCombo)
-	{
-		AngleSnapCombo->OnSelectionChanged.AddUniqueDynamic(this, &ThisClass::HandleAngleSnapSelected);
 	}
 }
 
@@ -193,43 +185,39 @@ void UStageViewportToolbar::BuildTree()
 	Add(MakeSegment({ LOCTEXT("Grid", "GRID") }, { LOCTEXT("GridTip", "Show or hide the reference grid (it follows the grid snap size).") },
 		GridToggleButtons, &ThisClass::HandleGridTogglePicked), ChoiceGap * 3.f);
 
+	// Snaps, next to the grid toggle: the reference grid follows the grid snap size. Labels come from the presets, so the
+	// buttons and StageViewMath can never disagree.
+	TArray<FText> GridOptions;
+	for (float Preset : StageViewMath::GetGridSnapPresets())
+	{
+		GridOptions.Add(DescribePreset(Preset, LOCTEXT("Cm", " cm")));
+	}
+	const FText GridSnapTip = LOCTEXT("GridSnapTip", "Grid snap for placing and moving items; positions land on the grid. OFF places and moves freely.");
+	TArray<FText> GridTips;
+	GridTips.Init(GridSnapTip, GridOptions.Num());
+
+	TArray<FText> AngleOptions;
+	for (float Preset : StageViewMath::GetAngleSnapPresets())
+	{
+		AngleOptions.Add(DescribePreset(Preset, LOCTEXT("Degrees", "°")));
+	}
+	const FText AngleSnapTip = LOCTEXT("AngleSnapTip", "Rotation snap for the rotate tool. OFF rotates freely.");
+	TArray<FText> AngleTips;
+	AngleTips.Init(AngleSnapTip, AngleOptions.Num());
+
+	Add(MakeSeparator(), GroupGap);
+	Add(MakeLabel(LOCTEXT("GridSnapLabel", "SNAP")), GroupGap);
+	Add(MakeSegment(GridOptions, GridTips, GridSnapButtons, &ThisClass::HandleGridSnapPicked), 4.f);
+
+	Add(MakeLabel(LOCTEXT("AngleSnapLabel", "ANGLE")), GroupGap);
+	Add(MakeSegment(AngleOptions, AngleTips, AngleSnapButtons, &ThisClass::HandleAngleSnapPicked), 4.f);
+
 	Add(MakeSeparator(), GroupGap);
 
 	// Gizmo.
 	Add(MakeSegment({ LOCTEXT("Move", "MOVE"), LOCTEXT("Rotate", "ROTATE"), LOCTEXT("Scale", "SCALE") },
 		{ LOCTEXT("MoveTip", "Move the selection (Space cycles the tools)."), LOCTEXT("RotateTip", "Rotate the selection."), LOCTEXT("ScaleTip", "Scale the selection.") },
 		GizmoModeButtons, &ThisClass::HandleGizmoModePicked), GroupGap);
-
-	Add(MakeSeparator(), GroupGap);
-
-	// Snaps.
-	TArray<FText> GridOptions;
-	for (float Preset : StageViewMath::GetGridSnapPresets())
-	{
-		GridOptions.Add(DescribePreset(Preset, LOCTEXT("Cm", " cm")));
-	}
-	TArray<FText> AngleOptions;
-	for (float Preset : StageViewMath::GetAngleSnapPresets())
-	{
-		AngleOptions.Add(DescribePreset(Preset, LOCTEXT("Degrees", "°")));
-	}
-
-	Add(MakeLabel(LOCTEXT("GridSnapLabel", "GRID")), GroupGap);
-	GridSnapCombo = MakeCombo(TEXT("GridSnapCombo"), GridOptions,
-		LOCTEXT("GridSnapTip", "Grid snap for placing and moving items; positions land on the grid. Off places and moves freely."));
-	USizeBox* GridBox = WidgetTree->ConstructWidget<USizeBox>(USizeBox::StaticClass(), TEXT("GridSnapBox"));
-	GridBox->SetWidthOverride(72.f);
-	GridBox->SetHeightOverride(BarHeight);
-	GridBox->SetContent(GridSnapCombo);
-	Add(GridBox, 4.f);
-
-	Add(MakeLabel(LOCTEXT("AngleSnapLabel", "ANGLE")), GroupGap);
-	AngleSnapCombo = MakeCombo(TEXT("AngleSnapCombo"), AngleOptions, LOCTEXT("AngleSnapTip", "Rotation snap for the rotate tool. Off rotates freely."));
-	USizeBox* AngleBox = WidgetTree->ConstructWidget<USizeBox>(USizeBox::StaticClass(), TEXT("AngleSnapBox"));
-	AngleBox->SetWidthOverride(64.f);
-	AngleBox->SetHeightOverride(BarHeight);
-	AngleBox->SetContent(AngleSnapCombo);
-	Add(AngleBox, 4.f);
 }
 
 void UStageViewportToolbar::NativeConstruct()
@@ -319,6 +307,8 @@ void UStageViewportToolbar::Refresh()
 	StyleGroup(ViewModeButtons, Viewport ? int32(Viewport->GetViewMode()) : INDEX_NONE, Viewport != nullptr);
 	StyleGroup(GridToggleButtons, Viewport && Viewport->IsGridVisible() ? 0 : INDEX_NONE, Viewport != nullptr);
 	StyleGroup(GizmoModeButtons, Gizmo ? int32(Gizmo->GetMode()) : INDEX_NONE, Gizmo != nullptr);
+	StyleGroup(GridSnapButtons, Snapping ? FindPreset(StageViewMath::GetGridSnapPresets(), Snapping->GetGridSnap()) : INDEX_NONE, Snapping != nullptr);
+	StyleGroup(AngleSnapButtons, Snapping ? FindPreset(StageViewMath::GetAngleSnapPresets(), Snapping->GetAngleSnap()) : INDEX_NONE, Snapping != nullptr);
 
 	// SetSelectedIndex reports ESelectInfo::Direct, which the handlers ignore: only user picks are edits.
 	const auto Select = [](UStageThemedComboBox* Combo, int32 Index, bool bEnabled)
@@ -333,8 +323,6 @@ void UStageViewportToolbar::Refresh()
 		}
 	};
 	Select(ProjectionCombo, Viewport ? int32(Viewport->GetProjection()) : INDEX_NONE, Viewport != nullptr);
-	Select(GridSnapCombo, Snapping ? FindPreset(StageViewMath::GetGridSnapPresets(), Snapping->GetGridSnap()) : INDEX_NONE, Snapping != nullptr);
-	Select(AngleSnapCombo, Snapping ? FindPreset(StageViewMath::GetAngleSnapPresets(), Snapping->GetAngleSnap()) : INDEX_NONE, Snapping != nullptr);
 }
 
 // --- User picks: write through the owner, then read back ---
@@ -381,14 +369,9 @@ void UStageViewportToolbar::HandleGizmoModePicked(int32 Index)
 	Refresh();
 }
 
-void UStageViewportToolbar::HandleGridSnapSelected(FString SelectedItem, ESelectInfo::Type SelectionType)
+void UStageViewportToolbar::HandleGridSnapPicked(int32 Index)
 {
-	if (SelectionType == ESelectInfo::Direct)
-	{
-		return;
-	}
 	const TConstArrayView<float> Presets = StageViewMath::GetGridSnapPresets();
-	const int32 Index = GridSnapCombo ? GridSnapCombo->GetSelectedIndex() : INDEX_NONE;
 	if (UStageSnappingComponent* Snapping = BoundSnapping.Get(); Snapping && Presets.IsValidIndex(Index))
 	{
 		Snapping->SetGridSnap(Presets[Index]);
@@ -396,14 +379,9 @@ void UStageViewportToolbar::HandleGridSnapSelected(FString SelectedItem, ESelect
 	Refresh();
 }
 
-void UStageViewportToolbar::HandleAngleSnapSelected(FString SelectedItem, ESelectInfo::Type SelectionType)
+void UStageViewportToolbar::HandleAngleSnapPicked(int32 Index)
 {
-	if (SelectionType == ESelectInfo::Direct)
-	{
-		return;
-	}
 	const TConstArrayView<float> Presets = StageViewMath::GetAngleSnapPresets();
-	const int32 Index = AngleSnapCombo ? AngleSnapCombo->GetSelectedIndex() : INDEX_NONE;
 	if (UStageSnappingComponent* Snapping = BoundSnapping.Get(); Snapping && Presets.IsValidIndex(Index))
 	{
 		Snapping->SetAngleSnap(Presets[Index]);

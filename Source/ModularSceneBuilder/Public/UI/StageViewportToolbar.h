@@ -9,7 +9,9 @@
 
 /**
  * The viewport header toolbar (Docs/ADR/0008-viewport-toolbar-projections-and-view-modes.md §4.6), shown in the viewport tab
- * above the 3D view: projection dropdown, Lit / Unlit / Lines, grid toggle, Move / Rotate / Scale, grid snap and angle snap.
+ * above the 3D view, as one horizontal row: projection dropdown, then single-click segments for Lit / Unlit / Lines, the grid
+ * toggle, grid snap (Off / 10 / 50 / 100 cm), angle snap (Off / 5 / 15 / 45 degrees) and Move / Rotate / Scale. The view mode
+ * and snap groups sit together because the reference grid follows the grid snap size.
  *
  * A view in the project's binding pattern:
  *  - It writes only through the owners' setters: UStageViewportComponent (projection, view mode, grid), UStageSnappingComponent
@@ -57,15 +59,11 @@ private:
 	void HandleViewModePicked(int32 Index);
 	void HandleGizmoModePicked(int32 Index);
 	void HandleGridTogglePicked(int32 Index);
+	void HandleGridSnapPicked(int32 Index);
+	void HandleAngleSnapPicked(int32 Index);
 
 	UFUNCTION()
 	void HandleProjectionSelected(FString SelectedItem, ESelectInfo::Type SelectionType);
-
-	UFUNCTION()
-	void HandleGridSnapSelected(FString SelectedItem, ESelectInfo::Type SelectionType);
-
-	UFUNCTION()
-	void HandleAngleSnapSelected(FString SelectedItem, ESelectInfo::Type SelectionType);
 
 	UFUNCTION()
 	void HandleViewChanged();
@@ -80,13 +78,15 @@ private:
 	TObjectPtr<class UStageThemedComboBox> ProjectionCombo = nullptr;
 
 	UPROPERTY(Transient)
-	TObjectPtr<class UStageThemedComboBox> GridSnapCombo = nullptr;
-
-	UPROPERTY(Transient)
-	TObjectPtr<class UStageThemedComboBox> AngleSnapCombo = nullptr;
-
-	UPROPERTY(Transient)
 	TArray<TObjectPtr<class UStageChoiceButton>> ViewModeButtons;
+
+	/** One button per StageViewMath::GetGridSnapPresets entry; the button index is the preset index. */
+	UPROPERTY(Transient)
+	TArray<TObjectPtr<class UStageChoiceButton>> GridSnapButtons;
+
+	/** One button per StageViewMath::GetAngleSnapPresets entry; the button index is the preset index. */
+	UPROPERTY(Transient)
+	TArray<TObjectPtr<class UStageChoiceButton>> AngleSnapButtons;
 
 	UPROPERTY(Transient)
 	TArray<TObjectPtr<class UStageChoiceButton>> GizmoModeButtons;
