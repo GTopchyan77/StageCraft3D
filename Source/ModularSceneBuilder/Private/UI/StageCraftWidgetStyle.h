@@ -26,6 +26,12 @@ namespace StageCraftWidgetStyle
 	/** A flat, optionally rounded and outlined box. */
 	FSlateBrush MakeBox(const FLinearColor& Fill, float Radius = 0.f, const FLinearColor& Outline = FLinearColor::Transparent, float OutlineWidth = 0.f);
 
+	/**
+	 * A solid line of a fixed size, for dividers in a UImage. The size lives in the brush because code-built trees are made
+	 * before their Slate widgets exist, and UImage::SetDesiredSizeOverride is silently dropped until then.
+	 */
+	FSlateBrush MakeLine(const FLinearColor& Color, const FVector2D& Size);
+
 	/** A borderless button that only shows a surface on hover and press, with a rounded fill. */
 	FButtonStyle MakeFlatButton(const FLinearColor& Normal, const FLinearColor& Hovered, const FLinearColor& Pressed);
 
@@ -61,6 +67,9 @@ namespace StageCraftWidgetStyle
 
 	/** Rows of a dropdown menu or list: transparent, hover surface, selection tint. */
 	FTableRowStyle MakeListRow(const UStageCraftUITheme& Theme);
+
+	/** Horizontal value slider: a thin recessed track and a round thumb that lights up in the accent colour on hover. */
+	FSliderStyle MakeSlider(const UStageCraftUITheme& Theme);
 
 	/** Thin scroll bar that blends into the panel. */
 	FScrollBarStyle MakeScrollBar(const UStageCraftUITheme& Theme);

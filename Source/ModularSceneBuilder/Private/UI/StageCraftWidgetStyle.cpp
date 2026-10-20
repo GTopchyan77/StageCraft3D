@@ -18,6 +18,13 @@ namespace StageCraftWidgetStyle
 		return FSlateRoundedBoxBrush(Fill, Radius, Outline, OutlineWidth);
 	}
 
+	FSlateBrush MakeLine(const FLinearColor& Color, const FVector2D& Size)
+	{
+		FSlateBrush Brush = MakeBox(Color);
+		Brush.ImageSize = Size;
+		return Brush;
+	}
+
 	FButtonStyle MakeFlatButton(const FLinearColor& Normal, const FLinearColor& Hovered, const FLinearColor& Pressed)
 	{
 		FButtonStyle Style;
@@ -152,6 +159,25 @@ namespace StageCraftWidgetStyle
 			.SetSelectorFocusedBrush(FSlateNoResource())
 			.SetTextColor(Theme.TextPrimary)
 			.SetSelectedTextColor(Theme.TextPrimary);
+		return Style;
+	}
+
+	FSliderStyle MakeSlider(const UStageCraftUITheme& Theme)
+	{
+		constexpr float ThumbSize = 12.f;
+		const auto MakeThumb = [](const FLinearColor& Fill, const FLinearColor& Outline)
+		{
+			return FSlateRoundedBoxBrush(Fill, ThumbSize * 0.5f, Outline, 1.f, FVector2D(ThumbSize, ThumbSize));
+		};
+
+		FSliderStyle Style;
+		Style.SetNormalBarImage(MakeBox(Theme.Divider, 1.f))
+			.SetHoveredBarImage(MakeBox(Theme.TextDisabled, 1.f))
+			.SetDisabledBarImage(MakeBox(WithAlpha(Theme.Divider, 0.5f), 1.f))
+			.SetNormalThumbImage(MakeThumb(Theme.TextPrimary, Theme.WindowBackground))
+			.SetHoveredThumbImage(MakeThumb(Theme.AccentColor, Theme.WindowBackground))
+			.SetDisabledThumbImage(MakeThumb(Theme.TextDisabled, Theme.WindowBackground))
+			.SetBarThickness(3.f);
 		return Style;
 	}
 

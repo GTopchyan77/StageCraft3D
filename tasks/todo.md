@@ -271,5 +271,11 @@ See `STATE.md` for detailed history of completed work.
 - [x] Toolbar layout revision (STATE.md #33): grid and angle snap as one-click segments beside LIT / UNLIT / LINES / GRID, gizmo segment last
 - [x] View menu (Unreal-style dropdown: Lit, Unlit, Wireframe / CAD Lines, Lighting Only, Detail Lighting, Reflections, Show > Grid) and toggling snap segments (STATE.md #34)
 - [ ] Manual verification (Gevor): View menu open/pick/close by mouse, snap and angle toggles by mouse (STATE.md #34)
+- [x] Toolbar sections with visible dividers (projection | view | grid snap | angle snap | gizmo) (STATE.md #35)
+- [x] Outdoor environment: Sky Creator backend, Environment panel (sky on/off, weather presets, time, sun height/direction, clouds, rain, snow, fog) (STATE.md #35, ADR 0009)
+- [ ] Manual verification (Gevor): Environment panel sliders and presets by mouse (STATE.md #35)
+- [ ] Packaged build: Sky Creator assets cooked, sky renders; measure sky GPU time / VRAM (ADR 0009 §7)
+- [ ] Save environment settings with scenes (scene format v2)
+- [ ] Fix invisible 1 px header lines in code-built panels with `StageCraftWidgetStyle::MakeLine` (ADR 0009 E7)
 - [ ] Manual verification (Gevor): STATE.md #32 "Not verified" list (toolbar clicks, right-drag pan, wheel zoom, WASD in ortho, packaged Unlit / Lines)
 - [ ] Grid fade with distance in perspective (batched lines cannot fade; would need a line material or a mesh grid)

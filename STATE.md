@@ -2683,9 +2683,121 @@ Design record, with verified engine facts F1–F11: `Docs/ADR/0008-viewport-tool
   - Greyed-out entries in a packaged Shipping build.
 - Status: **implemented, awaiting manual verification** of the items above.
 
-**Commit:** uncommitted (working tree).
+**Commit:** `33c907d`.
 
 **Known issues / follow-ups**
 - The grid toggle is now two clicks (View > Grid), as requested. There is no keyboard shortcut for it or for the view modes yet.
 - Lighting Only, Detail Lighting and Reflections are diagnostics: Development and editor builds only.
 - The last-used snap step is remembered per session, not saved.
+
+---
+
+## #35 — Viewport toolbar sections with dividers; outdoor environment (Sky Creator): sky, time of day, sun path, clouds, rain, snow, fog, Environment panel (2026-10-20)
+
+**What and why**
+- **Request (Gevor):**
+  1. Split the viewport toolbar into five sections with subtle vertical dividers and uniform padding: projection | view modes | grid snap | angle snap | gizmo.
+  2. Integrate the available weather plugin for outdoor stages: sun angle, time of day, cloud density, rain and snow particles and atmospheric fog, edited in a dedicated Environment panel, with no per-frame polling.
+  3. Rules.md standards, then update STATE.md.
+- Design record: `Docs/ADR/0009-outdoor-environment.md`.
+- **Toolbar sections:**
+  - `BuildTree` adds a divider between every pair of sections, with `SectionGap` (8 px) on both sides. Captions (SNAP, ANGLE) sit 4 px from their buttons.
+  - **Root cause of invisible dividers:** the dividers never drew, here or before. `UImage::SetDesiredSizeOverride` is dropped when called before the Slate widget exists (engine `Image.cpp` 122-127), and code-built trees are made in `NativeOnInitialized`. The divider had 0 px width (measured: a 16 px gap = 8 + 8).
+  - New `StageCraftWidgetStyle::MakeLine` stores the size in the brush instead. The divider is 1 × 14 px at half-strength `TextDisabled`, because the `Divider` colour vanished at 1 px.
+- **Which weather plugin:**
+  - SkyWeatherControls only drives Ultra Dynamic Sky, which is not in the project, so it stays disabled.
+  - Sky Creator (`Plugins/SkyCreat`) is a complete sky actor: sun, moon, atmosphere, volumetric clouds, sky light, height fog, Niagara rain and snow. It is enabled in the `.uproject` (it was disabled in #30). Its source compiles on 5.8 unchanged.
+- **Sky Creator descriptor:**
+  - Its descriptor said `"Installed": true, "EngineVersion": "5.7.0"`, so 5.8 skipped mounting its content ("Skipping load"). Its module still loaded through our link, and the sky actor's constructor then failed to find every asset.
+  - `EngineVersion` is now `5.8.0`. This is the only change to the plugin.
+- **Architecture (ADR 0009 §3):**
+  - **Core module:**
+    - `FStageEnvironmentSettings` plus pure `StageEnvironment::Sanitize / ApplyWeatherPreset / FindWeatherPreset`.
+    - The abstract `UStageEnvironmentBackend`.
+    - `UStageEnvironmentSubsystem`, a world subsystem (Game + PIE) that is the source of truth. `SetSettings` is the single write path: sanitize, refuse sky-on without a backend, skip if unchanged, store, apply, then broadcast `OnEnvironmentChanged`.
+    - The backend class comes from `DefaultGame.ini`, the same pattern as DMX: the core never links to the marketplace plugin.
+  - **New game module `StageCraftSkyCreator`:** `UStageSkyCreatorBackend` and `StageSkyCreator::MakeWeather`.
+    - Sky on: spawns one transient `ASkyCreator` and hides the level's directional and sky lights, atmosphere, clouds and fog, in one pass when the sky turns on.
+    - Each change sets the sun path, the time and the mapped weather.
+    - Sky off: destroys the actor and restores the level.
+    - At world teardown it leaves cleanup to the world.
+  - **No tick in StageCraft code.** The sky actor ticks itself (clouds, captures, particles) and exists only while the sky is on.
+- **Environment panel** (`StageCraft.Panel.Environment`, a tab after Render in the Default layout):
+  - OUTDOOR SKY Off / On.
+  - WEATHER presets: Clear, Cloudy, Rain, Snow, Fog.
+  - SUN sliders: time of day as HH:MM, sun height 5–90°, sun direction 0–359°.
+  - CONDITIONS sliders: clouds, rain, snow, fog (%).
+  - Sliders write on every move and the panel redraws from the delegate only.
+  - Slider tops stop at 23:59 / 359°, so the wrap never makes the handle jump.
+  - Without a backend all controls are disabled and the panel says why. With the sky off, only Off / On is live.
+  - `UStageValueSlider` is a never-focusable `USlider` that reports its index.
+- **Fog scale:** the first maximum (0.08) was invisible at stage distance, because the engine applies density / 1000 per cm. The maximum is now 1.0 × Fog², from screenshots: 85 % washes out items 25 m away, 30 % is a light mist.
+- **Packaging:** Sky Creator's Curves, Effects, Materials, Meshes, Textures and WeatherPresets folders go into `DirectoriesToAlwaysCook`, because the actor loads them by path.
+- **Dev console commands** (not in Shipping): `StageCraft.Environment.Status`, `StageCraft.Environment.Set <field> <value>`, `StageCraft.Environment.Preset <name>`.
+
+**Files changed**
+- New, core:
+  - `Source/ModularSceneBuilder/Public/Environment/StageEnvironmentTypes.h`, `Private/Environment/StageEnvironmentTypes.cpp`
+  - `Public/Environment/StageEnvironmentBackend.h`
+  - `Public/Environment/StageEnvironmentSubsystem.h`, `Private/Environment/StageEnvironmentSubsystem.cpp`
+  - `Private/Environment/StageEnvironmentConsoleCommands.cpp`
+  - `Private/Environment/Tests/StageEnvironmentTests.cpp`
+  - `Public/UI/StageEnvironmentPanel.h`, `Private/UI/StageEnvironmentPanel.cpp`
+  - `Public/UI/StageValueSlider.h`, `Private/UI/StageValueSlider.cpp`
+- New module: `Source/StageCraftSkyCreator/StageCraftSkyCreator.Build.cs`, plus these in `Private/`:
+  - `StageCraftSkyCreatorModule.cpp`
+  - `StageSkyCreatorBackend.h`, `StageSkyCreatorBackend.cpp`
+  - `StageSkyCreatorWeather.h`, `StageSkyCreatorWeather.cpp`
+  - `Tests/StageSkyCreatorTests.cpp`
+- Changed:
+  - `Source/ModularSceneBuilder/Private/UI/StageViewportToolbar.cpp`, `Public/UI/StageViewportToolbar.h` (sections, dividers)
+  - `Private/UI/StageCraftWidgetStyle.h/.cpp` (`MakeLine`, `MakeSlider`)
+  - `Public/Workspace/StageWorkspaceTypes.h`, `Private/Workspace/StageWorkspaceTypes.cpp` (`Panel_Environment` tag)
+  - `Private/Workspace/StageWorkspaceShell.cpp` (Default layout tab)
+  - `Source/ModularSceneBuilder.Target.cs`, `Source/ModularSceneBuilderEditor.Target.cs` (`StageCraftSkyCreator`)
+  - `ModularSceneBuilder.uproject` (module entry; `SkyCreatorPlugin` enabled)
+  - `Config/DefaultGame.ini` (`BackendClass`, cook directories)
+  - `Plugins/SkyCreat/SkyCreatorPlugin.uplugin` (`EngineVersion` 5.8.0)
+- Content (new): `Content/StageCraft/UI/Panels/DA_Panel_Environment.uasset`, made headless by the new `Scripts/Content/create_environment_panel_content.py`. Its tag reads back as `StageCraft.Panel.Environment`.
+- Docs: `Docs/ADR/0009-outdoor-environment.md` (new); `Docs/ADR/0008-viewport-toolbar-projections-and-view-modes.md` (§4.6 history); `tasks/todo.md`; `STATE.md` (this entry; #34 commit hash `33c907d`).
+- No maps, input assets or Widget Blueprints.
+- **Not in the repo:** Gevor's `Saved/StageCraft/Workspace/Session.json`.
+  - A first scripted run opened the Environment panel as a floating window on his second monitor. Claude moved the tab into the right-hand stack after Render and removed the floating window.
+  - Nothing else in his session layout changed.
+
+**Verification (Claude, 2026-10-20)**
+- Editor Development build: succeeded, 0 errors, 0 warnings. The C4305 warnings from Sky Creator's header are silenced in our includes only.
+- Game Shipping build (`-DisableAdaptiveUnity`): succeeded, 0 errors, 0 warnings, with the new module, Sky Creator, and the console commands compiled out.
+- Automation `StageCraft`: 46/46 passed (42 existing + 4 new), `TEST COMPLETE. EXIT CODE: 0`, on the final code.
+  - `Environment.Sanitize`: wrap, clamp, NaN / infinity → defaults, idempotence.
+  - `Environment.Presets`: each preset round-trips, keeps time and sun, stays in range; Custom.
+  - `Environment.SkyCreatorMapping`: cloud layers, stratus threshold, rain and wetness, snow, fog curve, Sky Creator's own tuning preserved.
+  - `Environment.SkyCreatorWorld`, a real game world with a level sun and fog:
+    - sky on spawns exactly one `ASkyCreator` and hides the level sun and fog;
+    - time and rain reach the actor;
+    - further changes reuse it, and the Snow preset reaches it;
+    - sky off removes it and restores the sun and fog, and on again spawns one;
+    - teardown is clean, with no world warnings.
+- **Standalone `-game` runs scripted by Claude** (`ScreenShot00013`–`00022`):
+  - Panel off: indoor night look, controls disabled.
+  - On: 14:00 daylight, the level's 3 sky components hidden.
+  - Rain preset: overcast, rain streaks. 19:12: warm low sun.
+  - Snow: falling snow. Fog 85 % / 30 %: heavy fog / light mist.
+  - Off: indoor look restored.
+  - The panel's preset buttons and sliders follow every change.
+  - The toolbar crop shows the four dividers with equal gaps.
+- **First scripted run:** the stored time of day changed between commands (19.2 → 7.56 → 21.03 h) while the panel was floating on the second monitor. The second, hands-off run with a status line before every change showed no drift. Sliders only commit under mouse capture, keyboard focus or touch, and these are never focusable. So the first run's changes were mouse drags on the floating panel.
+- **One later run showed the on-screen message "Video memory has been exhausted (737 MB over budget)".** The Kmidden editor was open at the same time (16 GB RAM). Earlier runs did not show it. Not measured further.
+- **Not verified:**
+  - Dragging the sliders and clicking the presets by mouse (Gevor).
+  - A packaged build: cook rules bring every Sky Creator asset; Shipping performance.
+- Status: **implemented, awaiting manual verification** of the items above.
+
+**Commit:** uncommitted (working tree).
+
+**Known issues / follow-ups**
+- Environment settings are not saved in scene files yet (scene format version 2).
+- The sky's GPU time and VRAM are not measured (`stat GPU`, `stat RHI`).
+- The 1 px header lines in the Render, Outliner, Library, Bill of Materials and Patch panels and the status bar are invisible for the same reason the toolbar dividers were (`SetDesiredSizeOverride` before Slate). Fix with `MakeLine`.
+- `Rules.md` "Where state lives" does not list `UStageEnvironmentSubsystem` yet. Claude did not edit Rules.md.
+- Sky Creator's lightning, rainbow, wind and moon settings are not exposed; they keep the plugin's defaults.

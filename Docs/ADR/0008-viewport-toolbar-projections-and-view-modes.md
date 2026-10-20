@@ -104,7 +104,7 @@ Persisted per machine: grid snap, angle snap and grid visibility. Projection and
 - **Snap segments toggle** (`StageViewMath::ResolveSnapPick`, `UStageSnappingComponent::PickGridSnap` / `PickAngleSnap`):
   - Clicking the active step turns snapping off.
   - Clicking Off while off restores the last step used this session, or the default when there is none.
-- History: #33 made the snaps one-click segments; #34 moved the view modes and the grid toggle into the View menu.
+- History: #33 made the snaps one-click segments; #34 moved the view modes and the grid toggle into the View menu; #35 split the row into five sections (projection | view | grid snap | angle snap | gizmo) with 1 px dividers and equal 8 px gaps. The dividers before #35 never drew: see ADR 0009 E7 and §5.
 - **Binding:** it writes through the components' setters and redraws only from their delegates (`OnViewChanged`, `OnSnapSettingsChanged`, `OnModeChanged`). It reads values back, binds in `NativeConstruct`, unbinds in `NativeDestruct`, and has no tick.
 - PIE has no workspace and no toolbar; the dev console commands work there.
 

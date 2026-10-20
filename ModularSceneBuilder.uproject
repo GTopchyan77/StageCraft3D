@@ -8,6 +8,11 @@
 			"Name": "ModularSceneBuilder",
 			"Type": "Runtime",
 			"LoadingPhase": "Default"
+		},
+		{
+			"Name": "StageCraftSkyCreator",
+			"Type": "Runtime",
+			"LoadingPhase": "Default"
 		}
 	],
 	"Plugins": [
@@ -50,7 +55,7 @@
 		{ "Name": "PlacementGizmo", "Enabled": false },
 		{ "Name": "PreciseTransform", "Enabled": false },
 		{ "Name": "RealTimeImport", "Enabled": false },
-		{ "Name": "SkyCreatorPlugin", "Enabled": false },
+		{ "Name": "SkyCreatorPlugin", "Enabled": true },
 		{ "Name": "SkyWeatherControls", "Enabled": false },
 		{ "Name": "SpaceCalculator", "Enabled": false },
 		{ "Name": "SplineRouteTool", "Enabled": false },

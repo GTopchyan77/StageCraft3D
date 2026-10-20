@@ -17,4 +17,5 @@ namespace StageCraftTags
 	UE_DEFINE_GAMEPLAY_TAG_COMMENT(Panel_Outliner,		"StageCraft.Panel.Outliner",	"Outliner: placed items by discipline, with visibility, lock and group selection.");
 	UE_DEFINE_GAMEPLAY_TAG_COMMENT(Panel_BillOfMaterials, "StageCraft.Panel.BillOfMaterials", "Bill of materials: quantities, weight and power of everything on stage, with CSV export.");
 	UE_DEFINE_GAMEPLAY_TAG_COMMENT(Panel_Patch,		"StageCraft.Panel.Patch",		"DMX patch sheet: fixture IDs, universes and addresses, conflicts, and the selected fixture's channels.");
+	UE_DEFINE_GAMEPLAY_TAG_COMMENT(Panel_Environment, "StageCraft.Panel.Environment", "Environment panel: outdoor sky, time of day, sun path and weather.");
 }

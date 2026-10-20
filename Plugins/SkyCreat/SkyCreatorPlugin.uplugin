@@ -10,7 +10,7 @@
 	"DocsURL": "https://dmkarpukhin.com/sky-creator-plugin/documentation/",
 	"MarketplaceURL": "com.epicgames.launcher://ue/marketplace/content/b9aa540db8c54f7d928c61d3b30cb955",
 	"SupportURL": "mailto:skxdoom@gmail.com",
-	"EngineVersion": "5.7.0",
+	"EngineVersion": "5.8.0",
 	"CanContainContent": true,
 	"Installed": true,
 	"Modules": [

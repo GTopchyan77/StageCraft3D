@@ -9,9 +9,9 @@
 
 /**
  * The viewport header toolbar (Docs/ADR/0008-viewport-toolbar-projections-and-view-modes.md §4.6), shown in the viewport tab
- * above the 3D view, as one horizontal row: the projection dropdown, the View menu button (an Unreal-style popup with the view
- * modes and the Show > Grid toggle), grid snap (Off / 10 / 50 / 100 cm) and angle snap (Off / 5 / 15 / 45 degrees) as toggling
- * segments, and Move / Rotate / Scale.
+ * above the 3D view, as one horizontal row of five sections separated by thin dividers with equal gaps: the projection dropdown,
+ * the View menu button (an Unreal-style popup with the view modes and the Show > Grid toggle), grid snap (Off / 10 / 50 / 100 cm)
+ * and angle snap (Off / 5 / 15 / 45 degrees) as toggling segments, and Move / Rotate / Scale.
  *
  * A view in the project's binding pattern:
  *  - It writes only through the owners' setters: UStageViewportComponent (projection, view mode, grid), UStageSnappingComponent

@@ -99,10 +99,11 @@ TSharedRef<FTabManager::FLayout> FStageWorkspaceShell::MakeDefaultLayout()
 			)
 			->Split
 			(
-				// Render and Bill of Materials share the Inspector's column as further tabs; the Inspector stays in front.
+				// Render, Environment and Bill of Materials share the Inspector's column as further tabs; the Inspector stays in front.
 				FTabManager::NewStack()->SetSizeCoefficient(0.22f)
 				->AddTab(ToTabId(StageCraftTags::Panel_Inspector), ETabState::OpenedTab)
 				->AddTab(ToTabId(StageCraftTags::Panel_Render), ETabState::OpenedTab)
+				->AddTab(ToTabId(StageCraftTags::Panel_Environment), ETabState::OpenedTab)
 				->AddTab(ToTabId(StageCraftTags::Panel_BillOfMaterials), ETabState::OpenedTab)
 				->SetForegroundTab(ToTabId(StageCraftTags::Panel_Inspector))
 			)

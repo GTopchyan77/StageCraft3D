@@ -28,7 +28,11 @@
 namespace StageViewportToolbar
 {
 	constexpr float BarHeight = 22.f;
-	constexpr float GroupGap = 10.f;
+	/** Space on each side of a section divider. */
+	constexpr float SectionGap = 8.f;
+	/** Space between a section's caption (SNAP, ANGLE) and its buttons. */
+	constexpr float CaptionGap = 4.f;
+	constexpr float DividerHeight = 14.f;
 	constexpr float ChoiceGap = 2.f;
 
 	/** Order of the projection dropdown; its index is the enum value. */
@@ -129,9 +133,10 @@ UWidget* UStageViewportToolbar::MakeLabel(const FText& Text) const
 
 UWidget* UStageViewportToolbar::MakeSeparator() const
 {
+	using namespace StageCraftWidgetStyle;
+	// Half-strength disabled text: one step brighter than the button outlines (Divider), which a 1 px line would vanish into.
 	UImage* Separator = WidgetTree->ConstructWidget<UImage>(UImage::StaticClass());
-	Separator->SetBrush(StageCraftWidgetStyle::MakeBox(GetTheme().Divider));
-	Separator->SetDesiredSizeOverride(FVector2D(1.f, 16.f));
+	Separator->SetBrush(MakeLine(WithAlpha(GetTheme().TextDisabled, 0.5f), FVector2D(1.f, StageViewportToolbar::DividerHeight)));
 	return Separator;
 }
 
@@ -204,8 +209,14 @@ void UStageViewportToolbar::BuildTree()
 			BarSlot->SetVerticalAlignment(VAlign_Center);
 		}
 	};
+	// Five sections, each separated by a divider with SectionGap on both sides: projection | view | grid snap | angle snap | gizmo.
+	// The first widget of every section after the first is added with SectionGap, so all dividers sit centred in equal gaps.
+	const auto AddDivider = [this, &Add]()
+	{
+		Add(MakeSeparator(), SectionGap);
+	};
 
-	// Projection.
+	// 1. Projection.
 	ProjectionCombo = MakeCombo(TEXT("ProjectionCombo"),
 		{ LOCTEXT("Perspective", "Perspective"), LOCTEXT("Top", "Top"), LOCTEXT("Front", "Front"), LOCTEXT("Back", "Back"),
 		  LOCTEXT("Left", "Left"), LOCTEXT("Right", "Right") },
@@ -216,7 +227,7 @@ void UStageViewportToolbar::BuildTree()
 	ProjectionBox->SetContent(ProjectionCombo);
 	Add(ProjectionBox, 0.f);
 
-	// View menu: view modes and the grid toggle.
+	// 2. View menu: view modes and the grid toggle.
 	ViewMenuButton = WidgetTree->ConstructWidget<UStageMenuButton>(UStageMenuButton::StaticClass(), TEXT("ViewMenuButton"));
 	ViewMenuButton->ApplyTheme(Palette);
 	ViewMenuButton->SetLabel(GetViewModeButtonLabel(EStageViewMode::Lit));
@@ -226,7 +237,8 @@ void UStageViewportToolbar::BuildTree()
 	ViewMenuBox->SetWidthOverride(120.f);
 	ViewMenuBox->SetHeightOverride(BarHeight);
 	ViewMenuBox->SetContent(ViewMenuButton);
-	Add(ViewMenuBox, ChoiceGap * 3.f);
+	AddDivider();
+	Add(ViewMenuBox, SectionGap);
 
 	// Snaps. Labels come from the presets, so the buttons and StageViewMath can never disagree.
 	TArray<FText> GridOptions;
@@ -247,19 +259,21 @@ void UStageViewportToolbar::BuildTree()
 	TArray<FText> AngleTips;
 	AngleTips.Init(AngleSnapTip, AngleOptions.Num());
 
-	Add(MakeSeparator(), GroupGap);
-	Add(MakeLabel(LOCTEXT("GridSnapLabel", "SNAP")), GroupGap);
-	Add(MakeSegment(GridOptions, GridTips, GridSnapButtons, &ThisClass::HandleGridSnapPicked), 4.f);
+	// 3. Grid snap.
+	AddDivider();
+	Add(MakeLabel(LOCTEXT("GridSnapLabel", "SNAP")), SectionGap);
+	Add(MakeSegment(GridOptions, GridTips, GridSnapButtons, &ThisClass::HandleGridSnapPicked), CaptionGap);
 
-	Add(MakeLabel(LOCTEXT("AngleSnapLabel", "ANGLE")), GroupGap);
-	Add(MakeSegment(AngleOptions, AngleTips, AngleSnapButtons, &ThisClass::HandleAngleSnapPicked), 4.f);
+	// 4. Angle snap.
+	AddDivider();
+	Add(MakeLabel(LOCTEXT("AngleSnapLabel", "ANGLE")), SectionGap);
+	Add(MakeSegment(AngleOptions, AngleTips, AngleSnapButtons, &ThisClass::HandleAngleSnapPicked), CaptionGap);
 
-	Add(MakeSeparator(), GroupGap);
-
-	// Gizmo.
+	// 5. Gizmo.
+	AddDivider();
 	Add(MakeSegment({ LOCTEXT("Move", "MOVE"), LOCTEXT("Rotate", "ROTATE"), LOCTEXT("Scale", "SCALE") },
 		{ LOCTEXT("MoveTip", "Move the selection (Space cycles the tools)."), LOCTEXT("RotateTip", "Rotate the selection."), LOCTEXT("ScaleTip", "Scale the selection.") },
-		GizmoModeButtons, &ThisClass::HandleGizmoModePicked), GroupGap);
+		GizmoModeButtons, &ThisClass::HandleGizmoModePicked), SectionGap);
 }
 
 void UStageViewportToolbar::NativeConstruct()
