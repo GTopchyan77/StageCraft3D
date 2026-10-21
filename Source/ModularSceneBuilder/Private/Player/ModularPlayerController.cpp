@@ -143,8 +143,9 @@ void AModularPlayerController::BeginPlay()
 	ApplySnapSettings();
 	ViewportView->OnViewChanged.AddUniqueDynamic(this, &ThisClass::HandleViewChanged);
 
-	// Undoing a length change writes it back through the same rules as the inspector.
+	// Undo / redo write lengths and transforms back through the same rules as the inspector: a locked item stays put.
 	EditHistory->ParameterApplier.BindUObject(this, &ThisClass::ApplyHistoryParameter);
+	EditHistory->TransformValidator.BindUObject(this, &ThisClass::ValidateHistoryTransform);
 
 	// Loading a scene asks the same rules per item, silently, and reports one summary instead of a refusal per item.
 	SceneFiles->PlacementEvaluator.BindUObject(this, &ThisClass::EvaluatePlacementPreview);
@@ -191,6 +192,7 @@ void AModularPlayerController::EndPlay(const EEndPlayReason::Type EndPlayReason)
 	Snapping->OnSnapSettingsChanged.RemoveDynamic(this, &ThisClass::ApplySnapSettings);
 	ViewportView->OnViewChanged.RemoveDynamic(this, &ThisClass::HandleViewChanged);
 	EditHistory->ParameterApplier.Unbind();
+	EditHistory->TransformValidator.Unbind();
 	SceneFiles->PlacementEvaluator.Unbind();
 	SceneFiles->OnSceneOperationFinished.RemoveDynamic(this, &ThisClass::HandleSceneOperationFinished);
 	if (UStageEconomySubsystem* Economy = GetEconomy())
@@ -1119,6 +1121,34 @@ EStageCommandResult AModularPlayerController::ApplyHistoryParameter(AModularBase
 	return Session->ApplyParameterChange(&Item, ParameterId, Value) ? EStageCommandResult::Succeeded : EStageCommandResult::Invalid;
 }
 
+bool AModularPlayerController::ValidateHistoryTransform(const AModularBaseActor& Item, const FTransform& Transform)
+{
+	const AStageCraftGameModeBase* GameMode = GetStageGameMode();
+	if (!GameMode)
+	{
+		ReportRejection(FStageEconomyResultInfo::Fail(EStageEconomyResult::InvalidRequest, LOCTEXT("NoAuthorityUndo", "Undo needs the StageCraft game mode.")));
+		return false;
+	}
+
+	const FStageEconomyResultInfo Verdict = GameMode->EvaluateTransformChange(this, Item, Transform);
+	if (!Verdict.IsSuccess())
+	{
+		ReportRejection(Verdict);
+		return false;
+	}
+	return true;
+}
+
+bool AModularPlayerController::BeginEditTransaction()
+{
+	return EditHistory->BeginTransaction();
+}
+
+void AModularPlayerController::EndEditTransaction()
+{
+	EditHistory->EndTransaction();
+}
+
 bool AModularPlayerController::IsBusyWithPointer() const
 {
 	return bIsNavigatingCamera || IsGizmoDragging();
@@ -1282,6 +1312,15 @@ EStageSceneResult AModularPlayerController::RequestLoadScene(const FString& Name
 		return EStageSceneResult::Busy;
 	}
 	return ReportSceneRefusal(EStageSceneOperation::Load, SceneFiles->LoadScene(Name), Name);
+}
+
+EStageSceneResult AModularPlayerController::RequestRecoverAutosave(const FString& Name)
+{
+	if (IsBusyWithPointer())
+	{
+		return EStageSceneResult::Busy;
+	}
+	return ReportSceneRefusal(EStageSceneOperation::Load, SceneFiles->RecoverAutosave(Name), Name);
 }
 
 EStageSceneResult AModularPlayerController::RequestDeleteScene(const FString& Name)

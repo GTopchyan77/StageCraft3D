@@ -22,6 +22,13 @@ struct FStageTransformChange
 DECLARE_DELEGATE_RetVal_ThreeParams(EStageCommandResult, FStageParameterApplier, class AModularBaseActor& /*Item*/, const FGameplayTag& /*ParameterId*/, const FStageParameterValue& /*Value*/);
 
 /**
+ * Decides whether undo / redo may put Item at Transform (sanitized, scale clamped) and reports a refusal itself. Bound by the
+ * owning controller to AStageCraftGameModeBase::EvaluateTransformChange, so a locked item cannot be moved by Ctrl+Z either.
+ * Unbound means no rules apply (tests, tools); only the sanity check (StageTransformRules::IsSaneTransform) remains.
+ */
+DECLARE_DELEGATE_RetVal_TwoParams(bool, FStageTransformValidator, const class AModularBaseActor& /*Item*/, const FTransform& /*Transform*/);
+
+/**
  * The local player's link to the stage's undo history (Docs/ADR/0003-undo-redo-and-object-snapping.md):
  * it records what this player's tools did, and runs undo/redo against the live world.
  *
@@ -34,9 +41,14 @@ DECLARE_DELEGATE_RetVal_ThreeParams(EStageCommandResult, FStageParameterApplier,
  *    validated Location / Rotation / Scale edit.
  * Undo and redo never go through those entry points, so they can never record themselves.
  *
+ * Transactions (BeginTransaction / EndTransaction): a continuous edit (dragging an inspector field) changes the stage many
+ * times. Transform and parameter changes recorded while a transaction is open are merged per item and parameter, keeping
+ * the first "before", and become ONE step when it ends. Only one transaction is open at a time.
+ *
  * Applying: restores go through USpawnSystemComponent::RestoreItem (the placement rules still decide),
- * removals release the selection first, transforms use the shared scale clamp. Items are found by
- * instance id in UStageSessionSubsystem.
+ * removals release the selection first. A transform must be sane and is checked by TransformValidator (lock, scale support)
+ * for every item, so a group step whose items include a locked one is refused as a whole (FStageBatchCommand rolls back).
+ * Parameters go through ParameterApplier. Items are found by instance id in UStageSessionSubsystem.
  *
  * Requires USpawnSystemComponent and USelectionComponent on the same actor; UStagePlacementToolComponent
  * is optional (without it placements are not recorded). Undo/redo is requested through the controller
@@ -91,6 +103,24 @@ public:
 	/** How undo / redo write parameters. See FStageParameterApplier. */
 	FStageParameterApplier ParameterApplier;
 
+	/** Whether undo / redo may write a transform. See FStageTransformValidator. */
+	FStageTransformValidator TransformValidator;
+
+	/**
+	 * Opens a transaction: until EndTransaction, RecordTransformChange(s) and RecordParameterChange collect instead of
+	 * recording. Returns false, and changes nothing, if one is already open (the caller then must not end it).
+	 */
+	bool BeginTransaction();
+
+	/**
+	 * Closes the open transaction and records everything it collected as one step (each item's first "before" against its
+	 * current state; items that ended where they started are left out). No-op when none is open. Undo / redo end it first.
+	 */
+	void EndTransaction();
+
+	bool IsTransactionOpen() const { return Transaction.IsSet(); }
+
+	/** Ends an open transaction, then undoes / redoes the latest step. */
 	EStageCommandResult Undo();
 	EStageCommandResult Redo();
 
@@ -116,6 +146,27 @@ private:
 	int32 DeleteAsOneStep(const TArray<AActor*>& Targets, TFunctionRef<FText(int32)> MakeBatchDescription);
 
 	EStageCommandResult Step(bool bUndo);
+
+	/** Commands for Changes, as one step would record them: unchanged and dead items are left out. */
+	static TArray<TSharedRef<IStageEditCommand>> MakeTransformCommands(TConstArrayView<FStageTransformChange> Changes);
+
+	/** A parameter change of one item, collected by an open transaction. */
+	struct FPendingParameterChange
+	{
+		TWeakObjectPtr<class AModularBaseActor> Item;
+		FGameplayTag ParameterId;
+		FText ParameterName;
+		FStageParameterValue Before;
+	};
+
+	/** What an open transaction collected: the first "before" per item (transforms) and per item and parameter. */
+	struct FPendingTransaction
+	{
+		TArray<FStageTransformChange> Transforms;
+		TArray<FPendingParameterChange> Parameters;
+	};
+
+	TOptional<FPendingTransaction> Transaction;
 
 	UPROPERTY(Transient)
 	TObjectPtr<class USpawnSystemComponent> SpawnSystem = nullptr;

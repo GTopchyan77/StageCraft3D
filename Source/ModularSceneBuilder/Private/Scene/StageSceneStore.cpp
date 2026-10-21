@@ -37,6 +37,56 @@ namespace StageSceneStore
 		const TCHAR* Rotation = TEXT("rotation");
 		const TCHAR* Scale = TEXT("scale");
 		const TCHAR* State = TEXT("state");
+
+		// Version 2: the outdoor environment.
+		const TCHAR* Environment = TEXT("environment");
+		const TCHAR* SkyEnabled = TEXT("skyEnabled");
+		const TCHAR* TimeOfDay = TEXT("timeOfDay");
+		const TCHAR* SunElevation = TEXT("sunElevation");
+		const TCHAR* SunAzimuth = TEXT("sunAzimuth");
+		const TCHAR* CloudCoverage = TEXT("cloudCoverage");
+		const TCHAR* Rain = TEXT("rain");
+		const TCHAR* Snow = TEXT("snow");
+		const TCHAR* Fog = TEXT("fog");
+	}
+
+	TSharedRef<FJsonObject> WriteEnvironment(const FStageEnvironmentSettings& Settings)
+	{
+		const TSharedRef<FJsonObject> Object = MakeShared<FJsonObject>();
+		Object->SetBoolField(Field::SkyEnabled, Settings.bSkyEnabled);
+		Object->SetNumberField(Field::TimeOfDay, Settings.TimeOfDay);
+		Object->SetNumberField(Field::SunElevation, Settings.SunElevation);
+		Object->SetNumberField(Field::SunAzimuth, Settings.SunAzimuth);
+		Object->SetNumberField(Field::CloudCoverage, Settings.CloudCoverage);
+		Object->SetNumberField(Field::Rain, Settings.Rain);
+		Object->SetNumberField(Field::Snow, Settings.Snow);
+		Object->SetNumberField(Field::Fog, Settings.Fog);
+		return Object;
+	}
+
+	/**
+	 * The environment of a version 2 file. A missing object or field keeps the default for that value (a hand-edited file may
+	 * leave some out), and the result is sanitized like every environment write, so a file can never put the sky out of range.
+	 */
+	FStageEnvironmentSettings ReadEnvironment(const FJsonObject& Root)
+	{
+		FStageEnvironmentSettings Settings;
+		const TSharedPtr<FJsonObject>* Object = nullptr;
+		if (!Root.TryGetObjectField(Field::Environment, Object) || !Object->IsValid())
+		{
+			return Settings;
+		}
+
+		const FJsonObject& Environment = **Object;
+		Environment.TryGetBoolField(Field::SkyEnabled, Settings.bSkyEnabled);
+		Environment.TryGetNumberField(Field::TimeOfDay, Settings.TimeOfDay);
+		Environment.TryGetNumberField(Field::SunElevation, Settings.SunElevation);
+		Environment.TryGetNumberField(Field::SunAzimuth, Settings.SunAzimuth);
+		Environment.TryGetNumberField(Field::CloudCoverage, Settings.CloudCoverage);
+		Environment.TryGetNumberField(Field::Rain, Settings.Rain);
+		Environment.TryGetNumberField(Field::Snow, Settings.Snow);
+		Environment.TryGetNumberField(Field::Fog, Settings.Fog);
+		return StageEnvironment::Sanitize(Settings);
 	}
 
 	TArray<TSharedPtr<FJsonValue>> ToJsonArray(std::initializer_list<double> Values)
@@ -252,6 +302,7 @@ FString FStageSceneStore::Serialize(const FStageSceneDocument& Document)
 	Root->SetStringField(Field::Level, Document.LevelName);
 	Root->SetStringField(Field::SavedAt, Document.SavedAtUtc.ToIso8601());
 	Root->SetArrayField(Field::Items, Items);
+	Root->SetObjectField(Field::Environment, WriteEnvironment(Document.Environment));
 
 	FString Contents;
 	const TSharedRef<TJsonWriter<TCHAR, TPrettyJsonPrintPolicy<TCHAR>>> Writer = TJsonWriterFactory<TCHAR, TPrettyJsonPrintPolicy<TCHAR>>::Create(&Contents);
@@ -279,7 +330,8 @@ EStageSceneResult FStageSceneStore::Parse(const FString& Contents, FStageSceneDo
 	{
 		return EStageSceneResult::Corrupt;
 	}
-	if (Version != FormatVersion)
+	// A newer file may hold data this build would silently drop on the next save, so it is refused rather than half-read.
+	if (Version < MinReadableVersion || Version > FormatVersion)
 	{
 		return EStageSceneResult::VersionMismatch;
 	}
@@ -297,6 +349,9 @@ EStageSceneResult FStageSceneStore::Parse(const FString& Contents, FStageSceneDo
 	{
 		FDateTime::ParseIso8601(*SavedAt, OutDocument.SavedAtUtc);
 	}
+
+	// Migration 1 -> 2: a version 1 stage had no saved environment; it opens with the default one (sky off, the indoor stage).
+	OutDocument.Environment = Version >= 2 ? ReadEnvironment(*Root) : FStageEnvironmentSettings();
 
 	TSet<FGuid> SeenIds;
 	SeenIds.Reserve(Items->Num());

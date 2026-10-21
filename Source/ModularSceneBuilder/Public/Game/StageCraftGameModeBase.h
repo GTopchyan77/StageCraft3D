@@ -48,6 +48,15 @@ public:
 	UFUNCTION(BlueprintNativeEvent, BlueprintCallable, Category = "StageCraft|Rules")
 	FStageEconomyResultInfo EvaluateParameterChange(const APlayerController* Player, const UObject* Target, FGameplayTag ParameterId, const FStageParameterValue& Value) const;
 
+	/**
+	 * May Player put Item at NewTransform in one write (an undo or redo step, which restores a whole transform at once)?
+	 * NewTransform must be sane (StageTransformRules::IsSaneTransform); then each part that differs from the item's current
+	 * transform (Location, Rotation, Scale) is judged by EvaluateParameterChange, so a lock, a span's refusal of Scale and
+	 * ownership apply exactly as for an inspector edit, including any Blueprint override. Unchanged parts are not judged.
+	 * Not a BlueprintNativeEvent itself: it composes EvaluateParameterChange, which is the extension point.
+	 */
+	FStageEconomyResultInfo EvaluateTransformChange(const APlayerController* Player, const class AModularBaseActor& Item, const FTransform& NewTransform) const;
+
 	/** May Player import model files into the Library? Off when SessionRules.bAllowModelImport is false. */
 	UFUNCTION(BlueprintNativeEvent, BlueprintCallable, Category = "StageCraft|Rules")
 	FStageEconomyResultInfo EvaluateModelImport(const APlayerController* Player) const;

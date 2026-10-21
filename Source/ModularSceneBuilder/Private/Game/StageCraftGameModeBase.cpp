@@ -5,6 +5,7 @@
 #include "Actors/ModularBaseActor.h"
 #include "Engine/GameInstance.h"
 #include "Engine/World.h"
+#include "Interaction/StageTransformRules.h"
 #include "Player/ModularPlayerController.h"
 #include "Player/StageCameraPawn.h"
 #include "Subsystems/StageEconomySubsystem.h"
@@ -98,6 +99,39 @@ FStageEconomyResultInfo AStageCraftGameModeBase::EvaluateParameterChange_Impleme
 	return SessionRules.bEnforceEntitlements
 		? Economy->ValidateParameterChange(Target, ParameterId, Value)
 		: FStageEconomyResultInfo::Ok();
+}
+
+FStageEconomyResultInfo AStageCraftGameModeBase::EvaluateTransformChange(const APlayerController* Player, const AModularBaseActor& Item, const FTransform& NewTransform) const
+{
+	if (!StageTransformRules::IsSaneTransform(NewTransform))
+	{
+		return FStageEconomyResultInfo::Fail(EStageEconomyResult::InvalidRequest,
+			FText::Format(LOCTEXT("InsaneTransform", "{0} cannot be placed there: the position is invalid or more than 10 km away."), Item.GetInstanceLabel()));
+	}
+
+	// Only the parts that change are judged, so restoring a rotation is not refused for a rule that only concerns scale.
+	const FTransform Current = Item.GetActorTransform();
+	if (!Current.GetLocation().Equals(NewTransform.GetLocation(), UE_KINDA_SMALL_NUMBER))
+	{
+		const FStageEconomyResultInfo Verdict = EvaluateParameterChange(Player, &Item, StageCraftTags::Param_Transform_Location, FStageParameterValue::MakeVector(NewTransform.GetLocation()));
+		if (!Verdict.IsSuccess())
+		{
+			return Verdict;
+		}
+	}
+	if (!Current.GetRotation().Equals(NewTransform.GetRotation(), UE_KINDA_SMALL_NUMBER))
+	{
+		const FStageEconomyResultInfo Verdict = EvaluateParameterChange(Player, &Item, StageCraftTags::Param_Transform_Rotation, FStageParameterValue::MakeRotator(NewTransform.Rotator()));
+		if (!Verdict.IsSuccess())
+		{
+			return Verdict;
+		}
+	}
+	if (!Current.GetScale3D().Equals(NewTransform.GetScale3D(), UE_KINDA_SMALL_NUMBER))
+	{
+		return EvaluateParameterChange(Player, &Item, StageCraftTags::Param_Transform_Scale, FStageParameterValue::MakeVector(NewTransform.GetScale3D()));
+	}
+	return FStageEconomyResultInfo::Ok();
 }
 
 FStageEconomyResultInfo AStageCraftGameModeBase::EvaluateItemEdit(const AModularBaseActor& Item, const FGameplayTag& ParameterId, const FStageParameterValue& Value) const

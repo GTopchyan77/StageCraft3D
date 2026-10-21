@@ -112,6 +112,11 @@ void SStageWorkspaceMenuBar::FillFileMenu(FMenuBuilder& MenuBuilder)
 		FNewMenuDelegate::CreateSP(this, &SStageWorkspaceMenuBar::FillOpenSceneMenu),
 		FUIAction(FExecuteAction(), FCanExecuteAction::CreateLambda([bCanOpen = bHasScenes && !bBusy]() { return bCanOpen; })),
 		NAME_None, EUserInterfaceActionType::Button);
+	MenuBuilder.AddSubMenu(LOCTEXT("RecoverAutosave", "Recover Autosave"),
+		LOCTEXT("RecoverAutosaveTip", "Open a stage that was autosaved but never saved (after a crash). It stays unsaved until you save it."),
+		FNewMenuDelegate::CreateSP(this, &SStageWorkspaceMenuBar::FillRecoverAutosaveMenu),
+		FUIAction(FExecuteAction(), FCanExecuteAction::CreateLambda([bCanRecover = !Scenes->GetAutosaveNames().IsEmpty() && !bBusy]() { return bCanRecover; })),
+		NAME_None, EUserInterfaceActionType::Button);
 	MenuBuilder.AddSubMenu(LOCTEXT("DeleteScene", "Delete Scene"),
 		LOCTEXT("DeleteSceneTip", "Delete a saved scene file. The stage on screen is not changed."),
 		FNewMenuDelegate::CreateSP(this, &SStageWorkspaceMenuBar::FillDeleteSceneMenu),
@@ -244,6 +249,37 @@ void SStageWorkspaceMenuBar::FillOpenSceneMenu(FMenuBuilder& MenuBuilder)
 			{
 				ConfirmMenu.AddMenuEntry(FText::Format(LOCTEXT("DiscardAndOpen", "Discard unsaved changes and open \"{0}\""), FText::FromString(Name)),
 					FText::GetEmpty(), FSlateIcon(), FUIAction(Open));
+			}));
+	}
+}
+
+void SStageWorkspaceMenuBar::FillRecoverAutosaveMenu(FMenuBuilder& MenuBuilder)
+{
+	const TWeakObjectPtr<AModularPlayerController> WeakController = GetStageController();
+	const UStageSceneComponent* Scenes = WeakController.IsValid() ? WeakController->GetSceneFiles() : nullptr;
+	const UStageSessionSubsystem* Session = WeakController.IsValid() ? UWorld::GetSubsystem<UStageSessionSubsystem>(WeakController->GetWorld()) : nullptr;
+	if (!Scenes || !Session)
+	{
+		return;
+	}
+
+	const bool bDirty = Session->IsDirty();
+	for (const FString& Name : Scenes->GetAutosaveNames())
+	{
+		const FExecuteAction Recover = FExecuteAction::CreateLambda([WeakController, Name]() { if (WeakController.IsValid()) { WeakController->RequestRecoverAutosave(Name); } });
+		if (!bDirty)
+		{
+			MenuBuilder.AddMenuEntry(FText::FromString(Name), FText::Format(LOCTEXT("RecoverEntryTip", "Replace the stage with the autosave of \"{0}\"."), FText::FromString(Name)),
+				FSlateIcon(), FUIAction(Recover));
+			continue;
+		}
+
+		// The same extra click as Open: the stage on screen has changes that would be lost.
+		MenuBuilder.AddSubMenu(FText::FromString(Name), FText::Format(LOCTEXT("RecoverDirtyTip", "The stage has unsaved changes. Recovering \"{0}\" discards them."), FText::FromString(Name)),
+			FNewMenuDelegate::CreateLambda([Name, Recover](FMenuBuilder& ConfirmMenu)
+			{
+				ConfirmMenu.AddMenuEntry(FText::Format(LOCTEXT("DiscardAndRecover", "Discard unsaved changes and recover \"{0}\""), FText::FromString(Name)),
+					FText::GetEmpty(), FSlateIcon(), FUIAction(Recover));
 			}));
 	}
 }

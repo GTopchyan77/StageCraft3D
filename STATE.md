@@ -2793,7 +2793,7 @@ Design record, with verified engine facts F1–F11: `Docs/ADR/0008-viewport-tool
   - A packaged build: cook rules bring every Sky Creator asset; Shipping performance.
 - Status: **implemented, awaiting manual verification** of the items above.
 
-**Commit:** uncommitted (working tree).
+**Commit:** `4f310c2` (hash set by #36).
 
 **Known issues / follow-ups**
 - Environment settings are not saved in scene files yet (scene format version 2).
@@ -2801,3 +2801,203 @@ Design record, with verified engine facts F1–F11: `Docs/ADR/0008-viewport-tool
 - The 1 px header lines in the Render, Outliner, Library, Bill of Materials and Patch panels and the status bar are invisible for the same reason the toolbar dividers were (`SetDesiredSizeOverride` before Slate). Fix with `MakeLine`.
 - `Rules.md` "Where state lives" does not list `UStageEnvironmentSubsystem` yet. Claude did not edit Rules.md.
 - Sky Creator's lightning, rainbow, wind and moon settings are not exposed; they keep the plugin's defaults.
+
+---
+
+## #36 — Project audit and technical discovery: PROJECT_AUDIT.md, CURRENT_SYSTEMS.md (2026-10-20)
+
+**Request (Gevor).** Run an evidence-based audit of the whole existing project before any new feature. Cover structure, every system, real execution paths, the architecture and dependency map, a status for every feature, ranked findings, a roadmap and tests. Produce `PROJECT_AUDIT.md` and `CURRENT_SYSTEMS.md`. Do not change architecture or implementation code.
+
+**What was done**
+- Read `Source/` (both modules, 250 files, about 42,400 lines), `Config/`, the `Content/` folder listing, `Scripts/`, `Rules.md`, this file, `tasks/todo.md` and ADR 0001–0009.
+  - The reading was split into six areas: UI and workspace; scene and CAD; lighting, show control and DMX; persistence, import and BOM; architecture and performance; documentation against code.
+  - The highest-impact findings were confirmed by hand in the source.
+- Ran the full automation suite once: 46/46 passed.
+- No `.uasset` or `.umap` was opened. The MCP bridge was attached to the Kmidden editor for the whole session.
+- No build, PIE or packaged run.
+- No code, config or content was changed.
+
+**Main findings.** Full table in `Docs/PROJECT_AUDIT.md` §10.
+
+- **R1. A secret is committed.** `Config/UserEngine.ini` (tracked) holds the UnrealNGGMCP `AuthToken`. The Anthropic key from #29 is still in git history.
+- **R2. A partial scene load is marked clean, so the next save drops the skipped items.**
+  - `ApplyDocument` calls `MarkClean()` after skipping items (`StageSceneComponent.cpp:265-297`).
+  - `LoadScene` does not wait for startup re-imports to finish.
+- **R3. Undo and redo of a transform ignore the item lock and the GameMode.** `FLiveItemEditor::SetItemTransform` calls `SetActorTransform` directly (`StageEditHistoryComponent.cpp:80-94`).
+- **R4. Dragging an inspector spin box records one undo step per value change.**
+  - `OnValueChanged` → `RequestParameterChange` → `RecordTransformChange`.
+  - The history has no merging and a 100-step cap.
+- **R5. No unsaved-changes prompt on quit, and no autosave** (`StageWorkspaceShell.cpp:572-581`).
+- **R6. SaveGame state is not sanitised when a scene is restored** (fixture attributes, patch, loudspeaker gain and delay).
+- **R7. No scene format migration.**
+- **R8. A corrupt `Imports.json` is overwritten.**
+- **R9. The profile is reset on a version mismatch.**
+- **R10. Show control is unreachable.**
+  - The cue engine has no UI, no C++ caller and no persistence.
+  - `UStageDMXBridge` has no transport.
+- **R11. No person-confirmed run is recorded for #1–#35.**
+  - These have no tests: GameMode rules, the request bridge, selection, the session, economy/profile and show control.
+- **R12. Documentation drift.**
+  - This entry fixes the #35 hash.
+  - Rules.md still has the RunEditor, DamenTools8 and UnrealClaude sections from another project.
+  - The Rules.md subsystem table is missing 7 subsystems.
+  - ADR 0001 §3 has a stale layout path and built-in layout names.
+  - Stale boxes in todo.md: lines 7, 32, 47, 49, 92 and 198.
+  - `Content/Python/stagecraft_setup_content.py` is stale.
+
+**Files changed**
+- `Docs/PROJECT_AUDIT.md` (new)
+- `Docs/CURRENT_SYSTEMS.md` (new)
+- `STATE.md`: this entry, and the #35 commit hash set to `4f310c2`.
+- `tasks/todo.md`: the audit follow-ups section.
+
+**Verification (Claude, 2026-10-20)**
+- Automation `StageCraft`: 46/46 Success, exit code 0.
+- Findings R2, R3, R4, R5 and R8 were re-read in source after the area reports came in. The runtime effects are inferred from code and have not been reproduced.
+- Status: **audit complete; findings awaiting review by Gevor.** Nothing was implemented.
+
+**Commit:** uncommitted (working tree).
+
+**Housekeeping.** Commit `960f5da` ("ngg-assets.json") only changed `.claude/.ngg-assets.json`, which is MCP tooling state. It had no entry; it is recorded here.
+
+**Known issues / follow-ups**
+- The open questions are in `Docs/PROJECT_AUDIT.md` §10:
+  - Do any Blueprints call the cue or DMX functions? This needs the editor with this project open.
+  - Which manual checklists have actually been run?
+  - Are the shop/economy and hardware DMX in scope?
+  - What rig-size performance target applies?
+  - Has the key been rotated?
+  - Should the test map and assets ship?
+- Recommended next task: roadmap step 1 (scene data safety and edit integrity: R2–R6, R8).
+
+---
+
+## #37 — Undo/redo obeys locks and rules, one undo step per inspector drag, autosave and exit prompt, scene format v2 with environment, packaged builds and sky cost measured (2026-10-20)
+
+**Request (Gevor).** Phase 2: undo and redo must respect item locks and GameMode rules, with every item of a group checked. An inspector slider or numeric drag must make exactly one undo step. Add autosave and a Save / Discard / Cancel prompt on exit. Store the environment in scenes, with v1 → v2 migration tests. Phase 3: verify the UE 5.8 Standalone and Shipping builds, check that the Sky Creator assets package cleanly, and measure the sky's GPU and video memory cost. Design: `Docs/ADR/0010-edit-rules-autosave-scene-v2.md`.
+
+**What changed and why**
+- **Undo/redo checks the rules (audit R3).**
+  - **Root cause:** `FLiveItemEditor::SetItemTransform` wrote `SetActorTransform` directly, unlike parameter undo, which went through the GameMode.
+  - **New GameMode rule:** `AStageCraftGameModeBase::EvaluateTransformChange` first requires a sane transform. It then judges each changed part (Location, Rotation, Scale) through `EvaluateParameterChange`, so the lock, a span's refusal of Scale, ownership and Blueprint overrides all apply.
+  - **New history hook:** `UStageEditHistoryComponent::TransformValidator`, bound by the controller (`ValidateHistoryTransform`), which reports refusals.
+  - **Outcomes:** a refused step stays in the history so it can be retried. A step whose transform is not sane (non-finite, more than 10 km out, degenerate rotation) is dropped as Invalid.
+  - **Groups:** a group step (`FStageBatchCommand`) checks every item and is all-or-nothing; a locked item refuses the step, and the items already moved are rolled back.
+  - **New shared limit:** `StageTransformRules::IsSaneTransform` and `MaxCoordinate`, which the scene store now uses too.
+- **Live group edits.** Drag start and numeric group edits already asked the GameMode about every selected item (`EvaluateSelectionTransform`). `UStageGroupTransformComponent::FollowLeader` now also sanity-checks every follower's computed transform before writing it.
+- **One undo step per drag (audit R4).**
+  - **Root cause:** each spin-box `OnValueChanged` went through `RequestParameterChange`, which recorded one step per change, and the history has no merging.
+  - **New mechanism:** `UStageEditHistoryComponent::BeginTransaction` / `EndTransaction`. While open, recorded transform and parameter changes keep the first "before" per item (and per parameter). When it ends, they become one step; items that ended where they started are left out.
+  - **Wiring:**
+    - `UStageParameterRowWidget` binds `OnBeginSliderMovement`, which calls `UStageParameterControlWidget::BeginInteraction`; `FinishInteraction` fires `OnInteractionFinished` once.
+    - `UStageParameterViewWidget` calls `AModularPlayerController::BeginEditTransaction` / `EndEditTransaction`. It also ends a transaction it opened when its controls go away (`bOwnsEditTransaction`).
+    - Undo or redo ends an open transaction first, and so does `EndPlay`.
+  - **Unchanged:** every value is still validated and applied live.
+- **Autosave and recovery (audit R5).**
+  - **Timer:** `UStageSceneComponent` runs a looping timer only while the session is dirty (started and stopped by `OnDirtyChanged`). `AutosaveIntervalSeconds` defaults to 120 s; 0 turns it off.
+  - **Write:** it saves only if the edit serial changed since the last autosave, never during a user save or load. The file is `Saved/StageCraft/Scenes/Autosave/<scene>.json`, or `(Untitled).json` for a stage never saved. It is written by a separate `FStageSceneStore` on a background task. It never touches the user's file and never marks the stage clean.
+  - **Cleanup:** a successful Save deletes the stage's autosave, and the autosave under its previous name. Don't Save on exit deletes it too.
+  - **Recovery:** File › Recover Autosave (`RequestRecoverAutosave`) opens it through the normal load path. The stage keeps its scene name and stays unsaved.
+- **Exit prompt.**
+  - **Hook:** `FStageWorkspaceShell` asks `Callbacks.ConfirmMainWindowClose` before closing the main window. `UStageWorkspaceSubsystem::ConfirmMainWindowClose` shows `SStageUnsavedChangesDialog` ("Save changes before closing?" with Save / Don't Save / Cancel) when the session is dirty.
+  - **Display:** the dialog sits on a dimmed overlay (`FStageWorkspaceShell::ShowDialog`) that takes every click and the keyboard focus. Escape cancels.
+  - **Untitled stages:** the dialog shows a name field; the first Save on an existing name only warns.
+  - **Save:** waits for `OnSceneOperationFinished`, then calls `CloseMainWindow`. A failed save keeps the dialog open with the reason.
+  - **Why not a modal window:** a Slate modal loop would block the save's game-thread continuation.
+  - **Scope:** Standalone and packaged builds only. PIE and `exit` / `RequestExit` are not affected.
+- **Scene format v2 (audit R7).**
+  - **Versions:** `FStageSceneStore::FormatVersion = 2`, `MinReadableVersion = 1`. Version 3 and above, and version 0, are refused as `VersionMismatch`.
+  - **New data:** the `environment` object (sky, time, sun height and direction, clouds, rain, snow, fog). Missing fields keep their defaults, and values are sanitized.
+  - **Migration:** version 1 files load with the default environment (sky off); re-saving writes version 2.
+  - **Capture and apply:** `CaptureStage` reads the environment, and `ApplyDocument` sets it before `MarkClean`.
+  - **Dirty tracking:** `UStageSessionSubsystem` binds `OnEnvironmentChanged` (`InitializeDependency<UStageEnvironmentSubsystem>`), so environment edits mark the scene unsaved.
+- **Packaging.**
+  - **Missing engine asset:** the packaged game logged "Failed to find `/Engine/EngineSky/VolumetricClouds/m_SimpleVolumetricCloud_Inst`" when the sky turned on. The engine's `UVolumetricCloudComponent` loads it as its default material, and it was not cooked. Fixed with `+DirectoriesToAlwaysCook=(Path="/Engine/EngineSky/VolumetricClouds")` (19 packages).
+  - **Dead reference, left alone:** Sky Creator's `MF_SC_BlueNoiseDithering` references `STBlueNoise_scalar_128x128x64`, which UE 5.8 no longer ships. Nothing that renders uses that function, so the plugin content is not edited.
+- **Dev console commands** (compiled out of Shipping): `StageCraft.Workspace.ExitPrompt Save [Name]|Discard|Cancel`, `StageCraft.Scene.AutosaveNow`, `StageCraft.Scene.Recover <Name>`. `StageCraft.Scene.Status` now lists autosaves.
+
+**Files changed**
+- **New:**
+  - `Private/Workspace/SStageUnsavedChangesDialog.h/.cpp`
+  - `Private/History/Tests/StageHistoryWorldTests.cpp`
+  - `Docs/ADR/0010-edit-rules-autosave-scene-v2.md`
+- **History and rules:**
+  - `Public/Interaction/StageTransformRules.h`
+  - `Public/Game/StageCraftGameModeBase.h`, `Private/Game/StageCraftGameModeBase.cpp`
+  - `Public/History/StageEditHistoryComponent.h`, `Private/History/StageEditHistoryComponent.cpp`
+  - `Private/Components/StageGroupTransformComponent.cpp`
+  - `Public/Player/ModularPlayerController.h`, `Private/Player/ModularPlayerController.cpp`
+- **Inspector:**
+  - `Public/UI/StageParameterControlWidget.h`, `Private/UI/StageParameterControlWidget.cpp`
+  - `Public/UI/StageParameterRowWidget.h`, `Private/UI/StageParameterRowWidget.cpp`
+  - `Public/UI/StageParameterViewWidget.h`, `Private/UI/StageParameterViewWidget.cpp`
+- **Scenes and session:**
+  - `Public/Scene/StageSceneTypes.h`
+  - `Private/Scene/StageSceneStore.h/.cpp`
+  - `Public/Scene/StageSceneComponent.h`, `Private/Scene/StageSceneComponent.cpp`
+  - `Private/Scene/StageSceneConsoleCommands.cpp`
+  - `Private/Scene/Tests/StageSceneStoreTests.cpp`
+  - `Public/Subsystems/StageSessionSubsystem.h`, `Private/Subsystems/StageSessionSubsystem.cpp`
+- **Workspace:**
+  - `Private/Workspace/StageWorkspaceShell.h/.cpp`
+  - `Public/Workspace/StageWorkspaceSubsystem.h`, `Private/Workspace/StageWorkspaceSubsystem.cpp`
+  - `Private/Workspace/SStageWorkspaceMenuBar.h/.cpp`
+  - `Private/Workspace/StageWorkspaceConsoleCommands.cpp`
+- **Config:** `Config/DefaultGame.ini` (engine cloud cook directory).
+- **Docs:**
+  - `Docs/ADR/0009-outdoor-environment.md` (§7 open items closed)
+  - `Docs/PROJECT_AUDIT.md` (follow-up note)
+  - `Docs/CURRENT_SYSTEMS.md` (updated rows)
+  - `tasks/todo.md`
+  - `STATE.md` (this entry)
+- **Not changed:** no content assets, Blueprints, maps or plugin files.
+
+All `Source/...` paths above are under `Source/ModularSceneBuilder/`.
+
+**Verification (Claude, 2026-10-20)**
+- **Builds (UE 5.8):** Editor Development, Game Development and Game Shipping (`-DisableAdaptiveUnity`) all succeeded with no warnings or errors.
+- **Automation:** 49/49 StageCraft tests passed, exit code 0. New tests:
+  - `StageCraft.History.Rules` (world test):
+    - the rule matrix: locked, unchanged, moved, turned, 20 km away, NaN;
+    - undo and redo of a locked item refused with nothing moved, then succeeding once unlocked;
+    - a group step with a locked item refused, and the item already undone rolled back;
+    - an out-of-range redo dropped as Invalid.
+  - `StageCraft.History.Transaction` (world test):
+    - 50 moves recorded as one step, with undo returning to before the drag;
+    - a group drag as one step;
+    - a drag back to its start recording nothing;
+    - undo during an open drag closing it and reverting it;
+    - a stray End doing nothing.
+  - `StageCraft.Scene.Migration`:
+    - version 2 environment round trip;
+    - version 1 migrated to the default environment, and a stray environment in a version 1 file ignored;
+    - versions 0 and 3 refused;
+    - hostile values wrapped or clamped, a wrong type or missing field defaulted;
+    - a version 1 file on disk re-saved as version 2.
+  - `StageCraft.Scene.Format` updated: the "future version" case is now `FormatVersion + 1`.
+- **Scripted Standalone runs** (`-game -windowed`, logs and screenshots `ScreenShot00023`/`00024`):
+  1. Placed two crates and made a group move. Sky on, 19:00, clouds 0.8. `AutosaveNow` wrote `(Untitled).json`. Closing the window showed the prompt (screenshot), and a second close kept it open. Save without a name was refused; Save "R37 Test" saved and quit. The file is version 2 with the environment, and the `(Untitled)` autosave was deleted.
+  2. Loaded "R37 Test": environment restored, scene clean. Group move, then locked the Prop group: Undo was refused with "Test Crate is locked…" and nothing moved; after unlocking, Undo succeeded. Loaded the real version 1 file "R27 A": 6 items, default environment, file still version 1 on disk. Fog 0.5 marked the scene unsaved. The prompt showed "R27 A" (screenshot). Cancel kept the app open; an autosave was written; Don't Save quit and deleted it.
+  3. and 4. Edited, autosaved, then quit through `quit`, which bypasses the prompt the way a crash would. The next launch listed the autosave. Recover restored the moved crates and rain 0.6, and the stage stayed unsaved. Don't Save then deleted the autosave.
+- **Packaging:** `BuildCookRun` Development and Shipping both succeeded: 918 packages, no warnings or errors in the cook. All six Sky Creator content folders are in the container (259 assets). The packaged Development run with the sky on is warning-free after the cook fix. The Shipping package (949 MB) ran for 25 s and quit cleanly on a window close.
+- **Sky cost** (packaged Development; 1184×657 view in a 1600×900 window; 300-frame CSV per state, two runs; **the Kmidden editor was open on the same GPU**, so absolute numbers are only indicative):
+
+| State | GPU time | Video memory in use |
+|---|---|---|
+| Sky off | 4.4–4.5 ms | about 1.9 GB |
+| Sky on, clear | 6.6–6.9 ms | +180 MB |
+| Sky on, Rain | 9.0–9.6 ms | +285 MB |
+
+  Moving-head beams stay visible with the sky on (screenshot), which disproves the audit's inference.
+- **Not verified by a person:** one undo step per spin-box drag by mouse (the transaction itself is tested), and the dialog's buttons and name field by mouse.
+- Status: **implemented, awaiting manual verification** of those items.
+
+**Commit:** uncommitted (working tree). It is staged together with #36, which was also still uncommitted.
+
+**Known issues / follow-ups**
+- Audit R2 is still open: a partial load is marked clean, so re-saving drops the skipped items, and a load does not wait for pending imports. R6 (restored state not sanitized) and R8 (corrupt `Imports.json` overwritten) are also open.
+- Fixture attribute, patch, visibility, lock and label edits are still not undoable.
+- Mouse-wheel steps on a spin box are one undo step each (discrete edits).
+- `exit` / `RequestExit` and PIE never show the prompt (by design). An autosave left behind by such an exit stays recoverable.
+- Re-measure the sky with no second editor open. The local video memory budget the OS reported fell from 7.2 GB to 4.3–4.5 GB during the runs, most likely because the other editor was using the GPU.
+- Cues are still not saved (needs format version 3).

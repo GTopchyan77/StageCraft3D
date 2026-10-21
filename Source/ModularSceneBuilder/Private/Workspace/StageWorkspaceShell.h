@@ -38,6 +38,12 @@ struct FStageWorkspaceShellCallbacks
 	/** The user changed the arrangement (split, tab move, resize, open, close). Slate defers this by a few seconds and coalesces it. */
 	TFunction<void()> LayoutChanged;
 
+	/**
+	 * The user asked to close the main window (its close button, Alt+F4). True: close now. False: the window stays open, and
+	 * the owner calls CloseMainWindow later (after asking about unsaved changes). Unbound: close now.
+	 */
+	TFunction<bool()> ConfirmMainWindowClose;
+
 	/** The user is closing the main window, which quits the app (ADR F7). Every window still exists, so the layout can be captured here. */
 	TFunction<void()> MainWindowClosing;
 
@@ -103,6 +109,19 @@ public:
 
 	EStagePanelHost GetPanelHost(const FGameplayTag& PanelTag) const;
 
+	/**
+	 * Shows Dialog centred over the whole workspace (menu bar, panels, status bar) on a dimmed layer that takes every click,
+	 * and gives FocusTarget keyboard focus, so nothing behind it can be used until CloseDialog. One dialog at a time: a new
+	 * one replaces the old. Floating panel windows are not covered.
+	 */
+	void ShowDialog(const TSharedRef<class SWidget>& Dialog, const TSharedPtr<class SWidget>& FocusTarget);
+
+	/** Removes the dialog and gives keyboard focus back to the viewport. Safe without a dialog. */
+	void CloseDialog();
+
+	/** Closes the main window, which quits the app, without asking ConfirmMainWindowClose again. */
+	void CloseMainWindow();
+
 	/** The OS window that currently shows the 3D viewport, or null before Install. */
 	TSharedPtr<class SWindow> GetViewportWindow() const;
 
@@ -150,6 +169,9 @@ private:
 	void HandleTabClosed(TSharedRef<class SDockTab> Tab, FGameplayTag PanelTag);
 	void HandlePersistLayout(const TSharedRef<FTabManager::FLayout>& Layout);
 	void HandleMainWindowCloseRequested(const TSharedRef<class SWindow>& Window);
+
+	/** Captures the layout (MainWindowClosing) and destroys the main window as SWindow::RequestDestroyWindow would. */
+	void ProceedWithMainWindowClose(const TSharedRef<class SWindow>& Window);
 	void HandleViewportMoved();
 	void NotifyHostChanged(const FGameplayTag& PanelTag, EStagePanelHost NewHost);
 	TSharedPtr<class SDockTab> FindLiveTab(const FGameplayTag& PanelTag) const;
@@ -166,6 +188,9 @@ private:
 
 	/** Holds the viewport toolbar inside the viewport tab, so it moves with the viewport and is replaced for a new controller. */
 	TSharedPtr<class SBox> ViewportToolbarSlot;
+
+	/** The dialog layer over the workspace content (ShowDialog). Collapsed while no dialog is shown. */
+	TSharedPtr<class SBox> DialogSlot;
 
 	/** The major tab in the main window. Owns PanelTabManager. */
 	TWeakPtr<class SDockTab> WorkspaceTab;

@@ -14,6 +14,9 @@ namespace StageTransformRules
 	inline constexpr double MinScale = 0.01;
 	inline constexpr double MaxScale = 100.0;
 
+	/** 10 km in cm: anything farther from the origin is not a stage position but data damage or a runaway edit. */
+	inline constexpr double MaxCoordinate = 1.0e6;
+
 	/** Clamps every component into [MinScale, MaxScale]. Non-finite components become 1. */
 	inline FVector ClampScale(const FVector& Scale)
 	{
@@ -22,6 +25,20 @@ namespace StageTransformRules
 			return FMath::IsFinite(Value) ? FMath::Clamp(Value, MinScale, MaxScale) : 1.0;
 		};
 		return FVector(ClampAxis(Scale.X), ClampAxis(Scale.Y), ClampAxis(Scale.Z));
+	}
+
+	/**
+	 * Whether a transform may be written to a stage item at all: every component finite, the location within MaxCoordinate
+	 * of the origin, and a rotation that is not degenerate. Scale is not judged here; writers clamp it with ClampScale.
+	 * Used where a transform is computed rather than typed (group followers, undo/redo, files).
+	 */
+	inline bool IsSaneTransform(const FTransform& Transform)
+	{
+		const FVector Location = Transform.GetLocation();
+		const FQuat Rotation = Transform.GetRotation();
+		return !Location.ContainsNaN() && Location.GetAbsMax() <= MaxCoordinate
+			&& !Rotation.ContainsNaN() && Rotation.SizeSquared() > UE_KINDA_SMALL_NUMBER
+			&& !Transform.GetScale3D().ContainsNaN();
 	}
 
 	/**

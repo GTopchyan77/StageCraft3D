@@ -36,8 +36,9 @@ namespace StageEditHistory
 	class FLiveItemEditor final : public IStageItemEditor
 	{
 	public:
-		FLiveItemEditor(UStageSessionSubsystem& InSession, USpawnSystemComponent& InSpawnSystem, USelectionComponent& InSelection, const FStageParameterApplier& InParameterApplier)
-			: Session(InSession), SpawnSystem(InSpawnSystem), Selection(InSelection), ParameterApplier(InParameterApplier)
+		FLiveItemEditor(UStageSessionSubsystem& InSession, USpawnSystemComponent& InSpawnSystem, USelectionComponent& InSelection,
+			const FStageParameterApplier& InParameterApplier, const FStageTransformValidator& InTransformValidator)
+			: Session(InSession), SpawnSystem(InSpawnSystem), Selection(InSelection), ParameterApplier(InParameterApplier), TransformValidator(InTransformValidator)
 		{
 		}
 
@@ -88,6 +89,17 @@ namespace StageEditHistory
 			// Same limits as the gizmo and inspector, in case the step was recorded before a limit changed.
 			FTransform Clamped = Transform;
 			Clamped.SetScale3D(StageTransformRules::ClampScale(Transform.GetScale3D()));
+			if (!StageTransformRules::IsSaneTransform(Clamped))
+			{
+				// A damaged step can never apply; the history drops it instead of offering it again.
+				UE_LOG(LogStageCraft, Warning, TEXT("History: the transform for %s is not a valid stage position; the step is dropped."), *Item->GetInstanceLabel().ToString());
+				return EStageCommandResult::Invalid;
+			}
+			// The rules decide again, for every item of a group step: a locked item refuses, and the batch rolls the others back.
+			if (TransformValidator.IsBound() && !TransformValidator.Execute(*Item, Clamped))
+			{
+				return EStageCommandResult::Refused;
+			}
 			// The session marks itself dirty and views refresh through the root's TransformUpdated, as for a gizmo move.
 			Item->SetActorTransform(Clamped);
 			return EStageCommandResult::Succeeded;
@@ -112,6 +124,7 @@ namespace StageEditHistory
 		USpawnSystemComponent& SpawnSystem;
 		USelectionComponent& Selection;
 		const FStageParameterApplier& ParameterApplier;
+		const FStageTransformValidator& TransformValidator;
 	};
 }
 
@@ -154,7 +167,10 @@ void UStageEditHistoryComponent::EndPlay(const EEndPlayReason::Type EndPlayReaso
 		SpanTool->OnItemPlaced.RemoveDynamic(this, &ThisClass::HandleItemPlaced);
 		SpanTool = nullptr;
 	}
+	// An edit still being dragged when play ends is recorded, not lost.
+	EndTransaction();
 	ParameterApplier.Unbind();
+	TransformValidator.Unbind();
 	Super::EndPlay(EndPlayReason);
 }
 
@@ -259,6 +275,27 @@ void UStageEditHistoryComponent::RecordTransformChange(AActor* Target, const FTr
 
 void UStageEditHistoryComponent::RecordTransformChanges(TConstArrayView<FStageTransformChange> Changes)
 {
+	if (Transaction.IsSet())
+	{
+		// Only the first "before" of each item counts: later ones are intermediate states of the same edit.
+		for (const FStageTransformChange& Change : Changes)
+		{
+			const bool bKnown = Transaction->Transforms.ContainsByPredicate([&Change](const FStageTransformChange& Pending) { return Pending.Item == Change.Item; });
+			if (!bKnown && Change.Item.IsValid())
+			{
+				Transaction->Transforms.Add(Change);
+			}
+		}
+		return;
+	}
+
+	TArray<TSharedRef<IStageEditCommand>> Commands = MakeTransformCommands(Changes);
+	const int32 Count = Commands.Num();
+	RecordAsOneStep(MoveTemp(Commands), FText::Format(NSLOCTEXT("StageEditHistory", "TransformItems", "Transform {0} items"), FText::AsNumber(Count)));
+}
+
+TArray<TSharedRef<IStageEditCommand>> UStageEditHistoryComponent::MakeTransformCommands(TConstArrayView<FStageTransformChange> Changes)
+{
 	TArray<TSharedRef<IStageEditCommand>> Commands;
 	for (const FStageTransformChange& Change : Changes)
 	{
@@ -274,9 +311,7 @@ void UStageEditHistoryComponent::RecordTransformChanges(TConstArrayView<FStageTr
 			Commands.Add(MakeShared<FStageTransformItemCommand>(Item->GetInstanceId(), Item->GetInstanceLabel(), Change.Before, After));
 		}
 	}
-
-	const int32 Count = Commands.Num();
-	RecordAsOneStep(MoveTemp(Commands), FText::Format(NSLOCTEXT("StageEditHistory", "TransformItems", "Transform {0} items"), FText::AsNumber(Count)));
+	return Commands;
 }
 
 void UStageEditHistoryComponent::RecordParameterChange(AActor* Target, const FGameplayTag& ParameterId, const FText& ParameterName, const FStageParameterValue& Before)
@@ -287,12 +322,60 @@ void UStageEditHistoryComponent::RecordParameterChange(AActor* Target, const FGa
 		return;
 	}
 
+	if (Transaction.IsSet())
+	{
+		const bool bKnown = Transaction->Parameters.ContainsByPredicate([Item, &ParameterId](const FPendingParameterChange& Pending)
+		{
+			return Pending.Item == Item && Pending.ParameterId == ParameterId;
+		});
+		if (!bKnown)
+		{
+			Transaction->Parameters.Add({ Item, ParameterId, ParameterName, Before });
+		}
+		return;
+	}
+
 	FStageParameterValue After;
 	if (!IStageParameterInterface::Execute_GetParameterValue(Item, ParameterId, After) || !FStageParameterItemCommand::IsMeaningfulChange(Before, After))
 	{
 		return;
 	}
 	Record(MakeShared<FStageParameterItemCommand>(Item->GetInstanceId(), Item->GetInstanceLabel(), ParameterName, ParameterId, Before, After));
+}
+
+bool UStageEditHistoryComponent::BeginTransaction()
+{
+	if (Transaction.IsSet())
+	{
+		return false;
+	}
+	Transaction.Emplace();
+	return true;
+}
+
+void UStageEditHistoryComponent::EndTransaction()
+{
+	if (!Transaction.IsSet())
+	{
+		return;
+	}
+	const FPendingTransaction Collected = MoveTemp(Transaction.GetValue());
+	Transaction.Reset();
+
+	TArray<TSharedRef<IStageEditCommand>> Commands = MakeTransformCommands(Collected.Transforms);
+	for (const FPendingParameterChange& Change : Collected.Parameters)
+	{
+		AModularBaseActor* Item = Change.Item.Get();
+		FStageParameterValue After;
+		if (IsValid(Item) && IStageParameterInterface::Execute_GetParameterValue(Item, Change.ParameterId, After)
+			&& FStageParameterItemCommand::IsMeaningfulChange(Change.Before, After))
+		{
+			Commands.Add(MakeShared<FStageParameterItemCommand>(Item->GetInstanceId(), Item->GetInstanceLabel(), Change.ParameterName, Change.ParameterId, Change.Before, After));
+		}
+	}
+
+	const int32 Count = Commands.Num();
+	RecordAsOneStep(MoveTemp(Commands), FText::Format(NSLOCTEXT("StageEditHistory", "EditItems", "Edit {0} items"), FText::AsNumber(Count)));
 }
 
 EStageCommandResult UStageEditHistoryComponent::Undo()
@@ -314,6 +397,9 @@ EStageCommandResult UStageEditHistoryComponent::Step(bool bUndo)
 		return EStageCommandResult::NothingToDo;
 	}
 
-	StageEditHistory::FLiveItemEditor Editor(*Session, *SpawnSystem, *Selection, ParameterApplier);
+	// A drag still open is a finished edit by now: it becomes a step first, so undo reverts it rather than an older one.
+	EndTransaction();
+
+	StageEditHistory::FLiveItemEditor Editor(*Session, *SpawnSystem, *Selection, ParameterApplier, TransformValidator);
 	return bUndo ? History->Undo(Editor) : History->Redo(Editor);
 }

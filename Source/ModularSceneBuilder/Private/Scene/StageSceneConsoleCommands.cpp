@@ -43,9 +43,27 @@ namespace StageSceneCommands
 			return;
 		}
 		const UStageSceneComponent* Scenes = Controller->GetSceneFiles();
-		UE_LOG(LogStageCraft, Display, TEXT("StageCraft.Scene.Status: scene \"%s\", %s, %d items, %s; saved scenes: [%s] in %s"),
+		UE_LOG(LogStageCraft, Display, TEXT("StageCraft.Scene.Status: scene \"%s\", %s, %d items, %s; saved scenes: [%s] in %s; autosaves: [%s]"),
 			*Session->GetSceneName(), Session->IsDirty() ? TEXT("unsaved changes") : TEXT("clean"), Session->GetStats().PlacedItems,
-			Scenes->IsBusy() ? TEXT("busy") : TEXT("idle"), *FString::Join(Scenes->GetSceneNames(), TEXT(", ")), *Scenes->GetScenesDirectory());
+			Scenes->IsBusy() ? TEXT("busy") : TEXT("idle"), *FString::Join(Scenes->GetSceneNames(), TEXT(", ")), *Scenes->GetScenesDirectory(),
+			*FString::Join(Scenes->GetAutosaveNames(), TEXT(", ")));
+	}
+
+	void Recover(const TArray<FString>& Args, UWorld* World)
+	{
+		if (AModularPlayerController* Controller = GetController(World))
+		{
+			UE_LOG(LogStageCraft, Display, TEXT("StageCraft.Scene.Recover: %s"), *UEnum::GetValueAsString(Controller->RequestRecoverAutosave(JoinArgs(Args))));
+		}
+	}
+
+	/** Runs the autosave timer's work now, so it can be checked without waiting for the interval. */
+	void AutosaveNow(const TArray<FString>& Args, UWorld* World)
+	{
+		if (AModularPlayerController* Controller = GetController(World))
+		{
+			Controller->GetSceneFiles()->DevAutosaveNow();
+		}
 	}
 
 	void Save(const TArray<FString>& Args, UWorld* World)
@@ -125,6 +143,10 @@ namespace StageSceneCommands
 		FConsoleCommandWithWorldAndArgsDelegate::CreateStatic(&Save));
 	FAutoConsoleCommandWithWorldAndArgs LoadCommand(TEXT("StageCraft.Scene.Load"), TEXT("<Name> Same as File > Open Scene (discards unsaved changes without asking)."),
 		FConsoleCommandWithWorldAndArgsDelegate::CreateStatic(&Load));
+	FAutoConsoleCommandWithWorldAndArgs RecoverCommand(TEXT("StageCraft.Scene.Recover"), TEXT("<Name> Same as File > Recover Autosave (discards unsaved changes without asking)."),
+		FConsoleCommandWithWorldAndArgsDelegate::CreateStatic(&Recover));
+	FAutoConsoleCommandWithWorldAndArgs AutosaveNowCommand(TEXT("StageCraft.Scene.AutosaveNow"), TEXT("Autosaves the stage now if it has unsaved changes not yet autosaved."),
+		FConsoleCommandWithWorldAndArgsDelegate::CreateStatic(&AutosaveNow));
 	FAutoConsoleCommandWithWorldAndArgs DeleteCommand(TEXT("StageCraft.Scene.Delete"), TEXT("<Name> Same as File > Delete Scene."),
 		FConsoleCommandWithWorldAndArgsDelegate::CreateStatic(&Delete));
 	FAutoConsoleCommandWithWorldAndArgs RenderCommand(TEXT("StageCraft.Render"), TEXT("[4K|HD|Square] [Off|FXAA|Temporal|Super] [Clean|Standard|Cinematic] [wm|nowm] Sets the render settings, then renders like Render > Render Image."),

@@ -6,6 +6,7 @@
 #include "Components/SelectionComponent.h"
 #include "GameFramework/Actor.h"
 #include "Interaction/StageGroupTransform.h"
+#include "Interaction/StageTransformRules.h"
 
 #include UE_INLINE_GENERATED_CPP_BY_NAME(StageGroupTransformComponent)
 
@@ -63,9 +64,16 @@ void UStageGroupTransformComponent::FollowLeader()
 	for (const FStageTransformChange& Follower : Followers)
 	{
 		AActor* FollowerActor = Follower.Item.Get();
-		if (FollowerActor && !FollowerActor->IsActorBeingDestroyed())
+		if (!FollowerActor || FollowerActor->IsActorBeingDestroyed())
 		{
-			FollowerActor->SetActorTransform(StageGroupTransform::ApplyLeaderChange(LeaderStart, LeaderNow, Follower.Before));
+			continue;
+		}
+		// Each follower is checked on its own: orbiting a far pivot can carry one item out of range while the leader is fine.
+		// It then stays where it last was valid, and its start is still recorded, so undo puts the whole group back.
+		const FTransform Target = StageGroupTransform::ApplyLeaderChange(LeaderStart, LeaderNow, Follower.Before);
+		if (StageTransformRules::IsSaneTransform(Target))
+		{
+			FollowerActor->SetActorTransform(Target);
 		}
 	}
 }

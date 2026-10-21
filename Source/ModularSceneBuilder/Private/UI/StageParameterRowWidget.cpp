@@ -122,6 +122,7 @@ void UStageParameterRowWidget::OnInitializeControl()
 			ValueSpinBox->SetIsEnabled(bEditable);
 			ValueSpinBox->OnValueChanged.AddUniqueDynamic(this, &ThisClass::HandleSpinValueChanged);
 			ValueSpinBox->OnValueCommitted.AddUniqueDynamic(this, &ThisClass::HandleSpinValueCommitted);
+			ValueSpinBox->OnBeginSliderMovement.AddUniqueDynamic(this, &ThisClass::HandleSpinBeginSliderMovement);
 			ValueSpinBox->OnEndSliderMovement.AddUniqueDynamic(this, &ThisClass::HandleSpinEndSliderMovement);
 		}
 		break;
@@ -144,6 +145,7 @@ void UStageParameterRowWidget::OnInitializeControl()
 				Spin->SetIsEnabled(bEditable);
 				Spin->OnValueChanged.AddUniqueDynamic(this, &ThisClass::HandleComponentSpinChanged);
 				Spin->OnValueCommitted.AddUniqueDynamic(this, &ThisClass::HandleComponentSpinCommitted);
+				Spin->OnBeginSliderMovement.AddUniqueDynamic(this, &ThisClass::HandleSpinBeginSliderMovement);
 				Spin->OnEndSliderMovement.AddUniqueDynamic(this, &ThisClass::HandleSpinEndSliderMovement);
 			}
 		}
@@ -454,6 +456,11 @@ void UStageParameterRowWidget::HandleSpinValueCommitted(float InValue, ETextComm
 {
 	HandleSpinValueChanged(InValue);
 	FinishInteraction();
+}
+
+void UStageParameterRowWidget::HandleSpinBeginSliderMovement()
+{
+	BeginInteraction();
 }
 
 void UStageParameterRowWidget::HandleSpinEndSliderMovement(float InValue)

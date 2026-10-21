@@ -150,19 +150,52 @@ void UStageParameterViewWidget::Rebuild()
 void UStageParameterViewWidget::RegisterControl(UStageParameterControlWidget& Control)
 {
 	Control.OnCommitted.BindUObject(this, &ThisClass::HandleControlCommitted);
+	Control.OnInteractionStarted.BindUObject(this, &ThisClass::HandleControlInteractionStarted);
+	Control.OnInteractionFinished.BindUObject(this, &ThisClass::HandleControlInteractionFinished);
 	Controls.Add(&Control);
 }
 
 void UStageParameterViewWidget::UnregisterControls()
 {
+	// A drag on a control that is going away (re-inspect, rebuild, panel closed) never reports its end; it ends here.
+	EndOwnEditTransaction();
 	for (UStageParameterControlWidget* Control : Controls)
 	{
 		if (Control)
 		{
 			Control->OnCommitted.Unbind();
+			Control->OnInteractionStarted.Unbind();
+			Control->OnInteractionFinished.Unbind();
 		}
 	}
 	Controls.Reset();
+}
+
+void UStageParameterViewWidget::HandleControlInteractionStarted()
+{
+	AModularPlayerController* Controller = Cast<AModularPlayerController>(GetOwningPlayer());
+	if (Controller && !bOwnsEditTransaction)
+	{
+		bOwnsEditTransaction = Controller->BeginEditTransaction();
+	}
+}
+
+void UStageParameterViewWidget::HandleControlInteractionFinished()
+{
+	EndOwnEditTransaction();
+}
+
+void UStageParameterViewWidget::EndOwnEditTransaction()
+{
+	if (!bOwnsEditTransaction)
+	{
+		return;
+	}
+	bOwnsEditTransaction = false;
+	if (AModularPlayerController* Controller = Cast<AModularPlayerController>(GetOwningPlayer()))
+	{
+		Controller->EndEditTransaction();
+	}
 }
 
 UStageParameterControlWidget* UStageParameterViewWidget::FindControl(FGameplayTag ParameterId) const

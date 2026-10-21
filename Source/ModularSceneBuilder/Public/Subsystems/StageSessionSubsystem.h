@@ -6,6 +6,7 @@
 #include "Subsystems/WorldSubsystem.h"
 #include "Data/StageParameterTypes.h"
 #include "Economy/StageEconomyTypes.h"
+#include "Environment/StageEnvironmentTypes.h"
 #include "Game/StageSessionTypes.h"
 #include "StageSessionSubsystem.generated.h"
 
@@ -35,6 +36,7 @@ class MODULARSCENEBUILDER_API UStageSessionSubsystem : public UWorldSubsystem
 
 public:
 	//~ Begin USubsystem Interface
+	virtual void Initialize(FSubsystemCollectionBase& Collection) override;
 	virtual void Deinitialize() override;
 	//~ End USubsystem Interface
 
@@ -120,6 +122,12 @@ protected:
 private:
 	UFUNCTION()
 	void HandleItemParameterChanged(class AModularBaseActor* Item, FGameplayTag ParameterId);
+
+	/** The outdoor environment is part of the scene file (format version 2), so changing it is an unsaved edit. */
+	UFUNCTION()
+	void HandleEnvironmentChanged(const FStageEnvironmentSettings& Settings);
+
+	TWeakObjectPtr<class UStageEnvironmentSubsystem> BoundEnvironment;
 
 	void RecomputeStats();
 	void SetDirty(bool bNewDirty);

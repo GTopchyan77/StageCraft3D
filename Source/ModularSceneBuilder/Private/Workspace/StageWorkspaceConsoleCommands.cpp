@@ -377,6 +377,30 @@ namespace StageWorkspaceCommands
 		}
 	}
 
+	/** Answers "Save changes before closing?" like its buttons: Save [Name] | Discard | Cancel. */
+	void ExitPrompt(const TArray<FString>& Args, UWorld* World)
+	{
+		UStageWorkspaceSubsystem* Workspace = GetWorkspace(World);
+		if (!Workspace || Args.IsEmpty())
+		{
+			UE_LOG(LogStageWorkspace, Display, TEXT("ExitPrompt: usage Save [Name] | Discard | Cancel."));
+			return;
+		}
+		UE_LOG(LogStageWorkspace, Display, TEXT("ExitPrompt: prompt %s."), Workspace->IsExitPromptOpen() ? TEXT("open") : TEXT("not open"));
+
+		EStageExitChoice Choice = EStageExitChoice::Cancel;
+		if (Args[0].Equals(TEXT("Save"), ESearchCase::IgnoreCase)) { Choice = EStageExitChoice::Save; }
+		else if (Args[0].Equals(TEXT("Discard"), ESearchCase::IgnoreCase)) { Choice = EStageExitChoice::Discard; }
+		else if (!Args[0].Equals(TEXT("Cancel"), ESearchCase::IgnoreCase))
+		{
+			UE_LOG(LogStageWorkspace, Display, TEXT("ExitPrompt: unknown choice %s."), *Args[0]);
+			return;
+		}
+		Workspace->AnswerExitPrompt(Choice, FString::Join(TArrayView<const FString>(Args).RightChop(1), TEXT(" ")));
+	}
+
+	FAutoConsoleCommandWithWorldAndArgs ExitPromptCommand(TEXT("StageCraft.Workspace.ExitPrompt"), TEXT("Save [Name] | Discard | Cancel: answers the unsaved-changes prompt shown when the main window closes."),
+		FConsoleCommandWithWorldAndArgsDelegate::CreateStatic(&ExitPrompt));
 	FAutoConsoleCommandWithWorldAndArgs CloseMainWindowCommand(TEXT("StageCraft.Workspace.CloseMainWindow"), TEXT("Closes the main window like its OS close button (quits)."),
 		FConsoleCommandWithWorldAndArgsDelegate::CreateStatic(&CloseMainWindow));
 	FAutoConsoleCommandWithWorldAndArgs OpenPanelCommand(TEXT("StageCraft.Workspace.OpenPanel"), TEXT("<PanelTag> Opens or focuses a panel."),

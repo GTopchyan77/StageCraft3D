@@ -3,6 +3,7 @@
 #pragma once
 
 #include "CoreMinimal.h"
+#include "Interaction/StageTransformRules.h"
 #include "Scene/StageSceneTypes.h"
 
 /** What Parse had to fix or drop while reading a scene file. */
@@ -34,13 +35,20 @@ struct FStageSceneParseReport
 class FStageSceneStore
 {
 public:
-	/** Bump when the format changes incompatibly. */
-	static constexpr int32 FormatVersion = 1;
+	/**
+	 * The version Save writes. Bump it whenever the format changes, and teach Parse to migrate the older versions it still
+	 * reads (Docs/ADR/0010-edit-rules-autosave-scene-v2.md §4):
+	 *  - 1: items only.
+	 *  - 2: adds "environment" (sky, time of day, sun path, weather). A version 1 file loads with the default environment.
+	 */
+	static constexpr int32 FormatVersion = 2;
+	/** The oldest version Parse still migrates. Older or newer files are refused as VersionMismatch and left untouched. */
+	static constexpr int32 MinReadableVersion = 1;
 	static constexpr int32 MaxItems = 10000;
 	static constexpr int32 MaxStateBytes = 64 * 1024;
 	static constexpr int32 MaxLabelLength = 256;
-	/** 10 km in cm: anything farther is not a stage, but data damage. */
-	static constexpr double MaxCoordinate = 1.0e6;
+	/** The same limit every transform write uses (StageTransformRules::MaxCoordinate). */
+	static constexpr double MaxCoordinate = StageTransformRules::MaxCoordinate;
 
 	explicit FStageSceneStore(FString InDirectory);
 

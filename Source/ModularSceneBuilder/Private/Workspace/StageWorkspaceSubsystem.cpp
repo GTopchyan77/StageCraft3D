@@ -12,6 +12,9 @@
 #include "Import/StageMeshImportSubsystem.h"
 #include "Misc/Paths.h"
 #include "Player/ModularPlayerController.h"
+#include "Scene/StageSceneComponent.h"
+#include "Scene/StageSceneStore.h"
+#include "Subsystems/StageSessionSubsystem.h"
 #include "UI/StageStatusBarWidget.h"
 #include "UI/StageViewportToolbar.h"
 #include "Widgets/SNullWidget.h"
@@ -19,6 +22,7 @@
 #include "Widgets/SWindow.h"
 #include "Widgets/Layout/SBox.h"
 #include "Widgets/Text/STextBlock.h"
+#include "Workspace/SStageUnsavedChangesDialog.h"
 #include "Workspace/SStageWorkspaceMenuBar.h"
 #include "Workspace/StageCraftGameEngine.h"
 #include "Workspace/StageLayoutStore.h"
@@ -80,6 +84,9 @@ void UStageWorkspaceSubsystem::Deinitialize()
 		SaveSessionNow();
 	}
 	PendingSessionWrite.Wait();
+
+	// Quitting another way while the prompt is up (the 'exit' command): it has nothing left to ask.
+	CloseExitPrompt();
 
 	State = EStageWorkspaceState::ShuttingDown;
 	if (Shell.IsValid())
@@ -214,6 +221,11 @@ void UStageWorkspaceSubsystem::InstallIfSupported()
 		{
 			Self->HandleLayoutChanged();
 		}
+	};
+	Callbacks.ConfirmMainWindowClose = [WeakThis]()
+	{
+		UStageWorkspaceSubsystem* Self = WeakThis.Get();
+		return !Self || Self->ConfirmMainWindowClose();
 	};
 	Callbacks.MainWindowClosing = [WeakThis]()
 	{
@@ -607,6 +619,162 @@ void UStageWorkspaceSubsystem::HandleLayoutChanged()
 void UStageWorkspaceSubsystem::HandleMainWindowClosing()
 {
 	SaveSessionNow();
+}
+
+bool UStageWorkspaceSubsystem::ConfirmMainWindowClose()
+{
+	// Asked again while the prompt is up (a second click on the close button): the prompt keeps the window open.
+	if (ExitPromptState != EExitPromptState::Closed)
+	{
+		return false;
+	}
+
+	const AModularPlayerController* Controller = LocalController.Get();
+	const UStageSessionSubsystem* Session = Controller ? UWorld::GetSubsystem<UStageSessionSubsystem>(Controller->GetWorld()) : nullptr;
+	if (!Session || !Session->IsDirty() || !Controller->GetSceneFiles())
+	{
+		return true;
+	}
+	ShowExitPrompt(Session->GetSceneName());
+	return false;
+}
+
+void UStageWorkspaceSubsystem::ShowExitPrompt(const FString& SceneName)
+{
+	if (!Shell.IsValid())
+	{
+		return;
+	}
+
+	const TWeakObjectPtr<UStageWorkspaceSubsystem> WeakThis(this);
+	ExitDialog = SNew(SStageUnsavedChangesDialog)
+		.SceneName(SceneName)
+		.OnSave_Lambda([WeakThis](const FString& Name) { if (WeakThis.IsValid()) { WeakThis->AnswerExitPrompt(EStageExitChoice::Save, Name); } })
+		.OnDiscard_Lambda([WeakThis]() { if (WeakThis.IsValid()) { WeakThis->AnswerExitPrompt(EStageExitChoice::Discard, FString()); } })
+		.OnCancel_Lambda([WeakThis]() { if (WeakThis.IsValid()) { WeakThis->AnswerExitPrompt(EStageExitChoice::Cancel, FString()); } });
+	ExitPromptState = EExitPromptState::Asking;
+	PendingExitOverwrite.Reset();
+	Shell->ShowDialog(ExitDialog.ToSharedRef(), ExitDialog->GetInitialFocus());
+	UE_LOG(LogStageWorkspace, Log, TEXT("Close requested with unsaved changes; asking whether to save \"%s\"."), *SceneName);
+}
+
+void UStageWorkspaceSubsystem::AnswerExitPrompt(EStageExitChoice Choice, const FString& SceneName)
+{
+	if (ExitPromptState != EExitPromptState::Asking || !Shell.IsValid())
+	{
+		return;
+	}
+
+	AModularPlayerController* Controller = LocalController.Get();
+	UStageSceneComponent* Scenes = Controller ? Controller->GetSceneFiles() : nullptr;
+	const UStageSessionSubsystem* Session = Controller ? UWorld::GetSubsystem<UStageSessionSubsystem>(Controller->GetWorld()) : nullptr;
+
+	switch (Choice)
+	{
+	case EStageExitChoice::Cancel:
+		UE_LOG(LogStageWorkspace, Log, TEXT("Exit prompt: cancelled; the app stays open."));
+		CloseExitPrompt();
+		return;
+
+	case EStageExitChoice::Discard:
+		UE_LOG(LogStageWorkspace, Log, TEXT("Exit prompt: closing without saving."));
+		if (Scenes)
+		{
+			Scenes->DiscardAutosave();
+		}
+		CloseExitPrompt();
+		Shell->CloseMainWindow();
+		return;
+
+	case EStageExitChoice::Save:
+		break;
+	}
+
+	if (!Scenes || !Session)
+	{
+		// The stage went away while the prompt was up (level change): nothing is left to save.
+		CloseExitPrompt();
+		Shell->CloseMainWindow();
+		return;
+	}
+
+	// A named stage is saved under its own name; the typed name is only for a stage that was never saved.
+	const FString Name = Session->GetSceneName().IsEmpty() ? SceneName.TrimStartAndEnd() : Session->GetSceneName();
+	if (!FStageSceneStore::IsValidSceneName(Name))
+	{
+		ExitDialog->SetError(UStageSceneComponent::DescribeFailure(EStageSceneOperation::Save, EStageSceneResult::InvalidName, Name));
+		return;
+	}
+	// Replacing another saved scene loses it, so, as in Save Scene As, the first Save on an existing name only warns.
+	if (Session->GetSceneName().IsEmpty() && Scenes->SceneExists(Name) && !PendingExitOverwrite.Equals(Name, ESearchCase::IgnoreCase))
+	{
+		PendingExitOverwrite = Name;
+		ExitDialog->SetError(FText::Format(LOCTEXT("ExitSceneExists", "\"{0}\" already exists. Press Save again to replace it."), FText::FromString(Name)));
+		return;
+	}
+
+	Scenes->OnSceneOperationFinished.AddUniqueDynamic(this, &ThisClass::HandleExitSaveFinished);
+	ExitSaveScenes = Scenes;
+	const EStageSceneResult Started = Controller->RequestSaveScene(Name);
+	if (Started != EStageSceneResult::Success)
+	{
+		Scenes->OnSceneOperationFinished.RemoveDynamic(this, &ThisClass::HandleExitSaveFinished);
+		ExitSaveScenes.Reset();
+		ExitDialog->SetError(UStageSceneComponent::DescribeFailure(EStageSceneOperation::Save, Started, Name));
+		return;
+	}
+	ExitPromptState = EExitPromptState::Saving;
+	ExitDialog->SetBusy(true);
+	UE_LOG(LogStageWorkspace, Log, TEXT("Exit prompt: saving \"%s\" before closing."), *Name);
+}
+
+void UStageWorkspaceSubsystem::HandleExitSaveFinished(const FStageSceneOperationResult& Result)
+{
+	if (ExitPromptState != EExitPromptState::Saving || Result.Operation != EStageSceneOperation::Save)
+	{
+		return;
+	}
+	if (UStageSceneComponent* Scenes = ExitSaveScenes.Get())
+	{
+		Scenes->OnSceneOperationFinished.RemoveDynamic(this, &ThisClass::HandleExitSaveFinished);
+	}
+	ExitSaveScenes.Reset();
+
+	if (!Result.IsSuccess())
+	{
+		// The stage is still unsaved: the user decides again, with the reason in front of them.
+		ExitPromptState = EExitPromptState::Asking;
+		if (ExitDialog.IsValid())
+		{
+			ExitDialog->SetBusy(false);
+			ExitDialog->SetError(Result.Message);
+		}
+		UE_LOG(LogStageWorkspace, Warning, TEXT("Exit prompt: the save failed (%s); the app stays open."), *Result.Message.ToString());
+		return;
+	}
+
+	UE_LOG(LogStageWorkspace, Log, TEXT("Exit prompt: saved \"%s\"; closing."), *Result.SceneName);
+	CloseExitPrompt();
+	if (Shell.IsValid())
+	{
+		Shell->CloseMainWindow();
+	}
+}
+
+void UStageWorkspaceSubsystem::CloseExitPrompt()
+{
+	if (UStageSceneComponent* Scenes = ExitSaveScenes.Get())
+	{
+		Scenes->OnSceneOperationFinished.RemoveDynamic(this, &ThisClass::HandleExitSaveFinished);
+	}
+	ExitSaveScenes.Reset();
+	ExitPromptState = EExitPromptState::Closed;
+	ExitDialog.Reset();
+	PendingExitOverwrite.Reset();
+	if (Shell.IsValid())
+	{
+		Shell->CloseDialog();
+	}
 }
 
 void UStageWorkspaceSubsystem::SaveSessionAsync()

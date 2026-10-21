@@ -87,7 +87,13 @@ Development console commands (compiled out of Shipping): `StageCraft.Environment
 
 ## 7. Open items
 
-- Save environment settings with scenes (scene format version 2).
-- Measure the frame time and VRAM cost of the sky on (`stat GPU`, `stat RHI`). One run with a second editor open showed a "video memory exhausted" message.
 - Fix the dropped `SetDesiredSizeOverride` in the other code-built panels (E7).
-- Packaged-build check that the cook rules bring every Sky Creator asset (E5).
+
+Closed by STATE.md #37 (ADR 0010):
+- Environment settings are saved with scenes (scene format version 2).
+- The sky's cost was measured in a packaged Development build. Rendering was at 1184×657 in a 1600×900 window, with a second editor sharing the GPU. Means are over 300 frames, from two runs.
+  - Sky off: GPU 4.4–4.5 ms, about 1.9 GB local video memory in use.
+  - Sky on, clear: GPU 6.6–6.9 ms (+2.3 ms), +180 MB.
+  - Sky on, Rain preset: GPU 9.0–9.6 ms (+4.8 ms), +285 MB.
+- The packaged build contains all six Sky Creator content folders (259 assets). One engine cook dependency was added: `/Engine/EngineSky/VolumetricClouds`, which the cloud component loads as its default.
+- Sky Creator's `MF_SC_BlueNoiseDithering` references `/Engine/EngineMaterials/STBlueNoise_scalar_128x128x64`, which no longer exists in 5.8. Only `MF_SC_Triplanar_SingleSample` uses that function, and no asset uses that one, so nothing that renders is affected. The plugin content is left unchanged.

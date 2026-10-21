@@ -5,8 +5,11 @@
 #include "Framework/Application/SlateApplication.h"
 #include "Framework/Docking/TabManager.h"
 #include "GenericPlatform/GenericWindow.h"
+#include "Styling/AppStyle.h"
 #include "Widgets/Docking/SDockTab.h"
+#include "Widgets/Layout/SBorder.h"
 #include "Widgets/Layout/SBox.h"
+#include "Widgets/SOverlay.h"
 #include "Widgets/SBoxPanel.h"
 #include "Widgets/SNullWidget.h"
 #include "Widgets/SViewport.h"
@@ -197,6 +200,7 @@ void FStageWorkspaceShell::Shutdown()
 	MenuBarWidget.Reset();
 	StatusBarSlot.Reset();
 	ViewportToolbarSlot.Reset();
+	DialogSlot.Reset();
 	ReportedHosts.Reset();
 }
 
@@ -286,25 +290,77 @@ TSharedRef<SWidget> FStageWorkspaceShell::BuildWorkspaceContent(const TSharedRef
 	const TSharedPtr<SWidget> PanelArea = PanelTabManager->RestoreFrom(PanelLayout, MainWindow.Pin(), false, EOutputCanBeNullptr::Never);
 	UE_LOG(LogStageWorkspace, Log, TEXT("Panel layout '%s' restored."), *PanelLayout->GetLayoutName().ToString());
 
-	return SNew(SVerticalBox)
-		+ SVerticalBox::Slot()
-		.AutoHeight()
+	return SNew(SOverlay)
+		+ SOverlay::Slot()
 		[
-			MenuBarWidget.IsValid() ? MenuBarWidget.ToSharedRef() : SNullWidget::NullWidget
-		]
-		+ SVerticalBox::Slot()
-		.FillHeight(1.f)
-		[
-			PanelArea.IsValid() ? PanelArea.ToSharedRef() : SNullWidget::NullWidget
-		]
-		+ SVerticalBox::Slot()
-		.AutoHeight()
-		[
-			SAssignNew(StatusBarSlot, SBox)
+			SNew(SVerticalBox)
+			+ SVerticalBox::Slot()
+			.AutoHeight()
 			[
-				MakeStatusBarContent()
+				MenuBarWidget.IsValid() ? MenuBarWidget.ToSharedRef() : SNullWidget::NullWidget
 			]
+			+ SVerticalBox::Slot()
+			.FillHeight(1.f)
+			[
+				PanelArea.IsValid() ? PanelArea.ToSharedRef() : SNullWidget::NullWidget
+			]
+			+ SVerticalBox::Slot()
+			.AutoHeight()
+			[
+				SAssignNew(StatusBarSlot, SBox)
+				[
+					MakeStatusBarContent()
+				]
+			]
+		]
+		+ SOverlay::Slot()
+		[
+			SAssignNew(DialogSlot, SBox)
+			.Visibility(EVisibility::Collapsed)
 		];
+}
+
+void FStageWorkspaceShell::ShowDialog(const TSharedRef<SWidget>& Dialog, const TSharedPtr<SWidget>& FocusTarget)
+{
+	if (!DialogSlot.IsValid())
+	{
+		return;
+	}
+
+	// The dim layer is Visible, so it takes every click that misses the dialog: nothing behind a dialog can be used.
+	DialogSlot->SetContent(
+		SNew(SBorder)
+		.BorderImage(FAppStyle::Get().GetBrush("WhiteBrush"))
+		.BorderBackgroundColor(FLinearColor(0.f, 0.f, 0.f, 0.55f))
+		.HAlign(HAlign_Center)
+		.VAlign(VAlign_Center)
+		[
+			Dialog
+		]);
+	DialogSlot->SetVisibility(EVisibility::Visible);
+
+	// Keys go to the dialog instead of the viewport, so Delete or Ctrl+Z cannot edit the stage while it asks.
+	FSlateApplication::Get().SetAllUserFocus(FocusTarget.IsValid() ? FocusTarget : Dialog.ToSharedPtr(), EFocusCause::SetDirectly);
+}
+
+void FStageWorkspaceShell::CloseDialog()
+{
+	if (!DialogSlot.IsValid() || DialogSlot->GetVisibility() == EVisibility::Collapsed)
+	{
+		return;
+	}
+	DialogSlot->SetContent(SNullWidget::NullWidget);
+	DialogSlot->SetVisibility(EVisibility::Collapsed);
+	// Back to the viewport, where the editor's keys work.
+	HandleViewportMoved();
+}
+
+void FStageWorkspaceShell::CloseMainWindow()
+{
+	if (const TSharedPtr<SWindow> Window = MainWindow.Pin())
+	{
+		ProceedWithMainWindowClose(Window.ToSharedRef());
+	}
 }
 
 TSharedRef<SWidget> FStageWorkspaceShell::MakeFileDropTarget(const TSharedRef<SWidget>& Content) const
@@ -570,6 +626,16 @@ void FStageWorkspaceShell::HandlePersistLayout(const TSharedRef<FTabManager::FLa
 }
 
 void FStageWorkspaceShell::HandleMainWindowCloseRequested(const TSharedRef<SWindow>& Window)
+{
+	// The owner may keep the window open to ask about unsaved changes; it calls CloseMainWindow once the user has answered.
+	if (bInstalled && Callbacks.ConfirmMainWindowClose && !Callbacks.ConfirmMainWindowClose())
+	{
+		return;
+	}
+	ProceedWithMainWindowClose(Window);
+}
+
+void FStageWorkspaceShell::ProceedWithMainWindowClose(const TSharedRef<SWindow>& Window)
 {
 	if (bInstalled)
 	{

@@ -274,8 +274,39 @@ See `STATE.md` for detailed history of completed work.
 - [x] Toolbar sections with visible dividers (projection | view | grid snap | angle snap | gizmo) (STATE.md #35)
 - [x] Outdoor environment: Sky Creator backend, Environment panel (sky on/off, weather presets, time, sun height/direction, clouds, rain, snow, fog) (STATE.md #35, ADR 0009)
 - [ ] Manual verification (Gevor): Environment panel sliders and presets by mouse (STATE.md #35)
-- [ ] Packaged build: Sky Creator assets cooked, sky renders; measure sky GPU time / VRAM (ADR 0009 §7)
-- [ ] Save environment settings with scenes (scene format v2)
+- [x] Packaged build: Sky Creator assets cooked, sky renders; measure sky GPU time / VRAM (ADR 0009 §7) — STATE.md #37
+- [x] Save environment settings with scenes (scene format v2) — STATE.md #37
 - [ ] Fix invisible 1 px header lines in code-built panels with `StageCraftWidgetStyle::MakeLine` (ADR 0009 E7)
 - [ ] Manual verification (Gevor): STATE.md #32 "Not verified" list (toolbar clicks, right-drag pan, wheel zoom, WASD in ortho, packaged Unlit / Lines)
 - [ ] Grid fade with distance in perspective (batched lines cannot fade; would need a line material or a mesh grid)
+
+## Audit follow-ups (STATE.md #36, Docs/PROJECT_AUDIT.md)
+- [x] PROJECT_AUDIT.md + CURRENT_SYSTEMS.md; 46/46 automation
+- [ ] Review the audit and answer its open questions (Gevor; PROJECT_AUDIT.md §10)
+- [ ] Untrack `Config/UserEngine.ini`, rotate the UnrealNGGMCP token; confirm the #29 Anthropic key was rotated (R1)
+- [ ] Partial scene load stays dirty, does not silently drop items on re-save; load waits for pending imports (R2)
+- [x] Undo/redo transforms checked by the GameMode (lock) (R3) — STATE.md #37
+- [x] Coalesce inspector spin-box drags into one undo step (R4) — STATE.md #37
+- [x] Quit prompt when dirty; timed autosave (R5) — STATE.md #37
+- [ ] Sanitise restored SaveGame state: fixture attributes, patch, loudspeaker gain/delay (R6)
+- [ ] Move a corrupt Imports.json aside instead of overwriting it (R8)
+- [ ] World-based tests: GameMode rules, request bridge, selection, ApplyDocument, patch conflicts, cues, economy (R11)
+- [ ] Docs: Rules.md subsystem table + foreign RunEditor/DamenTools8/UnrealClaude sections; ADR 0001 §3; stale todo boxes; Content/Python setup script (R12)
+
+## Phase 14 — Edit rules on undo/redo, one-step drags, autosave + exit prompt, scene format v2 (STATE.md #37, ADR 0010)
+- [x] `StageTransformRules::IsSaneTransform` (finite, |location| <= 10 km, non-degenerate rotation); scene store uses the same limit; tests
+- [x] GameMode `EvaluateTransformChange` (every changed part through `EvaluateParameterChange`: lock, scale support, ownership)
+- [x] History: `TransformValidator` on `UStageEditHistoryComponent`; undo/redo transforms refused for locked items; insane targets dropped; bound by the controller
+- [x] Group edits: per-follower sanity check in `FollowLeader`; batch undo/redo checks every item (all-or-nothing rollback)
+- [x] History transactions (`BeginTransaction` / `EndTransaction`): edits recorded in between merge into ONE step (first "before" per item / parameter)
+- [x] Inspector rows: spin-box slider drag = one transaction (control widget interaction start/finish → view → controller); closed on destroy, re-inspect, undo/redo
+- [x] Scene format v2: `environment` object; v1 files migrate (default environment); v3+ refused; environment sanitised; tests
+- [x] Environment edits mark the scene dirty (session binds `OnEnvironmentChanged`); load applies the environment before MarkClean
+- [x] Autosave: while dirty, every N s to `Saved/StageCraft/Scenes/Autosave/<Scene>.json`; deleted after a real save or Discard; File > Recover Autosave (stays dirty)
+- [x] Exit prompt: closing the main window with unsaved changes shows Save / Don't Save / Cancel in the workspace; Save waits for the write, then quits
+- [x] World tests: locked undo/redo (single + group), transaction coalescing; scene v1→v2 migration
+- [x] Builds: Editor Development, Game Development, Game Shipping; automation
+- [x] Package (Development + Shipping): Sky Creator assets cooked, no missing-asset errors; packaged run with sky on; GPU frame time and VRAM measured sky off / on
+- [x] ADR 0010; STATE.md #37
+- [ ] Manual verification (Gevor): one undo step per inspector spin-box drag (Location / Rotation / Scale, span Length / Sag); exit prompt buttons and name field by mouse; File > Recover Autosave (STATE.md #37)
+- [ ] Measure the sky on a machine without a second editor open (STATE.md #37 numbers were taken with the Kmidden editor sharing the GPU)

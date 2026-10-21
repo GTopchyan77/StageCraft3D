@@ -5,9 +5,21 @@
 #include "CoreMinimal.h"
 #include "GameplayTagContainer.h"
 #include "Subsystems/GameInstanceSubsystem.h"
+#include "Scene/StageSceneTypes.h"
 #include "Tasks/Task.h"
 #include "Workspace/StageWorkspaceTypes.h"
 #include "StageWorkspaceSubsystem.generated.h"
+
+/** The answers to "Save changes before closing?" (UStageWorkspaceSubsystem::AnswerExitPrompt). */
+enum class EStageExitChoice : uint8
+{
+	/** Save the stage (under its scene name, or the name typed for an untitled stage), then quit once it is written. */
+	Save,
+	/** Quit without saving; the stage's autosave is deleted too. */
+	Discard,
+	/** Keep the app open. */
+	Cancel,
+};
 
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_ThreeParams(FOnStagePanelHostChanged, FGameplayTag, PanelTag, EStagePanelHost, NewHost, EStagePanelHost, PreviousHost);
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FOnStageLayoutApplied, const FString&, LayoutName);
@@ -142,6 +154,16 @@ public:
 	TSharedPtr<class FStageWorkspaceShell> GetShellForDiagnostics() const { return Shell; }
 #endif
 
+	/** Whether "Save changes before closing?" is showing (or saving before it quits). */
+	bool IsExitPromptOpen() const { return ExitPromptState != EExitPromptState::Closed; }
+
+	/**
+	 * Answers the open exit prompt, exactly as its buttons do. SceneName is the name to save an untitled stage under; it is
+	 * ignored for a stage that already has one. Save quits only after the file is written; a failed save keeps the prompt
+	 * open with the reason. Ignored when no prompt is open, or while its save is running.
+	 */
+	void AnswerExitPrompt(EStageExitChoice Choice, const FString& SceneName);
+
 private:
 	/** Uninitialized -> Ready or Unsupported. No-op in any other state. */
 	void InstallIfSupported();
@@ -169,6 +191,36 @@ private:
 	void SaveSessionNow();
 	void HandleLayoutChanged();
 	void HandleMainWindowClosing();
+
+	/**
+	 * The main window's close button (ADR 0010 §3.2): true closes now (no unsaved changes, or no stage); false keeps the window
+	 * and shows the exit prompt, which later quits through FStageWorkspaceShell::CloseMainWindow.
+	 */
+	bool ConfirmMainWindowClose();
+	void ShowExitPrompt(const FString& SceneName);
+	void CloseExitPrompt();
+
+	UFUNCTION()
+	void HandleExitSaveFinished(const FStageSceneOperationResult& Result);
+
+	enum class EExitPromptState : uint8
+	{
+		Closed,
+		/** Waiting for Save / Don't Save / Cancel. */
+		Asking,
+		/** Save chosen; waiting for the scene file to be written. */
+		Saving,
+	};
+
+	EExitPromptState ExitPromptState = EExitPromptState::Closed;
+
+	TSharedPtr<class SStageUnsavedChangesDialog> ExitDialog;
+
+	/** The scene component whose save the prompt waits for; bound only while Saving. */
+	TWeakObjectPtr<class UStageSceneComponent> ExitSaveScenes;
+
+	/** An untitled stage's name that would replace an existing scene: the second Save confirms it. */
+	FString PendingExitOverwrite;
 
 	TSharedPtr<class FStageWorkspaceShell> Shell;
 

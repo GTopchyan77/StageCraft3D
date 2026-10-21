@@ -49,9 +49,25 @@ void UStageParameterControlWidget::RefreshValue(const FStageParameterValue& InVa
 	ApplyValueGuarded(/*bForce*/ false);
 }
 
+void UStageParameterControlWidget::BeginInteraction()
+{
+	if (bInContinuousEdit || Descriptor.bReadOnly)
+	{
+		return;
+	}
+	bInContinuousEdit = true;
+	OnInteractionStarted.ExecuteIfBound();
+}
+
 void UStageParameterControlWidget::FinishInteraction()
 {
 	ApplyValueGuarded(/*bForce*/ true);
+	// A spin box reports both the commit and the end of the drag; the owner hears the end once.
+	if (bInContinuousEdit)
+	{
+		bInContinuousEdit = false;
+		OnInteractionFinished.ExecuteIfBound();
+	}
 }
 
 void UStageParameterControlWidget::ApplyValueGuarded(bool bForce)

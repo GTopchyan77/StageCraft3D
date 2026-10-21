@@ -77,7 +77,7 @@ bool FStageSceneFormatTest::RunTest(const FString& Parameters)
 	TestEqual(TEXT("Not JSON"), Str(FStageSceneStore::Parse(TEXT("not json"), Parsed, Report)), Str(EStageSceneResult::Corrupt));
 	TestEqual(TEXT("Other format tag"), Str(FStageSceneStore::Parse(TEXT("{\"format\":\"Layout\",\"version\":1,\"items\":[]}"), Parsed, Report)), Str(EStageSceneResult::Corrupt));
 	TestEqual(TEXT("Missing items"), Str(FStageSceneStore::Parse(TEXT("{\"format\":\"StageCraftScene\",\"version\":1}"), Parsed, Report)), Str(EStageSceneResult::Corrupt));
-	TestEqual(TEXT("Future version"), Str(FStageSceneStore::Parse(MakeSceneJson(ValidItemFields, 2), Parsed, Report)), Str(EStageSceneResult::VersionMismatch));
+	TestEqual(TEXT("Future version"), Str(FStageSceneStore::Parse(MakeSceneJson(ValidItemFields, FStageSceneStore::FormatVersion + 1), Parsed, Report)), Str(EStageSceneResult::VersionMismatch));
 	TestEqual(TEXT("Valid minimal scene"), Str(FStageSceneStore::Parse(MakeSceneJson(ValidItemFields), Parsed, Report)), Str(EStageSceneResult::Success));
 	TestEqual(TEXT("... with its item"), Parsed.Items.Num(), 1);
 
@@ -134,6 +134,84 @@ bool FStageSceneFormatTest::RunTest(const FString& Parameters)
 	}
 	TooMany += TEXT("]}");
 	TestEqual(TEXT("Too many items"), Str(FStageSceneStore::Parse(TooMany, Parsed, Report)), Str(EStageSceneResult::Corrupt));
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FStageSceneMigrationTest, "StageCraft.Scene.Migration", StageSceneStoreTests::Flags)
+
+/** Format version 2 (Docs/ADR/0010-edit-rules-autosave-scene-v2.md §4): the environment round trip, v1 -> v2 migration, refusal of unknown versions. */
+bool FStageSceneMigrationTest::RunTest(const FString& Parameters)
+{
+	using namespace StageSceneStoreTests;
+
+	const FStageEnvironmentSettings Defaults;
+	FStageSceneDocument Parsed;
+	FStageSceneParseReport Report;
+
+	// The version every save writes; a stage's environment survives a round trip exactly.
+	FStageSceneDocument Document;
+	Document.Name = TEXT("Open Air");
+	Document.Items.Add(MakeItem(TEXT("Crate"), FTransform(FVector(1, 2, 3))));
+	Document.Environment.bSkyEnabled = true;
+	Document.Environment.TimeOfDay = 19.5f;
+	Document.Environment.SunElevation = 30.f;
+	Document.Environment.SunAzimuth = 120.f;
+	Document.Environment.CloudCoverage = 0.8f;
+	Document.Environment.Rain = 0.4f;
+	Document.Environment.Snow = 0.f;
+	Document.Environment.Fog = 0.6f;
+	const FString Saved = FStageSceneStore::Serialize(Document);
+	TestTrue(TEXT("Saves write the current version"), Saved.Contains(FString::Printf(TEXT("\"version\": %d"), FStageSceneStore::FormatVersion)));
+	TestEqual(TEXT("Version 2 parses"), Str(FStageSceneStore::Parse(Saved, Parsed, Report)), Str(EStageSceneResult::Success));
+	TestTrue(TEXT("Environment round-trips"), Parsed.Environment.Equals(Document.Environment));
+	TestEqual(TEXT("Items still round-trip"), Parsed.Items.Num(), 1);
+
+	// Migration 1 -> 2: every version 1 file still opens, items intact, with the default environment (the indoor stage).
+	TestEqual(TEXT("Version 1 parses"), Str(FStageSceneStore::Parse(MakeSceneJson(ValidItemFields, 1), Parsed, Report)), Str(EStageSceneResult::Success));
+	TestEqual(TEXT("... with its item"), Parsed.Items.Num(), 1);
+	TestTrue(TEXT("... and the default environment"), Parsed.Environment.Equals(Defaults));
+	TestFalse(TEXT("... sky off"), Parsed.Environment.bSkyEnabled);
+
+	// A version 1 file never had an environment; one found in it is not trusted to mean anything.
+	const FString V1WithEnvironment = TEXT("{\"format\":\"StageCraftScene\",\"version\":1,\"items\":[],\"environment\":{\"skyEnabled\":true}}");
+	TestEqual(TEXT("Version 1 with a stray environment parses"), Str(FStageSceneStore::Parse(V1WithEnvironment, Parsed, Report)), Str(EStageSceneResult::Success));
+	TestFalse(TEXT("... and ignores it"), Parsed.Environment.bSkyEnabled);
+
+	// Versions outside [MinReadableVersion, FormatVersion] are refused whole, never half-read.
+	TestEqual(TEXT("Version 0"), Str(FStageSceneStore::Parse(MakeSceneJson(ValidItemFields, FStageSceneStore::MinReadableVersion - 1), Parsed, Report)), Str(EStageSceneResult::VersionMismatch));
+	TestEqual(TEXT("Version 3"), Str(FStageSceneStore::Parse(MakeSceneJson(ValidItemFields, FStageSceneStore::FormatVersion + 1), Parsed, Report)), Str(EStageSceneResult::VersionMismatch));
+
+	// A version 2 file is untrusted input: missing values keep their defaults, out-of-range ones are wrapped or clamped.
+	const FString NoEnvironment = TEXT("{\"format\":\"StageCraftScene\",\"version\":2,\"items\":[]}");
+	TestEqual(TEXT("Version 2 without environment parses"), Str(FStageSceneStore::Parse(NoEnvironment, Parsed, Report)), Str(EStageSceneResult::Success));
+	TestTrue(TEXT("... default environment"), Parsed.Environment.Equals(Defaults));
+
+	const FString Hostile = TEXT("{\"format\":\"StageCraftScene\",\"version\":2,\"items\":[],\"environment\":"
+		"{\"skyEnabled\":true,\"timeOfDay\":25,\"sunElevation\":200,\"sunAzimuth\":-90,\"rain\":7,\"fog\":-1,\"cloudCoverage\":\"heavy\"}}");
+	TestEqual(TEXT("Out-of-range environment parses"), Str(FStageSceneStore::Parse(Hostile, Parsed, Report)), Str(EStageSceneResult::Success));
+	TestEqual(TEXT("Time wraps (25 h = 01:00)"), Parsed.Environment.TimeOfDay, 1.f, 1.e-4f);
+	TestEqual(TEXT("Sun height clamped"), Parsed.Environment.SunElevation, StageEnvironment::MaxSunElevation);
+	TestEqual(TEXT("Direction wraps"), Parsed.Environment.SunAzimuth, 270.f, 1.e-4f);
+	TestEqual(TEXT("Rain clamped"), Parsed.Environment.Rain, 1.f);
+	TestEqual(TEXT("Fog clamped"), Parsed.Environment.Fog, 0.f);
+	TestEqual(TEXT("A value of the wrong type keeps its default"), Parsed.Environment.CloudCoverage, Defaults.CloudCoverage);
+	TestEqual(TEXT("A missing value keeps its default"), Parsed.Environment.Snow, Defaults.Snow);
+	TestTrue(TEXT("The sky switch is read"), Parsed.Environment.bSkyEnabled);
+
+	// On disk: a version 1 file loads, and saving it again upgrades it to the current version.
+	const FString Directory = FPaths::Combine(FPaths::AutomationTransientDir(), TEXT("StageCraftScenes"), FGuid::NewGuid().ToString());
+	const FStageSceneStore Store(Directory);
+	IFileManager::Get().MakeDirectory(*Directory, /*Tree*/ true);
+	FFileHelper::SaveStringToFile(MakeSceneJson(ValidItemFields, 1), *Store.GetScenePath(TEXT("Old Show")));
+	FStageSceneDocument Loaded;
+	TestEqual(TEXT("Version 1 file loads"), Str(Store.Load(TEXT("Old Show"), Loaded, Report)), Str(EStageSceneResult::Success));
+	TestEqual(TEXT("Re-saved"), Str(Store.Save(Loaded)), Str(EStageSceneResult::Success));
+	FString Upgraded;
+	FFileHelper::LoadFileToString(Upgraded, *Store.GetScenePath(TEXT("Old Show")));
+	TestTrue(TEXT("The re-saved file is the current version"), Upgraded.Contains(FString::Printf(TEXT("\"version\": %d"), FStageSceneStore::FormatVersion)));
+	TestEqual(TEXT("... and loads"), Str(Store.Load(TEXT("Old Show"), Loaded, Report)), Str(EStageSceneResult::Success));
+	TestEqual(TEXT("... with its item"), Loaded.Items.Num(), 1);
+	IFileManager::Get().DeleteDirectory(*Directory, /*RequireExists*/ false, /*Tree*/ true);
 	return true;
 }
 

@@ -173,6 +173,16 @@ public:
 	EStageCommandResult RequestRedo();
 
 	/**
+	 * Starts one continuous edit (a slider drag in the inspector): every RequestParameterChange until EndEditTransaction is
+	 * still validated and applied at once, but together they become ONE undo step. Returns false if an edit is already open;
+	 * only the caller that got true ends it. Callers end it when the interaction ends or their view goes away.
+	 */
+	bool BeginEditTransaction();
+
+	/** Ends the continuous edit started by BeginEditTransaction and records it. No-op when none is open. */
+	void EndEditTransaction();
+
+	/**
 	 * Deletes every selected item as one undoable step (Delete key, Edit menu). Ignored during a gizmo drag or camera
 	 * navigation. Returns how many items were deleted.
 	 */
@@ -238,6 +248,12 @@ public:
 	 */
 	UFUNCTION(BlueprintCallable, Category = "StageCraft|Requests")
 	EStageSceneResult RequestLoadScene(const FString& Name);
+
+	/**
+	 * Replaces the stage with the autosave Name (File > Recover Autosave), for after a crash. The stage keeps its scene name and
+	 * stays marked as unsaved until the user saves it. Same guards and confirmation duty as RequestLoadScene.
+	 */
+	EStageSceneResult RequestRecoverAutosave(const FString& Name);
 
 	/** Deletes the saved scene Name from disk (the caller confirms). The stage on screen is not changed. Reported like Save. */
 	UFUNCTION(BlueprintCallable, Category = "StageCraft|Requests")
@@ -438,6 +454,9 @@ private:
 
 	/** Undo / redo of a recorded parameter step: validated by the GameMode and applied by the session, never recorded again. */
 	EStageCommandResult ApplyHistoryParameter(class AModularBaseActor& Item, const FGameplayTag& ParameterId, const FStageParameterValue& Value);
+
+	/** Undo / redo of a recorded transform, per item: the GameMode's EvaluateTransformChange decides; a refusal is reported. */
+	bool ValidateHistoryTransform(const class AModularBaseActor& Item, const FTransform& Transform);
 	void ReportRejection(const FStageEconomyResultInfo& Result);
 	class AStageCraftGameModeBase* GetStageGameMode() const;
 	class UStageEconomySubsystem* GetEconomy() const;

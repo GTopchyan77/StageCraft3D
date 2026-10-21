@@ -103,6 +103,14 @@ private:
 	void HandleEntitlementsChanged();
 
 	void HandleControlCommitted(const FGameplayTag& ParameterId, const FStageParameterValue& Value);
+
+	/** A control's continuous edit (a slider drag) starts / ends: the controller makes it one undo step. */
+	void HandleControlInteractionStarted();
+	void HandleControlInteractionFinished();
+
+	/** Ends the controller's edit transaction if this view opened it. Called when the drag ends or the controls go away. */
+	void EndOwnEditTransaction();
+
 	void RefreshControls(const FGameplayTag& ParameterId);
 	void UnregisterControls();
 	void UnbindTarget();
@@ -117,4 +125,7 @@ private:
 	TArray<TObjectPtr<class UStageParameterControlWidget>> Controls;
 
 	bool bRebuildPending = false;
+
+	/** True while a transaction this view started is open, so only this view ends it (never one another view started). */
+	bool bOwnsEditTransaction = false;
 };

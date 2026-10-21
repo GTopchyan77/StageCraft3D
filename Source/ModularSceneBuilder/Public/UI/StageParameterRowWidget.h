@@ -121,6 +121,10 @@ private:
 	UFUNCTION()
 	void HandleSpinValueCommitted(float InValue, ETextCommit::Type CommitMethod);
 
+	/** A drag on a spin box commits on every move; the whole drag is one continuous edit (one undo step). */
+	UFUNCTION()
+	void HandleSpinBeginSliderMovement();
+
 	UFUNCTION()
 	void HandleSpinEndSliderMovement(float InValue);
 

@@ -19,6 +19,9 @@ DECLARE_DELEGATE_TwoParams(FOnStageParameterControlCommitted, const FGameplayTag
  *  - CommitValue sends a user edit out (never while the control is writing its own widgets).
  *  - FinishInteraction re-applies the latest stored value to every widget when an edit ends, so a
  *    clamped or rejected edit always settles on what the object really holds.
+ *  - BeginInteraction / FinishInteraction bracket a continuous edit (a slider drag that commits on every
+ *    move): the owner hears OnInteractionStarted / OnInteractionFinished exactly once each, and makes the
+ *    whole drag one undo step (AModularPlayerController::BeginEditTransaction).
  *
  * Owners (UStageParameterViewWidget) bind OnCommitted and call RefreshValue; controls never talk to
  * the inspected object themselves.
@@ -54,6 +57,12 @@ public:
 
 	FOnStageParameterControlCommitted OnCommitted;
 
+	/** A continuous edit started (BeginInteraction). Followed by exactly one OnInteractionFinished. */
+	FSimpleDelegate OnInteractionStarted;
+
+	/** The continuous edit started by BeginInteraction ended. */
+	FSimpleDelegate OnInteractionFinished;
+
 protected:
 	/** Builds/configures widgets for Descriptor. Called once, before the first ApplyValue. */
 	virtual void OnInitializeControl() {}
@@ -64,7 +73,10 @@ protected:
 	 */
 	virtual void ApplyValue(const FStageParameterValue& InValue, bool bForce) {}
 
-	/** Call when the user ends an edit (drag released, text committed). */
+	/** Call when a continuous edit starts (a slider drag begins). Ignored while one is already running. */
+	void BeginInteraction();
+
+	/** Call when the user ends an edit (drag released, text committed). Also ends a continuous edit. */
 	void FinishInteraction();
 
 	/** True while the user is typing into or dragging the widget (keyboard focus within it, or mouse capture). */
@@ -90,4 +102,7 @@ private:
 
 	/** Set while the control writes widget values itself, so widget change events are not sent back as edits. */
 	bool bSuppressCommit = false;
+
+	/** Between BeginInteraction and FinishInteraction. */
+	bool bInContinuousEdit = false;
 };

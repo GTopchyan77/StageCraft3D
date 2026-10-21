@@ -3,6 +3,7 @@
 #pragma once
 
 #include "CoreMinimal.h"
+#include "Environment/StageEnvironmentTypes.h"
 #include "History/StageItemSnapshot.h"
 #include "StageSceneTypes.generated.h"
 
@@ -67,7 +68,7 @@ struct MODULARSCENEBUILDER_API FStageSceneOperationResult
 
 /**
  * A stage as written to and read from a scene file: every placed item with its catalog entry, transform, stable instance
- * id and per-instance settings (the SaveGame properties of FStageItemSnapshot). Plain value type: safe to build on the game
+ * id and per-instance settings (the SaveGame properties of FStageItemSnapshot), and the outdoor environment. Plain value type: safe to build on the game
  * thread and hand to a background task for writing, or to build on a background task while reading.
  */
 struct FStageSceneDocument
@@ -81,4 +82,7 @@ struct FStageSceneDocument
 	FDateTime SavedAtUtc;
 
 	TArray<FStageItemSnapshot> Items;
+
+	/** Sky, time of day, sun path and weather (format version 2). A version 1 file reads as the default environment. Sanitized. */
+	FStageEnvironmentSettings Environment;
 };

@@ -5,6 +5,7 @@
 #include "Actors/ModularBaseActor.h"
 #include "Data/BaseItemData.h"
 #include "Engine/World.h"
+#include "Environment/StageEnvironmentSubsystem.h"
 #include "Interaction/StageParameterInterface.h"
 #include "ModularSceneBuilder.h"
 
@@ -18,8 +19,35 @@ bool UStageSessionSubsystem::DoesSupportWorldType(const EWorldType::Type WorldTy
 	return WorldType == EWorldType::Game || WorldType == EWorldType::PIE;
 }
 
+void UStageSessionSubsystem::Initialize(FSubsystemCollectionBase& Collection)
+{
+	Super::Initialize(Collection);
+
+	if (UStageEnvironmentSubsystem* Environment = Collection.InitializeDependency<UStageEnvironmentSubsystem>())
+	{
+		Environment->OnEnvironmentChanged.AddUniqueDynamic(this, &ThisClass::HandleEnvironmentChanged);
+		BoundEnvironment = Environment;
+	}
+}
+
+void UStageSessionSubsystem::HandleEnvironmentChanged(const FStageEnvironmentSettings& Settings)
+{
+	// The same rule as items: an environment set up before play starts is the level's, not an edit.
+	const UWorld* World = GetWorld();
+	if (World && World->GetBegunPlay())
+	{
+		SetDirty(true);
+	}
+}
+
 void UStageSessionSubsystem::Deinitialize()
 {
+	if (UStageEnvironmentSubsystem* Environment = BoundEnvironment.Get())
+	{
+		Environment->OnEnvironmentChanged.RemoveDynamic(this, &ThisClass::HandleEnvironmentChanged);
+	}
+	BoundEnvironment.Reset();
+
 	for (const TWeakObjectPtr<AModularBaseActor>& Item : Items)
 	{
 		if (AModularBaseActor* Actor = Item.Get())
