@@ -12,7 +12,6 @@
 #include "Report/StageReportFiles.h"
 #include "Subsystems/StageSessionSubsystem.h"
 #include "Tasks/Task.h"
-#include "Workspace/StageLayoutStore.h"
 
 #include UE_INLINE_GENERATED_CPP_BY_NAME(StageBillOfMaterialsSubsystem)
 
@@ -121,22 +120,26 @@ bool UStageBillOfMaterialsSubsystem::StartExport(FText& OutReason)
 	const UStageSessionSubsystem* SessionSubsystem = Session.Get();
 	const FString SceneName = SessionSubsystem ? SessionSubsystem->GetSceneName() : FString();
 	const FDateTime Now = FDateTime::Now();
+	// Rendered here, not on the worker: the report holds FText from catalog assets, and both documents take well under a
+	// millisecond for a stage's worth of catalog lines. Only the file system work goes to the worker.
 	FString Csv = StageBillOfMaterials::ToCsv(Report, SceneName, Now);
+	TArray<uint8> Pdf = StageBillOfMaterials::ToPdf(Report, SceneName, Now);
 	const FString Directory = GetOutputDirectory();
-	const FString Path = Directory / StageBillOfMaterials::MakeFileName(SceneName, Now);
+	const FString Stem = FPaths::GetBaseFilename(StageBillOfMaterials::MakeFileName(SceneName, Now));
 	const int32 LineCount = Report.LineCount;
 
 	bExporting = true;
 	const uint64 Serial = ++ExportSerial;
-	UE_LOG(LogStageCraft, Log, TEXT("Bill of materials: exporting %d lines (%d units, %.1f kg, %.0f W) to %s."),
-		Report.LineCount, Report.Quantity, Report.TotalWeightKg, Report.TotalPowerWatts, *Path);
+	UE_LOG(LogStageCraft, Log, TEXT("Bill of materials: exporting %d lines (%d units, %.1f kg, %.0f W) to %s/%s (.pdf, .csv)."),
+		Report.LineCount, Report.Quantity, Report.TotalWeightKg, Report.TotalPowerWatts, *Directory, *Stem);
 
-	// The text is complete before the task starts; the worker only touches the file system and its own copies.
-	UE::Tasks::Launch(UE_SOURCE_LOCATION, [WeakThis = TWeakObjectPtr<UStageBillOfMaterialsSubsystem>(this), Serial, Csv = MoveTemp(Csv), Directory, Path, LineCount]()
+	// The documents are complete before the task starts; the worker only touches the file system and its own copies.
+	UE::Tasks::Launch(UE_SOURCE_LOCATION, [WeakThis = TWeakObjectPtr<UStageBillOfMaterialsSubsystem>(this), Serial, Csv = MoveTemp(Csv), Pdf = MoveTemp(Pdf), Directory, Stem, LineCount]()
 	{
 		IFileManager::Get().MakeDirectory(*Directory, /*Tree*/ true);
-		const FString FinalPath = StageReportFiles::MakeUniqueStemPath(Directory, FPaths::GetBaseFilename(Path), { TEXT(".csv") }) + TEXT(".csv");
-		const bool bWritten = FStageLayoutStore::WriteFileAtomic(FinalPath, Csv);
+		const FString BasePath = StageReportFiles::MakeUniqueStemPath(Directory, Stem, { TEXT(".pdf"), TEXT(".csv") });
+		const FString FinalPath = BasePath + TEXT(".pdf");
+		const bool bWritten = StageReportFiles::WritePdfAndCsv(BasePath, Pdf, Csv);
 		AsyncTask(ENamedThreads::GameThread, [WeakThis, Serial, bWritten, FinalPath, LineCount]()
 		{
 			if (UStageBillOfMaterialsSubsystem* Self = WeakThis.Get())
@@ -159,11 +162,11 @@ void UStageBillOfMaterialsSubsystem::FinishExport(uint64 Serial, bool bWritten, 
 	LastExport.bSucceeded = bWritten;
 	LastExport.FilePath = FilePath;
 	LastExport.Message = bWritten
-		? FText::Format(LOCTEXT("ExportDone", "Exported {0} ({1} lines)."), FText::FromString(FPaths::GetCleanFilename(FilePath)), FText::AsNumber(LineCount))
+		? FText::Format(LOCTEXT("ExportDone", "Exported the bill of materials {0} and .csv ({1} {1}|plural(one=line,other=lines))."), FText::FromString(FPaths::GetCleanFilename(FilePath)), LineCount)
 		: FText::Format(LOCTEXT("ExportFailed", "Could not write {0}. Check that the folder is writable and the file is not open in another program."),
 			FText::FromString(FilePath));
 
-	UE_CLOG(bWritten, LogStageCraft, Log, TEXT("Bill of materials: wrote %s."), *FilePath);
+	UE_CLOG(bWritten, LogStageCraft, Log, TEXT("Bill of materials: wrote %s and its CSV."), *FilePath);
 	UE_CLOG(!bWritten, LogStageCraft, Warning, TEXT("Bill of materials: could not write %s."), *FilePath);
 	OnExportFinished.Broadcast(LastExport);
 }

@@ -202,7 +202,7 @@ public:
 	void RequestSelectItems(const TArray<class AModularBaseActor*>& Items, EStageSelectionClick Click);
 
 	/**
-	 * Exports the bill of materials as CSV to Saved/StageCraft/Reports (Bill of Materials panel, File menu). Returns true when the
+	 * Exports the bill of materials as PDF and CSV to Saved/StageCraft/Reports (Bill of Materials panel, File menu). Returns true when the
 	 * export started; the result arrives on UStageBillOfMaterialsSubsystem::OnExportFinished. A refusal (empty stage, already
 	 * exporting) is reported on OnRequestRejected.
 	 */
@@ -216,6 +216,14 @@ public:
 	 */
 	UFUNCTION(BlueprintCallable, Category = "StageCraft|Requests")
 	bool RequestExportPatchSheet();
+
+	/**
+	 * Exports the cable schedule and power distribution plan as PDF and CSV to Saved/StageCraft/Reports (File menu;
+	 * Docs/ADR/0012-production-reports-and-fixture-benchmark.md §2.3). Returns true when the export started; the result arrives on
+	 * UStageCableScheduleSubsystem::OnExportFinished. A refusal (nothing to plan, already exporting) is reported on OnRequestRejected.
+	 */
+	UFUNCTION(BlueprintCallable, Category = "StageCraft|Requests")
+	bool RequestExportCableSchedule();
 
 	// --- Cues (Docs/ADR/0011-cue-list-and-patch-sheet-export.md §2.2) ---
 	// Each asks AStageCraftGameModeBase::EvaluateCueRequest, then calls UShowControlSubsystem. Store, Update and Delete are

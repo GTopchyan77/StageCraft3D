@@ -86,6 +86,14 @@ namespace StageBillOfMaterials
 	MODULARSCENEBUILDER_API FString ToCsv(const FStageBillOfMaterials& Report, const FString& SceneName, const FDateTime& GeneratedAt);
 
 	/**
+	 * The report as a print-ready A4 landscape PDF in black and grey (Docs/ADR/0012-production-reports-and-fixture-benchmark.md
+	 * §2.2): a heading per discipline with its lines and a subtotal row, then the grand total; the title block repeats on every
+	 * page with the totals. Names outside Windows-1252 print as '?' (FStagePdfDocument); the CSV keeps them. An empty report is
+	 * one page saying the stage is empty.
+	 */
+	MODULARSCENEBUILDER_API TArray<uint8> ToPdf(const FStageBillOfMaterials& Report, const FString& SceneName, const FDateTime& GeneratedAt);
+
+	/**
 	 * One CSV field: quoted when it holds a comma, quote or line break (quotes doubled). Text that a spreadsheet would run as a
 	 * formula (starting with =, +, -, @, tab or carriage return) is prefixed with an apostrophe, so a catalog name can never execute.
 	 */

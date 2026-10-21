@@ -322,5 +322,18 @@ See `STATE.md` for detailed history of completed work.
 - [x] Builds: Editor / Game Development / Game Shipping; 54/54 automation; scripted runs R38_Run1-4 (cue ops, refusals, undo, save/load v3, playback on fixtures, PDF checked)
 - [ ] Manual verification (Gevor): Cue panel by mouse (GO/BACK, STORE/RE-RECORD, inline label/fade, GO TO, DELETE, source segment), File > Production entries, EXPORT PDF, print the PDF (STATE.md #38)
 - [ ] GO keyboard shortcut; tracking cues, follow/wait times, timeline
-- [ ] Packaged build check with the new panel asset
+- [x] Packaged build check with the new panel asset (#39: DA_Panel_Cues in the Shipping and Development containers)
 - [ ] PDF: embedded Unicode font if non-Latin labels matter
+
+## Phase 16 — Production reports (BOM PDF, cable schedule and power plan), fixture benchmark, Shipping validation (requested by Gevor 2026-10-21; STATE.md #39, ADR 0012)
+- [x] `FStageReportPdfComposer`: flowing A4 report layout (title block and "Page n of m" on every page, headings kept with their table, header rows repeated after page breaks); `FStagePdfDocument::SetCurrentPage`; tests
+- [x] Bill of materials as PDF + CSV (both or neither, `StageReportFiles::WritePdfAndCsv`); BOM panel EXPORT PDF, File > Production; tests
+- [x] Cable schedule and power plan: `StageCableSchedule` (balanced phases and circuits, overloads, power home-runs, DMX chains with stock lengths, warnings), `UStagePowerDistributionSettings` (Project Settings), `UStageCableScheduleSubsystem`, File > Production, `StageCraft.Report.ExportCables`; tests
+- [x] Fixture benchmark `StageCraft.Bench.Fixtures` (Development only) + `Scripts/Bench/RunFixtureBench.ps1`; `StageFrameStats` tested; the user's show is restored afterwards
+- [x] Measured and fixed: light function only while the beam is shaped, batched light rebuild for moving heads, no navigation updates, one pivot update, only driven outputs, fades write only changing attributes; world tests Lighting.BeamShapingOnDemand / PanTiltTransform / FadeChangedOnly
+- [x] Builds: Editor, Game Shipping (0 warnings); 63/63 automation; Shipping and Development packages (cook 0 warnings, Sky Creator 259 assets, dev commands absent from Shipping, Shipping starts and closes cleanly); exports run in the packaged Development build
+- [ ] Manual verification (Gevor): File > Production > Export Bill of Materials / Export Cable Schedule & Power, BOM panel EXPORT PDF, print both PDFs; watch a crossfade of moving heads for flicker (lights are rebuilt while moving); gobo/iris/blade looks still project
+- [ ] 500 fixtures crossfading at once is render-thread bound (27–33 ms): fewer light updates per frame (DMX-rate updates for distant fixtures) or engine changes
+- [ ] Batch the per-attribute `OnParameterChanged` broadcasts during fades (about 2 ms at 200 fixtures)
+- [ ] Startup model re-import blocks the game thread for tens of seconds (audit R2); VSM "One Pass Projection max lights overflow" from about 50 overlapping spot lights
+- [ ] Cable schedule: saved circuit assignment (scene v4), power cable lengths once the distro has a position; patch sheet onto the composer

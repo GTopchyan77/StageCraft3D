@@ -142,6 +142,7 @@ private:
 	TWeakObjectPtr<class UStageSpanToolComponent> SpanTool;
 	TWeakObjectPtr<class UStageBillOfMaterialsSubsystem> BillOfMaterials;
 	TWeakObjectPtr<class UStagePatchSheetSubsystem> PatchSheet;
+	TWeakObjectPtr<class UStageCableScheduleSubsystem> CableSchedule;
 	TWeakObjectPtr<class UStageMeshImportSubsystem> Importer;
 
 	FTimerHandle MessageTimer;

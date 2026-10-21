@@ -16,7 +16,7 @@ struct MODULARSCENEBUILDER_API FStageReportExportResult
 	UPROPERTY(BlueprintReadOnly, Category = "StageCraft|Report")
 	bool bSucceeded = false;
 
-	/** The file written (success) or attempted (failure). */
+	/** The file written (success) or attempted (failure); for a PDF + CSV pair, the PDF (the CSV has the same name with ".csv"). */
 	UPROPERTY(BlueprintReadOnly, Category = "StageCraft|Report")
 	FString FilePath;
 
@@ -31,13 +31,13 @@ DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FOnStageReportExportFinished, const 
 
 /**
  * The production report of the stage in this world (Docs/ADR/0005-spans-outliner-and-bill-of-materials.md §5): every catalog item
- * with its quantity, combined weight and power draw, grouped by discipline, and its export as CSV to Saved/StageCraft/Reports.
+ * with its quantity, combined weight and power draw, grouped by discipline, and its export as PDF + CSV to Saved/StageCraft/Reports.
  *
  * Derived state only. The source of truth is UStageSessionSubsystem's placed items; the report is a cache that is marked stale on
  * the session's OnItemListChanged and rebuilt on the next GetReport, so a burst of edits (a scene load) costs one rebuild. Nothing
  * ticks, polls or iterates the world. Read access for everyone; exporting is requested through the controller (RequestExportBillOfMaterials).
  *
- * Export runs on a worker (UE::Tasks): the CSV text is built on the game thread from the current report, then written atomically
+ * Export runs on a worker (UE::Tasks): the PDF and CSV are built on the game thread from the current report, then written atomically
  * off it; the result returns on the game thread to a weakly held subsystem. One export at a time; results that arrive after the
  * world went away are dropped.
  */
@@ -56,7 +56,7 @@ public:
 	const FStageBillOfMaterials& GetReport() const;
 
 	/**
-	 * Writes the current report as CSV. Returns false with OutReason when it cannot start (already exporting, empty stage);
+	 * Writes the current report as PDF and CSV (Docs/ADR/0012-production-reports-and-fixture-benchmark.md §2.2). Returns false with OutReason when it cannot start (already exporting, empty stage);
 	 * otherwise the result arrives on OnExportFinished.
 	 */
 	bool StartExport(FText& OutReason);

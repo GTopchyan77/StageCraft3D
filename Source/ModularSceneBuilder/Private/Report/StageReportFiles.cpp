@@ -5,6 +5,7 @@
 #include "HAL/FileManager.h"
 #include "Misc/FileHelper.h"
 #include "Misc/Paths.h"
+#include "Workspace/StageLayoutStore.h"
 
 namespace StageReportFiles
 {
@@ -55,6 +56,21 @@ namespace StageReportFiles
 		if (!IFileManager::Get().Move(*Path, *TempPath, /*Replace*/ true, /*EvenIfReadOnly*/ false))
 		{
 			IFileManager::Get().Delete(*TempPath, /*RequireExists*/ false, /*EvenReadOnly*/ false, /*Quiet*/ true);
+			return false;
+		}
+		return true;
+	}
+
+	bool WritePdfAndCsv(const FString& BasePath, TConstArrayView<uint8> Pdf, const FString& Csv)
+	{
+		const FString PdfPath = BasePath + TEXT(".pdf");
+		if (!WriteBytesAtomic(PdfPath, Pdf))
+		{
+			return false;
+		}
+		if (!FStageLayoutStore::WriteFileAtomic(BasePath + TEXT(".csv"), Csv))
+		{
+			IFileManager::Get().Delete(*PdfPath, /*RequireExists*/ false, /*EvenReadOnly*/ false, /*Quiet*/ true);
 			return false;
 		}
 		return true;

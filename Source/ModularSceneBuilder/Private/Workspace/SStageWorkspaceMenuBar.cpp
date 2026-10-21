@@ -18,6 +18,7 @@
 #include "Player/ModularPlayerController.h"
 #include "Render/StageRenderSubsystem.h"
 #include "Report/StageBillOfMaterialsSubsystem.h"
+#include "Report/StageCableScheduleSubsystem.h"
 #include "Report/StagePatchSheetSubsystem.h"
 #include "Scene/StageSceneComponent.h"
 #include "Scene/StageSceneStore.h"
@@ -158,8 +159,8 @@ void SStageWorkspaceMenuBar::FillReportSection(FMenuBuilder& MenuBuilder, const 
 	MenuBuilder.AddMenuEntry(LOCTEXT("ShowBillOfMaterials", "Bill of Materials..."),
 		LOCTEXT("ShowBillOfMaterialsTip", "Show the Bill of Materials panel: quantities, weight and power of everything on stage."), FSlateIcon(),
 		FUIAction(FExecuteAction::CreateSP(this, &SStageWorkspaceMenuBar::ShowPanel, FGameplayTag(StageCraftTags::Panel_BillOfMaterials))));
-	MenuBuilder.AddMenuEntry(LOCTEXT("ExportBillOfMaterials", "Export Bill of Materials (CSV)"),
-		LOCTEXT("ExportBillOfMaterialsTip", "Write the bill of materials as a CSV file to the Reports folder, for spreadsheets and rental quotes."), FSlateIcon(),
+	MenuBuilder.AddMenuEntry(LOCTEXT("ExportBillOfMaterials", "Export Bill of Materials (PDF + CSV)"),
+		LOCTEXT("ExportBillOfMaterialsTip", "Write the bill of materials (counts, weight and power by discipline) as a print-ready PDF and a CSV to the Reports folder, for rental quotes and truck packing."), FSlateIcon(),
 		FUIAction(
 			FExecuteAction::CreateLambda([WeakController]() { if (WeakController.IsValid()) { WeakController->RequestExportBillOfMaterials(); } }),
 			FCanExecuteAction::CreateLambda([bCanExport = !Report->IsExporting() && !Current.IsEmpty()]() { return bCanExport; })));
@@ -170,6 +171,12 @@ void SStageWorkspaceMenuBar::FillReportSection(FMenuBuilder& MenuBuilder, const 
 		FUIAction(
 			FExecuteAction::CreateLambda([WeakController]() { if (WeakController.IsValid()) { WeakController->RequestExportPatchSheet(); } }),
 			FCanExecuteAction::CreateLambda([bCanExport = PatchSheet && ShowControl && !PatchSheet->IsExporting() && !ShowControl->GetFixtures().IsEmpty()]() { return bCanExport; })));
+	const UStageCableScheduleSubsystem* CableSchedule = UWorld::GetSubsystem<UStageCableScheduleSubsystem>(WeakController->GetWorld());
+	MenuBuilder.AddMenuEntry(LOCTEXT("ExportCableSchedule", "Export Cable Schedule & Power (PDF + CSV)"),
+		LOCTEXT("ExportCableScheduleTip", "Write a power distribution plan (loads balanced over phases and circuits, current per circuit) and a wiring list (power home-runs, DMX chains with cable lengths) as a print-ready PDF and a CSV to the Reports folder."), FSlateIcon(),
+		FUIAction(
+			FExecuteAction::CreateLambda([WeakController]() { if (WeakController.IsValid()) { WeakController->RequestExportCableSchedule(); } }),
+			FCanExecuteAction::CreateLambda([bCanExport = CableSchedule && !CableSchedule->IsExporting() && CableSchedule->HasPlannableEquipment()]() { return bCanExport; })));
 	MenuBuilder.AddMenuEntry(LOCTEXT("ShowCues", "Cue List..."),
 		LOCTEXT("ShowCuesTip", "Show the Cues panel: store, play and edit the show's lighting cues."), FSlateIcon(),
 		FUIAction(FExecuteAction::CreateSP(this, &SStageWorkspaceMenuBar::ShowPanel, FGameplayTag(StageCraftTags::Panel_Cues))));

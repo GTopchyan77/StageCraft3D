@@ -56,11 +56,21 @@ bool UShowControlSubsystem::IsTickable() const
 void UShowControlSubsystem::Tick(float DeltaTime)
 {
 	Super::Tick(DeltaTime);
+#if !UE_BUILD_SHIPPING
+	const double TickStart = FPlatformTime::Seconds();
+#endif
 
 	// Fades first: a fade may change a fixture's Shutter, which changes its strobe rate this frame.
 	TickFades(DeltaTime);
 	TickStrobes(DeltaTime);
 	TickDMXOutput(DeltaTime);
+
+#if !UE_BUILD_SHIPPING
+	const double TickSeconds = FPlatformTime::Seconds() - TickStart;
+	++TickCostStats.Ticks;
+	TickCostStats.TotalSeconds += TickSeconds;
+	TickCostStats.MaxSeconds = FMath::Max(TickCostStats.MaxSeconds, TickSeconds);
+#endif
 }
 
 // --- Strobe clock ---
@@ -425,7 +435,11 @@ bool UShowControlSubsystem::GoToCue(float CueNumber)
 		Fade.To = State.Attributes;
 		for (const TPair<FGameplayTag, float>& Pair : State.Attributes)
 		{
-			Fade.From.Add(Pair.Key, Fixture->GetAttribute(Pair.Key));
+			const float From = Fixture->GetAttribute(Pair.Key);
+			if (!FMath::IsNearlyEqual(From, Pair.Value))
+			{
+				Fade.Changing.Add({ Pair.Key, From, Pair.Value });
+			}
 		}
 	}
 
@@ -510,16 +524,15 @@ void UShowControlSubsystem::TickFades(float DeltaTime)
 	for (const FAttributeFade& Fade : Fades)
 	{
 		ALightingFixtureActor* Fixture = Fade.Fixture.Get();
-		if (!Fixture)
+		if (!Fixture || Fade.Changing.IsEmpty())
 		{
 			continue;
 		}
 
 		Frame.Reset();
-		for (const TPair<FGameplayTag, float>& Target : Fade.To)
+		for (const FAttributeLerp& Lerp : Fade.Changing)
 		{
-			const float* Start = Fade.From.Find(Target.Key);
-			Frame.Add(Target.Key, FMath::Lerp(Start ? *Start : Target.Value, Target.Value, Alpha));
+			Frame.Add(Lerp.Attribute, FMath::Lerp(Lerp.From, Lerp.To, Alpha));
 		}
 		Fixture->SetAttributes(Frame);
 	}

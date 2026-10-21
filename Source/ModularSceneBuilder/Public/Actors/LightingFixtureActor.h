@@ -117,7 +117,7 @@ protected:
 	virtual void OnStageTransformChanged() override;
 	//~ End AModularBaseActor Interface
 
-	/** Pushes Attributes onto pivots, the beam light and the beam-shaping projection. */
+	/** Pushes all Attributes onto pivots, the beam light and the beam-shaping projection (new data, BeginPlay). */
 	virtual void ApplyAttributesToComponents();
 
 	/**
@@ -153,6 +153,30 @@ protected:
 	TMap<FGameplayTag, float> Attributes;
 
 private:
+	/**
+	 * The parts of the fixture an attribute drives. An edit or a fade frame re-applies only the parts its changed attributes
+	 * drive: moving the pivots updates every component under them, and the beam-shaping projection has eight material
+	 * parameters, so re-applying everything for a dimmer change made each crossfading fixture several times more expensive
+	 * (Docs/ADR/0012-production-reports-and-fixture-benchmark.md §3).
+	 */
+	enum class EFixtureOutputs : uint8
+	{
+		None = 0,
+		Pivots = 1 << 0,
+		Intensity = 1 << 1,
+		Cone = 1 << 2,
+		Color = 1 << 3,
+		Temperature = 1 << 4,
+		BeamShaping = 1 << 5,
+		All = Pivots | Intensity | Cone | Color | Temperature | BeamShaping
+	};
+	FRIEND_ENUM_CLASS_FLAGS(EFixtureOutputs);
+
+	static EFixtureOutputs GetDrivenOutputs(const FGameplayTag& Attribute);
+
+	/** Pushes the attributes behind Outputs onto the components. */
+	void ApplyOutputs(EFixtureOutputs Outputs);
+
 	/** Clamps (and rounds stepped attributes) and stores without side effects. Returns true if the stored value changed. */
 	bool StoreAttribute(const FGameplayTag& Attribute, float Value);
 
@@ -186,3 +210,5 @@ private:
 	/** Throw distance in cm from the last trace; unset after pan, tilt or the transform changed. */
 	mutable TOptional<double> CachedThrowCm;
 };
+
+ENUM_CLASS_FLAGS(ALightingFixtureActor::EFixtureOutputs);

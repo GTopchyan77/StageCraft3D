@@ -28,6 +28,9 @@ namespace
 		Mesh.SetCollisionEnabled(ECollisionEnabled::QueryOnly);
 		Mesh.SetCollisionResponseToChannel(StageCraftCollision::StageItemChannel, ECR_Block);
 		Mesh.SetGenerateOverlapEvents(false);
+		// StageCraft has no navigation. A colliding mesh would otherwise update navigation data on every pan/tilt step,
+		// about a fifth of a moving head's game-thread cost (Docs/ADR/0012-production-reports-and-fixture-benchmark.md §3).
+		Mesh.SetCanEverAffectNavigation(false);
 	}
 
 	bool IsColorAttribute(const FGameplayTag& Attribute)
@@ -302,7 +305,7 @@ bool ALightingFixtureActor::SetAttribute(FGameplayTag Attribute, float Value)
 	{
 		return false;
 	}
-	ApplyAttributesToComponents();
+	ApplyOutputs(GetDrivenOutputs(Attribute));
 	if (Attribute == StageCraftTags::Attribute_Shutter)
 	{
 		UpdateStrobeRegistration();
@@ -314,11 +317,13 @@ bool ALightingFixtureActor::SetAttribute(FGameplayTag Attribute, float Value)
 bool ALightingFixtureActor::SetAttributes(const TMap<FGameplayTag, float>& Values)
 {
 	TArray<FGameplayTag, TInlineAllocator<16>> Changed;
+	EFixtureOutputs Outputs = EFixtureOutputs::None;
 	for (const TPair<FGameplayTag, float>& Pair : Values)
 	{
 		if (StoreAttribute(Pair.Key, Pair.Value))
 		{
 			Changed.Add(Pair.Key);
+			Outputs |= GetDrivenOutputs(Pair.Key);
 		}
 	}
 
@@ -327,7 +332,7 @@ bool ALightingFixtureActor::SetAttributes(const TMap<FGameplayTag, float>& Value
 		return false;
 	}
 
-	ApplyAttributesToComponents();
+	ApplyOutputs(Outputs);
 	if (Changed.Contains(StageCraftTags::Attribute_Shutter))
 	{
 		UpdateStrobeRegistration();
@@ -373,6 +378,44 @@ FLinearColor ALightingFixtureActor::GetColorRGB() const
 
 void ALightingFixtureActor::ApplyAttributesToComponents()
 {
+	ApplyOutputs(EFixtureOutputs::All);
+}
+
+ALightingFixtureActor::EFixtureOutputs ALightingFixtureActor::GetDrivenOutputs(const FGameplayTag& Attribute)
+{
+	if (MovesBeamAxis(Attribute))
+	{
+		return EFixtureOutputs::Pivots;
+	}
+	// The shutter drives the output through the strobe clock (bStrobeOpen), applied with the dimmer level.
+	if (Attribute == StageCraftTags::Attribute_Dimmer || Attribute == StageCraftTags::Attribute_Shutter)
+	{
+		return EFixtureOutputs::Intensity;
+	}
+	if (Attribute == StageCraftTags::Attribute_Zoom)
+	{
+		return EFixtureOutputs::Cone;
+	}
+	if (IsColorAttribute(Attribute) || Attribute == StageCraftTags::Attribute_ColorW)
+	{
+		return EFixtureOutputs::Color;
+	}
+	if (Attribute == StageCraftTags::Attribute_ColorTemp)
+	{
+		return EFixtureOutputs::Temperature;
+	}
+	if (Attribute == StageCraftTags::Attribute_Gobo || Attribute == StageCraftTags::Attribute_GoboRotation || Attribute == StageCraftTags::Attribute_Iris
+		|| Attribute == StageCraftTags::Attribute_BladeA || Attribute == StageCraftTags::Attribute_BladeB || Attribute == StageCraftTags::Attribute_BladeC
+		|| Attribute == StageCraftTags::Attribute_BladeD || Attribute == StageCraftTags::Attribute_BladeRotation)
+	{
+		return EFixtureOutputs::BeamShaping;
+	}
+	// An attribute this list does not know yet still reaches the components.
+	return EFixtureOutputs::All;
+}
+
+void ALightingFixtureActor::ApplyOutputs(EFixtureOutputs Outputs)
+{
 	const ULightingFixtureData* Fixture = GetFixtureData();
 	if (!Fixture)
 	{
@@ -380,38 +423,57 @@ void ALightingFixtureActor::ApplyAttributesToComponents()
 		return;
 	}
 
-	if (Fixture->bHasPanTilt)
+	if (EnumHasAnyFlags(Outputs, EFixtureOutputs::Pivots) && Fixture->bHasPanTilt)
 	{
-		PanPivot->SetRelativeRotation(FRotator(0.0, GetAttribute(StageCraftTags::Attribute_Pan), 0.0));
-		TiltPivot->SetRelativeRotation(FRotator(GetAttribute(StageCraftTags::Attribute_Tilt), 0.0, 0.0));
+		// Both rotations first, then one transform update from the pan pivot down: setting them one after the other moved the
+		// head, the lens and the beam twice per change.
+		TiltPivot->SetRelativeRotation_Direct(FRotator(GetAttribute(StageCraftTags::Attribute_Tilt), 0.0, 0.0));
+		PanPivot->SetRelativeRotation_Direct(FRotator(0.0, GetAttribute(StageCraftTags::Attribute_Pan), 0.0));
+		PanPivot->UpdateComponentToWorld();
+
+		// Engine cost workaround (UE 5.8, measured with 500 moving heads): a moved light goes through the render thread's
+		// per-light UpdateLightTransform, about 87 us per light per frame, while a light whose render state is rebuilt goes
+		// through the batched remove/add, about 11 us. A pending rebuild replaces the transform update, so moving heads take
+		// the batched path: 500 fixtures panning went from 58 to 27 ms a frame. The light is rebuilt anyway on every zoom
+		// change (USpotLightComponent::SetOuterConeAngle). Docs/ADR/0012-production-reports-and-fixture-benchmark.md §3.
+		BeamLight->MarkRenderStateDirty();
 	}
 
-	// The strobe clock closes the output between flashes; the dimmer level is kept for the next flash.
-	BeamLight->SetIntensity(bStrobeOpen ? Fixture->LuminousFlux * GetAttribute(StageCraftTags::Attribute_Dimmer) : 0.f);
+	if (EnumHasAnyFlags(Outputs, EFixtureOutputs::Intensity))
+	{
+		// The strobe clock closes the output between flashes; the dimmer level is kept for the next flash.
+		BeamLight->SetIntensity(bStrobeOpen ? Fixture->LuminousFlux * GetAttribute(StageCraftTags::Attribute_Dimmer) : 0.f);
+	}
 
-	// The cone is the zoom; the iris and the blades crop inside it (the light function), so the projection scales with zoom.
-	const float HalfAngle = 0.5f * (Fixture->HasZoom() ? GetAttribute(StageCraftTags::Attribute_Zoom) : Fixture->BeamAngleMax);
-	BeamLight->SetOuterConeAngle(HalfAngle);
-	BeamLight->SetInnerConeAngle(HalfAngle * 0.7f);
+	if (EnumHasAnyFlags(Outputs, EFixtureOutputs::Cone))
+	{
+		// The cone is the zoom; the iris and the blades crop inside it (the light function), so the projection scales with zoom.
+		const float HalfAngle = 0.5f * (Fixture->HasZoom() ? GetAttribute(StageCraftTags::Attribute_Zoom) : Fixture->BeamAngleMax);
+		BeamLight->SetOuterConeAngle(HalfAngle);
+		BeamLight->SetInnerConeAngle(HalfAngle * 0.7f);
+	}
 
-	if (Fixture->ColorSystem != EStageFixtureColorSystem::None)
+	if (EnumHasAnyFlags(Outputs, EFixtureOutputs::Color) && Fixture->ColorSystem != EStageFixtureColorSystem::None)
 	{
 		BeamLight->SetLightColor(MixBeamColor(GetColorRGB(), GetAttribute(StageCraftTags::Attribute_ColorW)), /*bSRGB*/ false);
 	}
 
-	// The light's temperature tints relative to 6500 K: CTC on colour mixers, the fixed source temperature on white-only fixtures.
-	if (Fixture->HasColorTemperatureControl())
+	if (EnumHasAnyFlags(Outputs, EFixtureOutputs::Temperature))
 	{
-		BeamLight->SetUseTemperature(true);
-		BeamLight->SetTemperature(GetAttribute(StageCraftTags::Attribute_ColorTemp));
-	}
-	else
-	{
-		BeamLight->SetUseTemperature(Fixture->ColorSystem == EStageFixtureColorSystem::None);
-		BeamLight->SetTemperature(Fixture->ColorTemperatureK);
+		// The light's temperature tints relative to 6500 K: CTC on colour mixers, the fixed source temperature on white-only fixtures.
+		if (Fixture->HasColorTemperatureControl())
+		{
+			BeamLight->SetUseTemperature(true);
+			BeamLight->SetTemperature(GetAttribute(StageCraftTags::Attribute_ColorTemp));
+		}
+		else
+		{
+			BeamLight->SetUseTemperature(Fixture->ColorSystem == EStageFixtureColorSystem::None);
+			BeamLight->SetTemperature(Fixture->ColorTemperatureK);
+		}
 	}
 
-	if (Fixture->HasBeamShaping())
+	if (EnumHasAnyFlags(Outputs, EFixtureOutputs::BeamShaping) && Fixture->HasBeamShaping())
 	{
 		ApplyBeamShaping(*Fixture);
 	}
@@ -419,6 +481,22 @@ void ALightingFixtureActor::ApplyAttributesToComponents()
 
 void ALightingFixtureActor::ApplyBeamShaping(const ULightingFixtureData& Fixture)
 {
+	const int32 GoboSlot = FMath::RoundToInt32(GetAttribute(StageCraftTags::Attribute_Gobo));
+	const float IrisRadius = Fixture.bHasIris ? FMath::Lerp(1.f, Fixture.IrisMinFraction, GetAttribute(StageCraftTags::Attribute_Iris)) : 1.f;
+	const bool bShaping = GoboSlot != 0 || IrisRadius < 1.f
+		|| GetAttribute(StageCraftTags::Attribute_BladeA) > 0.f || GetAttribute(StageCraftTags::Attribute_BladeB) > 0.f
+		|| GetAttribute(StageCraftTags::Attribute_BladeC) > 0.f || GetAttribute(StageCraftTags::Attribute_BladeD) > 0.f;
+	if (!bShaping)
+	{
+		// An open beam projects nothing, and a light function is a full extra lighting pass per light: with 500 fixtures it
+		// was two thirds of the GPU frame (Docs/ADR/0012-production-reports-and-fixture-benchmark.md §3). The instance is kept.
+		if (BeamLight->LightFunctionMaterial)
+		{
+			BeamLight->SetLightFunctionMaterial(nullptr);
+		}
+		return;
+	}
+
 	if (!BeamShapingInstance)
 	{
 		if (bBeamShapingUnavailable)
@@ -435,12 +513,14 @@ void ALightingFixtureActor::ApplyBeamShaping(const ULightingFixtureData& Fixture
 			return;
 		}
 		BeamShapingInstance = UMaterialInstanceDynamic::Create(Parent, this);
-		BeamLight->SetLightFunctionMaterial(BeamShapingInstance);
 		AppliedGoboSlot = INDEX_NONE;
+	}
+	if (BeamLight->LightFunctionMaterial != BeamShapingInstance)
+	{
+		BeamLight->SetLightFunctionMaterial(BeamShapingInstance);
 	}
 
 	// The texture is swapped only when the slot changes; the scalars are cheap to set on every attribute change.
-	const int32 GoboSlot = FMath::RoundToInt32(GetAttribute(StageCraftTags::Attribute_Gobo));
 	if (GoboSlot != AppliedGoboSlot)
 	{
 		UTexture2D* GoboTexture = Fixture.LoadGoboTexture(GoboSlot);
@@ -452,8 +532,6 @@ void ALightingFixtureActor::ApplyBeamShaping(const ULightingFixtureData& Fixture
 		AppliedGoboSlot = GoboSlot;
 	}
 	BeamShapingInstance->SetScalarParameterValue(BeamShapingParams::GoboRotation, GetAttribute(StageCraftTags::Attribute_GoboRotation));
-
-	const float IrisRadius = Fixture.bHasIris ? FMath::Lerp(1.f, Fixture.IrisMinFraction, GetAttribute(StageCraftTags::Attribute_Iris)) : 1.f;
 	BeamShapingInstance->SetScalarParameterValue(BeamShapingParams::IrisRadius, IrisRadius);
 	BeamShapingInstance->SetScalarParameterValue(BeamShapingParams::BladeTop, GetAttribute(StageCraftTags::Attribute_BladeA));
 	BeamShapingInstance->SetScalarParameterValue(BeamShapingParams::BladeRight, GetAttribute(StageCraftTags::Attribute_BladeB));

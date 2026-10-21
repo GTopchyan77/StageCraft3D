@@ -14,7 +14,6 @@
 #include "Subsystems/ShowControlSubsystem.h"
 #include "Subsystems/StageSessionSubsystem.h"
 #include "Tasks/Task.h"
-#include "Workspace/StageLayoutStore.h"
 
 #include UE_INLINE_GENERATED_CPP_BY_NAME(StagePatchSheetSubsystem)
 
@@ -105,13 +104,7 @@ bool UStagePatchSheetSubsystem::StartExport(FText& OutReason)
 		IFileManager::Get().MakeDirectory(*Directory, /*Tree*/ true);
 		const FString BasePath = StageReportFiles::MakeUniqueStemPath(Directory, Stem, { TEXT(".pdf"), TEXT(".csv") });
 		const FString PdfPath = BasePath + TEXT(".pdf");
-		// Both or neither: a PDF without its CSV would look like a finished export.
-		bool bWritten = StageReportFiles::WriteBytesAtomic(PdfPath, Pdf);
-		if (bWritten && !FStageLayoutStore::WriteFileAtomic(BasePath + TEXT(".csv"), Csv))
-		{
-			IFileManager::Get().Delete(*PdfPath, /*RequireExists*/ false, /*EvenReadOnly*/ false, /*Quiet*/ true);
-			bWritten = false;
-		}
+		const bool bWritten = StageReportFiles::WritePdfAndCsv(BasePath, Pdf, Csv);
 
 		AsyncTask(ENamedThreads::GameThread, [WeakThis, Serial, bWritten, PdfPath, FixtureCount]()
 		{

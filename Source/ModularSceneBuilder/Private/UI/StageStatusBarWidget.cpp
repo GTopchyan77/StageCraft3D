@@ -22,6 +22,7 @@
 #include "Player/ModularPlayerController.h"
 #include "Player/StageCameraPawn.h"
 #include "Render/StageRenderSubsystem.h"
+#include "Report/StageCableScheduleSubsystem.h"
 #include "Report/StagePatchSheetSubsystem.h"
 #include "Scene/StageSceneComponent.h"
 #include "Subsystems/StageEconomySubsystem.h"
@@ -244,6 +245,11 @@ void UStageStatusBarWidget::BindSources()
 		PatchSheet = PatchSheetSubsystem;
 		PatchSheetSubsystem->OnExportFinished.AddUniqueDynamic(this, &ThisClass::HandleReportExportFinished);
 	}
+	if (UStageCableScheduleSubsystem* CableScheduleSubsystem = UWorld::GetSubsystem<UStageCableScheduleSubsystem>(GetWorld()))
+	{
+		CableSchedule = CableScheduleSubsystem;
+		CableScheduleSubsystem->OnExportFinished.AddUniqueDynamic(this, &ThisClass::HandleReportExportFinished);
+	}
 
 	if (UStageMeshImportSubsystem* ImportSubsystem = GameInstance ? GameInstance->GetSubsystem<UStageMeshImportSubsystem>() : nullptr)
 	{
@@ -298,6 +304,10 @@ void UStageStatusBarWidget::UnbindSources()
 	{
 		PatchSheetSubsystem->OnExportFinished.RemoveDynamic(this, &ThisClass::HandleReportExportFinished);
 	}
+	if (UStageCableScheduleSubsystem* CableScheduleSubsystem = CableSchedule.Get())
+	{
+		CableScheduleSubsystem->OnExportFinished.RemoveDynamic(this, &ThisClass::HandleReportExportFinished);
+	}
 	if (UStageMeshImportSubsystem* ImportSubsystem = Importer.Get())
 	{
 		ImportSubsystem->OnImportStarted.RemoveDynamic(this, &ThisClass::HandleModelImportStarted);
@@ -314,6 +324,8 @@ void UStageStatusBarWidget::UnbindSources()
 	Render.Reset();
 	SpanTool.Reset();
 	BillOfMaterials.Reset();
+	PatchSheet.Reset();
+	CableSchedule.Reset();
 	Importer.Reset();
 }
 

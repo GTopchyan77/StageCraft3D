@@ -274,8 +274,8 @@ UWidget* UStageBillOfMaterialsPanel::BuildFooter()
 
 	ExportButton = WidgetTree->ConstructWidget<UButton>(UStageToolButton::StaticClass(), TEXT("ExportButton"));
 	ExportButton->SetStyle(MakeFlatButton(Palette.AccentColor, Palette.AccentColor * 1.1f, Palette.AccentColor * 0.85f));
-	ExportButton->SetToolTipText(LOCTEXT("ExportTip", "Write the bill of materials as a CSV file (opens in any spreadsheet) to the Reports folder."));
-	ExportButtonText = MakeText(LOCTEXT("ExportLabel", "EXPORT CSV"), 9, TEXT("Bold"), Palette.WindowBackground);
+	ExportButton->SetToolTipText(LOCTEXT("ExportTip", "Write the bill of materials as a print-ready PDF and a CSV (opens in any spreadsheet) to the Reports folder."));
+	ExportButtonText = MakeText(LOCTEXT("ExportLabel", "EXPORT PDF"), 9, TEXT("Bold"), Palette.WindowBackground);
 	if (UButtonSlot* LabelSlot = Cast<UButtonSlot>(ExportButton->AddChild(ExportButtonText)))
 	{
 		LabelSlot->SetPadding(FMargin(12.f, 6.f));
@@ -400,7 +400,7 @@ void UStageBillOfMaterialsPanel::RefreshExport()
 	}
 	if (ExportButtonText)
 	{
-		ExportButtonText->SetText(bExporting ? LOCTEXT("Exporting", "EXPORTING...") : LOCTEXT("ExportLabel", "EXPORT CSV"));
+		ExportButtonText->SetText(bExporting ? LOCTEXT("Exporting", "EXPORTING...") : LOCTEXT("ExportLabel", "EXPORT PDF"));
 	}
 	if (!StatusText)
 	{

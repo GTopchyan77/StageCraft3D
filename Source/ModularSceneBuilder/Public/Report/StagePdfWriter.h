@@ -56,6 +56,12 @@ public:
 	/** Starts a new page and makes it the one drawn on. Returns its index. Drawing before the first AddPage starts page 0. */
 	int32 AddPage();
 
+	/**
+	 * Makes an existing page the one drawn on, e.g. to draw "Page n of m" footers once the page count is known. Returns false
+	 * and changes nothing when Index is not a page.
+	 */
+	bool SetCurrentPage(int32 Index);
+
 	/** Text starting at X with its baseline at Y. Nothing is drawn for empty text or a size that is not positive. */
 	void Text(double X, double Y, const FString& String, EStagePdfFont Font, double Size, const FStagePdfColor& Color = FStagePdfColor());
 
@@ -97,4 +103,7 @@ private:
 
 	/** One content stream per page, ASCII only (text bytes >= 128 are written as octal escapes). */
 	TArray<FString> Pages;
+
+	/** The page drawn on; INDEX_NONE until the first page exists. */
+	int32 CurrentPage = INDEX_NONE;
 };

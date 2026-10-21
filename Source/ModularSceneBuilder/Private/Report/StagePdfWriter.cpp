@@ -213,16 +213,27 @@ void FStagePdfDocument::SetInfo(const FString& InTitle, const FString& InProduce
 
 int32 FStagePdfDocument::AddPage()
 {
-	return Pages.AddDefaulted();
+	CurrentPage = Pages.AddDefaulted();
+	return CurrentPage;
+}
+
+bool FStagePdfDocument::SetCurrentPage(int32 Index)
+{
+	if (!Pages.IsValidIndex(Index))
+	{
+		return false;
+	}
+	CurrentPage = Index;
+	return true;
 }
 
 FString& FStagePdfDocument::GetCurrentPage()
 {
-	if (Pages.IsEmpty())
+	if (!Pages.IsValidIndex(CurrentPage))
 	{
-		Pages.AddDefaulted();
+		CurrentPage = Pages.AddDefaulted();
 	}
-	return Pages.Last();
+	return Pages[CurrentPage];
 }
 
 void FStagePdfDocument::Text(double X, double Y, const FString& String, EStagePdfFont Font, double Size, const FStagePdfColor& Color)

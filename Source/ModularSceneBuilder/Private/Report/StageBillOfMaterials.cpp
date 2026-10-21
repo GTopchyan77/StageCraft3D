@@ -5,6 +5,7 @@
 #include "Misc/ComparisonUtility.h"
 #include "Misc/DateTime.h"
 #include "Outliner/StageOutlinerModel.h"
+#include "Report/StageReportPdfComposer.h"
 
 namespace StageBillOfMaterials
 {
@@ -166,6 +167,61 @@ namespace StageBillOfMaterials
 		AppendRow(Out, { TEXT("TOTAL"), FString(), FString(), FString::FromInt(Report.Quantity), FString::FromInt(Report.Placements),
 			FString(), FormatNumber(Report.TotalWeightKg), FString(), FormatNumber(Report.TotalPowerWatts) });
 		return Out;
+	}
+
+	TArray<uint8> ToPdf(const FStageBillOfMaterials& Report, const FString& SceneName, const FDateTime& GeneratedAt)
+	{
+		FStageReportPdfComposer Composer(TEXT("BILL OF MATERIALS"), TEXT("Bill of materials"), SceneName, GeneratedAt);
+		Composer.SetSummary(FString::Printf(TEXT("%d %s · %d %s in %d %s · %s kg · %.2f kW"),
+			Report.LineCount, Report.LineCount == 1 ? TEXT("line") : TEXT("lines"),
+			Report.Quantity, Report.Quantity == 1 ? TEXT("unit") : TEXT("units"),
+			Report.Placements, Report.Placements == 1 ? TEXT("placement") : TEXT("placements"),
+			*FString::Printf(TEXT("%.1f"), Report.TotalWeightKg), Report.TotalPowerWatts / 1000.0));
+
+		if (Report.IsEmpty())
+		{
+			Composer.AddNote(TEXT("The stage is empty: there is nothing to list."));
+			return Composer.Finish();
+		}
+
+		const auto MakeColumns = []()
+		{
+			return TArray<FStageReportColumn>{
+				{ TEXT("Item"), 190.0, EStageReportAlign::Left },
+				{ TEXT("Manufacturer"), 140.0, EStageReportAlign::Left },
+				{ TEXT("Qty"), 46.0, EStageReportAlign::Right },
+				{ TEXT("Placements"), 62.0, EStageReportAlign::Right },
+				{ TEXT("Unit kg"), 62.0, EStageReportAlign::Right },
+				{ TEXT("Total kg"), 70.0, EStageReportAlign::Right },
+				{ TEXT("Unit W"), 62.0, EStageReportAlign::Right },
+				{ TEXT("Total W"), 78.0, EStageReportAlign::Right },
+			};
+		};
+		const auto Kg = [](double Value) { return FString::Printf(TEXT("%.1f"), Value); };
+		const auto Watts = [](double Value) { return FString::Printf(TEXT("%.0f"), Value); };
+
+		for (const FStageBomGroup& Group : Report.Groups)
+		{
+			Composer.AddHeading(Group.Label.ToString());
+			Composer.BeginTable(MakeColumns());
+			for (const FStageBomLine& Line : Group.Lines)
+			{
+				Composer.AddRow({ Line.ItemName.ToString(), FStageReportCell(Line.Manufacturer.ToString(), EStageReportTone::Muted),
+					FString::FromInt(Line.Quantity), FString::FromInt(Line.Placements),
+					Kg(Line.UnitWeightKg), Kg(Line.TotalWeightKg), Watts(Line.UnitPowerWatts), Watts(Line.TotalPowerWatts) });
+			}
+			Composer.AddRow({ Group.Label.ToString() + TEXT(" subtotal"), FString(), FString::FromInt(Group.Quantity), FString::FromInt(Group.Placements),
+				FString(), Kg(Group.TotalWeightKg), FString(), Watts(Group.TotalPowerWatts) }, EStageReportRowStyle::Subtotal);
+			Composer.EndTable();
+		}
+
+		Composer.BeginTable(MakeColumns());
+		Composer.AddRow({ TEXT("TOTAL"), FString(), FString::FromInt(Report.Quantity), FString::FromInt(Report.Placements),
+			FString(), Kg(Report.TotalWeightKg), FString(), Watts(Report.TotalPowerWatts) }, EStageReportRowStyle::Total);
+		Composer.EndTable();
+		Composer.AddNote(TEXT("Quantities are catalog units (segments for spans). Weight and power are catalog values times quantity; power is the maximum draw."),
+			EStageReportTone::Muted);
+		return Composer.Finish();
 	}
 
 	FString MakeFileName(const FString& SceneName, const FDateTime& GeneratedAt)

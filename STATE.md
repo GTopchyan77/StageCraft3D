@@ -3085,7 +3085,7 @@ All `Source/...` paths above are under `Source/ModularSceneBuilder/`.
 - **Not verified by a person:** the Cue panel by mouse (buttons, inline label and fade edits, STORE / RE-RECORD), the File › Production entries, the EXPORT PDF button, and printing the PDF.
 - Status: **implemented, awaiting manual verification.**
 
-**Commit:** uncommitted (working tree).
+**Commit:** `274f059`.
 
 **Known issues / follow-ups**
 - **Saved layouts:** a layout saved before this change (including the restored session) has no Cues tab. The panel opens floating from File › Production › Cue List... or the Window menu, and Layout › Reset puts it in the bottom stack.
@@ -3095,3 +3095,102 @@ All `Source/...` paths above are under `Source/ModularSceneBuilder/`.
 - **Cue features not built:** tracking, per-attribute timing, follow/wait times and a timeline. Clear Stage keeps the cue list (cues are keyed by fixture ID).
 - **Test coverage:** `History.Cues` runs without fixtures (no fixture data in a bare world); fixture playback is covered by scripted run 4.
 - **Audit risks still open:** R2, R6 and R8.
+
+## #39 — Bill of materials as PDF, cable schedule and power plan (PDF + CSV), fixture benchmark at 50/200/500 and the fixes it found, Shipping validation (2026-10-21)
+
+**Request (Gevor).** The next milestone after #38 had four parts:
+1. Expand File › Production on top of `FStagePdfDocument` with a bill of materials report (PDF + CSV: equipment counts, total weight, power) and a cable schedule & electrical loads report (wiring list, load per phase/circuit).
+2. Run automated benchmarks with 50, 200 and 500 active fixtures through cues and crossfades, aiming for zero frame drops and efficient CPU/GPU time.
+3. Verify that the Weather/Sky assets and the PDF writer compile and package without warnings in the UE 5.8 Shipping target.
+4. Keep TObjectPtr memory safety, clean modules and no per-frame Tick polling, and update STATE.md.
+
+The design is in `Docs/ADR/0012-production-reports-and-fixture-benchmark.md`.
+
+**Housekeeping first.** #38 said "uncommitted"; it now carries `274f059`.
+
+**What changed and why**
+- **Report composer (`FStageReportPdfComposer`, new, private `Report/StageReportPdfComposer`).**
+  - The patch sheet (#38) hand-placed every line. Two more reports would have copied that layout code, so the shared A4 landscape layout now lives in one composer.
+  - It provides a title block, a summary line, headings kept with their table, notes, tables with weighted columns, alignment, Normal/Muted/Strong tones and Body/Subtotal/Total rows. Header rows repeat after a page break, and every page gets a frame and "Page n of m" at `Finish` (new `FStagePdfDocument::SetCurrentPage`).
+  - **Bug found by its test:** a table that started at the bottom of a page drew its header twice, once on each page. `BeginTable` now makes room before it opens the table.
+- **Bill of materials PDF (`FStageBillOfMaterials::ToPdf`).**
+  - Lines grouped by category with quantity, unit and total weight and power, category subtotals and a grand total.
+  - The export now writes the PDF and the CSV side by side (new `StageReportFiles::WritePdfAndCsv`, also used by the patch sheet). The PDF is rendered on the game thread and written on a worker.
+  - The BOM panel button reads EXPORT PDF.
+- **Cable schedule and power plan (`StageCableSchedule`, new, pure; `UStageCableScheduleSubsystem`, new, world).**
+  - **Scope (option B in the ADR):** StageCraft has no cable or circuit data, so the report is a generated proposal, labelled as such, not a record of a real installation.
+  - **Supply (`UStagePowerDistributionSettings`, Project Settings › StageCraft Power Distribution, `Config/DefaultGame.ini`):** 230 V, 3 phases, 16 A circuits, 80% usable share and a power factor of 1 by default, so a circuit takes 2944 W. Values are sanitized (V/A have no engine units, so the fields use display names).
+  - **Algorithm:** loads are sorted largest first and placed onto the least-loaded phase, then onto circuits of that phase (first fit). A load larger than a circuit gets its own circuit and a warning. Power home-runs go from the distro position. DMX chains run per universe in address order, with each length rounded up to the next stock length (1–50 m, 20% routing slack); a run over 50 m gets a warning.
+  - **Warnings:** overloaded circuits, phase imbalance over 15%, runs longer than stock, and fixtures with no DMX patch.
+  - **Names:** DMX endpoints print as "#ID label" (or "#ID").
+  - **Request path:** File › Production › Export Cable Schedule & Power (PDF + CSV) → `AModularPlayerController::RequestExportCableSchedule` → the subsystem's `StartExport`. The subsystem gathers the session's placed items and fixtures on the game thread, builds on a worker, and finishes on the game thread through a weak pointer and a serial. The status bar shows the result.
+- **Fixture benchmark (`StageCraft.Bench.Fixtures`, new, `Diagnostics/StageFixtureBenchmark.cpp`, Development only).**
+  - `StageCraft.Bench.Fixtures 50 200 500 Seconds=10 Fade=2 Zoom=1` spawns N fixtures in a grid, waits for pending model imports and a settle time, then measures idle and continuous cue crossfades. It writes `Saved/StageCraft/Benchmarks/FixtureBench_<ts>.csv` and a summary per phase (mean/p95/p99 frame, game, GPU and show-tick time, and dropped frames over 16.7 ms). `StageCraft.Bench.Cancel` stops it.
+  - It runs from an `FTSTicker` only while active, not from a component Tick. Phases are marked as Insights trace regions ("Bench N idle|crossfade").
+  - `FStageFrameStats` (new, pure) computes the statistics. `Scripts/Bench/RunFixtureBench.ps1` runs it in a `-game` window and prints the summary.
+  - **Bug found by a scripted run:** the harness left the active cue at its own cue 9001 and changed the user's fixture looks. It now snapshots the cue list, the active cue, the looks and the dirty flag, and restores them all when it finishes.
+  - **Render-thread time is not reported:** `GRenderThreadTime` reads 0 in this multi-window app, so the render thread was measured in Unreal Insights instead.
+- **Performance fixes (each measured before and after; see the table below).**
+  - **Light function only while shaped:** the gobo/iris/blade light function cost about 28 ms of GPU at 500 fixtures while doing nothing. `ApplyBeamShaping` now attaches it only when a gobo, an iris below 1 or a blade is in use. Crossfade GPU at 500 fixtures went from 42.8 to 14.2 ms.
+  - **Batched light rebuild for moving heads:** each moving light paid about 87 µs on the render thread in `FScene::UpdateLightTransform`. Pan/tilt now sets the pivots with `SetRelativeRotation_Direct`, updates the pan pivot once, and marks the light's render state dirty, so the engine rebuilds the light proxy in a batch (about 11 µs). With zoom fixed, 500 crossfading fixtures went from 58.7 to 27.0 ms a frame.
+  - **No navigation updates:** fixture meshes no longer affect navigation (`SetCanEverAffectNavigation(false)`).
+  - **Driven outputs only:** `ApplyOutputs(EFixtureOutputs)` writes only the outputs a changed attribute drives (dimmer and colour, beam, position, shaping) instead of all of them.
+  - **Changing-only fades:** `GoToCue` records which attributes actually change, and `TickFades` lerps only those. Show tick at 200 fixtures went from 6.2 to 3.5 ms. `UShowControlSubsystem::GetTickCostStats` measures it in non-Shipping builds.
+- **Shipping and packaging.** Shipping and Development packages built, cooked and staged with no errors or warnings. The Sky Creator and EngineSky assets, the new panels and the light function material are in the pak, and the Shipping exe contains no dev command strings.
+
+**Files changed**
+- **New:**
+  - `Docs/ADR/0012-production-reports-and-fixture-benchmark.md`
+  - `Scripts/Bench/RunFixtureBench.ps1`
+  - `Source/ModularSceneBuilder/Private/Report/StageReportPdfComposer.h/.cpp`
+  - `Source/ModularSceneBuilder/Public/Report/StageCableSchedule.h`, `Private/Report/StageCableSchedule.cpp`
+  - `Source/ModularSceneBuilder/Public/Report/StageCableScheduleSubsystem.h`, `Private/Report/StageCableScheduleSubsystem.cpp`
+  - `Source/ModularSceneBuilder/Public/Report/StagePowerDistributionSettings.h`, `Private/Report/StagePowerDistributionSettings.cpp`
+  - `Source/ModularSceneBuilder/Public/Diagnostics/StageFrameStats.h`, `Private/Diagnostics/StageFrameStats.cpp`
+  - `Source/ModularSceneBuilder/Private/Diagnostics/StageFixtureBenchmark.cpp`
+  - Tests: `Private/Report/Tests/StageReportTestUtils.h`, `Private/Report/Tests/StageProductionReportTests.cpp`, `Private/Diagnostics/Tests/StageFrameStatsTests.cpp`, `Private/Show/Tests/StageFixturePlaybackTests.cpp`
+- **Reports:** `Public/Report/StagePdfWriter.h`, `Private/Report/StagePdfWriter.cpp`, `Public/Report/StageBillOfMaterials.h`, `Private/Report/StageBillOfMaterials.cpp`, `Public/Report/StageBillOfMaterialsSubsystem.h`, `Private/Report/StageBillOfMaterialsSubsystem.cpp`, `Private/Report/StagePatchSheetSubsystem.cpp`, `Private/Report/StageReportFiles.h/.cpp`, `Private/Report/StageReportConsoleCommands.cpp`, `Private/Report/Tests/StagePatchSheetTests.cpp`
+- **Fixtures and show control:** `Public/Actors/LightingFixtureActor.h`, `Private/Actors/LightingFixtureActor.cpp`, `Public/Subsystems/ShowControlSubsystem.h`, `Private/Subsystems/ShowControlSubsystem.cpp`
+- **Request path and UI:** `Public/Player/ModularPlayerController.h`, `Private/Player/ModularPlayerController.cpp`, `Private/Workspace/SStageWorkspaceMenuBar.cpp`, `Public/UI/StageStatusBarWidget.h`, `Private/UI/StageStatusBarWidget.cpp`, `Public/UI/StageBillOfMaterialsPanel.h`, `Private/UI/StageBillOfMaterialsPanel.cpp`
+- **Config:** `Config/DefaultGame.ini` (power distribution defaults)
+- **Docs:** `Docs/CURRENT_SYSTEMS.md`, `tasks/todo.md`, this file
+- **Not changed:** no Blueprints, maps, input assets, content assets or plugins.
+
+**Verification (Claude, 2026-10-21)**
+- **Builds (UE 5.8):** Editor Development and Game Shipping (`-DisableAdaptiveUnity`) succeeded with 0 warnings and 0 errors.
+- **Packages:** `BuildCookRun` Shipping and Development: 1081 packages, 0 errors, 0 warnings. The pak lists 259 Sky Creator assets, 25 EngineSky cloud assets, `DA_Panel_Cues`, `DA_Panel_BillOfMaterials`, `M_StageBeamLightFunction` and `DA_MovingHead_Test`. The Shipping package ran for 25 s and closed cleanly. The packaged Development build exported the BOM, cable schedule and patch sheet PDFs and CSVs.
+- **Automation:** 63/63 StageCraft tests passed. New tests:
+  - `Report.CableSchedule.Power`: phase balance, circuit packing, an oversize load, bad input data, sanitized settings and determinism (any input order gives the same circuits).
+  - `Report.CableSchedule.Dmx`: chains per universe in address order, stock lengths, over-length and unpatched warnings.
+  - `Report.CableSchedule.Export`: 92 loads and 90 links: CSV headers, quoting and formula injection, PDF structure, title and footer on every page, and the empty report.
+  - `Report.BomPdf` and `Report.Composer`: PDF structure, totals, page breaks and repeated headers. This test caught the double-header bug.
+  - `Bench.FrameStats`: mean, percentiles, non-finite samples, dropped frames.
+  - `Lighting.BeamShapingOnDemand`, `Lighting.PanTiltTransform`, `Lighting.FadeChangedOnly`: the fixture output path behind the performance fixes.
+- **PDFs checked visually:** `BOM_R38_Cues_20261021-114135.pdf` and `CableSchedule_R38_Cues_20261021-114136.pdf` (6 pages, 12 circuits, 5% imbalance, 3 universes). The "#ID label" DMX names came after that check and are covered by the tests.
+- **Benchmark** ("R38 Cues" scene, editor `-game`, D3D12, RTX 3060 Ti, 1600×900, `Zoom=1`; frame ms are mean/p95, before → after):
+
+  | Fixtures | Phase | Frame ms | GPU ms | Show tick ms | Frames over 16.7 ms |
+  |---|---|---|---|---|---|
+  | 50 | crossfade | 15.6/16.6 → 11.1/12.5 | 12.8 → 9.7 | 1.56 → 0.77 | 13 → 1 of 901 |
+  | 200 | crossfade | 26.0/29.2 → 14.2/15.8 | 24.0 → 10.7 | 6.2 → 3.5 | 370 → 19 of 704 |
+  | 500 | idle | 33.7/55.0 → 12.7/14.6 | 31.3 → 10.4 | — | 3 → 1 |
+  | 500 | crossfade | 56.2/63.3 → 29.0/31.2 | 53.5 → 14.2 | 13.5 → 7.7 | all → all |
+
+  - A packaged Development build showed crossfade means of 6.7 ms (50), 14.8 ms (200, with one 651 ms spike that looks like garbage collection) and 32.7 ms (500).
+- **Not met: zero frame drops at 500.** 500 fixtures all crossfading at once are bound by the render thread at about 27–33 ms a frame, mostly light proxy updates for 500 moving shadowed spot lights. 50 and 200 fixtures are within a 60 Hz frame almost all the time, but not with zero drops.
+- **Not verified by a person:**
+  - Both File › Production entries and the EXPORT PDF button, used with the mouse.
+  - Printing the PDFs.
+  - Watching moving heads during a crossfade for flicker or lag after the batched light rebuild.
+  - Checking that a gobo, iris or blade still projects once a beam becomes shaped.
+- Status: **implemented, awaiting manual verification.**
+
+**Commit:** uncommitted (working tree).
+
+**Known issues / follow-ups**
+- **Render thread at 500 fixtures:** needs a different approach (fewer shadowed lights, light proxies shared per group, or beam meshes instead of real lights for distant fixtures). ADR 0012 §3.1 has the measurements.
+- **`OnParameterChanged` broadcasts:** about 2 ms of the 200-fixture show tick goes to per-attribute broadcasts during fades.
+- **Startup re-import (R2):** the `Imports.json` re-import of `AG1.FBX` at start-up causes frame spikes; the benchmark waits for it.
+- **VSM warning:** "One Pass Projection max lights overflow" with hundreds of shadowed lights.
+- **Cable schedule:** circuit assignments are not saved and power cables have no lengths. The patch sheet is not yet on the composer.
+- **Undo gaps, cue features and audit risks** from #38 are unchanged.

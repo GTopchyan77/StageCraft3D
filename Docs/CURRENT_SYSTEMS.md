@@ -1,6 +1,6 @@
 # StageCraft 3D: current systems
 
-Updated 2026-10-21 after STATE.md #38. This is a quick reference to what exists, how well it works, and where it lives. It was audited on 2026-10-20 at commit `960f5da`. Evidence, file:line references and the risk list are in `Docs/PROJECT_AUDIT.md`.
+Updated 2026-10-21 after STATE.md #39. This is a quick reference to what exists, how well it works, and where it lives. It was audited on 2026-10-20 at commit `960f5da`. Evidence, file:line references and the risk list are in `Docs/PROJECT_AUDIT.md`.
 
 **Legend**
 
@@ -50,7 +50,7 @@ Paths are relative to `Source/ModularSceneBuilder/` (`Public/` and `Private/` sh
 ## Lighting, rendering, environment
 | System | Status | Where |
 |---|---|---|
-| Moving-head fixture: dimmer, RGB(W), CTC, zoom, pan/tilt, gobo, iris, blades, strobe → real spot light | 🟢 | `Actors/LightingFixtureActor` |
+| Moving-head fixture: dimmer, RGB(W), CTC, zoom, pan/tilt, gobo, iris, blades, strobe → real spot light. Applies only the outputs a change drives; the gobo/iris/blade light function only while the beam is shaped (#39) | ✅ output path (Lighting.BeamShapingOnDemand, PanTiltTransform, FadeChangedOnly) / 🟢 visuals | `Actors/LightingFixtureActor` |
 | Fixture data and DMX layout | ✅ | `Data/LightingFixtureData` |
 | Photometrics (display only) | ✅ | `Show/StagePhotometry` |
 | Beam visualisation | 🟡 relies on the level's volumetric fog; no cone mesh | `Content/StageCraft/Maps/L_StageTest` |
@@ -62,7 +62,7 @@ Paths are relative to `Source/ModularSceneBuilder/` (`Public/` and `Private/` sh
 ## Show control and DMX
 | System | Status | Where |
 |---|---|---|
-| Cue list: store / re-record, update, delete, Go, Back, Go To, crossfade, Internal/External; GameMode rules, undo, saved in scenes (v3) | ✅ rules, history, file / 🟢 panel (mouse check pending, #38) | `Subsystems/ShowControlSubsystem`, `UI/StageCuePanel`, `History/StageCueCommands`, `Game/StageCraftGameModeBase` (EvaluateCueRequest) |
+| Cue list: store / re-record, update, delete, Go, Back, Go To, crossfade (writes only the attributes that change, #39), Internal/External; GameMode rules, undo, saved in scenes (v3) | ✅ rules, history, file, fade / 🟢 panel (mouse check pending, #38) | `Subsystems/ShowControlSubsystem`, `UI/StageCuePanel`, `History/StageCueCommands`, `Game/StageCraftGameModeBase` (EvaluateCueRequest) |
 | Timeline / Sequencer | ⚪ | — |
 | Patch: auto-ID, auto-patch, conflict detection, Patch panel | 🟢 no tests | `ShowControlSubsystem`, `UI/StagePatchPanel` |
 | DMX encode/decode, simulated live values | ✅ data / 🟢 actor | `LightingFixtureActor::WriteDMX/ReadDMX` |
@@ -78,9 +78,11 @@ Paths are relative to `Source/ModularSceneBuilder/` (`Public/` and `Private/` sh
 | Saved in scenes | Transforms, label, hide, lock, fixture state, patch, spans, loudspeakers, environment (v2), cues (v3) | — |
 | Not saved in scenes | Camera | — |
 | Autosave (while unsaved, every 120 s), File > Recover Autosave, exit prompt Save / Don't Save / Cancel | 🟢 scripted Standalone runs (#37); buttons need a mouse check | `Scene/StageSceneComponent`, `Workspace/SStageUnsavedChangesDialog`, `Workspace/StageWorkspaceSubsystem` |
-| Bill of materials and CSV export | ✅ | `Report/StageBillOfMaterials*`, `UI/StageBillOfMaterialsPanel` |
+| Bill of materials as PDF + CSV (File > Production, BOM panel EXPORT PDF) | ✅ model and PDF / 🟢 export (scripted run, #39) | `Report/StageBillOfMaterials*`, `Report/StageReportPdfComposer`, `UI/StageBillOfMaterialsPanel` |
+| Cable schedule and power plan as PDF + CSV: loads balanced over phases and circuits, power home-runs, DMX chains with stock lengths, warnings (File > Production) | ✅ model and PDF / 🟢 export (scripted run, #39) | `Report/StageCableSchedule*`, `Report/StagePowerDistributionSettings` (Project Settings) |
+| Fixture benchmark (`StageCraft.Bench.Fixtures`, `Scripts/Bench/RunFixtureBench.ps1`): 200 crossfading fixtures 14.2 ms a frame (was 26.0), 500 crossfading 29 ms (was 56; render-thread bound) (#39) | ✅ stats / 🟢 harness (Development only) | `Diagnostics/StageFixtureBenchmark`, `Diagnostics/StageFrameStats` |
 | DMX patch sheet as PDF + CSV (File > Production, Patch panel) | ✅ model and PDF / 🟢 export (scripted run) | `Report/StagePatchSheet`, `Report/StagePdfWriter`, `Report/StagePatchSheetSubsystem` |
-| XLSX, cable schedule, amps/phase, rigging loads, light plot drawings | ⚪ | — |
+| XLSX, saved circuit assignment, power cable lengths, rigging loads, light plot drawings | ⚪ | — |
 | Profile, wallet, entitlements, purchases (local backend). No tests. | 🟢 | `Subsystems/StageProfileSubsystem`, `StageEconomySubsystem`, `Economy/*` |
 | Shop UI, server commerce | ⚪ | — |
 | UI audio feedback | ✅ | `Audio/StageAudioSubsystem` |
@@ -89,7 +91,7 @@ Paths are relative to `Source/ModularSceneBuilder/` (`Public/` and `Private/` sh
 | Scope | Owner |
 |---|---|
 | GameInstance | `UStageProfileSubsystem`, `UStageEconomySubsystem`, `UStageItemSubsystem`, `UStageMeshImportSubsystem`, `UStageWorkspaceSubsystem`, `UStageAudioSubsystem` |
-| World (Game and PIE) | `UStageSessionSubsystem`, `UStageEditHistorySubsystem`, `UShowControlSubsystem` (ticks only while busy), `UStageRenderSubsystem`, `UStageBillOfMaterialsSubsystem`, `UStageEnvironmentSubsystem` |
+| World (Game and PIE) | `UStageSessionSubsystem`, `UStageEditHistorySubsystem`, `UShowControlSubsystem` (ticks only while busy), `UStageRenderSubsystem`, `UStageBillOfMaterialsSubsystem`, `UStagePatchSheetSubsystem`, `UStageCableScheduleSubsystem`, `UStageEnvironmentSubsystem` |
 | Controller components | Selection, SpawnSystem, PlacementTool, SpanTool, Snapping, GroupTransform, EditHistory, Scene, Viewport, EditorAudioFeedback |
 | Per-user preferences | `UStageCraftUserSettings` (`GameUserSettings`) |
 | Rules authority | `AStageCraftGameModeBase` |
@@ -102,6 +104,6 @@ Paths are relative to `Source/ModularSceneBuilder/` (`Public/` and `Private/` sh
 | Engine | UE 5.8 |
 | Plugins enabled | Interchange, SkyCreatorPlugin (plus Python and ModelingTools in the editor only) |
 | Plugins tracked but disabled | 19 |
-| Tests | 54 `StageCraft.*` automation tests: pure logic plus world tests for Sky Creator, undo/redo rules and transactions, and cues |
+| Tests | 63 `StageCraft.*` automation tests: pure logic (reports, PDF composer, cable schedule, frame statistics) plus world tests for Sky Creator, undo/redo rules and transactions, cues and the fixture output path |
 | Areas with no tests | Request bridge, selection, session, economy/profile, patch conflicts, fixture playback (scripted runs only) |
 | Console commands | About 84, all inside `#if !UE_BUILD_SHIPPING` |

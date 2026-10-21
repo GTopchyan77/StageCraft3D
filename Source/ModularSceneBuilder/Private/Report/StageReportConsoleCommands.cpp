@@ -1,7 +1,7 @@
 // Copyright Epic Games, Inc. All Rights Reserved.
 
-// Development console commands for the bill of materials (Docs/ADR/0005-spans-outliner-and-bill-of-materials.md §5) and the
-// patch sheet export (Docs/ADR/0011-cue-list-and-patch-sheet-export.md §3): log the
+// Development console commands for the bill of materials (Docs/ADR/0005-spans-outliner-and-bill-of-materials.md §5), the patch
+// sheet (Docs/ADR/0011-cue-list-and-patch-sheet-export.md §3) and the cable schedule (Docs/ADR/0012 §2.3): log the
 // report the panel shows, and export it through the controller's request. Compiled out of Shipping.
 
 #include "CoreMinimal.h"
@@ -53,11 +53,19 @@ namespace StageReportCommands
 		UE_LOG(LogStageCraft, Display, TEXT("StageCraft.Report.ExportPatch: %s"), Controller && Controller->RequestExportPatchSheet() ? TEXT("started") : TEXT("refused"));
 	}
 
+	void ExportCables(const TArray<FString>& Args, UWorld* World)
+	{
+		AModularPlayerController* Controller = World ? Cast<AModularPlayerController>(World->GetFirstPlayerController()) : nullptr;
+		UE_LOG(LogStageCraft, Display, TEXT("StageCraft.Report.ExportCables: %s"), Controller && Controller->RequestExportCableSchedule() ? TEXT("started") : TEXT("refused"));
+	}
+
+	FAutoConsoleCommandWithWorldAndArgs ExportCablesCommand(TEXT("StageCraft.Report.ExportCables"), TEXT("Exports the cable schedule and power distribution plan as PDF + CSV (File > Production)."),
+		FConsoleCommandWithWorldAndArgsDelegate::CreateStatic(&ExportCables));
 	FAutoConsoleCommandWithWorldAndArgs ExportPatchCommand(TEXT("StageCraft.Report.ExportPatch"), TEXT("Exports the DMX patch sheet as PDF + CSV (the Patch panel's EXPORT PDF)."),
 		FConsoleCommandWithWorldAndArgsDelegate::CreateStatic(&ExportPatch));
 	FAutoConsoleCommandWithWorldAndArgs StatusCommand(TEXT("StageCraft.Report.Status"), TEXT("Logs the bill of materials: lines by discipline, subtotals and totals."),
 		FConsoleCommandWithWorldAndArgsDelegate::CreateStatic(&Status));
-	FAutoConsoleCommandWithWorldAndArgs ExportCommand(TEXT("StageCraft.Report.Export"), TEXT("Exports the bill of materials as CSV (the panel's EXPORT CSV)."),
+	FAutoConsoleCommandWithWorldAndArgs ExportCommand(TEXT("StageCraft.Report.Export"), TEXT("Exports the bill of materials as PDF + CSV (the panel's EXPORT PDF)."),
 		FConsoleCommandWithWorldAndArgsDelegate::CreateStatic(&Export));
 }
 

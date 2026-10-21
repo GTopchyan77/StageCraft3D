@@ -23,7 +23,7 @@ namespace StageReportFormat
 /**
  * The Bill of Materials dock panel (StageCraft.Panel.BillOfMaterials, Docs/ADR/0005-spans-outliner-and-bill-of-materials.md §5):
  * totals (items, units, weight, power) as tiles, then every catalog item by discipline with quantity, weight and power and a
- * subtotal per discipline, and a CSV export for production planning (rental quotes, truck packing, power distribution).
+ * subtotal per discipline, and a PDF + CSV export for production planning (rental quotes, truck packing, power distribution).
  *
  * A view in the project's binding pattern:
  *  - It reads UStageBillOfMaterialsSubsystem::GetReport and never computes totals itself (one source of truth).

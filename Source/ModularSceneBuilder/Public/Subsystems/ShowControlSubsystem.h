@@ -191,16 +191,42 @@ public:
 	UPROPERTY(BlueprintAssignable, Category = "StageCraft|DMX")
 	FOnShowControlSourceChanged OnControlSourceChanged;
 
+	// --- Diagnostics ---
+
+	/** Time spent in Tick (fades, strobes, DMX output) since the last reset. */
+	struct FTickCostStats
+	{
+		int32 Ticks = 0;
+		double TotalSeconds = 0.0;
+		double MaxSeconds = 0.0;
+	};
+
+	/**
+	 * Measured in development builds only, for the fixture benchmark (Docs/ADR/0012-production-reports-and-fixture-benchmark.md
+	 * §3); always zero in Shipping. Reading or resetting it does not change playback.
+	 */
+	const FTickCostStats& GetTickCostStats() const { return TickCostStats; }
+	void ResetTickCostStats() { TickCostStats = FTickCostStats(); }
+
 protected:
 	//~ Begin UWorldSubsystem Interface
 	virtual bool DoesSupportWorldType(const EWorldType::Type WorldType) const override;
 	//~ End UWorldSubsystem Interface
 
 private:
+	struct FAttributeLerp
+	{
+		FGameplayTag Attribute;
+		float From = 0.f;
+		float To = 0.f;
+	};
+
 	struct FAttributeFade
 	{
 		TWeakObjectPtr<class ALightingFixtureActor> Fixture;
-		TMap<FGameplayTag, float> From;
+		/** Attributes whose start and target differ: the only ones a fade frame writes, so unchanged ones cost nothing. */
+		TArray<FAttributeLerp> Changing;
+		/** Every value the cue recorded, applied once when the fade completes. */
 		TMap<FGameplayTag, float> To;
 	};
 
@@ -236,4 +262,5 @@ private:
 	float ActiveCueNumber = -1.f;
 	float DMXOutputAccumulator = 0.f;
 	EStageControlSource ControlSource = EStageControlSource::Internal;
+	FTickCostStats TickCostStats;
 };

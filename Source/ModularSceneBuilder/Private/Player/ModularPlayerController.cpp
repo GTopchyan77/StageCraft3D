@@ -39,6 +39,7 @@
 #include "Player/StageCraftGameViewportClient.h"
 #include "Render/StageRenderSubsystem.h"
 #include "Report/StageBillOfMaterialsSubsystem.h"
+#include "Report/StageCableScheduleSubsystem.h"
 #include "Report/StagePatchSheetSubsystem.h"
 #include "Scene/StageSceneComponent.h"
 #include "Subsystems/ShowControlSubsystem.h"
@@ -1234,6 +1235,18 @@ bool AModularPlayerController::RequestExportPatchSheet()
 	UStagePatchSheetSubsystem* PatchSheet = UWorld::GetSubsystem<UStagePatchSheetSubsystem>(GetWorld());
 	FText Reason = LOCTEXT("NoPatchSheet", "The patch sheet is not available in this level.");
 	if (PatchSheet && PatchSheet->StartExport(Reason))
+	{
+		return true;
+	}
+	ReportRejection(FStageEconomyResultInfo::Fail(EStageEconomyResult::InvalidRequest, Reason));
+	return false;
+}
+
+bool AModularPlayerController::RequestExportCableSchedule()
+{
+	UStageCableScheduleSubsystem* CableSchedule = UWorld::GetSubsystem<UStageCableScheduleSubsystem>(GetWorld());
+	FText Reason = LOCTEXT("NoCableSchedule", "The cable schedule is not available in this level.");
+	if (CableSchedule && CableSchedule->StartExport(Reason))
 	{
 		return true;
 	}
