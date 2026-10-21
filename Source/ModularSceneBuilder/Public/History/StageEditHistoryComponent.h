@@ -33,7 +33,8 @@ DECLARE_DELEGATE_RetVal_TwoParams(bool, FStageTransformValidator, const class AM
  * it records what this player's tools did, and runs undo/redo against the live world.
  *
  * Recording (each user action becomes exactly one step, after it succeeded):
- *  - Place: UStagePlacementToolComponent::OnItemPlaced and UStageSpanToolComponent::OnItemPlaced (bound here).
+ *  - Place: UStagePlacementToolComponent::OnItemPlaced and UStageSpanToolComponent::OnItemPlaced (bound here); RecordPlacements
+ *    for a stage generated from the Sketch window (one step for all of it).
  *  - Parameter: RecordParameterChange, called by the controller after a validated edit that changes what an item is made of
  *    (a span's length); undo / redo write it back through ParameterApplier, so the rules decide again.
  *  - Delete: DeleteItem, which the controller's Delete key goes through.
@@ -107,6 +108,13 @@ public:
 	 * Description names the step ("Store Cue 3").
 	 */
 	void RecordCueListChange(const FText& Description, const TArray<struct FShowCue>& Before, const TArray<struct FShowCue>& After);
+
+	/**
+	 * Records items one action placed together (a stage generated from the Sketch window, Docs/ADR/0015-sketch-to-stage.md §2.5)
+	 * as ONE step named Description: undo removes all of them, redo restores all of them through the rules, all or nothing.
+	 * Items that are no longer valid are left out; nothing is recorded if none is. An open transaction is ended first.
+	 */
+	void RecordPlacements(TConstArrayView<class AModularBaseActor*> PlacedItems, const FText& Description);
 
 	/** How undo / redo write parameters. See FStageParameterApplier. */
 	FStageParameterApplier ParameterApplier;

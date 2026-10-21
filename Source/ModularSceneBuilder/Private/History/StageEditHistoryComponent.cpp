@@ -215,6 +215,21 @@ void UStageEditHistoryComponent::RecordCueListChange(const FText& Description, c
 	Record(MakeShared<FStageCueListCommand>(Description, Before, After));
 }
 
+void UStageEditHistoryComponent::RecordPlacements(TConstArrayView<AModularBaseActor*> PlacedItems, const FText& Description)
+{
+	EndTransaction();
+	TArray<TSharedRef<IStageEditCommand>> Commands;
+	Commands.Reserve(PlacedItems.Num());
+	for (const AModularBaseActor* Item : PlacedItems)
+	{
+		if (IsValid(Item))
+		{
+			Commands.Add(MakeShared<FStagePlaceItemCommand>(Item->CaptureSnapshot()));
+		}
+	}
+	RecordAsOneStep(MoveTemp(Commands), Description);
+}
+
 void UStageEditHistoryComponent::RecordAsOneStep(TArray<TSharedRef<IStageEditCommand>> Commands, const FText& BatchDescription) const
 {
 	if (Commands.Num() == 1)

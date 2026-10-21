@@ -90,6 +90,7 @@ namespace StageCraftTags
 	UE_DEFINE_GAMEPLAY_TAG_COMMENT(FeatureGroup_Audio,			"StageCraft.FeatureGroup.Audio",		"Speaker and system settings.");
 	UE_DEFINE_GAMEPLAY_TAG_COMMENT(FeatureGroup_Rigging,		"StageCraft.FeatureGroup.Rigging",		"Truss and hoist specs.");
 	UE_DEFINE_GAMEPLAY_TAG_COMMENT(FeatureGroup_Span,			"StageCraft.FeatureGroup.Span",			"Length and segments of a linear run (truss, railing, cable).");
+	UE_DEFINE_GAMEPLAY_TAG_COMMENT(FeatureGroup_Deck,			"StageCraft.FeatureGroup.Deck",			"Height and footprint of a stage deck or riser.");
 	UE_DEFINE_GAMEPLAY_TAG_COMMENT(FeatureGroup_Shapers,		"StageCraft.FeatureGroup.Shapers",		"Framing shutters (blades) of a profile fixture.");
 	UE_DEFINE_GAMEPLAY_TAG_COMMENT(FeatureGroup_Photometrics,	"StageCraft.FeatureGroup.Photometrics",	"Beam intensity, throw and illuminance (read-only).");
 
@@ -125,6 +126,10 @@ namespace StageCraftTags
 	UE_DEFINE_GAMEPLAY_TAG_COMMENT(Param_Span_Fit,				"StageCraft.Param.Span.Fit",			"How the run fills its length (read-only).");
 	UE_DEFINE_GAMEPLAY_TAG_COMMENT(Param_Span_Legs,			"StageCraft.Param.Span.Legs",			"Straight legs of a drawn path (read-only).");
 	UE_DEFINE_GAMEPLAY_TAG_COMMENT(Param_Span_Sag,				"StageCraft.Param.Span.Sag",			"Mid-span sag of a hanging run (cables) in cm.");
+	UE_DEFINE_GAMEPLAY_TAG_COMMENT(Param_Deck_Height,			"StageCraft.Param.Deck.Height",			"Deck top above its base in cm.");
+	UE_DEFINE_GAMEPLAY_TAG_COMMENT(Param_Deck_Area,			"StageCraft.Param.Deck.Area",			"Deck top area in square metres (read-only).");
+	UE_DEFINE_GAMEPLAY_TAG_COMMENT(Param_Deck_Panels,			"StageCraft.Param.Deck.Panels",			"Rental deck panels needed to cover the footprint (read-only).");
+	UE_DEFINE_GAMEPLAY_TAG_COMMENT(Param_Deck_Corners,			"StageCraft.Param.Deck.Corners",		"Corners of the deck outline (read-only).");
 	UE_DEFINE_GAMEPLAY_TAG_COMMENT(Param_Photo_BeamAngle,		"StageCraft.Param.Photo.BeamAngle",		"Effective full beam angle after zoom and iris, in degrees (read-only).");
 	UE_DEFINE_GAMEPLAY_TAG_COMMENT(Param_Photo_Intensity,		"StageCraft.Param.Photo.Intensity",		"Approximate peak intensity in candela (read-only).");
 	UE_DEFINE_GAMEPLAY_TAG_COMMENT(Param_Photo_Throw,			"StageCraft.Param.Photo.Throw",			"Distance to the first surface along the beam, as text in metres, or \"No surface\" (read-only).");
@@ -167,7 +172,7 @@ namespace StageCraftTags
 
 	bool IsShapeParameter(const FGameplayTag& ParameterId)
 	{
-		return IsQuantityParameter(ParameterId) || ParameterId == Param_Span_Sag;
+		return IsQuantityParameter(ParameterId) || ParameterId == Param_Span_Sag || ParameterId == Param_Deck_Height;
 	}
 
 	bool IsPhotometricParameter(const FGameplayTag& ParameterId)

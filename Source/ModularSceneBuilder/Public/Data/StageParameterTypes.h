@@ -175,6 +175,7 @@ namespace StageCraftTags
 	MODULARSCENEBUILDER_API UE_DECLARE_GAMEPLAY_TAG_EXTERN(FeatureGroup_Audio);
 	MODULARSCENEBUILDER_API UE_DECLARE_GAMEPLAY_TAG_EXTERN(FeatureGroup_Rigging);
 	MODULARSCENEBUILDER_API UE_DECLARE_GAMEPLAY_TAG_EXTERN(FeatureGroup_Span);
+	MODULARSCENEBUILDER_API UE_DECLARE_GAMEPLAY_TAG_EXTERN(FeatureGroup_Deck);
 	MODULARSCENEBUILDER_API UE_DECLARE_GAMEPLAY_TAG_EXTERN(FeatureGroup_Shapers);
 	MODULARSCENEBUILDER_API UE_DECLARE_GAMEPLAY_TAG_EXTERN(FeatureGroup_Photometrics);
 
@@ -211,6 +212,10 @@ namespace StageCraftTags
 	MODULARSCENEBUILDER_API UE_DECLARE_GAMEPLAY_TAG_EXTERN(Param_Span_Fit);
 	MODULARSCENEBUILDER_API UE_DECLARE_GAMEPLAY_TAG_EXTERN(Param_Span_Legs);
 	MODULARSCENEBUILDER_API UE_DECLARE_GAMEPLAY_TAG_EXTERN(Param_Span_Sag);
+	MODULARSCENEBUILDER_API UE_DECLARE_GAMEPLAY_TAG_EXTERN(Param_Deck_Height);
+	MODULARSCENEBUILDER_API UE_DECLARE_GAMEPLAY_TAG_EXTERN(Param_Deck_Area);
+	MODULARSCENEBUILDER_API UE_DECLARE_GAMEPLAY_TAG_EXTERN(Param_Deck_Panels);
+	MODULARSCENEBUILDER_API UE_DECLARE_GAMEPLAY_TAG_EXTERN(Param_Deck_Corners);
 	MODULARSCENEBUILDER_API UE_DECLARE_GAMEPLAY_TAG_EXTERN(Param_Photo_BeamAngle);
 	MODULARSCENEBUILDER_API UE_DECLARE_GAMEPLAY_TAG_EXTERN(Param_Photo_Intensity);
 	MODULARSCENEBUILDER_API UE_DECLARE_GAMEPLAY_TAG_EXTERN(Param_Photo_Throw);
@@ -223,7 +228,7 @@ namespace StageCraftTags
 	/** Parameters that change how many catalog units an item consists of (AModularBaseActor::GetQuantity), and so its weight and power. */
 	MODULARSCENEBUILDER_API bool IsQuantityParameter(const FGameplayTag& ParameterId);
 
-	/** Parameters that reshape an item (a span's length or sag): undoable steps, refused while the item is locked. Includes the quantity parameters. */
+	/** Parameters that reshape an item (a span's length or sag, a deck's height): undoable steps, refused while the item is locked. Includes the quantity parameters. */
 	MODULARSCENEBUILDER_API bool IsShapeParameter(const FGameplayTag& ParameterId);
 
 	/** Parameters that change how an item is listed (outliner, bill of materials): label, visibility, lock and quantity. */

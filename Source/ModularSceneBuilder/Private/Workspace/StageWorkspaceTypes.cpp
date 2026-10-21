@@ -20,4 +20,5 @@ namespace StageCraftTags
 	UE_DEFINE_GAMEPLAY_TAG_COMMENT(Panel_Environment, "StageCraft.Panel.Environment", "Environment panel: outdoor sky, time of day, sun path and weather.");
 	UE_DEFINE_GAMEPLAY_TAG_COMMENT(Panel_Cues,		"StageCraft.Panel.Cues",		"Cue list: store, play and edit the show's lighting cues; internal or external DMX control.");
 	UE_DEFINE_GAMEPLAY_TAG_COMMENT(Panel_Preferences,	"StageCraft.Panel.Preferences",	"Preferences: keyboard shortcuts, camera look, viewport and audio.");
+	UE_DEFINE_GAMEPLAY_TAG_COMMENT(Panel_Sketch,		"StageCraft.Panel.Sketch",		"Sketch to Stage: draw decks, truss lines and fixtures in 2D and generate them in 3D.");
 }

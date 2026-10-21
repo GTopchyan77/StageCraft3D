@@ -43,6 +43,9 @@
 #include "Report/StageCableScheduleSubsystem.h"
 #include "Report/StagePatchSheetSubsystem.h"
 #include "Scene/StageSceneComponent.h"
+#include "Sketch/StageSketchBuilder.h"
+#include "Sketch/StageSketchGenerator.h"
+#include "Sketch/StageSketchSubsystem.h"
 #include "Subsystems/ShowControlSubsystem.h"
 #include "Subsystems/StageEconomySubsystem.h"
 #include "Subsystems/StageItemSubsystem.h"
@@ -1302,6 +1305,78 @@ bool AModularPlayerController::RequestExportCableSchedule()
 	}
 	ReportRejection(FStageEconomyResultInfo::Fail(EStageEconomyResult::InvalidRequest, Reason));
 	return false;
+}
+
+bool AModularPlayerController::RequestGenerateFromSketch()
+{
+	UStageSketchSubsystem* Sketch = UWorld::GetSubsystem<UStageSketchSubsystem>(GetWorld());
+	FText Reason;
+	FStageSketchBuildPlan Plan;
+	if (!Sketch || !SpawnSystem)
+	{
+		Reason = LOCTEXT("NoSketch", "Sketch to Stage is not available in this level.");
+	}
+	else if (IsBusyWithPointer())
+	{
+		Reason = LOCTEXT("SketchBusy", "Finish the drag or camera move first, then generate the sketch.");
+	}
+	else if (Sketch->IsGenerationPending())
+	{
+		Reason = LOCTEXT("SketchPending", "The sketch is already being generated.");
+	}
+	else
+	{
+		Plan = Sketch->MakePlan();
+		if (Plan.IsEmpty())
+		{
+			Reason = Plan.Warnings.IsEmpty()
+				? LOCTEXT("SketchEmpty", "Nothing to generate: draw a stage shape, a truss line or a fixture first.")
+				: FText::Format(LOCTEXT("SketchNothingUsable", "Nothing to generate. {0}"), Plan.Warnings[0]);
+		}
+	}
+
+	if (Reason.IsEmpty() && Sketch->RequestPlanAssets(Plan, FSimpleDelegate::CreateUObject(this, &ThisClass::HandleSketchAssetsReady)))
+	{
+		return true;
+	}
+	ReportRejection(FStageEconomyResultInfo::Fail(EStageEconomyResult::InvalidRequest,
+		Reason.IsEmpty() ? LOCTEXT("SketchNotStarted", "The sketch could not be generated.") : Reason));
+	return false;
+}
+
+void AModularPlayerController::HandleSketchAssetsReady()
+{
+	UStageSketchSubsystem* Sketch = UWorld::GetSubsystem<UStageSketchSubsystem>(GetWorld());
+	TOptional<FStageSketchBuildPlan> Plan = Sketch ? Sketch->TakeReadyPlan() : TOptional<FStageSketchBuildPlan>();
+	if (!Plan.IsSet() || !SpawnSystem)
+	{
+		return;
+	}
+
+	// The preview check asks the same GameMode rules without reporting, so only the summary below reaches the status bar.
+	const FStageSketchBuildOutcome Outcome = StageSketchBuilder::Execute(*Plan, *SpawnSystem,
+		[this](const UBaseItemData& Item, int32 Quantity) { return EvaluatePlacementPreview(Item, Quantity); });
+
+	FStageSketchGenerateResult Result;
+	Result.bSucceeded = Outcome.IsSuccess();
+	if (!Outcome.IsSuccess())
+	{
+		Result.Message = FText::Format(LOCTEXT("SketchRefused", "Nothing was generated: {0}"), Outcome.Result.Message);
+		ReportRejection(FStageEconomyResultInfo::Fail(Outcome.Result.Code, Result.Message));
+		Sketch->ReportGeneration(Result);
+		return;
+	}
+
+	Result.DeckCount = Outcome.DeckCount;
+	Result.TrussCount = Outcome.TrussCount;
+	Result.FixtureCount = Outcome.FixtureCount;
+	if (EditHistory)
+	{
+		EditHistory->RecordPlacements(Outcome.Placed, FText::Format(LOCTEXT("GenerateStep", "Generate from Sketch ({0} {0}|plural(one=item,other=items))"),
+			FText::AsNumber(Outcome.Placed.Num())));
+	}
+	Result.Message = FText::Format(LOCTEXT("SketchGenerated", "Generated {0}. Undo removes all of it in one step."), StageSketchGenerator::DescribePlan(*Plan));
+	Sketch->ReportGeneration(Result);
 }
 
 UShowControlSubsystem* AModularPlayerController::ApproveCueRequest(EStageCueRequest Request, float CueNumber)

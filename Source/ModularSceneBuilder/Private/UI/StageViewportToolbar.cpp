@@ -20,6 +20,9 @@
 #include "UI/StageToolButton.h"
 #include "Viewport/StageViewMath.h"
 #include "Viewport/StageViewportComponent.h"
+#include "Workspace/StageWorkspaceSubsystem.h"
+#include "Workspace/StageWorkspaceTypes.h"
+#include "Engine/GameInstance.h"
 
 #include UE_INLINE_GENERATED_CPP_BY_NAME(StageViewportToolbar)
 
@@ -209,7 +212,7 @@ void UStageViewportToolbar::BuildTree()
 			BarSlot->SetVerticalAlignment(VAlign_Center);
 		}
 	};
-	// Five sections, each separated by a divider with SectionGap on both sides: projection | view | grid snap | angle snap | gizmo.
+	// Six sections, each separated by a divider with SectionGap on both sides: projection | view | grid snap | angle snap | gizmo | sketch.
 	// The first widget of every section after the first is added with SectionGap, so all dividers sit centred in equal gaps.
 	const auto AddDivider = [this, &Add]()
 	{
@@ -274,6 +277,22 @@ void UStageViewportToolbar::BuildTree()
 	Add(MakeSegment({ LOCTEXT("Move", "MOVE"), LOCTEXT("Rotate", "ROTATE"), LOCTEXT("Scale", "SCALE") },
 		{ LOCTEXT("MoveTip", "Move the selection (Space cycles the tools)."), LOCTEXT("RotateTip", "Rotate the selection."), LOCTEXT("ScaleTip", "Scale the selection.") },
 		GizmoModeButtons, &ThisClass::HandleGizmoModePicked), SectionGap);
+
+	// 6. Sketch to Stage: opens (or brings forward) the drawing window.
+	AddDivider();
+	Add(MakeSegment({ LOCTEXT("Sketch", "SKETCH") },
+		{ LOCTEXT("SketchTip", "Sketch to Stage: draw stage shapes, truss lines and fixtures from above and generate them in 3D.") },
+		SketchButtons, &ThisClass::HandleSketchPicked), SectionGap);
+}
+
+void UStageViewportToolbar::HandleSketchPicked(int32 Index)
+{
+	// Opening a panel is workspace layout, not stage state.
+	const UGameInstance* GameInstance = GetGameInstance();
+	if (UStageWorkspaceSubsystem* Workspace = GameInstance ? GameInstance->GetSubsystem<UStageWorkspaceSubsystem>() : nullptr)
+	{
+		Workspace->OpenPanel(StageCraftTags::Panel_Sketch);
+	}
 }
 
 void UStageViewportToolbar::NativeConstruct()
@@ -368,6 +387,7 @@ void UStageViewportToolbar::Refresh()
 	StyleGroup(GizmoModeButtons, Gizmo ? int32(Gizmo->GetMode()) : INDEX_NONE, Gizmo != nullptr);
 	StyleGroup(GridSnapButtons, Snapping ? FindPreset(StageViewMath::GetGridSnapPresets(), Snapping->GetGridSnap()) : INDEX_NONE, Snapping != nullptr);
 	StyleGroup(AngleSnapButtons, Snapping ? FindPreset(StageViewMath::GetAngleSnapPresets(), Snapping->GetAngleSnap()) : INDEX_NONE, Snapping != nullptr);
+	StyleGroup(SketchButtons, INDEX_NONE, true);
 
 	// SetSelectedIndex reports ESelectInfo::Direct, which the handlers ignore: only user picks are edits.
 	const auto Select = [](UStageThemedComboBox* Combo, int32 Index, bool bEnabled)

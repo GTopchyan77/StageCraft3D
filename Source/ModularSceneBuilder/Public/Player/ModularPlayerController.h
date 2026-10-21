@@ -229,6 +229,15 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "StageCraft|Requests")
 	bool RequestExportCableSchedule();
 
+	/**
+	 * Builds the Sketch window's drawing as decks, truss runs and fixtures (Docs/ADR/0015-sketch-to-stage.md §2.5). Returns true when
+	 * the request started: the plan's items stream in, then every element is placed through the GameMode rules, all or nothing,
+	 * and recorded as ONE undo step. The result arrives on UStageSketchSubsystem::OnGenerationFinished. Refused (and reported on
+	 * OnRequestRejected) during a gizmo drag or camera flight, while a generation is in flight, or when the sketch builds nothing.
+	 */
+	UFUNCTION(BlueprintCallable, Category = "StageCraft|Requests")
+	bool RequestGenerateFromSketch();
+
 	// --- Cues (Docs/ADR/0011-cue-list-and-patch-sheet-export.md §2.2) ---
 	// Each asks AStageCraftGameModeBase::EvaluateCueRequest, then calls UShowControlSubsystem. Store, Update and Delete are
 	// recorded as one undo step each. A refusal is reported on OnRequestRejected and returns false.
@@ -497,6 +506,9 @@ private:
 
 	/** The world's show control when the GameMode allows Request on CueNumber; null (refusal reported) otherwise. */
 	class UShowControlSubsystem* ApproveCueRequest(EStageCueRequest Request, float CueNumber);
+
+	/** The sketch plan's items are in memory: places the plan (all or nothing), records it as one step, reports the result. */
+	void HandleSketchAssetsReady();
 
 	/** Records the cue list change from Before to the current list as one undo step named Description. */
 	void RecordCueEdit(const FText& Description, const TArray<FShowCue>& Before, const class UShowControlSubsystem& Show) const;

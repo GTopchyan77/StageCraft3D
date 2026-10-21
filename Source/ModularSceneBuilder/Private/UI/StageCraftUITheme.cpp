@@ -40,6 +40,7 @@ UStageCraftUITheme::UStageCraftUITheme()
 	FeatureGroupColors.Add(StageCraftTags::FeatureGroup_Beam,		Hex(TEXT("4CD964")));
 	FeatureGroupColors.Add(StageCraftTags::FeatureGroup_Audio,		Hex(TEXT("00C2C7")));
 	FeatureGroupColors.Add(StageCraftTags::FeatureGroup_Rigging,	Hex(TEXT("C08457")));
+	FeatureGroupColors.Add(StageCraftTags::FeatureGroup_Deck,		Hex(TEXT("B08F6A")));
 	FeatureGroupColors.Add(StageCraftTags::FeatureGroup_Shapers,	Hex(TEXT("7CB342")));
 	FeatureGroupColors.Add(StageCraftTags::FeatureGroup_Photometrics, Hex(TEXT("FFD54F")));
 }

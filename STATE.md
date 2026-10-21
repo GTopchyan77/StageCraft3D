@@ -3426,10 +3426,116 @@ The design is in `Docs/ADR/0013-preferences-key-bindings-and-audit-fixes.md`.
   - whether the counts match a real rental pick list.
 - Status: **implemented, awaiting manual verification.**
 
-**Commit:** uncommitted (working tree).
+**Commit:** `80f055d`.
 
 **Known issues / follow-ups**
 - **Positions are assumed:** automatic means the centre of the equipment on the floor. Placeable distro and DMX node items (and per-distro placement near its loads) are the follow-up. The PDF prints the assumed positions.
 - **Not modelled:** TRUE1 daisy-chains (still one home-run per load), truss and speaker rigging, mains feed cables, spares.
 - **Rigged is decided by height (world Z ≥ 2 m) or tilt;** a fixture on a high deck counts as rigged.
 - The phase imbalance warning for very small rigs (2 loads → 100 %) is unchanged from #39.
+
+---
+
+## #42 — Sketch to Stage: 2D drawing window and procedural 3D generation (decks, truss, fixtures), one undo step (2026-10-21)
+
+**Request (Gevor, 2026-10-21, "Step 2: Drawing Window & Interactive 2D Sketch-to-3D Reconstruction").** A dockable 2D canvas (freehand, polygon / stage shape, straight truss line, fixture markers; smoothing; erase and clear); a generator subsystem (closed polygons → decks/risers with a height, lines → truss spans with corner joints, points → fixtures on grid-snapped positions); opened from the main menu and a toolbar button; generation undoable through the existing history; TObjectPtr, no tick, tests, 0 warnings. Mid-task (2026-10-21) Gevor asked for the window to open **as its own pop-up window, like Unreal Engine's floating windows**, instead of being docked into the main layout. Design: `Docs/ADR/0015-sketch-to-stage.md`.
+
+**Housekeeping first.** #41 said "uncommitted"; it carries `80f055d`.
+
+**What changed and why**
+- **No deck item existed.** No actor could take an arbitrary floor outline, so closed shapes had nothing to become. New:
+  - `UStageDeckData` (catalog): default footprint, default/min/max height, height step, panel size (the quantity unit), surface and skirt materials (Game bundle). Specs are per panel.
+  - `AStageDeckActor`: SaveGame `Outline` (actor-local, cm) and `DeckHeight`, so undo snapshots and scene files carry decks with **no scene format change** (still v3). A `UProceduralMeshComponent` builds the prism: a top triangulated by ear clipping, and flat-shaded skirt walls with outward normals (no bottom face). Collision is query-only on the stage item channel, so decks can be selected and items placed on them.
+  - Quantity = ⌈area ÷ panel area⌉, so session limits and the BOM count rental panels. Decks do not scale.
+  - Inspector "Deck" section: Height (`Param_Deck_Height`; in `IsShapeParameter`, so it is undoable and refused while locked), plus Area, Panels and Corners (read-only).
+  - Restored values are untrusted. A self-crossing, too-small or non-finite outline becomes the default footprint, and an out-of-range height is clamped. Each repair is counted (`ReportStateRepair`).
+  - Triangle winding follows the engine's own face normal, `(P1 − P2) × (P0 − P2)` (`UKismetProceduralMeshLibrary`). Every triangle is checked against its intended normal, and the tests assert it.
+- **Pure models (no world):**
+  - `StageDeckMath`: signed area, centroid, simple-polygon test, point in polygon, ear clipping, outline sanitizing, rectangle, panel count, mesh.
+  - `StageSketchMath`: lazy-brush stabiliser, iterative Ramer–Douglas–Peucker, grid snap, distance to a stroke, closed-gesture test, stroke and settings sanitizing. Limits: 256 strokes, 512 points, ±100 m.
+  - `StageSketchGenerator::BuildPlan` (deterministic):
+    - Deck corners snap to the grid and the outline is sanitized; the origin is at the centroid on the floor, and the height is clamped to the item.
+    - Truss-tool points of a whole-section truss snap to the **section length** (2 m for F34), so a drawn rectangle has whole sides and closes; freehand curves snap to the grid. Truss is laid out with `StageSpanMath::ComputePathLayout` exactly as the span actor will normalise it.
+    - A fixture within 75 cm of a planned truss is projected onto it, its distance along the leg snapped, and **hung** (truss height, rolled 180°). Otherwise it stands on the **highest deck** that contains it, otherwise on the floor. Duplicates are skipped.
+    - Every skip is a user-facing warning: a crossing shape, a clamped height, a loop that cannot close, a path cut by the section cap, a duplicate, a missing catalog item.
+- **Generator subsystem `UStageSketchSubsystem` (UWorldSubsystem, Game/PIE):**
+  - It is the source of truth for the sketch (strokes, settings, the catalog item chosen per element), so closing, reopening or re-docking the window keeps the drawing.
+  - Validated setters fire `OnSketchChanged`; `MakePlan` plans the current sketch.
+  - `RequestPlanAssets` streams the chosen items' Game bundles, with one generation in flight; the handle is cancelled in `Deinitialize`.
+  - It never ticks, never iterates the world and never changes the stage.
+- **Generation = request bridge, all or nothing, one undo step:**
+  - `AModularPlayerController::RequestGenerateFromSketch` refuses during a gizmo drag or flight, while a generation is pending, or for an empty plan (the reason goes to the status bar).
+  - Once the assets are loaded, `StageSketchBuilder::Execute` checks each element with the GameMode's placement preview (not reported) and spawns it through `USpawnSystemComponent::SpawnConfiguredItem` / `SpawnItem` (the validator asks the rules again with the real quantity).
+  - **If any element is refused, every item from that request is deleted again**, and "Nothing was generated: <reason>" is reported.
+  - On success, `UStageEditHistoryComponent::RecordPlacements` records one `FStageBatchCommand` of `FStagePlaceItemCommand`s ("Generate from Sketch (N items)"). Undo removes everything; redo restores it through the rules.
+- **Window:**
+  - `UStageSketchCanvasWidget` (panel, code-built, `DisableNativeTick`):
+    - tool segment (FREEHAND / STAGE SHAPE / TRUSS LINE / FIXTURE / ERASE), UNDO STROKE / CLEAR / FRAME, and a hint line per tool;
+    - DECK and TRUSS height sliders, GRID 25/50/100 cm, SNAP, SMOOTH OFF/LOW/HIGH;
+    - the item per element (click for the next candidate; long names end in an ellipsis, with the full name in the tooltip);
+    - a live "Will build: …" line with the warnings, the last result, and GENERATE 3D.
+  - `UStageSketchSurfaceWidget` (the canvas):
+    - a top view like the viewport's Top projection (up +X, right +Y), with the grid, axes, filled deck shapes labelled with their height, truss lines, fixture markers, the stroke in progress with a rubber band, the snapped cursor and its coordinates;
+    - freehand drag (stabilised and simplified), clicks for shapes and truss (first point, double-click or Enter finishes; Backspace, Esc), erase by click, wheel zoom about the cursor, right/middle drag pan;
+    - it repaints only on input or `OnSketchChanged`.
+  - **Pop-up window (Gevor's mid-task request):** Sketch to Stage is not in the default layout and opens as its own floating window, **1100 × 820** (`FTabManager::RegisterDefaultTabWindowSize` in `FStageWorkspaceShell::RegisterPanelSpawners`; Slate's fallback was 1000 × 600). It can still be docked by dragging its tab.
+- **Entry points:** Edit › Draw › Sketch to Stage..., the Window menu, and a SKETCH button as the sixth section of the viewport toolbar.
+- **Content** (headless, `Scripts/Content/create_sketch_content.py`): `DA_Panel_Sketch`, `M_DeckSurface`, `M_DeckSkirt`, and `DA_Deck_Riser` (2 × 1 m panels, 20–200 cm, 28 kg per panel; also placeable from the Library under Stage / Deck).
+- **Dev console** (compiled out of Shipping): `StageCraft.Sketch.Add Freehand|Shape|Truss|Fixture x,y … [closed] [h=cm]` (x:y inside -ExecCmds), `Status`, `Set`, `Clear`, `UndoStroke`, `Generate`, and `Screenshot` (saves the Sketch window through Slate wherever it is, and logs its size).
+- **Bug found in the scripted run and fixed:** the dev `Sketch.Add … closed` appended `Points[0]` to the same array (container aliasing assert in Standalone). Only the test command was affected.
+- **Bug found in the screenshots and fixed:**
+  - the canvas background drew white: a rounded-box brush painted directly ignored its fill colour, so it now uses the white brush tinted with the theme;
+  - item names ran into the next label: they are now clipped with an ellipsis.
+
+**Files changed**
+- New:
+  - `Docs/ADR/0015-sketch-to-stage.md`
+  - `Scripts/Content/create_sketch_content.py`
+  - `Content/StageCraft/UI/Panels/DA_Panel_Sketch.uasset`, `Content/StageCraft/Decks/M_DeckSurface.uasset`, `M_DeckSkirt.uasset`, `Content/StageCraft/Items/DA_Deck_Riser.uasset`
+  - `Source/ModularSceneBuilder/Public/Sketch/StageSketchTypes.h`, `StageSketchMath.h`, `StageSketchGenerator.h`, `StageSketchSubsystem.h`, `StageSketchBuilder.h`
+  - `Private/Sketch/StageSketchTypes.cpp`, `StageSketchMath.cpp`, `StageSketchGenerator.cpp`, `StageSketchSubsystem.cpp`, `StageSketchBuilder.cpp`, `StageSketchConsoleCommands.cpp`, `Tests/StageSketchTests.cpp`, `Tests/StageSketchWorldTests.cpp`
+  - `Public/Placement/StageDeckMath.h`, `Private/Placement/StageDeckMath.cpp`
+  - `Public/Data/StageDeckData.h`, `Private/Data/StageDeckData.cpp`, `Public/Actors/StageDeckActor.h`, `Private/Actors/StageDeckActor.cpp`
+  - `Public/UI/StageSketchCanvasWidget.h`, `Private/UI/StageSketchCanvasWidget.cpp`, `Public/UI/StageSketchSurfaceWidget.h`, `Private/UI/StageSketchSurfaceWidget.cpp`
+- Modified:
+  - `Public/Data/StageParameterTypes.h`, `Private/Data/StageParameterTypes.cpp` (`FeatureGroup_Deck`, `Param_Deck_*`; Height in `IsShapeParameter`)
+  - `Private/UI/StageCraftUITheme.cpp` (deck group colour)
+  - `Public/History/StageEditHistoryComponent.h`, `Private/History/StageEditHistoryComponent.cpp` (`RecordPlacements`)
+  - `Public/Player/ModularPlayerController.h`, `Private/Player/ModularPlayerController.cpp` (`RequestGenerateFromSketch`, `HandleSketchAssetsReady`)
+  - `Public/Workspace/StageWorkspaceTypes.h`, `Private/Workspace/StageWorkspaceTypes.cpp` (`Panel_Sketch`)
+  - `Private/Workspace/StageWorkspaceShell.cpp` (pop-up window size)
+  - `Private/Workspace/SStageWorkspaceMenuBar.cpp` (Edit › Draw › Sketch to Stage...)
+  - `Public/UI/StageViewportToolbar.h`, `Private/UI/StageViewportToolbar.cpp` (SKETCH section)
+  - `Docs/CURRENT_SYSTEMS.md`, `tasks/todo.md` (Phase 19), this file
+- No maps, Blueprints, input assets, plugins or config changed. The panel and deck item are found by the existing `StagePanel` / `StageItem` Asset Manager rules.
+
+**Verification (Claude, 2026-10-21)**
+- **Builds (UE 5.8):** Editor Development, Game Development and Game Shipping (`-DisableAdaptiveUnity`) all succeeded with 0 warnings in project code. The only warnings in the logs are C4305 inside the third-party Sky Creator plugin's own module (`SkyCreatorWeatherSettings.h`), which recompiled; they are not from this change. The Shipping exe contains no `StageCraft.Sketch.*` command strings.
+- **Automation:** 75/75 `StageCraft` tests passed (71 + 4 new):
+  - `Sketch.Math`: stabiliser, RDP, snap, segment and stroke distance, freehand loop → deck and open line → truss, bad points, caps, settings clamps.
+  - `Sketch.Deck`: area and orientation, bow tie and spike, convex/concave/clockwise triangulation covering the exact area, outline repair, panel counts, mesh faces by the engine formula, the −Y wall facing −Y.
+  - `Sketch.Plan`: 32 m² deck → 16 panels at the centroid, a closed 14-section truss loop from off-grid clicks, a hung fixture at (400, −1000, 600) rolled 180°, a fixture on the 60 cm deck top, a floor fixture, duplicate / bow tie / clamped-height warnings, an unsnapped loop that cannot close, missing items, determinism.
+  - `Sketch.Generate` (real game world): 4 items placed; deck 8 m², 80 cm, 4 panels, 10 triangles; truss 4 sections at 6 m; one undo removes all and redo restores all with no repairs; a refused 4th element leaves the stage unchanged with the rule's reason; a missing item spawns nothing; a bow-tie outline is repaired to the default footprint.
+- **Scripted Standalone `-game` runs** (`Saved/Logs/R42_Run2–6.log`):
+  - Run 2: a 6 × 10 m deck at 1 m, a 3 × 4 m riser at 40 cm, an 8 × 12 m truss loop, a freehand curve, 3 fixtures by the truss and 2 on the deck. The plan read "2 decks (36 panels), 2 truss runs (25 sections), 7 fixtures"; Generate placed all 11 (hung fixtures at Z 600, deck fixtures at Z 100) and the BOM counted 36 deck units (1008 kg). Undo removed all 11 as "Generate from Sketch (11 items)", and redo restored them. The scene was saved as "R42_Sketch" and reloaded: 15 placed, 0 refused, 0 repaired, decks intact.
+  - Screenshots `ScreenShot00080` (Top) and `00081` (Perspective): solid decks with outward-facing walls (winding correct), fixtures on the deck, the truss loop with hung fixtures, the curved truss, and the SKETCH toolbar button.
+  - Runs 5 and 6: `StageCraft.Sketch.Screenshot` → the window "Sketch to Stage" opened **floating, 1106 × 826**, in front of the main window (`Saved/Screenshots/Sketch_215131.png`, `Sketch_215358.png`): dark canvas, filled deck shapes with heights, truss, markers, the plan line, the result message and the self-crossing warning.
+  - Gevor's workspace session was backed up and restored around every run (compared byte for byte).
+- **Not verified by a person:**
+  - drawing with the real mouse and keyboard: freehand drag, shape and truss clicks, double-click / Enter / Backspace / Esc, erase, wheel zoom and right-drag pan;
+  - the buttons, sliders and item choice;
+  - GENERATE 3D, then Ctrl+Z / Ctrl+Shift+Z from the keyboard;
+  - deck Height in the inspector;
+  - placing `DA_Deck_Riser` from the Library;
+  - docking and undocking the pop-up window.
+- Status: **implemented, awaiting manual verification.**
+
+**Commit:** uncommitted (working tree).
+
+**Known issues / follow-ups**
+- The sketch is not saved in scene files and is dropped on level change. There is no 3D preview of the plan before generating.
+- Truss legs are level at one height (the Truss slider). Towers, motors and ground supports are not generated, so a generated truss floats.
+- A deck's outline cannot be edited after generating: redraw it, Ctrl+Z, generate again. Deck legs, stairs and handrails are not modelled.
+- Generating twice builds twice: the sketch is kept on purpose so it can be corrected; undo the previous generation first.
+- A fixture on a deck 2 m or higher counts as rigged in the cable schedule (existing rule, ADR 0014).
+- A Sketch window opened in an earlier layout is restored where it was; Layout › Reset closes it again.

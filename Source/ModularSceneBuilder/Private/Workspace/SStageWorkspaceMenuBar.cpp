@@ -472,6 +472,12 @@ void SStageWorkspaceMenuBar::FillEditMenu(FMenuBuilder& MenuBuilder)
 		NAME_None, EUserInterfaceActionType::ToggleButton);
 	MenuBuilder.EndSection();
 
+	MenuBuilder.BeginSection(TEXT("Sketch"), LOCTEXT("SketchSection", "Draw"));
+	MenuBuilder.AddMenuEntry(LOCTEXT("SketchToStage", "Sketch to Stage..."),
+		LOCTEXT("SketchToStageTip", "Open the drawing window: sketch stage shapes, truss lines and fixtures from above, then generate them in 3D as one undoable step."),
+		FSlateIcon(), FUIAction(FExecuteAction::CreateSP(this, &SStageWorkspaceMenuBar::ShowPanel, FGameplayTag(StageCraftTags::Panel_Sketch))));
+	MenuBuilder.EndSection();
+
 	MenuBuilder.BeginSection(TEXT("Preferences"));
 	MenuBuilder.AddMenuEntry(LOCTEXT("Preferences", "Preferences..."),
 		LOCTEXT("PreferencesTip", "Keyboard shortcuts, camera look, viewport and audio preferences."), FSlateIcon(),

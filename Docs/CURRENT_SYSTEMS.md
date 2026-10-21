@@ -1,6 +1,6 @@
 # StageCraft 3D: current systems
 
-Updated 2026-10-21 after STATE.md #41. This is a quick reference to what exists, how well it works, and where it lives. It was audited on 2026-10-20 at commit `960f5da`. Evidence, file:line references and the risk list are in `Docs/PROJECT_AUDIT.md`.
+Updated 2026-10-21 after STATE.md #42. This is a quick reference to what exists, how well it works, and where it lives. It was audited on 2026-10-20 at commit `960f5da`. Evidence, file:line references and the risk list are in `Docs/PROJECT_AUDIT.md`.
 
 **Legend**
 
@@ -21,8 +21,8 @@ Paths are relative to `Source/ModularSceneBuilder/` (`Public/` and `Private/` sh
 |---|---|---|
 | Docked workspace: tabs, floating windows, detachable viewport. Standalone and packaged only; PIE uses `WBP_StageCraftHUD`. | 🟢 | `Workspace/StageWorkspaceSubsystem`, `StageWorkspaceShell`, `SStageWorkspaceMenuBar`; `Player/StageCraftGameEngine` |
 | Layouts and `Session.json` | ✅ store / 🟢 shell | `Workspace/StageLayoutStore` |
-| Panels: Library, Inspector, Fader Bank, Outliner, Patch, BOM, Render, Environment, Cues, Preferences | 🟢 | `UI/*Panel*`, `Content/StageCraft/UI/Panels/DA_Panel_*` |
-| Status bar, viewport toolbar (5 sections) | 🟢 | `UI/StageStatusBarWidget`, `UI/StageViewportToolbar` |
+| Panels: Library, Inspector, Fader Bank, Outliner, Patch, BOM, Render, Environment, Cues, Preferences, Sketch to Stage | 🟢 | `UI/*Panel*`, `Content/StageCraft/UI/Panels/DA_Panel_*` |
+| Status bar, viewport toolbar (6 sections, the last opens Sketch to Stage) | 🟢 | `UI/StageStatusBarWidget`, `UI/StageViewportToolbar` |
 | Input. Mouse buttons and fly axes use Enhanced Input, built in code (no IMC or IA assets). Keyboard shortcuts come from the user's key map: exact chords, looked up on key press (#40). | ✅ key map rules / 🟢 dispatch (scripted run R40_RunC) | `Player/ModularPlayerController` (`InputKey`, `ExecuteCommand`, `RebuildCameraMapping`), `Input/StageKeyBindings` |
 | Preferences (#40): key bindings (24 commands, two slots each, set by pressing the keys in the Preferences panel), look speed and invert, and viewport and audio preferences in one panel | ✅ model and storage / 🟢 panel (mouse check pending) | `Input/StageInputPreferencesSubsystem`, `UI/StagePreferencesPanel`, `Settings/StageCraftUserSettings` |
 | Modal dialogs, colour picker, hover highlight, box select, remappable mouse buttons | ⚪ | — |
@@ -43,8 +43,10 @@ Paths are relative to `Source/ModularSceneBuilder/` (`Public/` and `Private/` sh
 | Reference grid | ✅ | `Viewport/StageGridActor` |
 | Outliner: discipline groups, hide, lock. No user groups. | ✅ model | `Outliner/StageOutlinerModel`, `UI/StageOutlinerPanel` |
 | Spans: path, closed loop, sag. Points cannot be edited after placement. | ✅ math | `Actors/StageSpanActor`, `Placement/StageSpanMath`, `StageSpanToolComponent` |
+| Decks / risers of any simple outline (procedural prism, Height parameter, panels as quantity; saved through SaveGame, sanitized on restore) (#42). Outline not editable after placing. | ✅ geometry, restore repair / 🟢 visuals | `Actors/StageDeckActor`, `Data/StageDeckData`, `Placement/StageDeckMath` |
+| Sketch to Stage (#42): 2D window (freehand, stage shape, truss line, fixture, erase; stabiliser, grid snap), plan (decks, truss on whole sections, fixtures hung / on decks / on the floor), GENERATE 3D through the rules, all or nothing, one undo step. Sketch not saved in scenes; no 3D preview. | ✅ plan and generation / 🟢 window (mouse check pending) | `Sketch/*`, `UI/StageSketchCanvasWidget`, `UI/StageSketchSurfaceWidget`, `ModularPlayerController::RequestGenerateFromSketch` |
 | Undo/redo (100 steps) | ✅ core | `History/*` |
-| Undo coverage | 🟡 transforms, place, delete, span shape and cue edits | `ModularPlayerController.cpp:1018-1052` |
+| Undo coverage | 🟡 transforms, place, delete, span shape, deck height, cue edits, a whole sketch generation (one step) | `ModularPlayerController.cpp:1018-1052` |
 | Undo respects locks and rules (every item of a group step; insane steps dropped) | ✅ (#37) | `Game/StageCraftGameModeBase::EvaluateTransformChange`, `StageEditHistoryComponent` (TransformValidator) |
 | Orbit, pan and frame-selected camera | ⚪ the fly camera only | `Player/StageCameraPawn` |
 
@@ -94,7 +96,7 @@ Paths are relative to `Source/ModularSceneBuilder/` (`Public/` and `Private/` sh
 | Scope | Owner |
 |---|---|
 | GameInstance | `UStageProfileSubsystem`, `UStageEconomySubsystem`, `UStageItemSubsystem`, `UStageMeshImportSubsystem`, `UStageWorkspaceSubsystem`, `UStageAudioSubsystem` |
-| World (Game and PIE) | `UStageSessionSubsystem`, `UStageEditHistorySubsystem`, `UShowControlSubsystem` (ticks only while busy), `UStageRenderSubsystem`, `UStageBillOfMaterialsSubsystem`, `UStagePatchSheetSubsystem`, `UStageCableScheduleSubsystem`, `UStageEnvironmentSubsystem` |
+| World (Game and PIE) | `UStageSketchSubsystem` (the sketch, #42), `UStageSessionSubsystem`, `UStageEditHistorySubsystem`, `UShowControlSubsystem` (ticks only while busy), `UStageRenderSubsystem`, `UStageBillOfMaterialsSubsystem`, `UStagePatchSheetSubsystem`, `UStageCableScheduleSubsystem`, `UStageEnvironmentSubsystem` |
 | Controller components | Selection, SpawnSystem, PlacementTool, SpanTool, Snapping, GroupTransform, EditHistory, Scene, Viewport, EditorAudioFeedback |
 | Per-user preferences | `UStageCraftUserSettings` (`GameUserSettings`, storage); `UStageInputPreferencesSubsystem` (local player: key map, look) |
 | Rules authority | `AStageCraftGameModeBase` |
@@ -107,6 +109,6 @@ Paths are relative to `Source/ModularSceneBuilder/` (`Public/` and `Private/` sh
 | Engine | UE 5.8 |
 | Plugins enabled | Interchange, SkyCreatorPlugin (plus Python and ModelingTools in the editor only) |
 | Plugins tracked but disabled | 19 |
-| Tests | 71 `StageCraft.*` automation tests: pure logic (reports, PDF composer, cable schedule, shopping list, frame statistics, key bindings, crash-safe files, import list file, kept scene items) plus world tests for Sky Creator, undo/redo rules and transactions, cues, the fixture output path and restored-state sanitizing |
+| Tests | 75 `StageCraft.*` automation tests: pure logic (sketch strokes, deck geometry, sketch plans, reports, PDF composer, cable schedule, shopping list, frame statistics, key bindings, crash-safe files, import list file, kept scene items) plus world tests for Sky Creator, sketch generation (all or nothing, one undo step), undo/redo rules and transactions, cues, the fixture output path and restored-state sanitizing |
 | Areas with no tests | Request bridge, selection, session, economy/profile, patch conflicts, fixture playback (scripted runs only) |
 | Console commands | About 88, all inside `#if !UE_BUILD_SHIPPING` |

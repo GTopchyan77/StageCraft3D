@@ -361,3 +361,14 @@ See `STATE.md` for detailed history of completed work.
 - [ ] Manual verification (Gevor): File > Production > Export Cable Schedule, Power & Shopping List on a rigged stage; Project Settings page; quantities against a real rental pick list
 - [ ] Placeable distro / DMX node items to replace the automatic positions; per-distro placement near its loads
 - [ ] Not modelled yet: TRUE1 daisy-chains, truss/speaker rigging hardware, mains feed cables, spares
+
+## Phase 19 — Sketch to Stage: 2D drawing window and 3D generation (requested by Gevor 2026-10-21; STATE.md #42, ADR 0015)
+- [x] Pure models: `StageSketchMath` (stabiliser, RDP simplification, grid snap, closing, stroke/settings sanitizing), `StageDeckMath` (simple polygons, ear clipping, extruded deck mesh with engine-checked winding, panel count), `StageSketchGenerator::BuildPlan` (decks, truss snapped to whole sections, fixtures hung / on decks / on the floor, warnings); tests
+- [x] `UStageDeckData` + `AStageDeckActor` (procedural deck/riser of any simple outline; SaveGame outline + height, sanitized on restore; Height an undoable shape parameter; quantity = rental panels); `DA_Deck_Riser`, `M_DeckSurface`, `M_DeckSkirt`
+- [x] `UStageSketchSubsystem` (world): sketch document, settings, chosen catalog items, plan, one generation in flight with streamed item bundles
+- [x] `StageSketchBuilder::Execute` (all or nothing through the spawn system) + `AModularPlayerController::RequestGenerateFromSketch` + `UStageEditHistoryComponent::RecordPlacements` (one undo step)
+- [x] Sketch window `UStageSketchCanvasWidget` + canvas `UStageSketchSurfaceWidget` (freehand, stage shape, truss line, fixture, erase; undo stroke, clear, frame; heights, grid, snap, smoothing, item choice; live plan summary); `DA_Panel_Sketch`; Edit › Sketch to Stage..., Window menu, toolbar SKETCH
+- [x] Builds: Editor, Game Development, Game Shipping (0 warnings in project code); 75/75 automation; scripted runs R42
+- [ ] Manual verification (Gevor): draw with the real mouse (freehand drag, shape clicks, double-click/Enter, Backspace/Esc, erase, wheel zoom, right-drag pan), GENERATE 3D, Ctrl+Z / Ctrl+Shift+Z of a generation, deck Height in the inspector, placing DA_Deck_Riser from the Library, saving and loading a scene with decks
+- [ ] Sketch not saved with scenes; no 3D preview of the plan; truss legs level at one height, no towers / motors / ground supports generated
+- [ ] Deck outline cannot be edited after generating (redraw it); no deck legs / stairs / handrails
