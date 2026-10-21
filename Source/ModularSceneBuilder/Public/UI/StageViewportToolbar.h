@@ -11,7 +11,7 @@
  * The viewport header toolbar (Docs/ADR/0008-viewport-toolbar-projections-and-view-modes.md §4.6), shown in the viewport tab
  * above the 3D view, as one horizontal row of six sections separated by thin dividers with equal gaps: the projection dropdown,
  * the View menu button (an Unreal-style popup with the view modes and the Show > Grid toggle), grid snap (Off / 10 / 50 / 100 cm)
- * and angle snap (Off / 5 / 15 / 45 degrees) as toggling segments, Move / Rotate / Scale, and SKETCH (opens the Sketch to Stage window, ADR 0015).
+ * and angle snap (Off / 5 / 15 / 45 degrees) as toggling segments, Move / Rotate / Scale, and SKETCH / ASSIST (open the Sketch to Stage window, ADR 0015, and the AI Assistant, ADR 0016).
  *
  * A view in the project's binding pattern:
  *  - It writes only through the owners' setters: UStageViewportComponent (projection, view mode, grid), UStageSnappingComponent
@@ -63,7 +63,7 @@ private:
 	void HandleGizmoModePicked(int32 Index);
 	void HandleGridSnapPicked(int32 Index);
 	void HandleAngleSnapPicked(int32 Index);
-	void HandleSketchPicked(int32 Index);
+	void HandleToolWindowPicked(int32 Index);
 
 	UFUNCTION()
 	void HandleProjectionSelected(FString SelectedItem, ESelectInfo::Type SelectionType);
@@ -96,7 +96,7 @@ private:
 
 	/** The single SKETCH button (a one-button segment, styled like the others). */
 	UPROPERTY(Transient)
-	TArray<TObjectPtr<class UStageChoiceButton>> SketchButtons;
+	TArray<TObjectPtr<class UStageChoiceButton>> ToolWindowButtons;
 
 	TWeakObjectPtr<class UStageViewportComponent> BoundViewport;
 	TWeakObjectPtr<class UStageSnappingComponent> BoundSnapping;

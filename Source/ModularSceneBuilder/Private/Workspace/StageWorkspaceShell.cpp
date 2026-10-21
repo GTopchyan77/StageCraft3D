@@ -460,9 +460,10 @@ void FStageWorkspaceShell::RegisterPanelSpawners()
 			.SetDisplayName(Callbacks.GetPanelLabel(PanelTag));
 	}
 
-	// Sketch to Stage opens as its own pop-up window, like a floating Unreal Editor tool window, rather than squeezing the main
-	// layout; it needs room to draw. Slate's fallback for a new floating tab is 1000 x 600 (ADR 0015 §2.7).
+	// Sketch to Stage and the AI Assistant open as their own pop-up windows, like floating Unreal Editor tool windows, rather than
+	// squeezing the main layout. Slate's fallback for a new floating tab is 1000 x 600 (ADR 0015 §2.7, ADR 0016 §2.6).
 	FTabManager::RegisterDefaultTabWindowSize(FGameplayTag(StageCraftTags::Panel_Sketch).GetTagName(), FVector2D(1100.0, 820.0));
+	FTabManager::RegisterDefaultTabWindowSize(FGameplayTag(StageCraftTags::Panel_Assistant).GetTagName(), FVector2D(560.0, 720.0));
 }
 
 void FStageWorkspaceShell::SyncReportedHosts()

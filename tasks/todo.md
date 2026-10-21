@@ -372,3 +372,13 @@ See `STATE.md` for detailed history of completed work.
 - [ ] Manual verification (Gevor): draw with the real mouse (freehand drag, shape clicks, double-click/Enter, Backspace/Esc, erase, wheel zoom, right-drag pan), GENERATE 3D, Ctrl+Z / Ctrl+Shift+Z of a generation, deck Height in the inspector, placing DA_Deck_Riser from the Library, saving and loading a scene with decks
 - [ ] Sketch not saved with scenes; no 3D preview of the plan; truss legs level at one height, no towers / motors / ground supports generated
 - [ ] Deck outline cannot be edited after generating (redraw it); no deck legs / stairs / handrails
+
+## Phase 20 — AI Assistant: chat panel and natural-language commands (requested by Gevor 2026-10-21; STATE.md #43, ADR 0016)
+- [x] Command model `FStageAICommand` (closed set of intents) + local grammar `StageAICommandParser` (questions, fixtures, cues, weather, time, sky, exports, undo/redo; destructive operations explained, not run); fixture matching and row layout; tests
+- [x] Trust boundary `StageAICommandSchema`: validation of every command, the strict `stage_command` tool, Messages API body and response parsing; tests
+- [x] Optional online model `UStageClaudeAssistantBackend` (raw HTTP, key from ANTHROPIC_API_KEY, off by default in Project Settings › StageCraft AI Assistant; falls back to the local parser)
+- [x] `UStageAICommandSubsystem` (world): conversation, one prompt in flight, read-only answers (CaptureScene), asset streaming for added fixtures
+- [x] `StageAICommandRunner` + controller `RequestAssistantPrompt`, `RequestBuildPlan` (shared with the Sketch window), `RequestSetEnvironment` + `FStageEnvironmentCommand` (assistant weather/time/sky changes are undoable), `RunCapturingRejections`
+- [x] Panel `UStageAIAssistantWidget` + `DA_Panel_Assistant` (pop-up 560 × 720); Edit › Assistant › AI Assistant..., Window menu, toolbar ASSIST
+- [ ] Manual verification (Gevor): type in the panel (Enter, SEND, chips, CLEAR), add fixtures and Ctrl+Z them, store/play cues, weather and time with Ctrl+Z, exports, the online model with a real API key
+- [ ] Follow-ups: export completion reported in the chat; several commands in one prompt; hanging added fixtures on truss; Environment panel edits undoable; conversation saved with scenes; more languages

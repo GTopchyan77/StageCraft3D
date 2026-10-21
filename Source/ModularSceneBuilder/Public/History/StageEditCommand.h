@@ -68,6 +68,12 @@ public:
 	 * for editors (test fakes, tools) that never see cue steps.
 	 */
 	virtual EStageCommandResult SetCueList(const TArray<struct FShowCue>& Cues) { return EStageCommandResult::Invalid; }
+
+	/**
+	 * Replaces the stage's outdoor environment (Docs/ADR/0016-ai-assistant.md §2.4): time of day, sun path, weather. Invalid where
+	 * there is no environment; the default is for editors that never see environment steps.
+	 */
+	virtual EStageCommandResult SetEnvironment(const struct FStageEnvironmentSettings& Settings) { return EStageCommandResult::Invalid; }
 };
 
 /**

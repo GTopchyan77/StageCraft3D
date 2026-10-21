@@ -7,8 +7,10 @@
 #include "Components/SpawnSystemComponent.h"
 #include "Data/BaseItemData.h"
 #include "Engine/World.h"
+#include "Environment/StageEnvironmentSubsystem.h"
 #include "History/StageBatchCommand.h"
 #include "History/StageCueCommands.h"
+#include "History/StageEnvironmentCommands.h"
 #include "History/StageEditHistorySubsystem.h"
 #include "History/StageItemCommands.h"
 #include "History/StageItemSnapshot.h"
@@ -133,6 +135,18 @@ namespace StageEditHistory
 			return EStageCommandResult::Succeeded;
 		}
 
+		virtual EStageCommandResult SetEnvironment(const FStageEnvironmentSettings& Settings) override
+		{
+			UStageEnvironmentSubsystem* Environment = UWorld::GetSubsystem<UStageEnvironmentSubsystem>(Session.GetWorld());
+			if (!Environment)
+			{
+				return EStageCommandResult::Invalid;
+			}
+			// SetSettings sanitizes again; the session marks itself dirty through OnEnvironmentChanged.
+			Environment->SetSettings(Settings);
+			return EStageCommandResult::Succeeded;
+		}
+
 	private:
 		UStageSessionSubsystem& Session;
 		USpawnSystemComponent& SpawnSystem;
@@ -213,6 +227,15 @@ void UStageEditHistoryComponent::RecordCueListChange(const FText& Description, c
 {
 	EndTransaction();
 	Record(MakeShared<FStageCueListCommand>(Description, Before, After));
+}
+
+void UStageEditHistoryComponent::RecordEnvironmentChange(const FText& Description, const FStageEnvironmentSettings& Before, const FStageEnvironmentSettings& After)
+{
+	EndTransaction();
+	if (!Before.Equals(After))
+	{
+		Record(MakeShared<FStageEnvironmentCommand>(Description, Before, After));
+	}
 }
 
 void UStageEditHistoryComponent::RecordPlacements(TConstArrayView<AModularBaseActor*> PlacedItems, const FText& Description)

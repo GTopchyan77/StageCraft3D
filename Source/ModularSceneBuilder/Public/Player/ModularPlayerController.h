@@ -6,11 +6,13 @@
 #include "GameFramework/PlayerController.h"
 #include "Data/StageParameterTypes.h"
 #include "Economy/StageEconomyTypes.h"
+#include "Environment/StageEnvironmentTypes.h"
 #include "History/StageEditCommand.h"
 #include "Input/StageKeyBindings.h"
 #include "Placement/StagePlacementTypes.h"
 #include "Scene/StageSceneTypes.h"
 #include "Show/ShowControlTypes.h"
+#include "Sketch/StageSketchTypes.h"
 #include "ModularPlayerController.generated.h"
 
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FOnStageRequestRejected, const FStageEconomyResultInfo&, Result);
@@ -237,6 +239,36 @@ public:
 	 */
 	UFUNCTION(BlueprintCallable, Category = "StageCraft|Requests")
 	bool RequestGenerateFromSketch();
+
+	/**
+	 * Places a build plan (decks, truss paths, fixtures) as ONE undo step named StepName: every element through the GameMode rules, all
+	 * or nothing (StageSketchBuilder, Docs/ADR/0016-ai-assistant.md §2.4). The plan's items should be in memory already. Used by
+	 * the Sketch window and the AI assistant. A refusal (gizmo drag or camera flight, empty plan, a rule) is reported on
+	 * OnRequestRejected; the result says what was placed (Message: the plan's description) or why nothing was (Message: the reason).
+	 */
+	FStageSketchGenerateResult RequestBuildPlan(const FStageSketchBuildPlan& Plan, const FText& StepName);
+
+	/**
+	 * Replaces the outdoor environment (time of day, sun path, weather, sky on/off) and records the change as ONE undo step named
+	 * StepName (Docs/ADR/0016-ai-assistant.md §2.4). The environment sanitizes the values and refuses the sky without a sky system,
+	 * so callers read the stored settings back. False, reported on OnRequestRejected, when the level has no environment.
+	 */
+	bool RequestSetEnvironment(const FStageEnvironmentSettings& Settings, const FText& StepName);
+
+	/**
+	 * The AI Assistant panel's single entry point (Docs/ADR/0016-ai-assistant.md §2.2): hands Prompt to UStageAICommandSubsystem,
+	 * whose action commands run back through this controller's requests, so they obey the same rules and undo history as the
+	 * buttons. Replies arrive on the subsystem's OnConversationChanged. False, reported on OnRequestRejected, when there is no
+	 * assistant, the prompt is empty, or the assistant is still answering the previous one.
+	 */
+	UFUNCTION(BlueprintCallable, Category = "StageCraft|Requests")
+	bool RequestAssistantPrompt(const FString& Prompt);
+
+	/**
+	 * Runs Work and returns every refusal it reported, in order (they are still broadcast on OnRequestRejected). Lets the assistant
+	 * quote the reason a request it made was refused. Not re-entrant: a nested call returns its own refusals only.
+	 */
+	TArray<FStageEconomyResultInfo> RunCapturingRejections(TFunctionRef<void()> Work);
 
 	// --- Cues (Docs/ADR/0011-cue-list-and-patch-sheet-export.md §2.2) ---
 	// Each asks AStageCraftGameModeBase::EvaluateCueRequest, then calls UShowControlSubsystem. Store, Update and Delete are
@@ -588,6 +620,9 @@ private:
 
 	bool bIsNavigatingCamera = false;
 	bool bPreviewRefreshQueued = false;
+
+	/** While RunCapturingRejections runs: where ReportRejection also copies each refusal. */
+	TArray<FStageEconomyResultInfo>* RejectionSink = nullptr;
 
 	/** Folder the import dialog opens in: where the user last picked models, this session. */
 	FString LastImportDirectory;

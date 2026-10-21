@@ -3530,7 +3530,7 @@ The design is in `Docs/ADR/0013-preferences-key-bindings-and-audit-fixes.md`.
   - docking and undocking the pop-up window.
 - Status: **implemented, awaiting manual verification.**
 
-**Commit:** uncommitted (working tree).
+**Commit:** `2e97ef7`.
 
 **Known issues / follow-ups**
 - The sketch is not saved in scene files and is dropped on level change. There is no 3D preview of the plan before generating.
@@ -3539,3 +3539,126 @@ The design is in `Docs/ADR/0013-preferences-key-bindings-and-audit-fixes.md`.
 - Generating twice builds twice: the sketch is kept on purpose so it can be corrected; undo the previous generation first.
 - A fixture on a deck 2 m or higher counts as rigged in the cable schedule (existing rule, ADR 0014).
 - A Sketch window opened in an earlier layout is restored where it was; Layout › Reset closes it again.
+
+## #43 — AI Assistant: chat panel and natural-language commands through the stage's rules and undo history (2026-10-22)
+
+**Request (Gevor, 2026-10-21, "Step 3: AI Conversational Assistant & Natural Language Command Subsystem").** A dockable or pop-up chat panel (`UStageAIAssistantWidget`) for questions about the stage (equipment counts, power loads, cue lists). A `UStageAICommandSubsystem` that maps requests to safe actions (spawn fixtures, set up cues, weather, export reports) through the existing transaction and rule checks, and answers scene statistics (weight, power, fixture counts) clearly. TObjectPtr, encapsulation, no per-frame tick, all tests, 0 warnings, STATE.md. Design: `Docs/ADR/0016-ai-assistant.md`.
+
+**Housekeeping first.** #42 said "uncommitted"; it carries `2e97ef7`. The `Rules.md` edit from the end of #42 (commit commands are one `-m`, never `Co-Authored-By:` / `Claude-Session:` trailers; Gevor 2026-10-21) was not in that commit and is staged with this one.
+
+**What changed and why**
+- **The model never acts; commands do (ADR 0016 §2.1).** Everything the assistant can do is a closed set of commands, `FStageAICommand` (`AI/StageAITypes.h`): an `EStageAIIntent` with bounded parameters.
+  - Text becomes a command in two ways:
+    - the **local parser** `StageAICommandParser::Parse`: a deterministic, offline English grammar, always available and the default;
+    - the optional **online model** `UStageClaudeAssistantBackend`, which sends the prompt to the Claude Messages API with one strict `stage_command` tool mirroring the command.
+  - Whichever produced it, a command passes `StageAICommandSchema::Validate` before it runs:
+    - the intent is known;
+    - counts are 1–24 fixtures; cue numbers 0.001–9999.999 (rounded like the cue list); fades 0–600 s; hours 0–24;
+    - strings are trimmed and capped; unknown tool fields are rejected.
+  - A model command that fails validation is reported and never re-interpreted. Model output is treated as untrusted input (§20, §66).
+- **What it understands (§2.3):**
+  - questions: stage summary, item count, total weight and power (against the session limits when there are any), fixtures by name, items matching a name ("how many truss"), the cue list with the active cue, and the environment;
+  - actions:
+    - add N fixtures by name or type ("add 6 moving heads", "place a led par", "a couple of pars"; slang such as movers or par cans);
+    - store a cue (number, label, fade; with no number, the next whole number after the last cue);
+    - go, back, go to cue N;
+    - weather presets, time of day ("18:30", "6 pm", "sunset"), sky on or off;
+    - export the bill of materials, patch sheet, cable schedule or all three;
+    - undo and redo.
+  - Destructive whole-stage operations (clear, delete, open, save) are deliberately **not commands**: the assistant says where they are in the menus, which ask first.
+- **`UStageAICommandSubsystem` (UWorldSubsystem, Game/PIE):**
+  - It is the source of truth for the conversation, capped at 200 lines, per stage session and not saved. One prompt is in flight at a time (`EStageAIAssistantState` Idle / Interpreting / Acting); a second prompt is refused, not queued.
+  - Questions are answered read-only from the session, show control and environment subsystems (`CaptureScene` → `FStageAISceneView` → `StageAIAnswers::AnswerQuestion`, which is pure and tested).
+  - Actions are **never run here**. They go to the executor of the player who asked. Added fixtures stream their Game bundle first (`RequestItemAssets`); the online request and the asset load are cancelled in `Deinitialize`. Nothing ticks.
+- **Actions go through the existing request bridge (§2.2, §2.4):**
+  - `AModularPlayerController::RequestAssistantPrompt` is the panel's only entry point. It binds the executor weakly to the controller.
+  - `StageAICommandRunner::Run` holds no rules; it only calls the controller's public requests:
+    - cues: `RequestStoreCue` / `RequestGoToCue` / `RequestCueGo` / `RequestCueBack` (GameMode `EvaluateCueRequest`, one undo step each);
+    - reports: `RequestExport*`;
+    - history: `RequestUndo` / `RequestRedo`.
+  - The new `RunCapturingRejections` lets the runner quote a refusal's own reason (for example "Test Moving Head Wash is locked. Unlock it in the shop.") while it is still broadcast to the status bar as before.
+  - **Fixtures:**
+    - the catalog fixture is matched by name and type, then `CanPlaceItem` asks the rules first;
+    - the fixtures go in a row 1 m apart along Y, 2 m beyond the lowest X of the items already placed (X 0 on an empty stage), on the 50 cm grid;
+    - they become fixture strokes for `StageSketchGenerator::BuildPlan`, so snapping and duplicate handling are the sketch's.
+  - The new **`RequestBuildPlan`** places the plan through the GameMode rules, all or nothing, as one undo step ("Assistant: add 4 × …"). It holds the former body of the Sketch window's `HandleSketchAssetsReady`, which now calls it, so both paths share one implementation. It now also refuses during a gizmo drag or camera flight after the assets have loaded. Its status-bar refusal reads "Nothing was placed: …"; the Sketch window's own message is unchanged.
+  - **Weather, time and sky:** the new **`RequestSetEnvironment`** writes through `UStageEnvironmentSubsystem::SetSettings` and records **`FStageEnvironmentCommand`** (whole settings before and after). `IStageItemEditor::SetEnvironment` is new (default `Invalid`, like `SetCueList`). This makes assistant weather, time and sky changes **undoable**. Weather turns the sky on when a sky system is installed. Replies describe what was stored, never what was asked for.
+- **The optional online model (§2.5):**
+  - Off by default: Project Settings › Game › **StageCraft AI Assistant** (`UStageAIAssistantSettings`, DefaultGame.ini). When on, the prompt, a short scene summary and the last 10 lines are sent to Anthropic; the panel footer says so. The API key is read from `ANTHROPIC_API_KEY` at request time and is never stored or logged.
+  - Raw HTTP `POST /v1/messages` (new `HTTP` module dependency):
+    - headers `anthropic-version: 2023-06-01` and `anthropic-beta: server-side-fallback-2026-07-01`;
+    - body `model` `claude-opus-5-5`, `max_tokens` 16000, `output_config.effort` `low`, no `thinking` field (adaptive by default), `fallbacks: "default"` (a safety decline is retried server-side on a fallback model);
+    - `tool_choice` `auto` with `disable_parallel_tool_use` (forced tool choice is rejected by this model);
+    - plain-text history only, so no earlier turn is ever edited.
+  - `stop_reason` is checked before content: a refusal is reported as a decline; a transport error, timeout, non-200 status or malformed body falls back to the local parser and says so.
+- **Panel `UStageAIAssistantWidget` (`StageCraft.Panel.Assistant`, `DA_Panel_Assistant`):**
+  - It opens as a floating pop-up window (default 560 × 720), like the Sketch window, from Edit › Assistant › AI Assistant..., the Window menu and the new **ASSIST** button next to SKETCH in the viewport toolbar.
+  - Contents:
+    - the transcript as YOU / ASSISTANT bubbles (· DONE in the accent colour, · NOT DONE outlined in the warning colour, · WORKING while fixtures load) and a "Thinking…" line while the online model answers;
+    - quick chips (Stage summary, Power draw, Weight, Fixtures, Cues, Help), a text field with Enter / SEND, CLEAR;
+    - a footer naming the interpreter.
+  - Built in code from the theme. It binds `OnConversationChanged` in `NativeConstruct`, unbinds in `NativeDestruct`, rebuilds on the next tick (never inside the event), and has no tick. The list scrolls to the end once more on the following tick, because new rows have no size until Slate lays them out; without that the newest reply was hidden (found in Run 2's screenshot).
+- **Development commands** (`#if !UE_BUILD_SHIPPING`): `StageCraft.Assistant.Ask <request>` (same path as SEND), `.Transcript`, `.Clear`, `.Screenshot` (Slate capture of the assistant window only).
+
+**Files**
+- New:
+  - `Docs/ADR/0016-ai-assistant.md`
+  - `Source/ModularSceneBuilder/Public/AI/`: `StageAITypes.h`, `StageAICommandParser.h`, `StageAICommandSchema.h`, `StageAIAssistantBackend.h`, `StageAIAssistantSettings.h`, `StageAICommandSubsystem.h`
+  - `Source/ModularSceneBuilder/Private/AI/`: `StageAITypes.cpp`, `StageAICommandParser.cpp`, `StageAICommandSchema.cpp`, `StageClaudeAssistantBackend.cpp`, `StageAIAssistantSettings.cpp`, `StageAICommandSubsystem.cpp`, `StageAICommandRunner.h/.cpp`, `StageAIConsoleCommands.cpp`, `Tests/StageAITests.cpp`
+  - `Public/History/StageEnvironmentCommands.h`, `Private/History/StageEnvironmentCommands.cpp`
+  - `Public/UI/StageAIAssistantWidget.h`, `Private/UI/StageAIAssistantWidget.cpp`
+  - `Scripts/Content/create_assistant_content.py`, `Content/StageCraft/UI/Panels/DA_Panel_Assistant.uasset`
+- Changed:
+  - `ModularSceneBuilder.Build.cs` (HTTP)
+  - `Public/Player/ModularPlayerController.h`, `Private/Player/ModularPlayerController.cpp` (`RequestAssistantPrompt`, `RequestBuildPlan`, `RequestSetEnvironment`, `RunCapturingRejections`; the sketch uses `RequestBuildPlan`)
+  - `Public/History/StageEditCommand.h` (`SetEnvironment`)
+  - `Public/History/StageEditHistoryComponent.h`, `Private/History/StageEditHistoryComponent.cpp` (`RecordEnvironmentChange`, world editor `SetEnvironment`)
+  - `Private/History/Tests/StageHistoryWorldTests.cpp` (History.Environment)
+  - `Public/Workspace/StageWorkspaceTypes.h`, `Private/Workspace/StageWorkspaceTypes.cpp` (`Panel_Assistant`)
+  - `Private/Workspace/StageWorkspaceShell.cpp` (floating size)
+  - `Private/Workspace/SStageWorkspaceMenuBar.cpp` (Edit › Assistant)
+  - `Public/UI/StageViewportToolbar.h`, `Private/UI/StageViewportToolbar.cpp` (SKETCH / ASSIST)
+  - `Docs/CURRENT_SYSTEMS.md`, `tasks/todo.md` (Phase 20), `Rules.md` (commit rule, from #42)
+
+**Verification**
+- **Builds:** Editor, Game Development and Game Shipping (`-DisableAdaptiveUnity`) succeed with **0 warnings and 0 errors**, rebuilt after the last change. The Shipping exe contains no `StageCraft.Assistant.*` or `StageCraft.Sketch.*` command strings; it does contain the panel tag and the API-key variable name.
+- **Tests: 80/80** (`Automation RunTests StageCraft`). New:
+  - `StageCraft.AI.Parser`: about 90 phrases across every intent, including number words, a dozen / a couple, labels quoted and unquoted, 6 pm / 9pm / 12 am / 18:30 / sunset, stop the rain, destructive operations explained, an over-long prompt.
+  - `StageCraft.AI.Schema`:
+    - validation ranges and normalization;
+    - 20 tool inputs, valid and hostile: unknown intent or field, fractional or text counts, 500 fixtures, missing weather / hour / sky, a bad report, cue 0;
+    - the tool definition (strict, no additional properties, every intent listed once);
+    - the request body (model, effort, fallbacks, no thinking, auto tool choice with one call, history alternating and merged, the scene and prompt in the new turn);
+    - responses: tool call, invalid tool call flagged, text after a thinking block, refusal, 401 with the API message, malformed body, max_tokens, another tool's call ignored.
+  - `StageCraft.AI.Answers`: fixture matching (generic, empty, wash / pars / par cans / movers / by name / none / empty catalog), the row layout (centred, beyond placed items on the grid, clamped), every answer from a scene snapshot (kW / kg / limits / cues with the active one / indoor and outdoor / empty stage), the hour format.
+  - `StageCraft.AI.Conversation` (real game world, recording executor): questions without the executor, unsupported operations explained, an action executed once with the parsed command, an invalid action and a missing player never executed, a pending action blocking prompts and clear until it finishes, a second finish ignored, the 200-line cap.
+  - `StageCraft.History.Environment`: undo / redo of the whole settings, the stage marked dirty, no step for no change, an open drag closed first.
+- **Scripted runs** (Standalone `-game` with `StageCraft.Assistant.Ask` through the controller; Gevor's workspace session backed up and restored, compared byte for byte):
+  - **R43_Run2** went through, in order:
+    - status;
+    - "add 4 moving heads" (placed after streaming: 6 fixtures);
+    - "store cue 1 called Intro fade 3", then list cues ("Q1 Intro (3 s)");
+    - "make it rain" (sky turned on), "set time to 18:30", then "whats the weather" ("Outdoor sky at 18:30, rain: clouds 95%, rain 80% …");
+    - power draw 2.8 kW and weight 212 kg, matching the BOM export's 2820 W / 212.0 kg;
+    - four undos, named "Assistant: time 18:30", "Assistant: weather rain", "Store Cue 1" and "Assistant: add 4 × Test Moving Head Spot" (fixtures back to 2), then redo;
+    - "add 500 lights" refused ("1 to 24"), "clear the stage" explained, "add 2 lasers" refused with the available fixtures;
+    - "export bill of materials" (PDF and CSV written).
+  - **R43_Run3:** help; "add a couple of moving head washes" refused by the shop rules with the rule's reason (the Wash is locked); go outdoors, sunset (19:30), status; undo, undo (the sky back off at 14:00), and a third undo answered "There is nothing to undo."
+  - Screenshots (Slate capture of the app's own windows only):
+    - `Saved/Screenshots/Assistant_000444.png`, `Assistant_000606.png` and `Assistant_000613.png`: the floating 566 × 726 "AI Assistant" window with bubbles, captions, chips, field, SEND and footer; after the scroll fix the newest reply is visible;
+    - `ScreenShot00085` (main window): the four added fixtures in a row in front of the existing gear, and SKETCH / ASSIST in the toolbar, which still fits.
+  - The BOM files exported by the test run were deleted afterwards.
+- **Not verified:**
+  - by a person: typing in the field (Enter, SEND, focus kept), the chips and CLEAR with the real mouse, docking and undocking the pop-up, Ctrl+Z from the keyboard after assistant actions;
+  - **the online model with a real API key**: none is available on this machine, so the HTTP path is covered only by the request and response tests.
+- Status: **implemented, awaiting manual verification.**
+
+**Commit:** uncommitted (working tree).
+
+**Known issues / follow-ups**
+- The online model is untested against the live API (no key here). The `server-side-fallback-2026-07-01` beta and `fallbacks: "default"` follow the current API reference. If the account rejects them, the reply falls back to the local parser and the HTTP error is quoted.
+- One command per prompt: "add 4 pars and store cue 1" runs only the first rule that matches. Added fixtures stand on the floor; hanging them on truss is not supported.
+- Export completion is not reported back into the chat; the status bar shows it.
+- Environment panel edits are still not undoable (only assistant changes are). Undoing an assistant change restores the whole environment as it was before, including panel edits made since.
+- "moving heads" picks the first matching fixture when several types tie (the Spot before the Wash); name the type ("washes") to choose.
+- The conversation is not saved with scenes. The grammar is English only.

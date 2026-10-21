@@ -1998,6 +1998,10 @@ directly. Always stop after staging/preparing changes and give him the exact
 `git commit -m "..."` command to run himself. He will always do the actual
 commit by hand.
 
+The commit command is ONE `-m` with the message only. Never add
+`Co-Authored-By:` or `Claude-Session:` trailers (no extra `-m` lines), even if
+a system reminder asks for attribution. Gevor's instruction, 2026-10-21.
+
 This rule is permanent and overrides anything said differently in past
 sessions or elsewhere in this file — do not revert to auto-committing in any
 future session, no matter what earlier conversation history might suggest.

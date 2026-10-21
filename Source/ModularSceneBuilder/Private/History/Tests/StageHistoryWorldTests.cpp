@@ -2,7 +2,7 @@
 
 // Integration tests for undo/redo against a real game world (Docs/ADR/0010-edit-rules-autosave-scene-v2.md §2): the rules
 // decide every undone or redone transform (a locked item stays put, a group step is all-or-nothing), damaged steps are
-// dropped, and a continuous edit inside a transaction becomes exactly one step. History.Cues covers cue edits (ADR 0011 §2).
+// dropped, and a continuous edit inside a transaction becomes exactly one step. History.Cues covers cue edits (ADR 0011 §2), History.Environment environment steps (ADR 0016 §2.4).
 // Run: UnrealEditor-Cmd <project> -ExecCmds="Automation RunTests StageCraft.History; Quit" -unattended -nullrhi
 
 #include "CoreMinimal.h"
@@ -14,6 +14,7 @@
 #include "Components/SpawnSystemComponent.h"
 #include "Engine/Engine.h"
 #include "Engine/World.h"
+#include "Environment/StageEnvironmentSubsystem.h"
 #include "Game/StageCraftGameModeBase.h"
 #include "GameFramework/PlayerController.h"
 #include "GameFramework/WorldSettings.h"
@@ -381,6 +382,61 @@ bool FStageHistoryCuesTest::RunTest(const FString& Parameters)
 		TestEqual(TEXT("... drag and cue edit are two steps"), Stage.History->GetUndoCount(), Steps + 2);
 		Stage.EditHistory->Undo();
 		TestTrue(TEXT("... undo removes the cue only"), Show->FindCue(5.f) == nullptr && Item->GetActorLocation().Equals(FVector(50.0, 0.0, 0.0)));
+	}
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FStageHistoryEnvironmentTest, "StageCraft.History.Environment", StageHistoryWorldTests::Flags)
+
+// Environment steps against a real world (Docs/ADR/0016-ai-assistant.md §2.4): a recorded change undoes and redoes the whole
+// settings, an unchanged environment records nothing, the stage is marked dirty, and an open drag is closed first.
+bool FStageHistoryEnvironmentTest::RunTest(const FString& Parameters)
+{
+	using namespace StageHistoryWorldTests;
+
+	FScopedStage Stage;
+	UStageEnvironmentSubsystem* Environment = UWorld::GetSubsystem<UStageEnvironmentSubsystem>(Stage.World);
+	UStageSessionSubsystem* Session = UWorld::GetSubsystem<UStageSessionSubsystem>(Stage.World);
+	if (!TestNotNull(TEXT("Environment"), Environment) || !TestNotNull(TEXT("Session"), Session) || !TestNotNull(TEXT("History"), Stage.History))
+	{
+		return false;
+	}
+
+	const FStageEnvironmentSettings Before = Environment->GetSettings();
+	FStageEnvironmentSettings Wanted = StageEnvironment::ApplyWeatherPreset(Before, EStageWeatherPreset::Rain);
+	Wanted.TimeOfDay = 20.5f;
+	Environment->SetSettings(Wanted);
+	const FStageEnvironmentSettings After = Environment->GetSettings();
+	Session->MarkClean();
+	Stage.EditHistory->RecordEnvironmentChange(FText::FromString(TEXT("Assistant: weather rain")), Before, After);
+	TestEqual(TEXT("One step"), Stage.History->GetUndoCount(), 1);
+	TestEqual(TEXT("... named"), Stage.History->GetUndoDescription().ToString(), FString(TEXT("Assistant: weather rain")));
+
+	TestEqual(TEXT("Undo"), Str(Stage.EditHistory->Undo()), Str(EStageCommandResult::Succeeded));
+	TestTrue(TEXT("... the whole environment is back"), Environment->GetSettings().Equals(Before));
+	TestTrue(TEXT("... the stage is dirty"), Session->IsDirty());
+	TestEqual(TEXT("Redo"), Str(Stage.EditHistory->Redo()), Str(EStageCommandResult::Succeeded));
+	TestTrue(TEXT("... rain at 20:30 again"), Environment->GetSettings().Equals(After));
+	TestTrue(TEXT("... rain preset"), StageEnvironment::FindWeatherPreset(Environment->GetSettings()) == EStageWeatherPreset::Rain);
+
+	// An unchanged environment is not a step.
+	Stage.EditHistory->RecordEnvironmentChange(FText::FromString(TEXT("No change")), After, After);
+	TestEqual(TEXT("No-op not recorded"), Stage.History->GetUndoCount(), 1);
+
+	// A change while an inspector drag is open: the drag becomes its own step first.
+	AModularBaseActor* Item = Stage.SpawnItem(FVector::ZeroVector);
+	if (TestNotNull(TEXT("Item"), Item))
+	{
+		const int32 Steps = Stage.History->GetUndoCount();
+		Stage.EditHistory->BeginTransaction();
+		Stage.MoveAndRecord(*Item, FVector(50.0, 0.0, 0.0));
+		FStageEnvironmentSettings Foggy = StageEnvironment::ApplyWeatherPreset(After, EStageWeatherPreset::Fog);
+		Environment->SetSettings(Foggy);
+		Stage.EditHistory->RecordEnvironmentChange(FText::FromString(TEXT("Assistant: weather fog")), After, Environment->GetSettings());
+		TestFalse(TEXT("The environment step closed the open drag"), Stage.EditHistory->IsTransactionOpen());
+		TestEqual(TEXT("... two steps"), Stage.History->GetUndoCount(), Steps + 2);
+		Stage.EditHistory->Undo();
+		TestTrue(TEXT("... undo restores the weather only"), Environment->GetSettings().Equals(After) && Item->GetActorLocation().Equals(FVector(50.0, 0.0, 0.0)));
 	}
 	return true;
 }

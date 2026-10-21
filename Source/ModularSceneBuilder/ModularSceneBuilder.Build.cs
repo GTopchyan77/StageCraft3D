@@ -13,7 +13,8 @@ public class ModularSceneBuilder : ModuleRules
 		// ApplicationCore: FDisplayMetrics and DPI scale (monitor work areas). Json: workspace layout files.
 		// DeveloperSettings: StageCraft Audio project settings (feedback cue table).
 		// RenderCore, RHI: render-thread GPU readback of still renders. ImageCore: resizing supersampled renders.
-		PrivateDependencyModuleNames.AddRange(new string[] { "ProceduralMeshComponent", "Slate", "SlateCore", "ApplicationCore", "Json", "DeveloperSettings", "RenderCore", "RHI", "ImageCore" });
+		// HTTP: the AI assistant's optional online model (Claude Messages API, ADR 0016).
+		PrivateDependencyModuleNames.AddRange(new string[] { "ProceduralMeshComponent", "Slate", "SlateCore", "ApplicationCore", "Json", "DeveloperSettings", "RenderCore", "RHI", "ImageCore", "HTTP" });
 
 		// Runtime model import (ADR 0006): Interchange translates .glb/.gltf/.obj (and .fbx in builds with editor code) and builds
 		// static meshes at runtime. InterchangePipelines is the Interchange plugin's generic pipeline, configured in code.

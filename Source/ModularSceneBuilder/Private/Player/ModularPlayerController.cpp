@@ -4,6 +4,8 @@
 
 #include "Actors/ModularBaseActor.h"
 #include "Actors/ModularTransformGizmo.h"
+#include "AI/StageAICommandRunner.h"
+#include "AI/StageAICommandSubsystem.h"
 #include "Algo/AllOf.h"
 #include "Audio/StageEditorAudioFeedbackComponent.h"
 #include "Blueprint/UserWidget.h"
@@ -19,6 +21,7 @@
 #include "Engine/LocalPlayer.h"
 #include "Engine/World.h"
 #include "Economy/StageProductData.h"
+#include "Environment/StageEnvironmentSubsystem.h"
 #include "Game/StageCraftGameModeBase.h"
 #include "Interaction/StageParameterInterface.h"
 #include "InputAction.h"
@@ -1348,35 +1351,115 @@ void AModularPlayerController::HandleSketchAssetsReady()
 {
 	UStageSketchSubsystem* Sketch = UWorld::GetSubsystem<UStageSketchSubsystem>(GetWorld());
 	TOptional<FStageSketchBuildPlan> Plan = Sketch ? Sketch->TakeReadyPlan() : TOptional<FStageSketchBuildPlan>();
-	if (!Plan.IsSet() || !SpawnSystem)
+	if (!Plan.IsSet())
 	{
 		return;
 	}
 
-	// The preview check asks the same GameMode rules without reporting, so only the summary below reaches the status bar.
-	const FStageSketchBuildOutcome Outcome = StageSketchBuilder::Execute(*Plan, *SpawnSystem,
-		[this](const UBaseItemData& Item, int32 Quantity) { return EvaluatePlacementPreview(Item, Quantity); });
+	FStageSketchGenerateResult Result = RequestBuildPlan(*Plan, FText::Format(LOCTEXT("GenerateStep", "Generate from Sketch ({0} {0}|plural(one=item,other=items))"),
+		FText::AsNumber(Plan->Num())));
+	Result.Message = Result.bSucceeded
+		? FText::Format(LOCTEXT("SketchGenerated", "Generated {0}. Undo removes all of it in one step."), Result.Message)
+		: FText::Format(LOCTEXT("SketchRefused", "Nothing was generated: {0}"), Result.Message);
+	Sketch->ReportGeneration(Result);
+}
 
+FStageSketchGenerateResult AModularPlayerController::RequestBuildPlan(const FStageSketchBuildPlan& Plan, const FText& StepName)
+{
 	FStageSketchGenerateResult Result;
-	Result.bSucceeded = Outcome.IsSuccess();
-	if (!Outcome.IsSuccess())
+	FStageEconomyResultInfo Refusal;
+	if (!SpawnSystem)
 	{
-		Result.Message = FText::Format(LOCTEXT("SketchRefused", "Nothing was generated: {0}"), Outcome.Result.Message);
-		ReportRejection(FStageEconomyResultInfo::Fail(Outcome.Result.Code, Result.Message));
-		Sketch->ReportGeneration(Result);
-		return;
+		Refusal = FStageEconomyResultInfo::Fail(EStageEconomyResult::InvalidRequest, LOCTEXT("BuildNoSpawner", "Placing is not available in this level."));
 	}
+	else if (IsBusyWithPointer())
+	{
+		Refusal = FStageEconomyResultInfo::Fail(EStageEconomyResult::InvalidRequest, LOCTEXT("BuildBusy", "Finish the drag or camera move first."));
+	}
+	else if (Plan.IsEmpty())
+	{
+		Refusal = FStageEconomyResultInfo::Fail(EStageEconomyResult::InvalidRequest, LOCTEXT("BuildEmpty", "There is nothing to place."));
+	}
+	else
+	{
+		// The preview check asks the same GameMode rules without reporting, so only the summary below reaches the status bar.
+		const FStageSketchBuildOutcome Outcome = StageSketchBuilder::Execute(Plan, *SpawnSystem,
+			[this](const UBaseItemData& Item, int32 Quantity) { return EvaluatePlacementPreview(Item, Quantity); });
+		if (Outcome.IsSuccess())
+		{
+			if (EditHistory)
+			{
+				EditHistory->RecordPlacements(Outcome.Placed, StepName);
+			}
+			Result.bSucceeded = true;
+			Result.DeckCount = Outcome.DeckCount;
+			Result.TrussCount = Outcome.TrussCount;
+			Result.FixtureCount = Outcome.FixtureCount;
+			Result.Message = StageSketchGenerator::DescribePlan(Plan);
+			return Result;
+		}
+		Refusal = Outcome.Result;
+	}
+	Result.Message = Refusal.Message;
+	ReportRejection(FStageEconomyResultInfo::Fail(Refusal.Code, FText::Format(LOCTEXT("BuildRefused", "Nothing was placed: {0}"), Refusal.Message)));
+	return Result;
+}
 
-	Result.DeckCount = Outcome.DeckCount;
-	Result.TrussCount = Outcome.TrussCount;
-	Result.FixtureCount = Outcome.FixtureCount;
+bool AModularPlayerController::RequestSetEnvironment(const FStageEnvironmentSettings& Settings, const FText& StepName)
+{
+	UStageEnvironmentSubsystem* Environment = UWorld::GetSubsystem<UStageEnvironmentSubsystem>(GetWorld());
+	if (!Environment)
+	{
+		ReportRejection(FStageEconomyResultInfo::Fail(EStageEconomyResult::InvalidRequest, LOCTEXT("NoEnvironment", "This level has no outdoor environment.")));
+		return false;
+	}
+	const FStageEnvironmentSettings Before = Environment->GetSettings();
+	Environment->SetSettings(Settings);
 	if (EditHistory)
 	{
-		EditHistory->RecordPlacements(Outcome.Placed, FText::Format(LOCTEXT("GenerateStep", "Generate from Sketch ({0} {0}|plural(one=item,other=items))"),
-			FText::AsNumber(Outcome.Placed.Num())));
+		// What the environment stored (sanitized, sky refused without a sky system) is the "after", never what was asked for.
+		EditHistory->RecordEnvironmentChange(StepName, Before, Environment->GetSettings());
 	}
-	Result.Message = FText::Format(LOCTEXT("SketchGenerated", "Generated {0}. Undo removes all of it in one step."), StageSketchGenerator::DescribePlan(*Plan));
-	Sketch->ReportGeneration(Result);
+	return true;
+}
+
+bool AModularPlayerController::RequestAssistantPrompt(const FString& Prompt)
+{
+	UStageAICommandSubsystem* Assistant = UWorld::GetSubsystem<UStageAICommandSubsystem>(GetWorld());
+	FText Reason;
+	if (!Assistant)
+	{
+		Reason = LOCTEXT("NoAssistant", "The AI assistant is not available in this level.");
+	}
+	else if (Assistant->IsBusy())
+	{
+		Reason = LOCTEXT("AssistantBusy", "The assistant is still answering the last request.");
+	}
+	else if (Prompt.TrimStartAndEnd().IsEmpty())
+	{
+		Reason = LOCTEXT("AssistantEmpty", "Type a request or a question first.");
+	}
+	// The executor is bound weakly: an action never runs for a controller that has gone.
+	else if (Assistant->SubmitPrompt(Prompt, FStageAICommandExecutor::CreateWeakLambda(this, [this](const FStageAICommand& Command)
+		{
+			return StageAICommandRunner::Run(*this, Command);
+		})))
+	{
+		return true;
+	}
+	ReportRejection(FStageEconomyResultInfo::Fail(EStageEconomyResult::InvalidRequest,
+		Reason.IsEmpty() ? LOCTEXT("AssistantNotStarted", "The assistant could not take the request.") : Reason));
+	return false;
+}
+
+TArray<FStageEconomyResultInfo> AModularPlayerController::RunCapturingRejections(TFunctionRef<void()> Work)
+{
+	TArray<FStageEconomyResultInfo> Captured;
+	TArray<FStageEconomyResultInfo>* const PreviousSink = RejectionSink;
+	RejectionSink = &Captured;
+	Work();
+	RejectionSink = PreviousSink;
+	return Captured;
 }
 
 UShowControlSubsystem* AModularPlayerController::ApproveCueRequest(EStageCueRequest Request, float CueNumber)
@@ -1793,6 +1876,11 @@ void AModularPlayerController::ReportRejection(const FStageEconomyResultInfo& Re
 {
 	UE_LOG(LogStageCraft, Log, TEXT("%s: request refused (%s): %s"), *GetName(),
 		*UEnum::GetValueAsString(Result.Code), *Result.Message.ToString());
+
+	if (RejectionSink)
+	{
+		RejectionSink->Add(Result);
+	}
 
 	// Shown by the workspace status bar (UStageStatusBarWidget) and answered with the error cue; nothing is drawn over the viewport.
 	OnRequestRejected.Broadcast(Result);

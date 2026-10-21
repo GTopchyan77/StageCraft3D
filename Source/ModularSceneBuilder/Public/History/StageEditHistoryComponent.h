@@ -41,6 +41,7 @@ DECLARE_DELEGATE_RetVal_TwoParams(bool, FStageTransformValidator, const class AM
  *  - Transform: RecordTransformChange, called by the controller when a gizmo drag ends and after a
  *    validated Location / Rotation / Scale edit.
  *  - Cues: RecordCueListChange, called by the controller after a validated cue store / update / delete.
+ *  - Environment: RecordEnvironmentChange, called by the controller after an assistant weather, time or sky change.
  * Undo and redo never go through those entry points, so they can never record themselves.
  *
  * Transactions (BeginTransaction / EndTransaction): a continuous edit (dragging an inspector field) changes the stage many
@@ -108,6 +109,12 @@ public:
 	 * Description names the step ("Store Cue 3").
 	 */
 	void RecordCueListChange(const FText& Description, const TArray<struct FShowCue>& Before, const TArray<struct FShowCue>& After);
+
+	/**
+	 * Records an environment change as one step holding the whole settings before and after it (Docs/ADR/0016-ai-assistant.md §2.4).
+	 * An open transaction is ended first. Nothing is recorded when Before and After are equal.
+	 */
+	void RecordEnvironmentChange(const FText& Description, const struct FStageEnvironmentSettings& Before, const struct FStageEnvironmentSettings& After);
 
 	/**
 	 * Records items one action placed together (a stage generated from the Sketch window, Docs/ADR/0015-sketch-to-stage.md §2.5)

@@ -478,6 +478,12 @@ void SStageWorkspaceMenuBar::FillEditMenu(FMenuBuilder& MenuBuilder)
 		FSlateIcon(), FUIAction(FExecuteAction::CreateSP(this, &SStageWorkspaceMenuBar::ShowPanel, FGameplayTag(StageCraftTags::Panel_Sketch))));
 	MenuBuilder.EndSection();
 
+	MenuBuilder.BeginSection(TEXT("Assistant"), LOCTEXT("AssistantSection", "Assistant"));
+	MenuBuilder.AddMenuEntry(LOCTEXT("AIAssistant", "AI Assistant..."),
+		LOCTEXT("AIAssistantTip", "Open the AI Assistant: ask about equipment, weight, power and cues, or ask for fixtures, cues, weather and reports in plain language. Every change obeys the stage's rules and can be undone."),
+		FSlateIcon(), FUIAction(FExecuteAction::CreateSP(this, &SStageWorkspaceMenuBar::ShowPanel, FGameplayTag(StageCraftTags::Panel_Assistant))));
+	MenuBuilder.EndSection();
+
 	MenuBuilder.BeginSection(TEXT("Preferences"));
 	MenuBuilder.AddMenuEntry(LOCTEXT("Preferences", "Preferences..."),
 		LOCTEXT("PreferencesTip", "Keyboard shortcuts, camera look, viewport and audio preferences."), FSlateIcon(),

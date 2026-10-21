@@ -278,20 +278,21 @@ void UStageViewportToolbar::BuildTree()
 		{ LOCTEXT("MoveTip", "Move the selection (Space cycles the tools)."), LOCTEXT("RotateTip", "Rotate the selection."), LOCTEXT("ScaleTip", "Scale the selection.") },
 		GizmoModeButtons, &ThisClass::HandleGizmoModePicked), SectionGap);
 
-	// 6. Sketch to Stage: opens (or brings forward) the drawing window.
+	// 6. Tool windows: open (or bring forward) Sketch to Stage and the AI Assistant.
 	AddDivider();
-	Add(MakeSegment({ LOCTEXT("Sketch", "SKETCH") },
-		{ LOCTEXT("SketchTip", "Sketch to Stage: draw stage shapes, truss lines and fixtures from above and generate them in 3D.") },
-		SketchButtons, &ThisClass::HandleSketchPicked), SectionGap);
+	Add(MakeSegment({ LOCTEXT("Sketch", "SKETCH"), LOCTEXT("Assist", "ASSIST") },
+		{ LOCTEXT("SketchTip", "Sketch to Stage: draw stage shapes, truss lines and fixtures from above and generate them in 3D."),
+		  LOCTEXT("AssistTip", "AI Assistant: ask about the stage, or ask for fixtures, cues, weather and reports in plain language.") },
+		ToolWindowButtons, &ThisClass::HandleToolWindowPicked), SectionGap);
 }
 
-void UStageViewportToolbar::HandleSketchPicked(int32 Index)
+void UStageViewportToolbar::HandleToolWindowPicked(int32 Index)
 {
 	// Opening a panel is workspace layout, not stage state.
 	const UGameInstance* GameInstance = GetGameInstance();
 	if (UStageWorkspaceSubsystem* Workspace = GameInstance ? GameInstance->GetSubsystem<UStageWorkspaceSubsystem>() : nullptr)
 	{
-		Workspace->OpenPanel(StageCraftTags::Panel_Sketch);
+		Workspace->OpenPanel(Index == 0 ? StageCraftTags::Panel_Sketch : StageCraftTags::Panel_Assistant);
 	}
 }
 
@@ -387,7 +388,7 @@ void UStageViewportToolbar::Refresh()
 	StyleGroup(GizmoModeButtons, Gizmo ? int32(Gizmo->GetMode()) : INDEX_NONE, Gizmo != nullptr);
 	StyleGroup(GridSnapButtons, Snapping ? FindPreset(StageViewMath::GetGridSnapPresets(), Snapping->GetGridSnap()) : INDEX_NONE, Snapping != nullptr);
 	StyleGroup(AngleSnapButtons, Snapping ? FindPreset(StageViewMath::GetAngleSnapPresets(), Snapping->GetAngleSnap()) : INDEX_NONE, Snapping != nullptr);
-	StyleGroup(SketchButtons, INDEX_NONE, true);
+	StyleGroup(ToolWindowButtons, INDEX_NONE, true);
 
 	// SetSelectedIndex reports ESelectInfo::Direct, which the handlers ignore: only user picks are edits.
 	const auto Select = [](UStageThemedComboBox* Combo, int32 Index, bool bEnabled)
