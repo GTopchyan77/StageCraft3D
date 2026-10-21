@@ -6,18 +6,24 @@
 #include "GameplayTagContainer.h"
 #include "ShowControlTypes.generated.h"
 
-/** Where a fixture's DMX mode starts. Universe 0 means unpatched. */
+/**
+ * Where a fixture's DMX mode starts. Universe 0 means unpatched.
+ *
+ * The fields are SaveGame because a fixture's Patch is: SaveGame serialization (undo snapshots, scene files) skips every member
+ * of a struct that is not itself SaveGame, so without the flags the patch was silently dropped and re-auto-patched on every load
+ * (found by StageCraft.Scene.RestoredState, STATE.md #40).
+ */
 USTRUCT(BlueprintType)
 struct MODULARSCENEBUILDER_API FStageDMXPatch
 {
 	GENERATED_BODY()
 
 	/** 1-based. Art-Net and sACN universes both map onto this number; the DMX bridge translates. */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "DMX", meta = (ClampMin = "0", ClampMax = "63999"))
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, SaveGame, Category = "DMX", meta = (ClampMin = "0", ClampMax = "63999"))
 	int32 Universe = 0;
 
 	/** 1..512. */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "DMX", meta = (ClampMin = "0", ClampMax = "512"))
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, SaveGame, Category = "DMX", meta = (ClampMin = "0", ClampMax = "512"))
 	int32 Address = 0;
 
 	bool IsPatched() const { return Universe > 0 && Address > 0; }

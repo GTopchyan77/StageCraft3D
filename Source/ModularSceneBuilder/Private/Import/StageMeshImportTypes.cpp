@@ -4,6 +4,9 @@
 
 #include "Dom/JsonObject.h"
 #include "Dom/JsonValue.h"
+#include "HAL/FileManager.h"
+#include "IO/StageAtomicFile.h"
+#include "Misc/FileHelper.h"
 #include "Misc/Paths.h"
 #include "Misc/SecureHash.h"
 #include "Serialization/JsonReader.h"
@@ -237,6 +240,27 @@ namespace StageMeshImport
 			}
 		}
 		return true;
+	}
+
+	EImportListRead LoadImportListFile(const FString& Path, TArray<FString>& OutSourceFiles)
+	{
+		OutSourceFiles.Reset();
+		if (!IFileManager::Get().FileExists(*Path))
+		{
+			return EImportListRead::Missing;
+		}
+
+		FString Json;
+		if (!FFileHelper::LoadFileToString(Json, *Path))
+		{
+			return EImportListRead::Unreadable;
+		}
+		if (ReadImportList(Json, OutSourceFiles))
+		{
+			return EImportListRead::Read;
+		}
+		// Set aside before anything can save over it: it may be the only record of the user's imports.
+		return StageAtomicFile::MoveAside(Path) ? EImportListRead::Damaged : EImportListRead::Unreadable;
 	}
 }
 

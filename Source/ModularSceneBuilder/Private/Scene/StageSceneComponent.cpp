@@ -10,6 +10,7 @@
 #include "Engine/World.h"
 #include "Environment/StageEnvironmentSubsystem.h"
 #include "History/StageEditHistorySubsystem.h"
+#include "Import/StageMeshImportSubsystem.h"
 #include "TimerManager.h"
 #include "Misc/Paths.h"
 #include "ModularSceneBuilder.h"
@@ -109,6 +110,8 @@ FStageSceneDocument UStageSceneComponent::CaptureStage(const FString& Name) cons
 			Document.Items.Add(Item->CaptureSnapshot());
 		}
 	}
+	// Items the last load could not place are still part of the scene; without them a save would delete them from the file.
+	FStageSceneStore::AppendUnplacedItems(Document, UnplacedItems);
 
 	if (const UStageEnvironmentSubsystem* Environment = UWorld::GetSubsystem<UStageEnvironmentSubsystem>(GetWorld()))
 	{
@@ -141,23 +144,27 @@ EStageSceneResult UStageSceneComponent::SaveScene(const FString& Name)
 	FStageSceneDocument Document = CaptureStage(Name);
 	const uint64 EditSerial = Session->GetEditSerial();
 	const int32 ItemCount = Document.Items.Num();
+	// The file still has entries the load had to drop as damaged; keep the original before it is replaced.
+	const bool bBackupFirst = !SceneWithDroppedEntries.IsEmpty() && SceneWithDroppedEntries.Equals(Name, ESearchCase::IgnoreCase);
 	bOperationInFlight = true;
 
-	UE::Tasks::Launch(UE_SOURCE_LOCATION, [WeakThis = TWeakObjectPtr<UStageSceneComponent>(this), SceneStore = Store, Document = MoveTemp(Document), EditSerial, ItemCount]()
+	UE::Tasks::Launch(UE_SOURCE_LOCATION, [WeakThis = TWeakObjectPtr<UStageSceneComponent>(this), SceneStore = Store, Document = MoveTemp(Document), EditSerial, ItemCount, bBackupFirst]()
 	{
-		const EStageSceneResult Result = SceneStore->Save(Document);
-		AsyncTask(ENamedThreads::GameThread, [WeakThis, Result, Name = Document.Name, ItemCount, EditSerial]()
+		const bool bBackedUp = bBackupFirst && SceneStore->BackupScene(Document.Name);
+		// Never replace the only copy of the damaged entries: no backup, no save.
+		const EStageSceneResult Result = bBackupFirst && !bBackedUp ? EStageSceneResult::WriteFailed : SceneStore->Save(Document);
+		AsyncTask(ENamedThreads::GameThread, [WeakThis, Result, Name = Document.Name, ItemCount, EditSerial, bBackedUp]()
 		{
 			if (UStageSceneComponent* This = WeakThis.Get())
 			{
-				This->FinishSave(Result, Name, ItemCount, EditSerial);
+				This->FinishSave(Result, Name, ItemCount, EditSerial, bBackedUp);
 			}
 		});
 	});
 	return EStageSceneResult::Success;
 }
 
-void UStageSceneComponent::FinishSave(EStageSceneResult Result, const FString& Name, int32 ItemCount, uint64 EditSerialAtCapture)
+void UStageSceneComponent::FinishSave(EStageSceneResult Result, const FString& Name, int32 ItemCount, uint64 EditSerialAtCapture, bool bBackedUp)
 {
 	bOperationInFlight = false;
 
@@ -166,6 +173,7 @@ void UStageSceneComponent::FinishSave(EStageSceneResult Result, const FString& N
 	Outcome.Result = Result;
 	Outcome.SceneName = Name;
 	Outcome.ItemCount = ItemCount;
+	Outcome.KeptCount = UnplacedItems.Num();
 
 	if (Result != EStageSceneResult::Success)
 	{
@@ -191,7 +199,20 @@ void UStageSceneComponent::FinishSave(EStageSceneResult Result, const FString& N
 		DeleteAutosaveFile(LastAutosaveName);
 	}
 	LastAutosaveName.Reset();
+	if (bBackedUp)
+	{
+		SceneWithDroppedEntries.Reset();
+	}
+
 	Outcome.Message = FText::Format(LOCTEXT("Saved", "Saved scene \"{0}\" ({1} items)"), FText::FromString(Name), FText::AsNumber(ItemCount));
+	if (Outcome.KeptCount > 0)
+	{
+		Outcome.Message = FText::Format(LOCTEXT("SavedKept", "{0}, including {1} not placed on this stage"), Outcome.Message, FText::AsNumber(Outcome.KeptCount));
+	}
+	if (bBackedUp)
+	{
+		Outcome.Message = FText::Format(LOCTEXT("SavedBackup", "{0}. The previous file, with its damaged entries, was kept as {1}.json.bak"), Outcome.Message, FText::FromString(Name));
+	}
 	Broadcast(Outcome);
 }
 
@@ -228,6 +249,12 @@ EStageSceneResult UStageSceneComponent::StartLoad(ELoadSource Source, const FStr
 	if (!Items->IsCatalogLoaded())
 	{
 		return EStageSceneResult::CatalogNotReady;
+	}
+	// Imported models join the catalog when their import finishes; loading before that would skip their items as unknown.
+	const UStageMeshImportSubsystem* Imports = GameInstance->GetSubsystem<UStageMeshImportSubsystem>();
+	if (Imports && Imports->HasImportsInProgress())
+	{
+		return EStageSceneResult::ImportsPending;
 	}
 	if (!SourceStore->SceneExists(Name))
 	{
@@ -313,14 +340,17 @@ FStageSceneOperationResult UStageSceneComponent::ApplyDocument(const FStageScene
 		SpawnSystem->TryDeleteActor(Existing);
 	}
 
+	// Skipped items are kept, not dropped: they go back into the file with the next save (Docs/ADR/0013 §3.1).
 	int32 UnknownItems = 0;
 	int32 RefusedItems = 0;
+	TArray<FStageItemSnapshot> Unplaced;
 	for (const FStageItemSnapshot& Snapshot : Document.Items)
 	{
 		UBaseItemData* const* Item = Catalog.Find(Snapshot.Item.ToSoftObjectPath());
 		if (!Item)
 		{
 			++UnknownItems;
+			Unplaced.Add(Snapshot);
 			continue;
 		}
 		// A pre-check of the item itself (ownership, item count). A span's full quantity is only known once its saved state is
@@ -328,17 +358,23 @@ FStageSceneOperationResult UStageSceneComponent::ApplyDocument(const FStageScene
 		if (PlacementEvaluator.IsBound() && !PlacementEvaluator.Execute(**Item, 1).IsSuccess())
 		{
 			++RefusedItems;
+			Unplaced.Add(Snapshot);
 			continue;
 		}
-		if (SpawnSystem->RestoreItem(Snapshot))
+		if (const AModularBaseActor* Restored = SpawnSystem->RestoreItem(Snapshot))
 		{
 			++Outcome.ItemCount;
+			Outcome.RepairedCount += Restored->GetStateRepairCount();
 		}
 		else
 		{
 			++RefusedItems;
+			Unplaced.Add(Snapshot);
 		}
 	}
+	UnplacedItems = MoveTemp(Unplaced);
+	Outcome.KeptCount = UnplacedItems.Num();
+	SceneWithDroppedEntries = Report.InvalidItems > 0 && Source == ELoadSource::SavedScene ? Document.Name : FString();
 
 	// Before MarkClean: setting the environment marks the session dirty like any edit, and it is part of what was loaded.
 	if (UStageEnvironmentSubsystem* Environment = UWorld::GetSubsystem<UStageEnvironmentSubsystem>(GetWorld()))
@@ -377,19 +413,55 @@ FStageSceneOperationResult UStageSceneComponent::ApplyDocument(const FStageScene
 	}
 
 	Session->SetSceneName(Document.Name);
-	Session->MarkClean();
-
 	Outcome.Result = EStageSceneResult::Success;
 	Outcome.SkippedCount = Report.InvalidItems + UnknownItems + RefusedItems;
-	Outcome.Message = Outcome.SkippedCount == 0
-		? FText::Format(LOCTEXT("Loaded", "Loaded scene \"{0}\" ({1} items)"), FText::FromString(Document.Name), FText::AsNumber(Outcome.ItemCount))
-		: FText::Format(LOCTEXT("LoadedSkipped", "Loaded scene \"{0}\": {1} items placed, {2} skipped ({3} not allowed now, {4} not in the Library, {5} damaged)"),
-			FText::FromString(Document.Name), FText::AsNumber(Outcome.ItemCount), FText::AsNumber(Outcome.SkippedCount),
-			FText::AsNumber(RefusedItems), FText::AsNumber(UnknownItems), FText::AsNumber(Report.InvalidItems));
 
-	UE_LOG(LogStageCraft, Log, TEXT("Scene \"%s\" loaded: %d placed, %d refused, %d unknown, %d invalid, %d ids repaired."), *Document.Name,
-		Outcome.ItemCount, RefusedItems, UnknownItems, Report.InvalidItems, Report.RepairedIds);
+	// The stage matches the file only if everything was placed as saved. Otherwise it stays unsaved, so autosave and the exit
+	// prompt protect it, and the message says what differs.
+	const bool bComplete = Outcome.SkippedCount == 0 && Outcome.RepairedCount == 0;
+	if (bComplete)
+	{
+		Session->MarkClean();
+		Outcome.Message = FText::Format(LOCTEXT("Loaded", "Loaded scene \"{0}\" ({1} items)"), FText::FromString(Document.Name), FText::AsNumber(Outcome.ItemCount));
+	}
+	else
+	{
+		Session->MarkUnsaved();
+		Outcome.Message = MakePartialLoadMessage(Document.Name, Outcome, RefusedItems, UnknownItems, Report.InvalidItems);
+	}
+
+	UE_LOG(LogStageCraft, Log, TEXT("Scene \"%s\" loaded: %d placed, %d refused, %d unknown, %d invalid, %d kept for saving, %d values repaired, %d ids repaired."), *Document.Name,
+		Outcome.ItemCount, RefusedItems, UnknownItems, Report.InvalidItems, Outcome.KeptCount, Outcome.RepairedCount, Report.RepairedIds);
 	return Outcome;
+}
+
+FText UStageSceneComponent::MakePartialLoadMessage(const FString& SceneName, const FStageSceneOperationResult& Outcome, int32 Refused, int32 Unknown, int32 Damaged)
+{
+	TArray<FText> Parts;
+	if (Refused > 0)
+	{
+		Parts.Add(FText::Format(LOCTEXT("PartRefused", "{0} not allowed now"), FText::AsNumber(Refused)));
+	}
+	if (Unknown > 0)
+	{
+		Parts.Add(FText::Format(LOCTEXT("PartUnknown", "{0} not in the Library"), FText::AsNumber(Unknown)));
+	}
+	if (Damaged > 0)
+	{
+		Parts.Add(FText::Format(LOCTEXT("PartDamaged", "{0} damaged"), FText::AsNumber(Damaged)));
+	}
+	if (Outcome.RepairedCount > 0)
+	{
+		Parts.Add(FText::Format(LOCTEXT("PartRepaired", "{0} invalid {0}|plural(one=setting,other=settings) repaired"), FText::AsNumber(Outcome.RepairedCount)));
+	}
+
+	FText Message = FText::Format(LOCTEXT("LoadedPartial", "Loaded scene \"{0}\": {1} items placed ({2})"),
+		FText::FromString(SceneName), FText::AsNumber(Outcome.ItemCount), FText::Join(FText::FromString(TEXT(", ")), Parts));
+	if (Outcome.KeptCount > 0)
+	{
+		Message = FText::Format(LOCTEXT("LoadedKept", "{0}. The {1} skipped {1}|plural(one=item is,other=items are) kept and saved with the scene"), Message, FText::AsNumber(Outcome.KeptCount));
+	}
+	return FText::Format(LOCTEXT("LoadedUnsaved", "{0}. The stage differs from the file, so it is marked unsaved."), Message);
 }
 
 // --- Autosave ---
@@ -551,6 +623,8 @@ FText UStageSceneComponent::DescribeFailure(EStageSceneOperation Operation, ESta
 		return LOCTEXT("Busy", "Another scene is still being saved or loaded. Try again in a moment.");
 	case EStageSceneResult::CatalogNotReady:
 		return LOCTEXT("CatalogNotReady", "The Library is still loading. Try again in a moment.");
+	case EStageSceneResult::ImportsPending:
+		return LOCTEXT("ImportsPending", "Imported models are still loading. Try again in a moment.");
 	case EStageSceneResult::Unavailable:
 		return LOCTEXT("Unavailable", "Scenes are not available in this level.");
 	case EStageSceneResult::Success:

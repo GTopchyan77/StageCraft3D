@@ -276,23 +276,37 @@ FStageItemSnapshot AModularBaseActor::CaptureSnapshot() const
 
 bool AModularBaseActor::RestoreSnapshotState(const FStageItemSnapshot& Snapshot)
 {
+	StateRepairCount = 0;
 	if (Snapshot.SavedProperties.IsEmpty())
 	{
 		return true;
 	}
 
 	FMemoryReader Reader(Snapshot.SavedProperties, /*bIsPersistent*/ false);
-	FObjectAndNameAsStringProxyArchive Archive(Reader, /*bInLoadIfFindFails*/ true);
+	// No package is ever loaded because a file named it: a saved reference resolves only to an object that is already loaded.
+	FObjectAndNameAsStringProxyArchive Archive(Reader, /*bInLoadIfFindFails*/ false);
 	Archive.ArIsSaveGame = true;
 	Archive.ArNoDelta = true;
 	SerializeScriptProperties(Archive);
 
 	if (Archive.IsError())
 	{
-		UE_LOG(LogStageCraft, Warning, TEXT("%s: could not read the saved state of %s; it is restored with default settings."), *GetName(), *Snapshot.DisplayName.ToString());
+		ReportStateRepair(FString::Printf(TEXT("saved settings of %s were unreadable; default settings used"), *Snapshot.DisplayName.ToString()));
 		return false;
 	}
+
+	if (InstanceLabel.ToString().Len() > MaxLabelLength)
+	{
+		InstanceLabel = FText::FromString(InstanceLabel.ToString().Left(MaxLabelLength));
+		ReportStateRepair(FString::Printf(TEXT("label longer than %d characters shortened"), MaxLabelLength));
+	}
 	return true;
+}
+
+void AModularBaseActor::ReportStateRepair(const FString& What)
+{
+	++StateRepairCount;
+	UE_LOG(LogStageCraft, Warning, TEXT("%s (%s): repaired restored state: %s."), *GetName(), *GetInstanceLabel().ToString(), *What);
 }
 
 TArray<FStageParameterSection> AModularBaseActor::GetParameterSections_Implementation() const
@@ -418,7 +432,8 @@ bool AModularBaseActor::WriteParameter(const FGameplayTag& ParameterId, const FS
 {
 	if (ParameterId == StageCraftTags::Param_Info_Label && Value.Type == EStageParameterType::Text)
 	{
-		InstanceLabel = Value.Text;
+		const FString Label = Value.Text.ToString();
+		InstanceLabel = Label.Len() > MaxLabelLength ? FText::FromString(Label.Left(MaxLabelLength)) : Value.Text;
 		NotifyParameterChanged(ParameterId);
 		return true;
 	}

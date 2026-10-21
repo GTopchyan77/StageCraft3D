@@ -343,4 +343,59 @@ bool FStageSceneFilesTest::RunTest(const FString& Parameters)
 	return true;
 }
 
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FStageScenePartialLoadTest, "StageCraft.Scene.PartialLoad", StageSceneStoreTests::Flags)
+
+bool FStageScenePartialLoadTest::RunTest(const FString& Parameters)
+{
+	using namespace StageSceneStoreTests;
+
+	// Audit risk R2 (Docs/ADR/0013-preferences-key-bindings-and-audit-fixes.md §3.1): items a load could not place go back into
+	// the file with the next save, so a scene keeps all 3 items although only 2 were on the stage.
+	const FStageItemSnapshot Placed1 = MakeItem(TEXT("Placed 1"), FTransform(FVector(0, 0, 0)));
+	const FStageItemSnapshot Placed2 = MakeItem(TEXT("Placed 2"), FTransform(FVector(100, 0, 0)));
+	FStageItemSnapshot Unknown = MakeItem(TEXT("Imported model"), FTransform(FVector(200, 0, 0)), { 7, 7, 7 });
+	// An imported model whose import is gone: the catalog does not know it, so a load skips it.
+	Unknown.Item = TSoftObjectPtr<UBaseItemData>(FSoftObjectPath(TEXT("/Temp/StageCraft/Imported/IMP_0123456789ABCDEF.IMP_0123456789ABCDEF")));
+
+	FStageSceneDocument Document;
+	Document.Name = TEXT("Partial");
+	Document.Items = { Placed1, Placed2 };
+	FStageSceneStore::AppendUnplacedItems(Document, { Unknown, Placed2 });
+	if (TestEqual(TEXT("Keep: the unplaced item is added once; a placed id is not repeated"), Document.Items.Num(), 3))
+	{
+		TestEqual(TEXT("Keep: placed items first"), Document.Items[1].InstanceId, Placed2.InstanceId);
+		TestEqual(TEXT("Keep: the unplaced item as it was loaded"), Document.Items[2].InstanceId, Unknown.InstanceId);
+		TestEqual(TEXT("Keep: its settings untouched"), Document.Items[2].SavedProperties, Unknown.SavedProperties);
+	}
+	FStageSceneDocument Unchanged = Document;
+	FStageSceneStore::AppendUnplacedItems(Unchanged, {});
+	TestEqual(TEXT("Keep: nothing to keep adds nothing"), Unchanged.Items.Num(), 3);
+
+	const FString Directory = FPaths::Combine(FPaths::AutomationTransientDir(), TEXT("StageCraftScenes"), FGuid::NewGuid().ToString());
+	const FStageSceneStore Store(Directory);
+	TestEqual(TEXT("Round trip: saved"), Str(Store.Save(Document)), Str(EStageSceneResult::Success));
+	FStageSceneDocument Loaded;
+	FStageSceneParseReport Report;
+	TestEqual(TEXT("Round trip: loaded"), Str(Store.Load(TEXT("Partial"), Loaded, Report)), Str(EStageSceneResult::Success));
+	TestEqual(TEXT("Round trip: the file still holds 3 items"), Loaded.Items.Num(), 3);
+	TestTrue(TEXT("Round trip: including the item that was not placed"), Loaded.Items.ContainsByPredicate([&Unknown](const FStageItemSnapshot& Item)
+	{
+		return Item.InstanceId == Unknown.InstanceId && Item.Item.ToSoftObjectPath() == Unknown.Item.ToSoftObjectPath();
+	}));
+
+	// Damaged entries cannot be carried, so the file is copied before a save drops them.
+	TestFalse(TEXT("Backup: no scene, no backup"), Store.BackupScene(TEXT("Nope")));
+	TestTrue(TEXT("Backup: copied"), Store.BackupScene(TEXT("Partial")));
+	FString Original;
+	FString Backup;
+	FFileHelper::LoadFileToString(Original, *Store.GetScenePath(TEXT("Partial")));
+	FFileHelper::LoadFileToString(Backup, *(Store.GetScenePath(TEXT("Partial")) + TEXT(".bak")));
+	TestEqual(TEXT("Backup: byte for byte"), Backup, Original);
+	TestTrue(TEXT("Backup: the scene itself stays"), Store.SceneExists(TEXT("Partial")));
+	TestEqual(TEXT("Backup: never listed as a scene"), FString::Join(Store.ListScenes(), TEXT("|")), FString(TEXT("Partial")));
+
+	IFileManager::Get().DeleteDirectory(*Directory, /*RequireExists*/ false, /*Tree*/ true);
+	return true;
+}
+
 #endif // WITH_DEV_AUTOMATION_TESTS

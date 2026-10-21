@@ -7,6 +7,7 @@
 #include "Data/StageParameterTypes.h"
 #include "Economy/StageEconomyTypes.h"
 #include "History/StageEditCommand.h"
+#include "Input/StageKeyBindings.h"
 #include "Placement/StagePlacementTypes.h"
 #include "Scene/StageSceneTypes.h"
 #include "Show/ShowControlTypes.h"
@@ -51,9 +52,12 @@ enum class EStageSelectionClick : uint8
  *    UStageCraftGameViewportClient, so this class never changes the input mode mid-press.
  *  - Wheel: fly speed, with or without the right button held. It scales every fly axis alike.
  *
- * Keys: P toggles Place mode, Esc leaves Place mode (or, in Select mode, deselects and disarms),
- * Delete removes every selected item (one undo step), Space cycles the gizmo Move -> Rotate -> Scale, Ctrl+Z undoes and
- * Ctrl+Y / Ctrl+Shift+Z redo (text fields keep these keys while they have focus).
+ * Keys are the user's key map (UStageInputPreferencesSubsystem, Docs/ADR/0013-preferences-key-bindings-and-audit-fixes.md §2.3).
+ * InputKey looks up each key press (exact chord: key plus Ctrl/Shift/Alt) and runs that command: undo, redo, delete, select
+ * all, cancel, the transform tools, Place mode, finishing or shortening a span path, the view projections and the grid.
+ * Commands are suspended while the right button is held, so the same key can fly (W) and pick a tool (W) as in the Unreal
+ * Editor. The fly keys are an Enhanced Input context rebuilt from the key map when it changes. Text fields keep their keys
+ * while they have focus.
  *
  * The placement preview follows the cursor without any tick: cursor moves (viewport client), camera
  * moves (pawn root) and view rotation (SetControlRotation) request one coalesced trace on the next tick,
@@ -64,8 +68,8 @@ enum class EStageSelectionClick : uint8
  * component's PlacementValidator, which ask the GameMode (rules + ownership) and only then let the
  * session or economy subsystem apply them. Refusals are broadcast on OnRequestRejected.
  *
- * Input assets are designer-assignable in a Blueprint subclass. If any slot is empty, an equivalent
- * mapping is built in code, so the project works with no content.
+ * The mouse actions (select/place, navigate) and the camera actions are designer-assignable in a Blueprint subclass; empty
+ * slots are built in code, so the project works with no content. The fly key context is always built from the key map.
  */
 UCLASS()
 class MODULARSCENEBUILDER_API AModularPlayerController : public APlayerController
@@ -332,6 +336,7 @@ protected:
 	virtual void BeginPlay() override;
 	virtual void EndPlay(const EEndPlayReason::Type EndPlayReason) override;
 	virtual void SetupInputComponent() override;
+	virtual bool InputKey(const FInputKeyEventArgs& Params) override;
 	//~ End APlayerController Interface
 
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Components")
@@ -386,47 +391,15 @@ protected:
 	UPROPERTY(EditDefaultsOnly, Category = "StageCraft|Input")
 	TObjectPtr<class UInputAction> NavigateAction = nullptr;
 
-	/** Deletes the selected item (Delete key). */
-	UPROPERTY(EditDefaultsOnly, Category = "StageCraft|Input")
-	TObjectPtr<class UInputAction> DeleteAction = nullptr;
-
-	/** Backs out one level: leaves Place mode, or clears the selection and disarms the catalog item (Esc). */
-	UPROPERTY(EditDefaultsOnly, Category = "StageCraft|Input")
-	TObjectPtr<class UInputAction> CancelAction = nullptr;
-
-	/** Cycles the gizmo Move -> Rotate -> Scale (Space). */
-	UPROPERTY(EditDefaultsOnly, Category = "StageCraft|Input")
-	TObjectPtr<class UInputAction> ToggleGizmoModeAction = nullptr;
-
-	/** Toggles Place mode (P). */
-	UPROPERTY(EditDefaultsOnly, Category = "StageCraft|Input")
-	TObjectPtr<class UInputAction> TogglePlaceModeAction = nullptr;
-
-	/** Finishes the span path being drawn (Enter). */
-	UPROPERTY(EditDefaultsOnly, Category = "StageCraft|Input")
-	TObjectPtr<class UInputAction> FinishPathAction = nullptr;
-
-	/** Removes the last point of the span path being drawn (Backspace). */
-	UPROPERTY(EditDefaultsOnly, Category = "StageCraft|Input")
-	TObjectPtr<class UInputAction> RemovePathPointAction = nullptr;
-
-	/** Undo (Ctrl+Z). An assigned action must be mapped with its own Ctrl chord in EditorMappingContext. */
-	UPROPERTY(EditDefaultsOnly, Category = "StageCraft|Input")
-	TObjectPtr<class UInputAction> UndoAction = nullptr;
-
-	/** Redo (Ctrl+Y and Ctrl+Shift+Z). An assigned action must be mapped with its own chords in EditorMappingContext. */
-	UPROPERTY(EditDefaultsOnly, Category = "StageCraft|Input")
-	TObjectPtr<class UInputAction> RedoAction = nullptr;
-
 	UPROPERTY(EditDefaultsOnly, Category = "StageCraft|Input")
 	int32 MappingContextPriority = 0;
 
 	/**
-	 * Applied for the whole session; the handlers act only while NavigateAction is held. Never
-	 * added/removed per press, because rebuilding mappings while keys are held makes press/release
-	 * pairing unreliable. Must map CameraLookAction, CameraMoveAction and CameraSpeedAction.
+	 * Look, wheel and the fly keys from the key map. Applied for the whole session; the handlers act only while NavigateAction
+	 * is held. Rebuilt only when the fly keys change in the preferences, never per press, because rebuilding mappings while
+	 * keys are held makes press/release pairing unreliable.
 	 */
-	UPROPERTY(EditDefaultsOnly, Category = "StageCraft|Input|Camera")
+	UPROPERTY(Transient)
 	TObjectPtr<class UInputMappingContext> CameraNavigationMappingContext = nullptr;
 
 	/** Axis2D look delta in raw mouse counts (X = yaw, Y = pitch). */
@@ -441,7 +414,7 @@ protected:
 	UPROPERTY(EditDefaultsOnly, Category = "StageCraft|Input|Camera")
 	TObjectPtr<class UInputAction> CameraSpeedAction = nullptr;
 
-	/** Above the editor context, so the fly keys win when both map the same key. */
+	/** Above the editor context (which maps only the mouse buttons). */
 	UPROPERTY(EditDefaultsOnly, Category = "StageCraft|Input|Camera")
 	int32 CameraNavigationContextPriority = 1;
 
@@ -453,8 +426,26 @@ protected:
 
 private:
 	void BuildDefaultInputMapping();
-	void BuildDefaultCameraMapping();
-	void MapUndoRedoChords(class UInputMappingContext& Context);
+	void EnsureCameraActions();
+
+	/** Builds the camera context from the key map's fly keys; when it replaces one in use, swaps it in the input subsystem. */
+	void RebuildCameraMapping();
+
+	/** The local user's key map and navigation preferences; null before the local player exists. */
+	class UStageInputPreferencesSubsystem* GetInputPreferences() const;
+
+	/** The key map or the fly keys changed: rebuild the fly mapping. Commands read the map on each press, so need nothing. */
+	UFUNCTION()
+	void HandleInputPreferencesChanged();
+
+	/** Runs one key-map command. Each command keeps its own guards (gizmo drag, span tool state). */
+	void ExecuteCommand(EStageInputCommand Command);
+
+	/** Ctrl, Shift or Alt (either side) is down for the event from Viewport (or, without one, in this controller's input state). */
+	bool IsModifierDown(const class FViewport* Viewport, const FKey& Left, const FKey& Right) const;
+
+	/** The preferences this controller is bound to, for unbinding in EndPlay. */
+	TWeakObjectPtr<class UStageInputPreferencesSubsystem> BoundInputPreferences;
 
 	UFUNCTION()
 	void HandleSelectionChanged(AActor* NewSelection, AActor* PreviousSelection);
@@ -520,14 +511,12 @@ private:
 	void HandlePrimaryCompleted();
 	void HandleNavigateStarted();
 	void HandleNavigateCompleted();
-	void HandleDelete();
+
+	// Key-map commands (ExecuteCommand).
 	void HandleCancel();
-	void HandleToggleGizmoMode();
 	void HandleTogglePlaceMode();
 	void HandleFinishPath();
 	void HandleRemovePathPoint();
-	void HandleUndo();
-	void HandleRedo();
 
 	UFUNCTION()
 	void HandleGizmoDragStarted(AActor* Target);

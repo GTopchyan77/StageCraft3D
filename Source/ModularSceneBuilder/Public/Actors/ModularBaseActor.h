@@ -132,8 +132,21 @@ public:
 	 * Writes a snapshot's SaveGame properties onto this actor. Call between SpawnActorDeferred and
 	 * InitializeFromItemData, so ApplyItemData and BeginPlay see the restored state (e.g. the fixture ID
 	 * registers unchanged). Returns false if the data could not be read; the actor then keeps its defaults.
+	 *
+	 * Saved state is untrusted (scene files can be hand-edited or damaged; Docs/ADR/0013-preferences-key-bindings-and-audit-fixes.md
+	 * §3.2): an object reference in it resolves only to an object that is already loaded, never loads a package, and every
+	 * value is sanitized by its class when the item data is applied next. Resets GetStateRepairCount.
 	 */
 	bool RestoreSnapshotState(const struct FStageItemSnapshot& Snapshot);
+
+	/**
+	 * Saved values repaired since the last RestoreSnapshotState: unreadable state, an over-long label, or (subclasses)
+	 * non-finite and out-of-range settings. Each repair was logged. A scene load counts them and keeps the stage unsaved.
+	 */
+	int32 GetStateRepairCount() const { return StateRepairCount; }
+
+	/** Longest label kept, the same limit scene files apply to names. */
+	static constexpr int32 MaxLabelLength = 256;
 
 	//~ Begin IInteractableInterface
 	virtual void OnHoverBegin_Implementation() override;
@@ -165,6 +178,9 @@ protected:
 	virtual bool WriteParameter(const FGameplayTag& ParameterId, const FStageParameterValue& Value);
 
 	void NotifyParameterChanged(const FGameplayTag& ParameterId);
+
+	/** A restored or applied value was invalid and was replaced (What names it and the new value): logs it and counts it. */
+	void ReportStateRepair(const FString& What);
 
 	/** Call after GetQuantity() changed: the Info Weight / Power rows show specs x quantity, as the bill of materials does. */
 	void NotifyQuantityChanged();
@@ -229,6 +245,9 @@ private:
 
 	UPROPERTY(Transient)
 	bool bHighlightSuppressed = false;
+
+	/** See GetStateRepairCount. */
+	int32 StateRepairCount = 0;
 
 	/** Independent user flags, not a mode: an item can be hidden, locked, both or neither. SaveGame, so undo and scene files keep them. */
 	UPROPERTY(VisibleInstanceOnly, SaveGame, Category = "StageCraft|Item")

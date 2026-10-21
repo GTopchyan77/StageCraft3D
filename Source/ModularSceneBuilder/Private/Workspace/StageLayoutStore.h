@@ -32,7 +32,7 @@ struct FStageSavedLayout
  *
  * Pure logic: no world, no UObjects, no Slate. Slate's own layout JSON is only checked for shape and version here.
  * The shell turns it into an FLayout. Every function is synchronous and safe on any thread, because the store holds only immutable paths.
- * The workspace runs writes during play on a background task (WriteFileAtomic on copied strings).
+ * The workspace runs writes during play on a background task (StageAtomicFile::WriteText on copied strings).
  *
  * Files:
  *   <Directory>/Layouts/<Name>.json   named user layouts, written only by an explicit "Save Layout As"
@@ -72,9 +72,6 @@ public:
 	FString GetSessionPath() const;
 	FString Serialize(const FStageSavedLayout& Layout) const;
 
-	/** Writes to a temporary file, then moves it over Path, so a crash mid-write never leaves a truncated layout. Any thread. */
-	static bool WriteFileAtomic(const FString& Path, const FString& Contents);
-
 	/**
 	 * Moves and shrinks the main window and every floating panel window so each lies fully inside one monitor's work area.
 	 * - Each window goes to the work area it overlaps most.
@@ -96,7 +93,6 @@ public:
 private:
 	EStageLayoutResult LoadFile(const FString& Path, FStageSavedLayout& OutLayout) const;
 	EStageLayoutResult Parse(const FString& Contents, FStageSavedLayout& OutLayout) const;
-	static void MoveAside(const FString& Path);
 
 	FString Directory;
 	FName SlateLayoutVersion;

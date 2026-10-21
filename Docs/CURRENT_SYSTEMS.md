@@ -1,6 +1,6 @@
 # StageCraft 3D: current systems
 
-Updated 2026-10-21 after STATE.md #39. This is a quick reference to what exists, how well it works, and where it lives. It was audited on 2026-10-20 at commit `960f5da`. Evidence, file:line references and the risk list are in `Docs/PROJECT_AUDIT.md`.
+Updated 2026-10-21 after STATE.md #40. This is a quick reference to what exists, how well it works, and where it lives. It was audited on 2026-10-20 at commit `960f5da`. Evidence, file:line references and the risk list are in `Docs/PROJECT_AUDIT.md`.
 
 **Legend**
 
@@ -21,10 +21,11 @@ Paths are relative to `Source/ModularSceneBuilder/` (`Public/` and `Private/` sh
 |---|---|---|
 | Docked workspace: tabs, floating windows, detachable viewport. Standalone and packaged only; PIE uses `WBP_StageCraftHUD`. | 🟢 | `Workspace/StageWorkspaceSubsystem`, `StageWorkspaceShell`, `SStageWorkspaceMenuBar`; `Player/StageCraftGameEngine` |
 | Layouts and `Session.json` | ✅ store / 🟢 shell | `Workspace/StageLayoutStore` |
-| Panels: Library, Inspector, Fader Bank, Outliner, Patch, BOM, Render, Environment, Cues | 🟢 | `UI/*Panel*`, `Content/StageCraft/UI/Panels/DA_Panel_*` |
+| Panels: Library, Inspector, Fader Bank, Outliner, Patch, BOM, Render, Environment, Cues, Preferences | 🟢 | `UI/*Panel*`, `Content/StageCraft/UI/Panels/DA_Panel_*` |
 | Status bar, viewport toolbar (5 sections) | 🟢 | `UI/StageStatusBarWidget`, `UI/StageViewportToolbar` |
-| Input. Built in code; there are no IMC or IA assets. | 🟢 | `Player/ModularPlayerController` (`BuildDefaultInputMapping`) |
-| Preferences panel, key-binding editor, modal dialogs, colour picker, hover highlight, box select | ⚪ | — |
+| Input. Mouse buttons and fly axes use Enhanced Input, built in code (no IMC or IA assets). Keyboard shortcuts come from the user's key map: exact chords, looked up on key press (#40). | ✅ key map rules / 🟢 dispatch (scripted run R40_RunC) | `Player/ModularPlayerController` (`InputKey`, `ExecuteCommand`, `RebuildCameraMapping`), `Input/StageKeyBindings` |
+| Preferences (#40): key bindings (24 commands, two slots each, set by pressing the keys in the Preferences panel), look speed and invert, and viewport and audio preferences in one panel | ✅ model and storage / 🟢 panel (mouse check pending) | `Input/StageInputPreferencesSubsystem`, `UI/StagePreferencesPanel`, `Settings/StageCraftUserSettings` |
+| Modal dialogs, colour picker, hover highlight, box select, remappable mouse buttons | ⚪ | — |
 
 ## Scene and CAD
 | System | Status | Where |
@@ -72,10 +73,11 @@ Paths are relative to `Source/ModularSceneBuilder/` (`Public/` and `Private/` sh
 | System | Status | Where |
 |---|---|---|
 | Item catalog (Asset Manager `StageItem`) | 🟢 | `Subsystems/StageItemSubsystem`, `Data/BaseItemData` |
-| Runtime model import (glb, gltf, obj; fbx in editor only) | ✅ rules / 🟢 import | `Import/StageMeshImportSubsystem` |
+| Runtime model import (glb, gltf, obj; fbx in editor only). A damaged import list is moved to .bak; an unreadable one is never overwritten (#40). | ✅ rules and list file / 🟢 import | `Import/StageMeshImportSubsystem` |
+| Crash-safe saves: every scene, layout, import list, report and render is flushed to disk before the rename (#40) | ✅ | `IO/StageAtomicFile` |
 | Remove an import, release its memory | ⚪ | — |
-| Scene save/load (JSON v3 with environment and cues; v1 and v2 migrate; atomic, async) | ✅ store and migration / 🔴 partial load then save loses items (R2) | `Scene/StageSceneStore`, `Scene/StageSceneComponent` |
-| Saved in scenes | Transforms, label, hide, lock, fixture state, patch, spans, loudspeakers, environment (v2), cues (v3) | — |
+| Scene save/load (JSON v3 with environment and cues; v1 and v2 migrate; atomic, async). #40 (R2): a partial load keeps skipped items and stays unsaved, damaged entries are backed up before a save, and loads wait for imports. #40 (R6): restored values are sanitized. | ✅ store, migration, kept items, sanitizing / 🟢 apply (scripted run R40_RunA) | `Scene/StageSceneStore`, `Scene/StageSceneComponent` |
+| Saved in scenes | Transforms, label, hide, lock, fixture state, the DMX patch (only since #40; it was silently dropped before), spans, loudspeakers, environment (v2), cues (v3) | — |
 | Not saved in scenes | Camera | — |
 | Autosave (while unsaved, every 120 s), File > Recover Autosave, exit prompt Save / Don't Save / Cancel | 🟢 scripted Standalone runs (#37); buttons need a mouse check | `Scene/StageSceneComponent`, `Workspace/SStageUnsavedChangesDialog`, `Workspace/StageWorkspaceSubsystem` |
 | Bill of materials as PDF + CSV (File > Production, BOM panel EXPORT PDF) | ✅ model and PDF / 🟢 export (scripted run, #39) | `Report/StageBillOfMaterials*`, `Report/StageReportPdfComposer`, `UI/StageBillOfMaterialsPanel` |
@@ -93,7 +95,7 @@ Paths are relative to `Source/ModularSceneBuilder/` (`Public/` and `Private/` sh
 | GameInstance | `UStageProfileSubsystem`, `UStageEconomySubsystem`, `UStageItemSubsystem`, `UStageMeshImportSubsystem`, `UStageWorkspaceSubsystem`, `UStageAudioSubsystem` |
 | World (Game and PIE) | `UStageSessionSubsystem`, `UStageEditHistorySubsystem`, `UShowControlSubsystem` (ticks only while busy), `UStageRenderSubsystem`, `UStageBillOfMaterialsSubsystem`, `UStagePatchSheetSubsystem`, `UStageCableScheduleSubsystem`, `UStageEnvironmentSubsystem` |
 | Controller components | Selection, SpawnSystem, PlacementTool, SpanTool, Snapping, GroupTransform, EditHistory, Scene, Viewport, EditorAudioFeedback |
-| Per-user preferences | `UStageCraftUserSettings` (`GameUserSettings`) |
+| Per-user preferences | `UStageCraftUserSettings` (`GameUserSettings`, storage); `UStageInputPreferencesSubsystem` (local player: key map, look) |
 | Rules authority | `AStageCraftGameModeBase` |
 | UI-to-game bridge | `AModularPlayerController` |
 
@@ -104,6 +106,6 @@ Paths are relative to `Source/ModularSceneBuilder/` (`Public/` and `Private/` sh
 | Engine | UE 5.8 |
 | Plugins enabled | Interchange, SkyCreatorPlugin (plus Python and ModelingTools in the editor only) |
 | Plugins tracked but disabled | 19 |
-| Tests | 63 `StageCraft.*` automation tests: pure logic (reports, PDF composer, cable schedule, frame statistics) plus world tests for Sky Creator, undo/redo rules and transactions, cues and the fixture output path |
+| Tests | 69 `StageCraft.*` automation tests: pure logic (reports, PDF composer, cable schedule, frame statistics, key bindings, crash-safe files, import list file, kept scene items) plus world tests for Sky Creator, undo/redo rules and transactions, cues, the fixture output path and restored-state sanitizing |
 | Areas with no tests | Request bridge, selection, session, economy/profile, patch conflicts, fixture playback (scripted runs only) |
-| Console commands | About 84, all inside `#if !UE_BUILD_SHIPPING` |
+| Console commands | About 88, all inside `#if !UE_BUILD_SHIPPING` |

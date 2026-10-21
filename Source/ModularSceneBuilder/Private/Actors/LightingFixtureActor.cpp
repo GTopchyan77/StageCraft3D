@@ -223,6 +223,7 @@ void ALightingFixtureActor::ApplyItemData(const UBaseItemData& Data)
 			Attributes.Add(Attribute, Fixture->GetAttributeDefault(Attribute));
 		}
 	}
+	SanitizeRestoredState(*Fixture);
 
 	ApplyAttributesToComponents();
 	UpdateStrobeRegistration();
@@ -235,6 +236,53 @@ void ALightingFixtureActor::UpdateHighlight()
 	UMaterialInterface* Overlay = MeshComponent->GetOverlayMaterial();
 	YokeMeshComponent->SetOverlayMaterial(Overlay);
 	HeadMeshComponent->SetOverlayMaterial(Overlay);
+}
+
+void ALightingFixtureActor::SanitizeRestoredState(const ULightingFixtureData& Fixture)
+{
+	// Values arrive unchecked from scene files and undo snapshots; the same limits as every live write apply
+	// (Docs/ADR/0013-preferences-key-bindings-and-audit-fixes.md §3.2).
+	for (TPair<FGameplayTag, float>& Pair : Attributes)
+	{
+		float Min = 0.f;
+		float Max = 1.f;
+		if (!Fixture.GetAttributeRange(Pair.Key, Min, Max))
+		{
+			continue;
+		}
+		const float Sanitized = FMath::IsFinite(Pair.Value) ? SanitizeAttributeValue(Pair.Key, Pair.Value, Min, Max) : Fixture.GetAttributeDefault(Pair.Key);
+		if (!FMath::IsNearlyEqual(Pair.Value, Sanitized) || !FMath::IsFinite(Pair.Value))
+		{
+			ReportStateRepair(FString::Printf(TEXT("%s %s -> %s"), *Pair.Key.ToString(), *FString::SanitizeFloat(Pair.Value), *FString::SanitizeFloat(Sanitized)));
+			Pair.Value = Sanitized;
+		}
+	}
+
+	const FStageDMXPatch ClampedPatch = ClampPatch(Patch);
+	if (!(ClampedPatch == Patch))
+	{
+		ReportStateRepair(FString::Printf(TEXT("DMX patch %d.%d -> %d.%d"), Patch.Universe, Patch.Address, ClampedPatch.Universe, ClampedPatch.Address));
+		Patch = ClampedPatch;
+	}
+	if (FixtureId < 0)
+	{
+		ReportStateRepair(FString::Printf(TEXT("fixture ID %d -> automatic"), FixtureId));
+		FixtureId = 0;
+	}
+}
+
+float ALightingFixtureActor::SanitizeAttributeValue(const FGameplayTag& Attribute, float Value, float Min, float Max)
+{
+	const float Clamped = FMath::Clamp(Value, Min, Max);
+	return ULightingFixtureData::IsSteppedAttribute(Attribute) ? FMath::RoundHalfFromZero(Clamped) : Clamped;
+}
+
+FStageDMXPatch ALightingFixtureActor::ClampPatch(const FStageDMXPatch& InPatch)
+{
+	FStageDMXPatch Clamped;
+	Clamped.Universe = FMath::Clamp(InPatch.Universe, 0, 63999);
+	Clamped.Address = FMath::Clamp(InPatch.Address, 0, 512);
+	return Clamped;
 }
 
 bool ALightingFixtureActor::StoreAttribute(const FGameplayTag& Attribute, float Value)
@@ -253,11 +301,7 @@ bool ALightingFixtureActor::StoreAttribute(const FGameplayTag& Attribute, float 
 	}
 
 	float& Stored = Attributes.FindOrAdd(Attribute);
-	float Clamped = FMath::Clamp(Value, Min, Max);
-	if (ULightingFixtureData::IsSteppedAttribute(Attribute))
-	{
-		Clamped = FMath::RoundHalfFromZero(Clamped);
-	}
+	const float Clamped = SanitizeAttributeValue(Attribute, Value, Min, Max);
 	if (FMath::IsNearlyEqual(Stored, Clamped))
 	{
 		return false;
@@ -650,9 +694,7 @@ bool ALightingFixtureActor::SetFixtureId(int32 NewFixtureId)
 
 void ALightingFixtureActor::SetPatch(const FStageDMXPatch& NewPatch)
 {
-	FStageDMXPatch Clamped;
-	Clamped.Universe = FMath::Clamp(NewPatch.Universe, 0, 63999);
-	Clamped.Address = FMath::Clamp(NewPatch.Address, 0, 512);
+	const FStageDMXPatch Clamped = ClampPatch(NewPatch);
 	if (Clamped == Patch)
 	{
 		return;

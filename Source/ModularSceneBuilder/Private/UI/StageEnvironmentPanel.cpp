@@ -322,10 +322,10 @@ UWidget* UStageEnvironmentPanel::BuildSliderSection(const FText& Title, int32 Fi
 		}
 		ValueTexts.Add(Value);
 
-		USizeBox* RowHeight = WidgetTree->ConstructWidget<USizeBox>(USizeBox::StaticClass());
-		RowHeight->SetHeightOverride(StageCraftWidgetStyle::FieldHeight);
-		RowHeight->SetContent(Row);
-		if (UVerticalBoxSlot* RowSlot = Section->AddChildToVerticalBox(RowHeight))
+		USizeBox* SizedRow = WidgetTree->ConstructWidget<USizeBox>(USizeBox::StaticClass());
+		SizedRow->SetHeightOverride(StageCraftWidgetStyle::FieldHeight);
+		SizedRow->SetContent(Row);
+		if (UVerticalBoxSlot* RowSlot = Section->AddChildToVerticalBox(SizedRow))
 		{
 			RowSlot->SetPadding(FMargin(0.f, RowGap * 0.5f));
 		}

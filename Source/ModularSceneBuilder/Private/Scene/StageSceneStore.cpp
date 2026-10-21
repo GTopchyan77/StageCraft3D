@@ -16,6 +16,7 @@
 #include "Serialization/JsonReader.h"
 #include "Serialization/JsonSerializer.h"
 #include "Serialization/JsonWriter.h"
+#include "IO/StageAtomicFile.h"
 #include "Workspace/StageLayoutStore.h"
 
 namespace StageSceneStore
@@ -363,7 +364,7 @@ EStageSceneResult FStageSceneStore::Save(const FStageSceneDocument& Document) co
 		return EStageSceneResult::InvalidName;
 	}
 	IFileManager::Get().MakeDirectory(*Directory, /*Tree*/ true);
-	return FStageLayoutStore::WriteFileAtomic(GetScenePath(Document.Name), Serialize(Document)) ? EStageSceneResult::Success : EStageSceneResult::WriteFailed;
+	return StageAtomicFile::WriteText(GetScenePath(Document.Name), Serialize(Document)) ? EStageSceneResult::Success : EStageSceneResult::WriteFailed;
 }
 
 EStageSceneResult FStageSceneStore::Load(const FString& Name, FStageSceneDocument& OutDocument, FStageSceneParseReport& OutReport) const
@@ -402,6 +403,35 @@ EStageSceneResult FStageSceneStore::Delete(const FString& Name) const
 		return EStageSceneResult::NotFound;
 	}
 	return IFileManager::Get().Delete(*Path, /*RequireExists*/ true, /*EvenReadOnly*/ false, /*Quiet*/ true) ? EStageSceneResult::Success : EStageSceneResult::WriteFailed;
+}
+
+bool FStageSceneStore::BackupScene(const FString& Name) const
+{
+	if (!SceneExists(Name))
+	{
+		return false;
+	}
+	const FString Path = GetScenePath(Name);
+	return IFileManager::Get().Copy(*(Path + TEXT(".bak")), *Path, /*bReplace*/ true, /*bEvenIfReadOnly*/ true) == COPY_OK;
+}
+
+void FStageSceneStore::AppendUnplacedItems(FStageSceneDocument& Document, TConstArrayView<FStageItemSnapshot> Unplaced)
+{
+	TSet<FGuid> PlacedIds;
+	PlacedIds.Reserve(Document.Items.Num());
+	for (const FStageItemSnapshot& Item : Document.Items)
+	{
+		PlacedIds.Add(Item.InstanceId);
+	}
+	for (const FStageItemSnapshot& Item : Unplaced)
+	{
+		bool bAlreadyThere = false;
+		PlacedIds.Add(Item.InstanceId, &bAlreadyThere);
+		if (!bAlreadyThere)
+		{
+			Document.Items.Add(Item);
+		}
+	}
 }
 
 FString FStageSceneStore::Serialize(const FStageSceneDocument& Document)

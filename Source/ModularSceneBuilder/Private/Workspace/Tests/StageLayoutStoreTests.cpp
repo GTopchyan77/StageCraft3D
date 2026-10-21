@@ -15,6 +15,7 @@
 #include "Misc/Paths.h"
 #include "Serialization/JsonReader.h"
 #include "Serialization/JsonSerializer.h"
+#include "IO/StageAtomicFile.h"
 #include "Workspace/StageLayoutStore.h"
 
 namespace StageLayoutStoreTests
@@ -194,7 +195,7 @@ bool FStageLayoutStoreListDeleteTest::RunTest(const FString& Parameters)
 
 	// The session file lives outside the layouts folder and must never be listed as a user layout.
 	FStageSavedLayout Session = MakeLayout(TEXT("Alpha"));
-	FStageLayoutStore::WriteFileAtomic(Store.GetSessionPath(), Store.Serialize(Session));
+	StageAtomicFile::WriteText(Store.GetSessionPath(), Store.Serialize(Session));
 
 	TestEqual(TEXT("Sorted case-insensitively, session excluded"), Str(Store.ListUserLayouts()), Str(TArray<FString>{ TEXT("Alpha"), TEXT("beta"), TEXT("zeta") }));
 

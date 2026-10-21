@@ -93,6 +93,8 @@ void AStageSpanActor::InitializePath(TConstArrayView<FVector> LocalPoints, bool 
 
 void AStageSpanActor::NormalisePath()
 {
+	// A path that arrived with the actor (scene file, undo, a configured placement), not the empty one of a fresh actor.
+	const bool bHadPath = PathPoints.Num() >= 2;
 	if (PathPoints.Num() < 2)
 	{
 		// A straight run from a scene file written before paths, or a fresh actor: one leg along +X.
@@ -106,6 +108,10 @@ void AStageSpanActor::NormalisePath()
 	if (!Layout.IsValid() && GetSpanData())
 	{
 		// Too short or damaged: the smallest run the item allows, rather than an invisible item that still bills nothing.
+		if (bHadPath)
+		{
+			ReportStateRepair(FString::Printf(TEXT("unusable span path (%d points) replaced by the shortest run"), PathPoints.Num()));
+		}
 		Layout = ComputePathFor({ FVector::ZeroVector, FVector::ForwardVector }, false, 0.0);
 	}
 	ApplyPath(Layout);

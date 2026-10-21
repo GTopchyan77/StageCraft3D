@@ -19,12 +19,11 @@
 #include "InterchangeResult.h"
 #include "InterchangeResultsContainer.h"
 #include "InterchangeSourceData.h"
-#include "Misc/FileHelper.h"
 #include "Misc/Paths.h"
 #include "ModularSceneBuilder.h"
 #include "Subsystems/StageItemSubsystem.h"
 #include "Tasks/Task.h"
-#include "Workspace/StageLayoutStore.h"
+#include "IO/StageAtomicFile.h"
 
 #include UE_INLINE_GENERATED_CPP_BY_NAME(StageMeshImportSubsystem)
 
@@ -362,28 +361,35 @@ void UStageMeshImportSubsystem::LoadImportList()
 {
 	UE::Tasks::Launch(UE_SOURCE_LOCATION, [WeakThis = TWeakObjectPtr<UStageMeshImportSubsystem>(this), Path = GetImportListPath()]()
 	{
-		FString Json;
 		TArray<FString> Files;
-		if (FFileHelper::LoadFileToString(Json, *Path) && !StageMeshImport::ReadImportList(Json, Files))
-		{
-			UE_LOG(LogStageCraft, Warning, TEXT("Mesh import: %s is not a valid import list; no models are restored."), *Path);
-		}
-		AsyncTask(ENamedThreads::GameThread, [WeakThis, Files = MoveTemp(Files)]() mutable
+		const StageMeshImport::EImportListRead Read = StageMeshImport::LoadImportListFile(Path, Files);
+		AsyncTask(ENamedThreads::GameThread, [WeakThis, Read, Files = MoveTemp(Files)]() mutable
 		{
 			if (UStageMeshImportSubsystem* Self = WeakThis.Get())
 			{
-				Self->HandleImportListLoaded(MoveTemp(Files));
+				Self->HandleImportListLoaded(Read, MoveTemp(Files));
 			}
 		});
 	});
 }
 
-void UStageMeshImportSubsystem::HandleImportListLoaded(TArray<FString> Files)
+void UStageMeshImportSubsystem::HandleImportListLoaded(StageMeshImport::EImportListRead Read, TArray<FString> Files)
 {
+	using StageMeshImport::EImportListRead;
+	const FString Path = GetImportListPath();
+	if (Read == EImportListRead::Damaged)
+	{
+		UE_LOG(LogStageCraft, Warning, TEXT("Mesh import: %s was not a valid import list; it was kept as %s.bak and no models are restored."), *Path, *Path);
+	}
+	else if (Read == EImportListRead::Unreadable)
+	{
+		UE_LOG(LogStageCraft, Warning, TEXT("Mesh import: %s could not be read; it is left untouched, and models imported in this session will not be restored next time."), *Path);
+	}
+
 	// Imports that finished while the list was being read are kept, after the remembered ones.
 	TArray<FString> ImportedMeanwhile = MoveTemp(RememberedFiles);
 	RememberedFiles = Files;
-	bImportListLoaded = true;
+	ImportListState = Read == EImportListRead::Unreadable ? EImportListState::ReadOnly : EImportListState::Writable;
 	for (const FString& File : ImportedMeanwhile)
 	{
 		RememberFile(File);
@@ -415,7 +421,7 @@ void UStageMeshImportSubsystem::RememberFile(const FString& SourceFile)
 		return;
 	}
 	RememberedFiles.Add(SourceFile);
-	if (bImportListLoaded)
+	if (ImportListState == EImportListState::Writable)
 	{
 		SaveImportList();
 	}
@@ -425,8 +431,7 @@ void UStageMeshImportSubsystem::SaveImportList()
 {
 	ImportListPipe.Launch(UE_SOURCE_LOCATION, [Json = StageMeshImport::WriteImportList(RememberedFiles), Path = GetImportListPath()]()
 	{
-		IFileManager::Get().MakeDirectory(*FPaths::GetPath(Path), /*Tree*/ true);
-		if (!FStageLayoutStore::WriteFileAtomic(Path, Json))
+		if (!StageAtomicFile::WriteText(Path, Json))
 		{
 			UE_LOG(LogStageCraft, Warning, TEXT("Mesh import: could not write %s; imported models will not be restored next time."), *Path);
 		}

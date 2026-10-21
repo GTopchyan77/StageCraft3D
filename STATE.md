@@ -3185,7 +3185,7 @@ The design is in `Docs/ADR/0012-production-reports-and-fixture-benchmark.md`.
   - Checking that a gobo, iris or blade still projects once a beam becomes shaped.
 - Status: **implemented, awaiting manual verification.**
 
-**Commit:** uncommitted (working tree).
+**Commit:** `565287e`.
 
 **Known issues / follow-ups**
 - **Render thread at 500 fixtures:** needs a different approach (fewer shadowed lights, light proxies shared per group, or beam meshes instead of real lights for distant fixtures). ADR 0012 §3.1 has the measurements.
@@ -3194,3 +3194,155 @@ The design is in `Docs/ADR/0012-production-reports-and-fixture-benchmark.md`.
 - **VSM warning:** "One Pass Projection max lights overflow" with hundreds of shadowed lights.
 - **Cable schedule:** circuit assignments are not saved and power cables have no lengths. The patch sheet is not yet on the composer.
 - **Undo gaps, cue features and audit risks** from #38 are unchanged.
+
+## #40 — Preferences and key bindings, audit risks R2/R6/R8 fixed, DMX patch now saved (2026-10-21)
+
+**Request (Gevor).** The final polish and Phase 6 milestone:
+1. A preferences and key-bindings system that lets users remap the viewport, navigation and editing actions.
+2. The open audit findings:
+   - **R2:** partial scene loads must mark the dirty state correctly.
+   - **R6:** restored state must be sanitized against invalid values and UObject references.
+   - **R8:** `Imports.json` must be safe from corruption during unexpected shutdowns.
+3. Keep TObjectPtr safety, encapsulation and no per-frame Tick polling; run every test, verify a clean package, and update STATE.md.
+
+The design is in `Docs/ADR/0013-preferences-key-bindings-and-audit-fixes.md`.
+
+**Housekeeping first.** #39 said "uncommitted"; it now carries `565287e`.
+
+**What changed and why**
+- **Key map (`FStageKeyBindings`, new, pure, `Input/StageKeyBindings`).**
+  - **Commands:** 24 commands, each with two slots.
+    - Editing: Undo, Redo, Delete, Select All, Cancel.
+    - Tools: Cycle, Move W, Rotate E, Scale R, Place P, Finish Path, Remove Point.
+    - View: Perspective / Top / Front / Back / Left / Right as Alt+G/J/H/Shift+H/K/Shift+K, and Grid G.
+    - Fly: W/S/A/D/E/Q.
+  - **Rules:**
+    - Keyboard keys only; the console key is reserved.
+    - Fly keys take no modifiers.
+    - No two commands share a chord, and no two fly directions share a key.
+    - A fly key may equal a command key (W = Move tool, and fly forward while the right button is held), as in the Unreal Editor.
+    - A refusal names the conflicting command.
+  - **Storage:** only overrides of the defaults are stored (GameUserSettings.ini). `FromOverrides` is the trust boundary: it clears every overridden command first so swaps load in any order, and drops bad entries.
+- **Owner (`UStageInputPreferencesSubsystem`, new, the project's first `ULocalPlayerSubsystem`).**
+  - It holds the key map, look sensitivity (×0.1–5) and invert look.
+  - It is the single writer of the new `UStageCraftUserSettings` fields: validate, store, save, broadcast `OnInputPreferencesChanged`.
+  - The ini key map is validated when read, not in `LoadSettings`, because settings load before the engine registers its keys.
+- **Dispatch (`AModularPlayerController`).**
+  - `InputKey` passes everything to Enhanced Input, then looks up the exact chord of a key press and runs `ExecuteCommand`.
+  - Commands are suspended while flying.
+  - The modifiers come from the viewport's key state.
+    - The first scripted run showed the player-input state lags a frame: every Ctrl chord failed during a slow import frame.
+    - The viewport records keys as Slate delivers them and clears them on focus loss.
+  - The fly context is rebuilt from the key map only when it changes (`bIgnoreAllPressedKeysUntilRelease`).
+  - Look sensitivity and invert are applied where look input reaches the pawn.
+  - **Removed:** the eight per-shortcut `UInputAction` properties and the Ctrl/Shift chord-action machinery. No asset used them.
+- **UI.**
+  - The Edit menu labels ("Undo (Ctrl+Z)", tool and view entries, "Transform Tool (Space cycles)") and the status bar hints name the user's keys and leave unbound ones out. The status bar refreshes on change.
+  - Edit › Preferences… opens the new **Preferences panel** (`UStagePreferencesPanel`; `DA_Panel_Preferences` created headlessly by `Scripts/Content/create_preferences_content.py`). It has:
+    - Camera: look speed, vertical look.
+    - Viewport: snap to items, grid.
+    - Audio: master, effects, mute.
+    - Keyboard shortcuts: Primary and Secondary per command, RESET, RESET ALL, CLEAR. Clicking a slot captures the next key with its modifiers. A refusal is shown in the warning colour. The mouse buttons are listed as fixed.
+  - Every value is written through its owner and read back on that owner's event. No tick.
+- **R2 (`UStageSceneComponent`, `FStageSceneStore`, `UStageSessionSubsystem`).**
+  - **Kept items:** skipped unknown or refused items are kept as snapshots and appended to every save and autosave (`AppendUnplacedItems`; placed ids win) until another scene is loaded.
+  - **Unsaved after a partial load:** a load that skipped or repaired anything now calls the new `MarkUnsaved` instead of `MarkClean`. The message lists the counts and says the stage is unsaved.
+  - **Damaged entries:** they cannot be kept. The first save over that scene's file copies it to `<Name>.json.bak` (`BackupScene`), and refuses to save if the copy fails.
+  - **Imports first:** loads are refused with the new `ImportsPending` result while `UStageMeshImportSubsystem::HasImportsInProgress()`: the list is still being read, or files are queued.
+- **R6 (`AModularBaseActor` and subclasses).**
+  - **No package loads:** `RestoreSnapshotState` reads with `bLoadIfFindFails = false`, so saved state can never load a package; references resolve only to loaded objects.
+  - **Repairs:**
+    - Labels are capped at 256 characters (also for inspector edits).
+    - Fixture attributes are made finite, clamped and stepped as live writes are; the patch is clamped as `SetPatch` does; a negative fixture ID becomes automatic.
+    - Audio gain, delay and splay are kept in range. A splay above a swapped-in cabinet's maximum is still clamped, but not counted as damage.
+    - A broken span path counts as a repair.
+  - **Counting:** each repair is logged (`ReportStateRepair`) and counted (`GetStateRepairCount`). Scene loads add the counts to their message and stay unsaved.
+- **Bug found by the R6 test: the DMX patch was never saved.**
+  - `FStageDMXPatch`'s Universe and Address were not `SaveGame`. SaveGame serialization skips such struct members, so undo snapshots and scene files stored an empty patch, and every load or undo re-auto-patched the fixture.
+  - Existing scene files confirm it: their state shows `StructProperty StageDMXPatch … None`.
+  - The fields are now `SaveGame`. Patches saved from now on round-trip. Older files still have no patch to recover.
+- **R8 (`StageAtomicFile`, new; `StageMeshImport::LoadImportListFile`, new).**
+  - **Damaged list:** an import list that does not parse is moved to `Imports.json.bak` before anything can overwrite it.
+  - **Unreadable list:** one that exists but cannot be read leaves the subsystem `ReadOnly` for the session; new imports work but are not remembered.
+  - **Durable writes:** every save (scenes, autosaves, layouts, the session, the import list, CSV/PDF reports, render PNGs) now flushes the temporary file to disk (`Flush(true)`) before the rename. A power cut can no longer leave a renamed but empty file.
+  - Three duplicated writers were removed: `FStageLayoutStore::WriteFileAtomic`/`MoveAside`, the render writer and `StageReportFiles::WriteBytesAtomic`.
+- **Unity-build fix:** the new files changed unity grouping, so the PDF composer's file-scope `RowHeight` now hid a local in the Environment panel (C4459). The panel locals were renamed.
+- **Dev console commands** (compiled out of Shipping): `StageCraft.Input.List`, `.Bind <Command> <Chord|None> [1|2]`, `.Reset [Command|All]`, `.Look <Sensitivity> [Invert]`.
+
+**Files changed**
+- **New:**
+  - `Docs/ADR/0013-preferences-key-bindings-and-audit-fixes.md`
+  - `Scripts/Content/create_preferences_content.py`
+  - `Content/StageCraft/UI/Panels/DA_Panel_Preferences.uasset`
+  - `Source/ModularSceneBuilder/Public/Input/StageKeyBindings.h`, `Private/Input/StageKeyBindings.cpp`
+  - `Source/ModularSceneBuilder/Public/Input/StageInputPreferencesSubsystem.h`, `Private/Input/StageInputPreferencesSubsystem.cpp`
+  - `Source/ModularSceneBuilder/Private/Input/StageInputConsoleCommands.cpp`
+  - `Source/ModularSceneBuilder/Public/UI/StagePreferencesPanel.h`, `Private/UI/StagePreferencesPanel.cpp`
+  - `Source/ModularSceneBuilder/Private/IO/StageAtomicFile.h/.cpp`
+  - Tests: `Private/Input/Tests/StageKeyBindingsTests.cpp`, `Private/IO/Tests/StageAtomicFileTests.cpp`, `Private/Actors/Tests/StageRestoredStateTests.cpp`
+- **Input and settings:** `Public/Player/ModularPlayerController.h`, `Private/Player/ModularPlayerController.cpp`, `Public/Settings/StageCraftUserSettings.h`, `Private/Settings/StageCraftUserSettings.cpp`
+- **UI and workspace:** `Public/UI/StageStatusBarWidget.h`, `Private/UI/StageStatusBarWidget.cpp`, `Private/UI/StageEnvironmentPanel.cpp`, `Private/Workspace/SStageWorkspaceMenuBar.cpp`, `Public/Workspace/StageWorkspaceTypes.h`, `Private/Workspace/StageWorkspaceTypes.cpp`, `Private/Workspace/StageLayoutStore.h`, `Private/Workspace/StageLayoutStore.cpp`, `Private/Workspace/StageWorkspaceSubsystem.cpp`
+- **Scenes and session:** `Public/Scene/StageSceneTypes.h`, `Public/Scene/StageSceneComponent.h`, `Private/Scene/StageSceneComponent.cpp`, `Private/Scene/StageSceneStore.h`, `Private/Scene/StageSceneStore.cpp`, `Public/Subsystems/StageSessionSubsystem.h`, `Private/Subsystems/StageSessionSubsystem.cpp`
+- **Actors and show:** `Public/Actors/ModularBaseActor.h`, `Private/Actors/ModularBaseActor.cpp`, `Public/Actors/LightingFixtureActor.h`, `Private/Actors/LightingFixtureActor.cpp`, `Private/Actors/AudioEquipmentActor.cpp`, `Private/Actors/StageSpanActor.cpp`, `Public/Show/ShowControlTypes.h`
+- **Import, reports, render:** `Public/Import/StageMeshImportTypes.h`, `Private/Import/StageMeshImportTypes.cpp`, `Public/Import/StageMeshImportSubsystem.h`, `Private/Import/StageMeshImportSubsystem.cpp`, `Private/Report/StageReportFiles.h`, `Private/Report/StageReportFiles.cpp`, `Private/Render/StageRenderSubsystem.cpp`
+- **Tests changed:** `Private/UI/Tests/StageUITests.cpp` (hints from the key map, remapped keys), `Private/Scene/Tests/StageSceneStoreTests.cpp` (new `Scene.PartialLoad`), `Private/Workspace/Tests/StageLayoutStoreTests.cpp`
+- **Docs:** `Docs/CURRENT_SYSTEMS.md`, `Docs/PROJECT_AUDIT.md`, `Rules.md` (the state table now names the local-player subsystem), `tasks/todo.md`, this file
+- **Not changed:** no Blueprints, maps, input assets or plugins. Config is unchanged: the panel asset is cooked by the existing `StagePanel` Asset Manager rule.
+
+**Verification (Claude, 2026-10-21)**
+- **Builds (UE 5.8):** Editor Development and Game Shipping (`-DisableAdaptiveUnity`): 0 warnings, 0 errors.
+- **Package:** `BuildCookRun` Shipping: 1082 packages, 0 errors, 0 warnings. The pak contains `DA_Panel_Preferences`; the Shipping exe has no `StageCraft.Input.*` command strings. The package ran for 25 s and closed cleanly.
+- **Automation:** 69/69 StageCraft tests passed. New tests:
+  - `Input.KeyBindings`:
+    - The defaults pass their own rules.
+    - Exact lookup: Ctrl+Z is Undo, Ctrl+Shift+Z is Redo, plain Z is nothing, W is the Move tool.
+    - Every refusal kind.
+    - A command may share a fly key.
+    - Clear, Reset with a taken default, ResetAll, descriptions, chord parsing.
+  - `Input.SavedBindings`: override round trip; a swap loads in either order; 6 damaged ini entries are dropped and counted; the settings fields clamp, refuse NaN and reset.
+  - `IO.AtomicFile`: content, no .tmp left, KeepExisting, UTF-8 with the text's own BOM, bytes, MoveAside.
+  - `IO.ImportListFile`: Missing, Read, Damaged (moved to .bak byte for byte), Unreadable (locked file; the list is untouched).
+  - `Scene.PartialLoad`: kept items are appended once; a 3-item file still holds 3 items after a save of 2 placed; backup byte for byte and never listed as a scene.
+  - `Scene.RestoredState` (world test):
+    - A clean fixture restores with 0 repairs, and its DMX patch comes back (regression for the SaveGame bug).
+    - A tampered fixture gets its NaN dimmer defaulted, zoom clamped, gobo stepped, universe clamped, ID made automatic and label shortened: 6 repairs counted.
+    - Audio NaN gain, 5000 ms delay and −3° splay are repaired: 3 counted. A cabinet swap is clamped but not counted.
+  - `UI.StatusHint` / `UI.SpanHint`: the hints follow remapped and unbound keys.
+  - The first run caught the patch bug.
+- **Scripted Standalone runs** (`-game -windowed`; logs `Saved/Logs/R40_RunA`–`D.log`):
+  - **Run A (R8 + R2):**
+    - A truncated `Imports.json` was moved to `.bak` and 0 models were restored.
+    - Loading "R40 Partial" (a copy of R37 Test with one item pointing at a missing asset and one item with a broken location) placed 4, kept 1 and reported 1 damaged. The stage was marked unsaved.
+    - The save wrote 5 items, "including 1 not placed", and kept `R40 Partial.json.bak`; the stage became clean.
+    - Re-loading still found the unknown item in the file.
+    - The user's real `Imports.json` was restored afterwards.
+  - **Run B:**
+    - With the real import list (AG1.FBX takes about 50 s to re-import), both scene loads at 1 s and 30 s were refused with "Imported models are still loading".
+    - Binding SelectAll to Ctrl+U was refused ("already used by Undo"), and so was FlyUp Ctrl+E (no modifiers).
+    - E set the Rotate tool and G hid the grid.
+    - This run exposed the modifier-timing bug: every Ctrl/Alt chord failed.
+  - **Run C (after the fix):**
+    - Ctrl+A selected all 4 items, Delete removed them, and Ctrl+Z restored them.
+    - After `Bind Undo Ctrl+U`, Ctrl+Z did nothing and Ctrl+U ran Undo.
+    - Ctrl+Shift+Z redid "Delete 4 items", and Ctrl+Y (nothing left) reported NothingToDo.
+    - Alt+J switched to Top, Alt+G back to Perspective, and R set the Scale tool (screenshot `ScreenShot00038`).
+  - **Run D:** the Preferences panel opened in its own window. A desktop capture, cropped to it, shows the sections, the bindings and RESET disabled on defaults.
+  - The runs changed the user's preferences: the bindings were reset by the script, and GameUserSettings.ini was restored from a copy taken before the runs.
+- **Not verified by a person:**
+  - The Preferences panel by mouse: clicking a slot and pressing keys, CLEAR, RESET, RESET ALL, the refusal texts, look speed and invert while flying.
+  - Edit menu labels after a rebind.
+  - Real-keyboard chords.
+  - Opening a scene that references a missing imported model.
+- Status: **implemented, awaiting manual verification.**
+
+**Commit:** uncommitted (working tree).
+
+**Known issues / follow-ups**
+- **Kept items are invisible:** nothing lists them (only the load and save messages), and Clear Stage does not discard them. An Outliner group with a discard action is the follow-up.
+- **Damaged entries** are not carried; they survive only in the `.bak` copy.
+- **Old scene files** have no DMX patch to recover (the SaveGame bug); fixtures in them are auto-patched on load, as before.
+- **Mouse buttons are not remappable:** the viewport's cursor capture and the gizmo depend on them.
+- **Keyboard commands no longer run while the right mouse button is held** (before, Delete and Ctrl+Z did).
+- **Start-up model re-import** still blocks the game thread for tens of seconds (AG1.FBX); scene loads now wait for it instead of losing items.
+- **From #39:** the render-thread limit at 500 fixtures, the per-attribute broadcasts during fades, and the cable schedule follow-ups.
+- **Audit risks still open:** R1 and R9–R14.

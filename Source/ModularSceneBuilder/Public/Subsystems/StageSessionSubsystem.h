@@ -98,6 +98,12 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "StageCraft|Session")
 	void MarkClean();
 
+	/**
+	 * The stage differs from its scene file without an edit having happened: a load that skipped or repaired items
+	 * (Docs/ADR/0013-preferences-key-bindings-and-audit-fixes.md §3.1). Marks it dirty, so autosave and the exit prompt cover it.
+	 */
+	void MarkUnsaved();
+
 	UPROPERTY(BlueprintAssignable, Category = "StageCraft|Session")
 	FOnStageSessionDirtyChanged OnDirtyChanged;
 

@@ -56,6 +56,12 @@ public:
 	/** Files waiting or importing now. */
 	int32 GetPendingCount() const { return Queue.Num() + (Active.IsValid() ? 1 : 0); }
 
+	/**
+	 * Last run's import list is still being read, or files are waiting or importing. Until this is false, the catalog may
+	 * still lack imported models that a scene places (a scene load waits for it; Docs/ADR/0013 §3.1).
+	 */
+	bool HasImportsInProgress() const { return ImportListState == EImportListState::Reading || GetPendingCount() > 0; }
+
 	/** Every model imported so far this run. */
 	const TArray<TObjectPtr<class UStageImportedItemData>>& GetImportedItems() const { return ImportedItems; }
 
@@ -90,7 +96,7 @@ private:
 	class UStageImportedItemData* RegisterItem(class UStaticMesh& Mesh, const FString& SourceFile);
 
 	void LoadImportList();
-	void HandleImportListLoaded(TArray<FString> Files);
+	void HandleImportListLoaded(StageMeshImport::EImportListRead Read, TArray<FString> Files);
 	void RememberFile(const FString& SourceFile);
 	void SaveImportList();
 
@@ -128,8 +134,16 @@ private:
 	/** Files imported successfully, in import order, as saved for the next run. */
 	TArray<FString> RememberedFiles;
 
-	/** False until last run's list has been read; the list is not written before that, so it cannot be overwritten. */
-	bool bImportListLoaded = false;
+	/** Whether RememberedFiles may be written to the import list file. */
+	enum class EImportListState : uint8
+	{
+		/** Last run's list is still being read; writing now would overwrite it. */
+		Reading,
+		Writable,
+		/** The file exists but could not be read: it is never overwritten this session, so new imports are not remembered. */
+		ReadOnly,
+	};
+	EImportListState ImportListState = EImportListState::Reading;
 
 	/** Writes of the import list run in order on this pipe, so an older list never overwrites a newer one. */
 	UE::Tasks::FPipe ImportListPipe{ UE_SOURCE_LOCATION };

@@ -27,6 +27,8 @@ enum class EStageSceneResult : uint8
 	CatalogNotReady,
 	/** No stage session in this world (no session subsystem, spawn system or world). */
 	Unavailable,
+	/** Imported models are still being loaded, so the items made from them cannot be placed yet. */
+	ImportsPending,
 };
 
 UENUM(BlueprintType)
@@ -59,6 +61,14 @@ struct MODULARSCENEBUILDER_API FStageSceneOperationResult
 	/** Load only: items in the file that were not placed (unknown catalog item, invalid data, refused by the rules). */
 	UPROPERTY(BlueprintReadOnly, Category = "StageCraft|Scene")
 	int32 SkippedCount = 0;
+
+	/** Load: skipped items kept with the stage, so a save writes them back unchanged (unknown or refused, not damaged). Save: how many were written back. */
+	UPROPERTY(BlueprintReadOnly, Category = "StageCraft|Scene")
+	int32 KeptCount = 0;
+
+	/** Load only: saved values that were invalid and were repaired (non-finite, out of range, unreadable). */
+	UPROPERTY(BlueprintReadOnly, Category = "StageCraft|Scene")
+	int32 RepairedCount = 0;
 
 	/** User-facing summary, e.g. "Loaded My Show: 24 items (2 skipped: locked)". */
 	UPROPERTY(BlueprintReadOnly, Category = "StageCraft|Scene")

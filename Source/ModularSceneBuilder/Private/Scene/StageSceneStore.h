@@ -79,6 +79,19 @@ public:
 
 	EStageSceneResult Delete(const FString& Name) const;
 
+	/**
+	 * Copies the scene Name to <Name>.json.bak (replacing an older backup), before a save would drop entries the file still
+	 * has (damaged items that could not be loaded; Docs/ADR/0013-preferences-key-bindings-and-audit-fixes.md §3.1). False if
+	 * there is no such scene or the copy failed. ListScenes never lists backups.
+	 */
+	bool BackupScene(const FString& Name) const;
+
+	/**
+	 * Appends Unplaced (items a load could not place) to Document's items, so the file keeps them. An item whose instance id
+	 * is already in Document is not added again: what is on the stage wins.
+	 */
+	static void AppendUnplacedItems(FStageSceneDocument& Document, TConstArrayView<FStageItemSnapshot> Unplaced);
+
 	static FString Serialize(const FStageSceneDocument& Document);
 	static EStageSceneResult Parse(const FString& Contents, FStageSceneDocument& OutDocument, FStageSceneParseReport& OutReport);
 

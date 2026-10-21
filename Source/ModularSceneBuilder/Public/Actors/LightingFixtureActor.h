@@ -180,6 +180,16 @@ private:
 	/** Clamps (and rounds stepped attributes) and stores without side effects. Returns true if the stored value changed. */
 	bool StoreAttribute(const FGameplayTag& Attribute, float Value);
 
+	/**
+	 * Brings restored values within the limits every live write has: a non-finite attribute takes the fixture's default,
+	 * others are clamped and stepped ones rounded; the patch is clamped as SetPatch does; a negative ID becomes 0 (automatic).
+	 * Each repair is reported (ReportStateRepair). Runs from ApplyItemData, after unsupported attributes were dropped.
+	 */
+	void SanitizeRestoredState(const class ULightingFixtureData& Fixture);
+
+	static float SanitizeAttributeValue(const FGameplayTag& Attribute, float Value, float Min, float Max);
+	static FStageDMXPatch ClampPatch(const FStageDMXPatch& InPatch);
+
 	/** Broadcasts an attribute change plus the composite and derived rows that follow from it. */
 	void NotifyAttributeChanged(const FGameplayTag& Attribute);
 	void NotifyPhotometricsChanged();

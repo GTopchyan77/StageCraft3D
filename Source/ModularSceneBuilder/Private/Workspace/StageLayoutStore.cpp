@@ -4,6 +4,7 @@
 
 #include "Dom/JsonObject.h"
 #include "HAL/FileManager.h"
+#include "IO/StageAtomicFile.h"
 #include "Misc/FileHelper.h"
 #include "Misc/Paths.h"
 #include "Serialization/JsonReader.h"
@@ -169,7 +170,7 @@ EStageLayoutResult FStageLayoutStore::SaveUserLayout(const FStageSavedLayout& La
 	{
 		return EStageLayoutResult::InvalidName;
 	}
-	return WriteFileAtomic(GetUserLayoutPath(Layout.Name), Serialize(Layout)) ? EStageLayoutResult::Success : EStageLayoutResult::WriteFailed;
+	return StageAtomicFile::WriteText(GetUserLayoutPath(Layout.Name), Serialize(Layout)) ? EStageLayoutResult::Success : EStageLayoutResult::WriteFailed;
 }
 
 EStageLayoutResult FStageLayoutStore::DeleteUserLayout(const FString& Name) const
@@ -202,7 +203,8 @@ EStageLayoutResult FStageLayoutStore::LoadFile(const FString& Path, FStageSavedL
 	EStageLayoutResult Result = FFileHelper::LoadFileToString(Contents, *Path) ? Parse(Contents, OutLayout) : EStageLayoutResult::Corrupt;
 	if (Result == EStageLayoutResult::Corrupt || Result == EStageLayoutResult::VersionMismatch)
 	{
-		MoveAside(Path);
+		// Never delete what the user may want back; the newest bad copy replaces an older one.
+		StageAtomicFile::MoveAside(Path);
 	}
 	return Result;
 }
@@ -276,27 +278,6 @@ FString FStageLayoutStore::Serialize(const FStageSavedLayout& Layout) const
 	const TSharedRef<TJsonWriter<>> Writer = TJsonWriterFactory<>::Create(&Text);
 	FJsonSerializer::Serialize(Root, Writer);
 	return Text;
-}
-
-bool FStageLayoutStore::WriteFileAtomic(const FString& Path, const FString& Contents)
-{
-	const FString TempPath = Path + TEXT(".tmp");
-	if (!FFileHelper::SaveStringToFile(Contents, *TempPath, FFileHelper::EEncodingOptions::ForceUTF8WithoutBOM))
-	{
-		return false;
-	}
-	const bool bMoved = IFileManager::Get().Move(*Path, *TempPath, /*bReplace*/ true, /*bEvenIfReadOnly*/ false, /*bAttributes*/ false, /*bDoNotRetryOrError*/ true);
-	if (!bMoved)
-	{
-		IFileManager::Get().Delete(*TempPath, false, false, true);
-	}
-	return bMoved;
-}
-
-void FStageLayoutStore::MoveAside(const FString& Path)
-{
-	// Never delete what the user may want back; the newest bad copy replaces an older one.
-	IFileManager::Get().Move(*(Path + TEXT(".bak")), *Path, /*bReplace*/ true, false, false, /*bDoNotRetryOrError*/ true);
 }
 
 FStageWindowPlacement FStageLayoutStore::ClampPlacement(const FStageWindowPlacement& Placement, TConstArrayView<FBox2D> WorkAreas)

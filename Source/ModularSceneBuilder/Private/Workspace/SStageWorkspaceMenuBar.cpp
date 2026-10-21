@@ -8,11 +8,13 @@
 #include "HAL/PlatformProcess.h"
 #include "Components/SelectionComponent.h"
 #include "Engine/GameInstance.h"
+#include "Engine/LocalPlayer.h"
 #include "Framework/Application/SlateApplication.h"
 #include "Framework/MultiBox/MultiBoxBuilder.h"
 #include "GameplayTagContainer.h"
 #include "History/StageEditHistoryComponent.h"
 #include "History/StageEditHistorySubsystem.h"
+#include "Input/StageInputPreferencesSubsystem.h"
 #include "Placement/StagePlacementToolComponent.h"
 #include "Placement/StageSnappingComponent.h"
 #include "Player/ModularPlayerController.h"
@@ -36,6 +38,19 @@
 namespace StageWorkspaceMenuBar
 {
 	constexpr float SliderWidth = 160.f;
+
+	/** The controller's local key map, so menu labels name the user's keys (Docs/ADR/0013 §2.4); null without a local player. */
+	const UStageInputPreferencesSubsystem* GetKeys(const AModularPlayerController& Controller)
+	{
+		return ULocalPlayer::GetSubsystem<UStageInputPreferencesSubsystem>(Controller.GetLocalPlayer());
+	}
+
+	/** "Label  (Ctrl+Z)", or Label alone when the command is unbound. */
+	FText WithKeys(const FText& Label, const UStageInputPreferencesSubsystem* Keys, EStageInputCommand Command)
+	{
+		const FText Chords = Keys ? Keys->DescribeCommand(Command) : StageKeyBindings::DescribeCommand(FStageKeyBindings::MakeDefaults(), Command);
+		return Chords.IsEmpty() ? Label : FText::Format(LOCTEXT("LabelWithKeys", "{0}  ({1})"), Label, Chords);
+	}
 }
 
 void SStageWorkspaceMenuBar::Construct(const FArguments& InArgs, UStageWorkspaceSubsystem* InWorkspace)
@@ -358,7 +373,9 @@ void SStageWorkspaceMenuBar::FillEditMenu(FMenuBuilder& MenuBuilder)
 		return;
 	}
 
-	// Labels are built when the menu opens, so they name the step that would be undone right now.
+	// Labels are built when the menu opens, so they name the step that would be undone right now, and the user's current keys.
+	using StageWorkspaceMenuBar::WithKeys;
+	const UStageInputPreferencesSubsystem* Keys = StageWorkspaceMenuBar::GetKeys(*WeakController);
 	MenuBuilder.BeginSection(TEXT("History"), LOCTEXT("HistorySection", "History"));
 	{
 		const UStageEditHistorySubsystem* History = WeakController->GetEditHistory() ? WeakController->GetEditHistory()->GetHistory() : nullptr;
@@ -366,14 +383,14 @@ void SStageWorkspaceMenuBar::FillEditMenu(FMenuBuilder& MenuBuilder)
 		const FText RedoName = History ? History->GetRedoDescription() : FText::GetEmpty();
 
 		MenuBuilder.AddMenuEntry(
-			UndoName.IsEmpty() ? LOCTEXT("UndoNothing", "Undo  (Ctrl+Z)") : FText::Format(LOCTEXT("UndoStep", "Undo {0}  (Ctrl+Z)"), UndoName),
+			WithKeys(UndoName.IsEmpty() ? LOCTEXT("UndoNothing", "Undo") : FText::Format(LOCTEXT("UndoStep", "Undo {0}"), UndoName), Keys, EStageInputCommand::Undo),
 			LOCTEXT("UndoTip", "Revert the last placement, deletion or transform edit."), FSlateIcon(),
 			FUIAction(
 				FExecuteAction::CreateLambda([WeakController]() { if (WeakController.IsValid()) { WeakController->RequestUndo(); } }),
 				FCanExecuteAction::CreateLambda([bCanUndo = !UndoName.IsEmpty()]() { return bCanUndo; })));
 		MenuBuilder.AddMenuEntry(
-			RedoName.IsEmpty() ? LOCTEXT("RedoNothing", "Redo  (Ctrl+Y)") : FText::Format(LOCTEXT("RedoStep", "Redo {0}  (Ctrl+Y)"), RedoName),
-			LOCTEXT("RedoTip", "Re-apply the last undone step (also Ctrl+Shift+Z)."), FSlateIcon(),
+			WithKeys(RedoName.IsEmpty() ? LOCTEXT("RedoNothing", "Redo") : FText::Format(LOCTEXT("RedoStep", "Redo {0}"), RedoName), Keys, EStageInputCommand::Redo),
+			LOCTEXT("RedoTip", "Re-apply the last undone step."), FSlateIcon(),
 			FUIAction(
 				FExecuteAction::CreateLambda([WeakController]() { if (WeakController.IsValid()) { WeakController->RequestRedo(); } }),
 				FCanExecuteAction::CreateLambda([bCanRedo = !RedoName.IsEmpty()]() { return bCanRedo; })));
@@ -403,10 +420,13 @@ void SStageWorkspaceMenuBar::FillEditMenu(FMenuBuilder& MenuBuilder)
 			NAME_None, EUserInterfaceActionType::RadioButton);
 	};
 	AddModeEntry(EStageEditMode::Select, LOCTEXT("SelectMode", "Select"), LOCTEXT("SelectModeTip", "Click items to select them; edit with the gizmo or the Inspector."));
-	AddModeEntry(EStageEditMode::Place, LOCTEXT("PlaceMode", "Place  (P)"), LOCTEXT("PlaceModeTip", "Show the armed Library item under the cursor; every click places a copy until you leave Place mode (Esc or P)."));
+	AddModeEntry(EStageEditMode::Place, WithKeys(LOCTEXT("PlaceMode", "Place"), Keys, EStageInputCommand::TogglePlaceMode),
+		LOCTEXT("PlaceModeTip", "Show the armed Library item under the cursor; every click places a copy until you leave Place mode."));
 	MenuBuilder.EndSection();
 
-	MenuBuilder.BeginSection(TEXT("TransformTool"), LOCTEXT("TransformSection", "Transform Tool  (Space cycles)"));
+	const FText CycleKeys = Keys ? Keys->DescribeCommand(EStageInputCommand::CycleTransformTool) : FText::GetEmpty();
+	MenuBuilder.BeginSection(TEXT("TransformTool"), CycleKeys.IsEmpty() ? LOCTEXT("TransformSectionNoKey", "Transform Tool")
+		: FText::Format(LOCTEXT("TransformSection", "Transform Tool  ({0} cycles)"), CycleKeys));
 	const auto AddGizmoEntry = [&MenuBuilder, WeakController](EGizmoMode GizmoMode, const FText& Label)
 	{
 		MenuBuilder.AddMenuEntry(Label, FText::GetEmpty(), FSlateIcon(),
@@ -426,9 +446,9 @@ void SStageWorkspaceMenuBar::FillEditMenu(FMenuBuilder& MenuBuilder)
 				})),
 			NAME_None, EUserInterfaceActionType::RadioButton);
 	};
-	AddGizmoEntry(EGizmoMode::Translate, LOCTEXT("MoveTool", "Move"));
-	AddGizmoEntry(EGizmoMode::Rotate, LOCTEXT("RotateTool", "Rotate"));
-	AddGizmoEntry(EGizmoMode::Scale, LOCTEXT("ScaleTool", "Scale"));
+	AddGizmoEntry(EGizmoMode::Translate, WithKeys(LOCTEXT("MoveTool", "Move"), Keys, EStageInputCommand::MoveTool));
+	AddGizmoEntry(EGizmoMode::Rotate, WithKeys(LOCTEXT("RotateTool", "Rotate"), Keys, EStageInputCommand::RotateTool));
+	AddGizmoEntry(EGizmoMode::Scale, WithKeys(LOCTEXT("ScaleTool", "Scale"), Keys, EStageInputCommand::ScaleTool));
 	MenuBuilder.EndSection();
 
 	MenuBuilder.BeginSection(TEXT("Snapping"), LOCTEXT("SnappingSection", "Snapping"));
@@ -451,6 +471,12 @@ void SStageWorkspaceMenuBar::FillEditMenu(FMenuBuilder& MenuBuilder)
 			})),
 		NAME_None, EUserInterfaceActionType::ToggleButton);
 	MenuBuilder.EndSection();
+
+	MenuBuilder.BeginSection(TEXT("Preferences"));
+	MenuBuilder.AddMenuEntry(LOCTEXT("Preferences", "Preferences..."),
+		LOCTEXT("PreferencesTip", "Keyboard shortcuts, camera look, viewport and audio preferences."), FSlateIcon(),
+		FUIAction(FExecuteAction::CreateSP(this, &SStageWorkspaceMenuBar::ShowPanel, FGameplayTag(StageCraftTags::Panel_Preferences))));
+	MenuBuilder.EndSection();
 }
 
 void SStageWorkspaceMenuBar::FillSelectionSection(FMenuBuilder& MenuBuilder, const TWeakObjectPtr<AModularPlayerController>& WeakController)
@@ -460,13 +486,15 @@ void SStageWorkspaceMenuBar::FillSelectionSection(FMenuBuilder& MenuBuilder, con
 	const int32 SelectedCount = SelectionComponent ? SelectionComponent->GetSelectionCount() : 0;
 	const int32 PlacedCount = Session ? Session->GetStats().PlacedItems : 0;
 
+	using StageWorkspaceMenuBar::WithKeys;
+	const UStageInputPreferencesSubsystem* Keys = StageWorkspaceMenuBar::GetKeys(*WeakController);
 	MenuBuilder.BeginSection(TEXT("Selection"), LOCTEXT("SelectionSection", "Selection"));
-	MenuBuilder.AddMenuEntry(LOCTEXT("SelectAll", "Select All"),
+	MenuBuilder.AddMenuEntry(WithKeys(LOCTEXT("SelectAll", "Select All"), Keys, EStageInputCommand::SelectAll),
 		LOCTEXT("SelectAllTip", "Select every placed item. Ctrl+Click adds or removes single items."), FSlateIcon(),
 		FUIAction(
 			FExecuteAction::CreateLambda([WeakController]() { if (WeakController.IsValid()) { WeakController->RequestSelectAll(); } }),
 			FCanExecuteAction::CreateLambda([PlacedCount]() { return PlacedCount > 0; })));
-	MenuBuilder.AddMenuEntry(LOCTEXT("DeselectAll", "Deselect All  (Esc)"), FText::GetEmpty(), FSlateIcon(),
+	MenuBuilder.AddMenuEntry(WithKeys(LOCTEXT("DeselectAll", "Deselect All"), Keys, EStageInputCommand::Cancel), FText::GetEmpty(), FSlateIcon(),
 		FUIAction(
 			FExecuteAction::CreateLambda([WeakController]()
 			{
@@ -477,23 +505,23 @@ void SStageWorkspaceMenuBar::FillSelectionSection(FMenuBuilder& MenuBuilder, con
 			}),
 			FCanExecuteAction::CreateLambda([SelectedCount]() { return SelectedCount > 0; })));
 	MenuBuilder.AddMenuEntry(
-		SelectedCount > 1 ? FText::Format(LOCTEXT("DeleteSelectedN", "Delete {0} Selected Items  (Delete)"), FText::AsNumber(SelectedCount))
-			: LOCTEXT("DeleteSelected", "Delete Selected  (Delete)"),
-		LOCTEXT("DeleteSelectedTip", "Remove the selected items as one step; Ctrl+Z brings them back."), FSlateIcon(),
+		WithKeys(SelectedCount > 1 ? FText::Format(LOCTEXT("DeleteSelectedN", "Delete {0} Selected Items"), FText::AsNumber(SelectedCount))
+			: LOCTEXT("DeleteSelected", "Delete Selected"), Keys, EStageInputCommand::DeleteSelection),
+		LOCTEXT("DeleteSelectedTip", "Remove the selected items as one step; Undo brings them back."), FSlateIcon(),
 		FUIAction(
 			FExecuteAction::CreateLambda([WeakController]() { if (WeakController.IsValid()) { WeakController->RequestDeleteSelection(); } }),
 			FCanExecuteAction::CreateLambda([SelectedCount]() { return SelectedCount > 0; })));
 
 	// Clearing asks first: the confirmation is a submenu, so one stray click can never wipe the stage.
 	MenuBuilder.AddSubMenu(LOCTEXT("ClearStage", "Clear Stage..."),
-		LOCTEXT("ClearStageTip", "Remove every placed item. You are asked to confirm, and Ctrl+Z restores the stage."),
+		LOCTEXT("ClearStageTip", "Remove every placed item. You are asked to confirm, and Undo restores the stage."),
 		FNewMenuDelegate::CreateLambda([WeakController, PlacedCount](FMenuBuilder& ConfirmMenu)
 		{
 			ConfirmMenu.AddWidget(SNew(SBox).MaxDesiredWidth(280.f)
 				[
 					SNew(STextBlock)
 					.AutoWrapText(true)
-					.Text(FText::Format(LOCTEXT("ClearStageWarning", "This removes all {0} placed items from the stage. You can undo it with Ctrl+Z."), FText::AsNumber(PlacedCount)))
+					.Text(FText::Format(LOCTEXT("ClearStageWarning", "This removes all {0} placed items from the stage. You can bring them back with Undo."), FText::AsNumber(PlacedCount)))
 				], FText::GetEmpty(), /*bNoIndent*/ true);
 			ConfirmMenu.AddMenuEntry(FText::Format(LOCTEXT("ClearStageConfirm", "Clear {0} Items"), FText::AsNumber(PlacedCount)), FText::GetEmpty(), FSlateIcon(),
 				FUIAction(FExecuteAction::CreateLambda([WeakController]() { if (WeakController.IsValid()) { WeakController->RequestClearStage(); } })));

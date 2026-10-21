@@ -3,9 +3,8 @@
 #include "Report/StageReportFiles.h"
 
 #include "HAL/FileManager.h"
-#include "Misc/FileHelper.h"
+#include "IO/StageAtomicFile.h"
 #include "Misc/Paths.h"
-#include "Workspace/StageLayoutStore.h"
 
 namespace StageReportFiles
 {
@@ -45,30 +44,14 @@ namespace StageReportFiles
 		return Base;
 	}
 
-	bool WriteBytesAtomic(const FString& Path, TConstArrayView<uint8> Bytes)
-	{
-		const FString TempPath = Path + TEXT(".tmp");
-		if (!FFileHelper::SaveArrayToFile(Bytes, *TempPath))
-		{
-			IFileManager::Get().Delete(*TempPath, /*RequireExists*/ false, /*EvenReadOnly*/ false, /*Quiet*/ true);
-			return false;
-		}
-		if (!IFileManager::Get().Move(*Path, *TempPath, /*Replace*/ true, /*EvenIfReadOnly*/ false))
-		{
-			IFileManager::Get().Delete(*TempPath, /*RequireExists*/ false, /*EvenReadOnly*/ false, /*Quiet*/ true);
-			return false;
-		}
-		return true;
-	}
-
 	bool WritePdfAndCsv(const FString& BasePath, TConstArrayView<uint8> Pdf, const FString& Csv)
 	{
 		const FString PdfPath = BasePath + TEXT(".pdf");
-		if (!WriteBytesAtomic(PdfPath, Pdf))
+		if (!StageAtomicFile::WriteBytes(PdfPath, TConstArrayView64<uint8>(Pdf.GetData(), Pdf.Num())))
 		{
 			return false;
 		}
-		if (!FStageLayoutStore::WriteFileAtomic(BasePath + TEXT(".csv"), Csv))
+		if (!StageAtomicFile::WriteText(BasePath + TEXT(".csv"), Csv))
 		{
 			IFileManager::Get().Delete(*PdfPath, /*RequireExists*/ false, /*EvenReadOnly*/ false, /*Quiet*/ true);
 			return false;

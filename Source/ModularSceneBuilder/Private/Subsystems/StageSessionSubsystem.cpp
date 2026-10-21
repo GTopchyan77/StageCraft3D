@@ -292,6 +292,11 @@ void UStageSessionSubsystem::MarkClean()
 	SetDirty(false);
 }
 
+void UStageSessionSubsystem::MarkUnsaved()
+{
+	SetDirty(true);
+}
+
 void UStageSessionSubsystem::SetSceneName(const FString& InSceneName)
 {
 	SceneName = InSceneName;

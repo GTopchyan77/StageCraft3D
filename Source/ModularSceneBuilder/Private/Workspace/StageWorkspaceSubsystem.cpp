@@ -25,6 +25,7 @@
 #include "Workspace/SStageUnsavedChangesDialog.h"
 #include "Workspace/SStageWorkspaceMenuBar.h"
 #include "Workspace/StageCraftGameEngine.h"
+#include "IO/StageAtomicFile.h"
 #include "Workspace/StageLayoutStore.h"
 #include "Workspace/StagePanelDefinition.h"
 #include "Workspace/StageWorkspaceShell.h"
@@ -789,7 +790,7 @@ void UStageWorkspaceSubsystem::SaveSessionAsync()
 	PendingSessionWrite = UE::Tasks::Launch(UE_SOURCE_LOCATION,
 		[Path = LayoutStore->GetSessionPath(), Contents = LayoutStore->Serialize(Session)]()
 		{
-			if (!FStageLayoutStore::WriteFileAtomic(Path, Contents))
+			if (!StageAtomicFile::WriteText(Path, Contents))
 			{
 				UE_LOG(LogStageWorkspace, Warning, TEXT("Could not write the session layout to %s."), *Path);
 			}
@@ -808,7 +809,7 @@ void UStageWorkspaceSubsystem::SaveSessionNow()
 
 	PendingSessionWrite.Wait();
 	const FString Path = LayoutStore->GetSessionPath();
-	if (FStageLayoutStore::WriteFileAtomic(Path, LayoutStore->Serialize(Session)))
+	if (StageAtomicFile::WriteText(Path, LayoutStore->Serialize(Session)))
 	{
 		UE_LOG(LogStageWorkspace, Log, TEXT("Session layout saved to %s."), *Path);
 	}

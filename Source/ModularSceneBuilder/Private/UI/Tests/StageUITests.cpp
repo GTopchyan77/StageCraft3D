@@ -58,9 +58,24 @@ bool FStageStatusHintTest::RunTest(const FString& Parameters)
 
 	const FString Group = MakeHint(EStageEditMode::Select, Crate, 3).ToString();
 	TestTrue(TEXT("Group hint counts the selection"), Group.Contains(TEXT("3 items selected")));
-	TestTrue(TEXT("Group hint names group delete"), Group.Contains(TEXT("Delete")));
+	TestTrue(TEXT("Group hint names group delete with its key"), Group.Contains(TEXT("Del: remove all")));
 	TestFalse(TEXT("One selected item reads like a single selection"), MakeHint(EStageEditMode::Select, Crate, 1).ToString().Contains(TEXT("items selected")));
 	TestTrue(TEXT("Place mode ignores the selection count"), MakeHint(EStageEditMode::Place, Crate, 3).ToString().Contains(TEXT("Placing")));
+	TestTrue(TEXT("Select hint names the fly keys"), MakeHint(EStageEditMode::Select, FText::GetEmpty()).ToString().Contains(TEXT("Right mouse + WASD: fly")));
+
+	// The hints follow the user's key map (Docs/ADR/0013-preferences-key-bindings-and-audit-fixes.md §2.4).
+	FStageKeyBindings Remapped = FStageKeyBindings::MakeDefaults();
+	Remapped.Assign(EStageInputCommand::TogglePlaceMode, EStageKeySlot::Primary, FStageKeyChord(EKeys::L));
+	Remapped.Clear(EStageInputCommand::Cancel, EStageKeySlot::Primary);
+	Remapped.Clear(EStageInputCommand::CycleTransformTool, EStageKeySlot::Primary);
+	Remapped.Clear(EStageInputCommand::FlyLeft, EStageKeySlot::Primary);
+	const StageStatusBar::FHintKeys Keys = StageStatusBar::FHintKeys::FromBindings(Remapped);
+	TestTrue(TEXT("Remapped: the place key is the new one"), MakeHint(EStageEditMode::Select, Crate, 0, Keys).ToString().Contains(TEXT("L: place Crate")));
+	TestEqual(TEXT("Remapped: an unbound Esc is left out of the finish hint"), MakeHint(EStageEditMode::Place, Crate, 0, Keys).ToString(),
+		FString(TEXT("Placing Crate: each click places a copy   ·   L: finish")));
+	const FString NoTools = MakeHint(EStageEditMode::Select, FText::GetEmpty(), 0, Keys).ToString();
+	TestFalse(TEXT("Remapped: an unbound tool cycle is left out"), NoTools.Contains(TEXT("Move / Rotate / Scale")));
+	TestTrue(TEXT("Remapped: without all fly keys the hint says look around"), NoTools.Contains(TEXT("Right mouse: look around")));
 	return true;
 }
 
@@ -117,6 +132,17 @@ bool FStageSpanHintTest::RunTest(const FString& Parameters)
 
 	Status.bRefused = true;
 	TestTrue(TEXT("Refused path says so"), MakeSpanHint(Status).ToString().Contains(TEXT("not allowed")));
+	Status.bRefused = false;
+
+	// Remapped keys: the finish key moves to F; an unbound Backspace is left out.
+	FStageKeyBindings Remapped = FStageKeyBindings::MakeDefaults();
+	Remapped.Assign(EStageInputCommand::FinishPath, EStageKeySlot::Primary, FStageKeyChord(EKeys::F));
+	Remapped.Clear(EStageInputCommand::RemovePathPoint, EStageKeySlot::Primary);
+	Status.PointCount = 3;
+	const FString RemappedPath = MakeSpanHint(Status, StageStatusBar::FHintKeys::FromBindings(Remapped)).ToString();
+	TestTrue(TEXT("Remapped: the finish key is named"), RemappedPath.Contains(TEXT("F or double-click: place")));
+	TestFalse(TEXT("Remapped: Enter is not offered"), RemappedPath.Contains(TEXT("Enter")));
+	TestFalse(TEXT("Remapped: an unbound undo-point key is left out"), RemappedPath.Contains(TEXT("undo point")));
 	return true;
 }
 

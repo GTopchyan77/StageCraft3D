@@ -24,12 +24,13 @@
 #include "InputAction.h"
 #include "InputActionValue.h"
 #include "InputMappingContext.h"
+#include "InputKeyEventArgs.h"
 #include "InputModifiers.h"
-#include "InputTriggers.h"
 #include "Misc/Paths.h"
 #include "History/StageEditHistoryComponent.h"
 #include "Import/StageFileDialog.h"
 #include "Import/StageMeshImportSubsystem.h"
+#include "Input/StageInputPreferencesSubsystem.h"
 #include "Interaction/StageCraftCollision.h"
 #include "ModularSceneBuilder.h"
 #include "Placement/StagePlacementToolComponent.h"
@@ -47,6 +48,7 @@
 #include "Subsystems/StageItemSubsystem.h"
 #include "Subsystems/StageSessionSubsystem.h"
 #include "TimerManager.h"
+#include "UnrealClient.h"
 #include "Viewport/StageViewportComponent.h"
 #include "Workspace/StageWorkspaceSubsystem.h"
 
@@ -202,6 +204,11 @@ void AModularPlayerController::EndPlay(const EEndPlayReason::Type EndPlayReason)
 	{
 		Economy->OnPurchaseCompleted.RemoveDynamic(this, &ThisClass::HandlePurchaseCompleted);
 	}
+	if (UStageInputPreferencesSubsystem* Preferences = BoundInputPreferences.Get())
+	{
+		Preferences->OnInputPreferencesChanged.RemoveDynamic(this, &ThisClass::HandleInputPreferencesChanged);
+	}
+	BoundInputPreferences.Reset();
 
 	if (UStageWorkspaceSubsystem* Workspace = GetGameInstance() ? GetGameInstance()->GetSubsystem<UStageWorkspaceSubsystem>() : nullptr)
 	{
@@ -230,21 +237,23 @@ void AModularPlayerController::SetupInputComponent()
 {
 	Super::SetupInputComponent();
 
-	if (!EditorMappingContext || !PlaceAction || !NavigateAction || !DeleteAction || !CancelAction || !ToggleGizmoModeAction || !TogglePlaceModeAction
-		|| !FinishPathAction || !RemovePathPointAction || !UndoAction || !RedoAction)
+	if (!EditorMappingContext || !PlaceAction || !NavigateAction)
 	{
 		BuildDefaultInputMapping();
 	}
-
-	if (!CameraNavigationMappingContext || !CameraLookAction || !CameraMoveAction || !CameraSpeedAction)
-	{
-		BuildDefaultCameraMapping();
-	}
+	RebuildCameraMapping();
 
 	if (UEnhancedInputLocalPlayerSubsystem* InputSubsystem = ULocalPlayer::GetSubsystem<UEnhancedInputLocalPlayerSubsystem>(GetLocalPlayer()))
 	{
 		InputSubsystem->AddMappingContext(EditorMappingContext, MappingContextPriority);
 		InputSubsystem->AddMappingContext(CameraNavigationMappingContext, CameraNavigationContextPriority);
+	}
+
+	// The fly keys follow the preferences; the other keys are looked up on each press (InputKey).
+	if (UStageInputPreferencesSubsystem* Preferences = GetInputPreferences())
+	{
+		Preferences->OnInputPreferencesChanged.AddUniqueDynamic(this, &ThisClass::HandleInputPreferencesChanged);
+		BoundInputPreferences = Preferences;
 	}
 
 	UEnhancedInputComponent* EnhancedInput = Cast<UEnhancedInputComponent>(InputComponent);
@@ -263,14 +272,6 @@ void AModularPlayerController::SetupInputComponent()
 	EnhancedInput->BindAction(NavigateAction, ETriggerEvent::Started, this, &ThisClass::HandleNavigateStarted);
 	EnhancedInput->BindAction(NavigateAction, ETriggerEvent::Completed, this, &ThisClass::HandleNavigateCompleted);
 	EnhancedInput->BindAction(NavigateAction, ETriggerEvent::Canceled, this, &ThisClass::HandleNavigateCompleted);
-	EnhancedInput->BindAction(DeleteAction, ETriggerEvent::Started, this, &ThisClass::HandleDelete);
-	EnhancedInput->BindAction(CancelAction, ETriggerEvent::Started, this, &ThisClass::HandleCancel);
-	EnhancedInput->BindAction(ToggleGizmoModeAction, ETriggerEvent::Started, this, &ThisClass::HandleToggleGizmoMode);
-	EnhancedInput->BindAction(TogglePlaceModeAction, ETriggerEvent::Started, this, &ThisClass::HandleTogglePlaceMode);
-	EnhancedInput->BindAction(FinishPathAction, ETriggerEvent::Started, this, &ThisClass::HandleFinishPath);
-	EnhancedInput->BindAction(RemovePathPointAction, ETriggerEvent::Started, this, &ThisClass::HandleRemovePathPoint);
-	EnhancedInput->BindAction(UndoAction, ETriggerEvent::Started, this, &ThisClass::HandleUndo);
-	EnhancedInput->BindAction(RedoAction, ETriggerEvent::Started, this, &ThisClass::HandleRedo);
 
 	// Always mapped. Look and move act only while NavigateAction is held; speed (wheel) acts any time.
 	EnhancedInput->BindAction(CameraLookAction, ETriggerEvent::Triggered, this, &ThisClass::HandleCameraLook);
@@ -280,7 +281,7 @@ void AModularPlayerController::SetupInputComponent()
 
 void AModularPlayerController::BuildDefaultInputMapping()
 {
-	UE_LOG(LogStageCraft, Log, TEXT("%s: input assets not fully assigned, using built-in LMB/RMB/Delete/Esc/Space/P mapping."), *GetName());
+	UE_LOG(LogStageCraft, Log, TEXT("%s: mouse input assets not fully assigned, using built-in LMB/RMB mapping."), *GetName());
 
 	if (!PlaceAction)
 	{
@@ -290,87 +291,15 @@ void AModularPlayerController::BuildDefaultInputMapping()
 	{
 		NavigateAction = NewObject<UInputAction>(this, TEXT("IA_Navigate_Default"));
 	}
-	if (!DeleteAction)
-	{
-		DeleteAction = NewObject<UInputAction>(this, TEXT("IA_Delete_Default"));
-	}
-	if (!CancelAction)
-	{
-		CancelAction = NewObject<UInputAction>(this, TEXT("IA_Cancel_Default"));
-	}
-	if (!ToggleGizmoModeAction)
-	{
-		ToggleGizmoModeAction = NewObject<UInputAction>(this, TEXT("IA_ToggleGizmoMode_Default"));
-	}
-	if (!TogglePlaceModeAction)
-	{
-		TogglePlaceModeAction = NewObject<UInputAction>(this, TEXT("IA_TogglePlaceMode_Default"));
-	}
-	if (!FinishPathAction)
-	{
-		FinishPathAction = NewObject<UInputAction>(this, TEXT("IA_FinishPath_Default"));
-	}
-	if (!RemovePathPointAction)
-	{
-		RemovePathPointAction = NewObject<UInputAction>(this, TEXT("IA_RemovePathPoint_Default"));
-	}
-	if (!UndoAction)
-	{
-		UndoAction = NewObject<UInputAction>(this, TEXT("IA_Undo_Default"));
-	}
-	if (!RedoAction)
-	{
-		RedoAction = NewObject<UInputAction>(this, TEXT("IA_Redo_Default"));
-	}
 
-	// A fresh context, because an assigned one cannot be trusted to map actions it was not authored with.
-	// P, Z, Y, Enter and Backspace are free in the camera context (which maps W/A/S/D/Q/E), so they are never consumed by navigation.
+	// Only the mouse buttons: keyboard shortcuts come from the key map (InputKey), not from a mapping context.
 	EditorMappingContext = NewObject<UInputMappingContext>(this, TEXT("IMC_StageEditor_Default"));
-	MapUndoRedoChords(*EditorMappingContext);
 	EditorMappingContext->MapKey(PlaceAction, EKeys::LeftMouseButton);
 	EditorMappingContext->MapKey(NavigateAction, EKeys::RightMouseButton);
-	EditorMappingContext->MapKey(DeleteAction, EKeys::Delete);
-	EditorMappingContext->MapKey(CancelAction, EKeys::Escape);
-	EditorMappingContext->MapKey(ToggleGizmoModeAction, EKeys::SpaceBar);
-	EditorMappingContext->MapKey(TogglePlaceModeAction, EKeys::P);
-	EditorMappingContext->MapKey(FinishPathAction, EKeys::Enter);
-	EditorMappingContext->MapKey(RemovePathPointAction, EKeys::BackSpace);
 }
 
-void AModularPlayerController::MapUndoRedoChords(UInputMappingContext& Context)
+void AModularPlayerController::EnsureCameraActions()
 {
-	// Modifier keys are actions of their own, used only as chords. They come first so their state is
-	// evaluated before the chorded keys in the same frame.
-	UInputAction* ControlChord = NewObject<UInputAction>(&Context, TEXT("IA_ModifierControl_Default"));
-	UInputAction* ShiftChord = NewObject<UInputAction>(&Context, TEXT("IA_ModifierShift_Default"));
-	Context.MapKey(ControlChord, EKeys::LeftControl);
-	Context.MapKey(ControlChord, EKeys::RightControl);
-	Context.MapKey(ShiftChord, EKeys::LeftShift);
-	Context.MapKey(ShiftChord, EKeys::RightShift);
-
-	const auto AddChord = [&Context](FEnhancedActionKeyMapping& Mapping, const UInputAction* Chord)
-	{
-		UInputTriggerChordAction* Trigger = NewObject<UInputTriggerChordAction>(&Context);
-		Trigger->ChordAction = Chord;
-		Mapping.Triggers.Add(Trigger);
-	};
-
-	// Ctrl+Shift+Z is mapped before Ctrl+Z on purpose: Enhanced Input then blocks the later Z mapping
-	// while the earlier chorded one triggers (IEnhancedInputSubsystemInterface::InjectChordBlockers),
-	// so Ctrl+Shift+Z redoes without also undoing.
-	FEnhancedActionKeyMapping& RedoShiftZ = Context.MapKey(RedoAction, EKeys::Z);
-	AddChord(RedoShiftZ, ControlChord);
-	AddChord(RedoShiftZ, ShiftChord);
-	AddChord(Context.MapKey(UndoAction, EKeys::Z), ControlChord);
-	AddChord(Context.MapKey(RedoAction, EKeys::Y), ControlChord);
-}
-
-void AModularPlayerController::BuildDefaultCameraMapping()
-{
-	using namespace ModularPlayerController;
-
-	UE_LOG(LogStageCraft, Log, TEXT("%s: camera input assets not fully assigned, using built-in RMB fly mapping (mouse look, WASD, Q/E, wheel)."), *GetName());
-
 	if (!CameraLookAction)
 	{
 		CameraLookAction = NewObject<UInputAction>(this, TEXT("IA_CameraLook_Default"));
@@ -386,21 +315,158 @@ void AModularPlayerController::BuildDefaultCameraMapping()
 		CameraSpeedAction = NewObject<UInputAction>(this, TEXT("IA_CameraSpeed_Default"));
 		CameraSpeedAction->ValueType = EInputActionValueType::Axis1D;
 	}
+}
 
-	CameraNavigationMappingContext = NewObject<UInputMappingContext>(this, TEXT("IMC_CameraNavigation_Default"));
-	UInputMappingContext* Context = CameraNavigationMappingContext;
+void AModularPlayerController::RebuildCameraMapping()
+{
+	using namespace ModularPlayerController;
+	EnsureCameraActions();
 
+	const UStageInputPreferencesSubsystem* Preferences = GetInputPreferences();
+	const FStageKeyBindings Bindings = Preferences ? Preferences->GetKeyBindings() : FStageKeyBindings::MakeDefaults();
+
+	// No fixed name: the previous context may still exist (it is removed from the input subsystem below, then collected).
+	UInputMappingContext* Context = NewObject<UInputMappingContext>(this);
 	Context->MapKey(CameraLookAction, EKeys::Mouse2D);
 	Context->MapKey(CameraSpeedAction, EKeys::MouseWheelAxis);
 
 	// A digital key yields (1,0,0); swizzle routes it onto Y (right) or Z (up), negate flips the direction.
-	// Space/Ctrl are not mapped: Space cycles the gizmo and Ctrl is reserved for multi-select.
-	MapAxisKey(Context, CameraMoveAction, EKeys::W);
-	MapAxisKey(Context, CameraMoveAction, EKeys::S, {}, /*bNegate*/ true);
-	MapAxisKey(Context, CameraMoveAction, EKeys::D, EInputAxisSwizzle::YXZ);
-	MapAxisKey(Context, CameraMoveAction, EKeys::A, EInputAxisSwizzle::YXZ, /*bNegate*/ true);
-	MapAxisKey(Context, CameraMoveAction, EKeys::E, EInputAxisSwizzle::ZYX);
-	MapAxisKey(Context, CameraMoveAction, EKeys::Q, EInputAxisSwizzle::ZYX, /*bNegate*/ true);
+	struct FFlyAxis
+	{
+		EStageInputCommand Command;
+		TOptional<EInputAxisSwizzle> Swizzle;
+		bool bNegate;
+	};
+	const FFlyAxis Axes[] =
+	{
+		{ EStageInputCommand::FlyForward, {}, false },
+		{ EStageInputCommand::FlyBackward, {}, true },
+		{ EStageInputCommand::FlyRight, EInputAxisSwizzle::YXZ, false },
+		{ EStageInputCommand::FlyLeft, EInputAxisSwizzle::YXZ, true },
+		{ EStageInputCommand::FlyUp, EInputAxisSwizzle::ZYX, false },
+		{ EStageInputCommand::FlyDown, EInputAxisSwizzle::ZYX, true },
+	};
+	for (const FFlyAxis& Axis : Axes)
+	{
+		for (EStageKeySlot Slot : { EStageKeySlot::Primary, EStageKeySlot::Secondary })
+		{
+			const FStageKeyChord& Chord = Bindings.Get(Axis.Command, Slot);
+			if (Chord.IsSet())
+			{
+				MapAxisKey(Context, CameraMoveAction, Chord.Key, Axis.Swizzle, Axis.bNegate);
+			}
+		}
+	}
+
+	UInputMappingContext* Previous = CameraNavigationMappingContext;
+	CameraNavigationMappingContext = Context;
+	if (!Previous)
+	{
+		return; // First build: SetupInputComponent adds it.
+	}
+
+	if (UEnhancedInputLocalPlayerSubsystem* InputSubsystem = ULocalPlayer::GetSubsystem<UEnhancedInputLocalPlayerSubsystem>(GetLocalPlayer()))
+	{
+		// A key held across the swap must be released before it counts again, so a held W never jumps the camera.
+		FModifyContextOptions Options;
+		Options.bIgnoreAllPressedKeysUntilRelease = true;
+		InputSubsystem->RemoveMappingContext(Previous, Options);
+		InputSubsystem->AddMappingContext(Context, CameraNavigationContextPriority, Options);
+	}
+}
+
+UStageInputPreferencesSubsystem* AModularPlayerController::GetInputPreferences() const
+{
+	return ULocalPlayer::GetSubsystem<UStageInputPreferencesSubsystem>(GetLocalPlayer());
+}
+
+void AModularPlayerController::HandleInputPreferencesChanged()
+{
+	RebuildCameraMapping();
+}
+
+bool AModularPlayerController::IsModifierDown(const FViewport* Viewport, const FKey& Left, const FKey& Right) const
+{
+	// The viewport records a key the moment Slate delivers it, before this event is dispatched, and forgets every key when it
+	// loses focus. The player input's own state only updates on its next tick, so Ctrl pressed in the same frame as Z (a fast
+	// chord, a busy frame, a scripted chord) would read as up there.
+	if (Viewport)
+	{
+		return Viewport->KeyState(Left) || Viewport->KeyState(Right);
+	}
+	return IsInputKeyDown(Left) || IsInputKeyDown(Right);
+}
+
+bool AModularPlayerController::InputKey(const FInputKeyEventArgs& Params)
+{
+	// Enhanced Input first and unchanged: it tracks every key's state (the modifiers below) and runs the mouse and fly mappings.
+	const bool bHandled = Super::InputKey(Params);
+
+	// One command per press, never on auto-repeat. Commands are suspended while flying, so a fly key can also be a command key.
+	if (Params.Event != IE_Pressed || bIsNavigatingCamera || !StageKeyBindings::IsBindableKey(Params.Key))
+	{
+		return bHandled;
+	}
+	const UStageInputPreferencesSubsystem* Preferences = GetInputPreferences();
+	if (!Preferences)
+	{
+		return bHandled;
+	}
+
+	// The input pipeline's key state, not the OS's, so simulated chords (StageCraft.Edit.Key) match like real ones.
+	const FStageKeyChord Chord(Params.Key,
+		IsModifierDown(Params.Viewport, EKeys::LeftControl, EKeys::RightControl),
+		IsModifierDown(Params.Viewport, EKeys::LeftShift, EKeys::RightShift),
+		IsModifierDown(Params.Viewport, EKeys::LeftAlt, EKeys::RightAlt));
+	const TOptional<EStageInputCommand> Command = Preferences->GetKeyBindings().FindCommand(Chord);
+	if (!Command.IsSet())
+	{
+		return bHandled;
+	}
+	ExecuteCommand(Command.GetValue());
+	return true;
+}
+
+void AModularPlayerController::ExecuteCommand(EStageInputCommand Command)
+{
+	const auto SetGizmoMode = [this](EGizmoMode Mode)
+	{
+		if (Gizmo && !IsGizmoDragging())
+		{
+			Gizmo->SetMode(Mode);
+		}
+	};
+
+	switch (Command)
+	{
+	case EStageInputCommand::Undo:					RequestUndo(); break;
+	case EStageInputCommand::Redo:					RequestRedo(); break;
+	case EStageInputCommand::DeleteSelection:		RequestDeleteSelection(); break;
+	case EStageInputCommand::SelectAll:				RequestSelectAll(); break;
+	case EStageInputCommand::Cancel:				HandleCancel(); break;
+	case EStageInputCommand::CycleTransformTool:
+		if (Gizmo && !IsGizmoDragging())
+		{
+			Gizmo->CycleMode();
+		}
+		break;
+	case EStageInputCommand::MoveTool:				SetGizmoMode(EGizmoMode::Translate); break;
+	case EStageInputCommand::RotateTool:			SetGizmoMode(EGizmoMode::Rotate); break;
+	case EStageInputCommand::ScaleTool:				SetGizmoMode(EGizmoMode::Scale); break;
+	case EStageInputCommand::TogglePlaceMode:		HandleTogglePlaceMode(); break;
+	case EStageInputCommand::FinishPath:			HandleFinishPath(); break;
+	case EStageInputCommand::RemovePathPoint:		HandleRemovePathPoint(); break;
+	case EStageInputCommand::ViewPerspective:		ViewportView->SetProjection(EStageViewProjection::Perspective); break;
+	case EStageInputCommand::ViewTop:				ViewportView->SetProjection(EStageViewProjection::Top); break;
+	case EStageInputCommand::ViewFront:				ViewportView->SetProjection(EStageViewProjection::Front); break;
+	case EStageInputCommand::ViewBack:				ViewportView->SetProjection(EStageViewProjection::Back); break;
+	case EStageInputCommand::ViewLeft:				ViewportView->SetProjection(EStageViewProjection::Left); break;
+	case EStageInputCommand::ViewRight:				ViewportView->SetProjection(EStageViewProjection::Right); break;
+	case EStageInputCommand::ToggleGrid:			ViewportView->SetGridVisible(!ViewportView->IsGridVisible()); break;
+	default:
+		// Navigation commands are fly-axis mappings (RebuildCameraMapping); FindCommand never returns them.
+		break;
+	}
 }
 
 void AModularPlayerController::HandleSelectionChanged(AActor* NewSelection, AActor* PreviousSelection)
@@ -655,21 +721,6 @@ void AModularPlayerController::HandleNavigateCompleted()
 	bIsNavigatingCamera = false;
 }
 
-void AModularPlayerController::HandleDelete()
-{
-	RequestDeleteSelection();
-}
-
-void AModularPlayerController::HandleUndo()
-{
-	RequestUndo();
-}
-
-void AModularPlayerController::HandleRedo()
-{
-	RequestRedo();
-}
-
 void AModularPlayerController::HandleGizmoDragStarted(AActor* Target)
 {
 	if (Target)
@@ -721,14 +772,6 @@ void AModularPlayerController::HandleCancel()
 	}
 }
 
-void AModularPlayerController::HandleToggleGizmoMode()
-{
-	if (Gizmo && !IsGizmoDragging())
-	{
-		Gizmo->CycleMode();
-	}
-}
-
 void AModularPlayerController::HandleFinishPath()
 {
 	if (!bIsNavigatingCamera && SpanTool->IsToolActive() && SpanTool->FinishPath())
@@ -767,7 +810,14 @@ void AModularPlayerController::HandleCameraLook(const FInputActionValue& Value)
 		}
 		else if (AStageCameraPawn* CameraPawn = GetCameraPawn())
 		{
-			CameraPawn->AddLookInput(Value.Get<FVector2D>());
+			// The user's preferences scale and flip the look; they are read per event (two settings reads), never cached.
+			FVector2D Look = Value.Get<FVector2D>();
+			if (const UStageInputPreferencesSubsystem* Preferences = GetInputPreferences())
+			{
+				Look *= Preferences->GetLookSensitivity();
+				Look.Y *= Preferences->IsLookInverted() ? -1.0 : 1.0;
+			}
+			CameraPawn->AddLookInput(Look);
 		}
 	}
 }

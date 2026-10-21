@@ -4,6 +4,7 @@
 
 #include "CoreMinimal.h"
 #include "GameFramework/GameUserSettings.h"
+#include "Input/StageKeyBindings.h"
 #include "Render/StageRenderTypes.h"
 #include "StageCraftUserSettings.generated.h"
 
@@ -71,12 +72,39 @@ public:
 	/** Returns true if the stored value changed. Does not save. */
 	bool SetViewportGridVisible(bool bVisible);
 
+	/**
+	 * Input preferences (Docs/ADR/0013-preferences-key-bindings-and-audit-fixes.md §2.2). UStageInputPreferencesSubsystem is
+	 * the only writer. The key map is stored as overrides of the defaults and rebuilt through FStageKeyBindings::FromOverrides
+	 * on every read, so a hand-edited ini can never load a conflict or an unbindable key. OutDropped (optional) counts the
+	 * saved entries that were dropped. Call once the engine has registered its keys (any time after engine start-up).
+	 */
+	FStageKeyBindings GetKeyBindings(int32* OutDropped = nullptr) const;
+
+	/** Returns true if the stored map changed. Does not save. */
+	bool SetKeyBindings(const FStageKeyBindings& Bindings);
+
+	/** Multiplier on the camera's look speed, StageInputPreferences::MinLookSensitivity..MaxLookSensitivity. */
+	float GetLookSensitivity() const { return LookSensitivity; }
+
+	/** Clamped; a non-finite value is refused (returns false). Returns true if the stored value changed. Does not save. */
+	bool SetLookSensitivity(float Sensitivity);
+
+	bool IsLookInverted() const { return bInvertLook; }
+
+	/** Returns true if the stored value changed. Does not save. */
+	bool SetLookInverted(bool bInverted);
+
 private:
 	void ResetAudioToDefaults();
 	void SanitizeAudio();
+	void ResetInputToDefaults();
+	void SanitizeInput();
 
 	/** Bumped when the meaning of the audio fields changes; older saved values are then reset. */
 	static constexpr int32 CurrentAudioSettingsVersion = 1;
+
+	/** Bumped when the meaning of the input fields changes; older saved values are then reset. */
+	static constexpr int32 CurrentInputSettingsVersion = 1;
 
 	UPROPERTY(Config)
 	float MasterVolume = 1.f;
@@ -104,4 +132,24 @@ private:
 
 	UPROPERTY(Config)
 	bool bViewportGridVisible = true;
+
+	/** Only the commands whose keys differ from the defaults (FStageKeyBindings::ToOverrides). */
+	UPROPERTY(Config)
+	TArray<FStageKeyBindingOverride> KeyBindingOverrides;
+
+	UPROPERTY(Config)
+	float LookSensitivity = 1.f;
+
+	UPROPERTY(Config)
+	bool bInvertLook = false;
+
+	UPROPERTY(Config)
+	int32 InputSettingsVersion = 0;
 };
+
+namespace StageInputPreferences
+{
+	inline constexpr float MinLookSensitivity = 0.1f;
+	inline constexpr float MaxLookSensitivity = 5.f;
+	inline constexpr float DefaultLookSensitivity = 1.f;
+}

@@ -136,4 +136,22 @@ namespace StageMeshImport
 	 * or duplicates are dropped, and at most MaxRememberedFiles are kept. False when the document itself is unreadable.
 	 */
 	MODULARSCENEBUILDER_API bool ReadImportList(const FString& Json, TArray<FString>& OutSourceFiles);
+
+	/** What LoadImportListFile found (Docs/ADR/0013-preferences-key-bindings-and-audit-fixes.md §3.3). */
+	enum class EImportListRead : uint8
+	{
+		/** No list yet (first run): start empty, save freely. */
+		Missing,
+		Read,
+		/** Not an import list (damaged, truncated, another version): moved to Path.bak, start empty, save freely. */
+		Damaged,
+		/** The file exists but could not be read or moved aside (locked, no permission): it must not be overwritten this session. */
+		Unreadable,
+	};
+
+	/**
+	 * Reads the import list file at Path into OutSourceFiles (through ReadImportList). A damaged list is moved aside before
+	 * anything can overwrite it. File system only: any thread.
+	 */
+	MODULARSCENEBUILDER_API EImportListRead LoadImportListFile(const FString& Path, TArray<FString>& OutSourceFiles);
 }

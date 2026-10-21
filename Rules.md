@@ -176,7 +176,7 @@ These rules describe how StageCraft is layered (STATE.md #18). New features must
 | The whole run, across level travel, saved to disk | `UGameInstanceSubsystem` | `UStageProfileSubsystem` (profile, wallet, entitlements), `UStageEconomySubsystem` (shop rules), `UStageItemSubsystem` (catalog) |
 | One level / stage session | `UWorldSubsystem` (Game + PIE worlds only, via `DoesSupportWorldType`) | `UStageSessionSubsystem` (placed items, totals, session rules, dirty flag), `UShowControlSubsystem` (fixtures, cues, DMX) |
 | One local player's input and tools | Components on `AModularPlayerController` | `USelectionComponent`, `USpawnSystemComponent` |
-| Per local user settings (split-screen, per-user preferences) | `ULocalPlayerSubsystem` | none yet; add one only for per-user data that is not gameplay state |
+| Per local user settings (split-screen, per-user preferences) | `ULocalPlayerSubsystem` | `UStageInputPreferencesSubsystem` (key map, camera look; STATE.md #40); add one only for per-user data that is not gameplay state |
 
 - Prefer a subsystem over subclassing `UGameInstance`, so the systems stay composable.
 - Use `Collection.InitializeDependency<T>()` when one subsystem needs another during `Initialize`.

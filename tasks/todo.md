@@ -337,3 +337,17 @@ See `STATE.md` for detailed history of completed work.
 - [ ] Batch the per-attribute `OnParameterChanged` broadcasts during fades (about 2 ms at 200 fixtures)
 - [ ] Startup model re-import blocks the game thread for tens of seconds (audit R2); VSM "One Pass Projection max lights overflow" from about 50 overlapping spot lights
 - [ ] Cable schedule: saved circuit assignment (scene v4), power cable lengths once the distro has a position; patch sheet onto the composer
+
+## Phase 17 — Preferences and key bindings, audit risks R2/R6/R8 (requested by Gevor 2026-10-21; STATE.md #40, ADR 0013)
+- [x] Key map model `FStageKeyBindings` (24 commands, two slots, exact chords, conflict rules, fly keys may share a command key); saved as overrides in GameUserSettings.ini; tests
+- [x] `UStageInputPreferencesSubsystem` (first ULocalPlayerSubsystem): key map, look sensitivity, invert look; single writer, OnInputPreferencesChanged
+- [x] Controller: keyboard commands looked up on key press (viewport key state for modifiers), fly mapping rebuilt from the key map, look preferences applied; per-shortcut input actions and chord machinery removed
+- [x] Menus and status bar hints name the user's keys; Edit > Preferences...; `UStagePreferencesPanel` + `DA_Panel_Preferences` (camera, viewport, audio, shortcuts with capture/clear/reset)
+- [x] R2: unplaced items kept and saved back, partial load stays unsaved, damaged-entry backup (.bak), loads refused while imports run (ImportsPending)
+- [x] R6: restored state sanitized (fixture attributes/patch/ID, audio gain/delay/splay, label, span path), repairs counted; no package loads from saved state
+- [x] Found by the R6 test: the DMX patch was never saved (FStageDMXPatch fields not SaveGame) — fixed
+- [x] R8: damaged Imports.json moved to .bak, unreadable list never overwritten; `StageAtomicFile` flushes before renaming (all saves, reports, renders)
+- [x] Builds: Editor, Game Shipping (0 warnings); 69/69 automation; scripted runs R40_RunA–D
+- [ ] Manual verification (Gevor): Preferences panel by mouse (click a shortcut, press keys, CLEAR, RESET, RESET ALL, refusal messages, look speed/invert while flying); Edit menu labels after a rebind; real keyboard Ctrl+Z/Ctrl+Shift+Z; File > Open of a scene with a missing imported model
+- [ ] Unplaced items: show them somewhere (Outliner group) and allow discarding them; Clear Stage keeps them today
+- [ ] Mouse buttons are not remappable (viewport capture depends on them)

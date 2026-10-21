@@ -17,11 +17,26 @@ void AAudioEquipmentActor::ApplyItemData(const UBaseItemData& Data)
 {
 	Super::ApplyItemData(Data);
 
-	// A swapped-in cabinet may allow less splay than the previous one.
-	if (const UAudioEquipmentData* Audio = Cast<UAudioEquipmentData>(&Data))
+	// Restored values are untrusted (Docs/ADR/0013-preferences-key-bindings-and-audit-fixes.md §3.2), and a swapped-in cabinet
+	// may allow less splay than the previous one: the inspector's limits apply to every value that arrives here.
+	const UAudioEquipmentData* Audio = Cast<UAudioEquipmentData>(&Data);
+	const auto Sanitize = [this](float& Value, float Min, float Max, float Default, const TCHAR* Name, bool bReport)
 	{
-		SplayAngle = FMath::Clamp(SplayAngle, 0.f, Audio->MaxSplayAngle);
-	}
+		const float Sanitized = FMath::IsFinite(Value) ? FMath::Clamp(Value, Min, Max) : Default;
+		if (Sanitized != Value || !FMath::IsFinite(Value))
+		{
+			if (bReport)
+			{
+				ReportStateRepair(FString::Printf(TEXT("%s %s -> %s"), Name, *FString::SanitizeFloat(Value), *FString::SanitizeFloat(Sanitized)));
+			}
+			Value = Sanitized;
+		}
+	};
+	Sanitize(GainDb, -60.f, 12.f, 0.f, TEXT("gain dB"), /*bReport*/ true);
+	Sanitize(DelayMs, 0.f, 1000.f, 0.f, TEXT("delay ms"), /*bReport*/ true);
+	// A splay beyond a newly swapped cabinet's maximum is a normal model change, not damaged data; only a non-finite or negative one is.
+	const bool bSplayDamaged = !FMath::IsFinite(SplayAngle) || SplayAngle < 0.f;
+	Sanitize(SplayAngle, 0.f, Audio ? Audio->MaxSplayAngle : TNumericLimits<float>::Max(), 0.f, TEXT("splay deg"), bSplayDamaged);
 }
 
 void AAudioEquipmentActor::GatherParameterSections(TArray<FStageParameterSection>& OutSections) const

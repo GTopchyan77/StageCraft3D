@@ -17,7 +17,12 @@
   - **R5 fixed:** an exit prompt and autosave with recovery were added.
   - **R7 addressed:** the scene format is version 2 and migrates version 1.
   - **Sky Creator** was packaged and measured (ADR 0010 §7).
-  - **Still open:** R1, R2, R6, R8 and R9–R14. `Docs/CURRENT_SYSTEMS.md` is kept current.
+  - **R2, R6, R8 addressed in STATE.md #40 (ADR 0013 §3):**
+    - **R2:** skipped items are kept and saved back; a partial load stays unsaved; damaged entries are backed up before a save; loads wait for imports.
+    - **R6:** restored values are sanitized and counted; no package loads from saved state.
+    - **R8:** a damaged import list is moved aside, an unreadable one is never overwritten, and every save is flushed before its rename.
+    - **Found while fixing R6:** the DMX patch was never saved, because its fields were not SaveGame.
+  - **Still open:** R1 and R9–R14. `Docs/CURRENT_SYSTEMS.md` is kept current.
 
 ### Evidence labels used in this document
 

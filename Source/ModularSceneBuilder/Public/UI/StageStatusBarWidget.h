@@ -7,6 +7,7 @@
 #include "Economy/StageEconomyTypes.h"
 #include "History/StageEditCommand.h"
 #include "Import/StageMeshImportTypes.h"
+#include "Input/StageKeyBindings.h"
 #include "Placement/StagePlacementTypes.h"
 #include "Placement/StageSpanToolComponent.h"
 #include "Render/StageRenderTypes.h"
@@ -17,13 +18,32 @@
 namespace StageStatusBar
 {
 	/**
+	 * The keys the hints name, from the user's key map (Docs/ADR/0013-preferences-key-bindings-and-audit-fixes.md §2.4). An empty
+	 * text is an unbound command; the hint then leaves that part out.
+	 */
+	struct MODULARSCENEBUILDER_API FHintKeys
+	{
+		FText Cancel;
+		FText TogglePlace;
+		FText CycleTool;
+		FText Delete;
+		FText FinishPath;
+		FText RemovePoint;
+		/** "WASD", or empty when a fly direction is unbound. */
+		FText Fly;
+
+		static FHintKeys FromBindings(const FStageKeyBindings& Bindings);
+		static FHintKeys Defaults() { return FromBindings(FStageKeyBindings::MakeDefaults()); }
+	};
+
+	/**
 	 * The context hint for an edit mode: what a click does and which keys apply. ArmedItemName is empty when nothing is armed.
 	 * With more than one item selected (Select mode), the hint names the group actions instead.
 	 */
-	MODULARSCENEBUILDER_API FText MakeHint(EStageEditMode Mode, const FText& ArmedItemName, int32 SelectedCount = 0);
+	MODULARSCENEBUILDER_API FText MakeHint(EStageEditMode Mode, const FText& ArmedItemName, int32 SelectedCount = 0, const FHintKeys& Keys = FHintKeys::Defaults());
 
 	/** The hint while drawing a span: which point the next click sets and, with a run under the cursor, its length and segment count. */
-	MODULARSCENEBUILDER_API FText MakeSpanHint(const FStageSpanToolStatus& Status);
+	MODULARSCENEBUILDER_API FText MakeSpanHint(const FStageSpanToolStatus& Status, const FHintKeys& Keys = FHintKeys::Defaults());
 }
 
 /**
@@ -36,7 +56,8 @@ namespace StageStatusBar
  * A view only. It is owned by the local AModularPlayerController (CreateWidget) and binds, in NativeConstruct, to the
  * placement tool, the controller's OnRequestRejected, the economy's OnPurchaseCompleted and the camera pawn's
  * OnFlySpeedChanged, the edit history's OnHistoryChanged, the selection's OnSelectionSetChanged, the scene component's
- * OnSceneOperationFinished and the render subsystem's state and results; everything is unbound in NativeDestruct. No tick: the message
+ * OnSceneOperationFinished, the render subsystem's state and results, and the input preferences (the hint names the user's
+ * keys); everything is unbound in NativeDestruct. No tick: the message
  * clears on a one-shot timer.
  */
 UCLASS()
@@ -110,6 +131,10 @@ private:
 	UFUNCTION()
 	void HandleSpanStatusChanged(const FStageSpanToolStatus& Status);
 
+	/** The key map changed: the hint names the new keys. */
+	UFUNCTION()
+	void HandleInputPreferencesChanged();
+
 	UFUNCTION()
 	void HandleReportExportFinished(const FStageReportExportResult& Result);
 
@@ -144,6 +169,7 @@ private:
 	TWeakObjectPtr<class UStagePatchSheetSubsystem> PatchSheet;
 	TWeakObjectPtr<class UStageCableScheduleSubsystem> CableSchedule;
 	TWeakObjectPtr<class UStageMeshImportSubsystem> Importer;
+	TWeakObjectPtr<class UStageInputPreferencesSubsystem> InputPreferences;
 
 	FTimerHandle MessageTimer;
 };

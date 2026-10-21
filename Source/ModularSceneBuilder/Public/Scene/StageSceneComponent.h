@@ -28,6 +28,13 @@ DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FOnStageSceneOperationFinished, cons
  * a toast per item), are skipped and counted. The scene's environment (format version 2) is applied through
  * UStageEnvironmentSubsystem. The undo history is cleared, because its steps name the previous stage.
  *
+ * A partial load loses nothing (Docs/ADR/0013-preferences-key-bindings-and-audit-fixes.md §3.1):
+ *  - Skipped unknown or refused items are kept here as snapshots and written back by every save and autosave, until another
+ *    scene is loaded. Damaged entries cannot be kept; the first save over that scene's file backs the file up first (.bak).
+ *  - A load that skipped, kept or repaired anything leaves the stage unsaved, so autosave and the exit prompt cover it.
+ *  - A load waits for imported models: it is refused (ImportsPending) while UStageMeshImportSubsystem is still restoring or
+ *    importing, because their items would otherwise count as unknown.
+ *
  * Autosave (Docs/ADR/0010-edit-rules-autosave-scene-v2.md §3): while the stage has unsaved changes, a looping timer writes it
  * every AutosaveIntervalSeconds to Saved/StageCraft/Scenes/Autosave/<scene name>.json ("(Untitled)" for a stage never saved),
  * on a background task, only when something changed since the last autosave. The timer runs only while the session is dirty
@@ -70,6 +77,9 @@ public:
 	FString GetScenesDirectory() const;
 
 	bool IsBusy() const { return bOperationInFlight; }
+
+	/** Items of the loaded scene that are not on the stage but are kept for the next save (see the class comment). */
+	int32 GetUnplacedItemCount() const { return UnplacedItems.Num(); }
 
 	/**
 	 * Starts opening the autosave Name (from GetAutosaveNames) in place of the current stage, like LoadScene. The stage keeps
@@ -124,10 +134,13 @@ private:
 	};
 
 	FStageSceneDocument CaptureStage(const FString& Name) const;
-	void FinishSave(EStageSceneResult Result, const FString& Name, int32 ItemCount, uint64 EditSerialAtCapture);
+	void FinishSave(EStageSceneResult Result, const FString& Name, int32 ItemCount, uint64 EditSerialAtCapture, bool bBackedUp);
 	EStageSceneResult StartLoad(ELoadSource Source, const FString& Name);
 	void FinishLoad(EStageSceneResult Result, const FStageSceneDocument& Document, const struct FStageSceneParseReport& Report, ELoadSource Source);
 	FStageSceneOperationResult ApplyDocument(const FStageSceneDocument& Document, const struct FStageSceneParseReport& Report, ELoadSource Source);
+
+	/** "Loaded scene X: 3 items placed (1 not in the Library, 2 invalid settings repaired). ... marked unsaved." */
+	static FText MakePartialLoadMessage(const FString& SceneName, const FStageSceneOperationResult& Outcome, int32 Refused, int32 Unknown, int32 Damaged);
 	void Broadcast(const FStageSceneOperationResult& Result);
 	class UStageSessionSubsystem* GetSession() const;
 
@@ -156,6 +169,15 @@ private:
 	FString LastAutosaveName;
 
 	bool bAutosaveInFlight = false;
+
+	/**
+	 * Items of the loaded scene that could not be placed (unknown catalog entry, refused by the rules), kept so CaptureStage
+	 * writes them back. Plain snapshots: a soft item reference and serialized state, never a live object. Replaced by the next load.
+	 */
+	TArray<FStageItemSnapshot> UnplacedItems;
+
+	/** The scene whose load dropped damaged entries; the next save under this name backs its file up first. Empty otherwise. */
+	FString SceneWithDroppedEntries;
 
 	/** Saved/StageCraft/Scenes/Autosave. Immutable and shared with background tasks, like Store. */
 	TSharedPtr<const class FStageSceneStore, ESPMode::ThreadSafe> AutosaveStore;

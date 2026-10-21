@@ -16,9 +16,9 @@
 #include "HAL/IConsoleManager.h"
 #include "HAL/PlatformTime.h"
 #include "ImageCore.h"
+#include "IO/StageAtomicFile.h"
 #include "ImageUtils.h"
 #include "Kismet/KismetRenderingLibrary.h"
-#include "Misc/FileHelper.h"
 #include "Misc/Paths.h"
 #include "Modules/ModuleManager.h"
 #include "ModularSceneBuilder.h"
@@ -71,22 +71,6 @@ namespace StageRenderSubsystem
 	{
 		const IConsoleVariable* Variable = IConsoleManager::Get().FindConsoleVariable(Name);
 		return Variable ? Variable->GetInt() : Fallback;
-	}
-
-	/** Writes Bytes to Path through a temporary file, so a crash never leaves a truncated image behind. Any thread. */
-	bool WriteFileAtomic(const FString& Path, TConstArrayView64<uint8> Bytes)
-	{
-		const FString TempPath = Path + TEXT(".tmp");
-		if (!FFileHelper::SaveArrayToFile(Bytes, *TempPath))
-		{
-			return false;
-		}
-		if (!IFileManager::Get().Move(*Path, *TempPath, /*bReplace*/ false, /*bEvenIfReadOnly*/ false, /*bAttributes*/ false, /*bDoNotRetryOrError*/ true))
-		{
-			IFileManager::Get().Delete(*TempPath, false, false, true);
-			return false;
-		}
-		return true;
 	}
 
 	/** Path in Directory for FileName that does not exist yet ("..._2.png", "..._3.png" when needed). */
@@ -594,7 +578,7 @@ void UStageRenderSubsystem::BeginEncode()
 		{
 			IFileManager::Get().MakeDirectory(*Directory, /*Tree*/ true);
 			FilePath = StageRenderSubsystem::MakeUniquePath(Directory, FileName);
-			bSucceeded = StageRenderSubsystem::WriteFileAtomic(FilePath, Png);
+			bSucceeded = StageAtomicFile::WriteBytes(FilePath, Png, EStageFileWrite::KeepExisting);
 			if (!bSucceeded)
 			{
 				Error = FText::Format(LOCTEXT("WriteFailed", "The image could not be written to {0}."), FText::FromString(Directory));

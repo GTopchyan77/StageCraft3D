@@ -16,7 +16,9 @@
 #include "Engine/GameInstance.h"
 #include "Engine/World.h"
 #include "History/StageEditHistorySubsystem.h"
+#include "Engine/LocalPlayer.h"
 #include "Import/StageMeshImportSubsystem.h"
+#include "Input/StageInputPreferencesSubsystem.h"
 #include "Misc/Paths.h"
 #include "Placement/StagePlacementToolComponent.h"
 #include "Player/ModularPlayerController.h"
@@ -36,33 +38,94 @@
 
 namespace StageStatusBar
 {
-	FText MakeHint(EStageEditMode Mode, const FText& ArmedItemName, int32 SelectedCount)
+	namespace
 	{
+		/** "Esc or P", either one alone, or empty when neither is bound. */
+		FText EitherKey(const FText& First, const FText& Second)
+		{
+			if (First.IsEmpty() || Second.IsEmpty())
+			{
+				return First.IsEmpty() ? Second : First;
+			}
+			return FText::Format(LOCTEXT("EitherKey", "{0} or {1}"), First, Second);
+		}
+
+		/** Joins the parts that are not empty with the hint separator; a part whose key is unbound is left out by its caller. */
+		FText JoinParts(TConstArrayView<FText> Parts)
+		{
+			TArray<FText> Present;
+			for (const FText& Part : Parts)
+			{
+				if (!Part.IsEmpty())
+				{
+					Present.Add(Part);
+				}
+			}
+			return FText::Join(FText::FromString(TEXT("   ·   ")), Present);
+		}
+
+		/** "Keys: action", or empty when Keys is (the command is unbound). */
+		FText KeyPart(const FText& Keys, const FText& Action)
+		{
+			return Keys.IsEmpty() ? FText::GetEmpty() : FText::Format(LOCTEXT("KeyPart", "{0}: {1}"), Keys, Action);
+		}
+	}
+
+	FHintKeys FHintKeys::FromBindings(const FStageKeyBindings& Bindings)
+	{
+		// Only the primary chord, to keep the hint short; the menus and the Preferences panel show both.
+		const auto Primary = [&Bindings](EStageInputCommand Command)
+		{
+			const FText Main = Bindings.Get(Command, EStageKeySlot::Primary).ToText();
+			return Main.IsEmpty() ? Bindings.Get(Command, EStageKeySlot::Secondary).ToText() : Main;
+		};
+		FHintKeys Keys;
+		Keys.Cancel = Primary(EStageInputCommand::Cancel);
+		Keys.TogglePlace = Primary(EStageInputCommand::TogglePlaceMode);
+		Keys.CycleTool = Primary(EStageInputCommand::CycleTransformTool);
+		Keys.Delete = Primary(EStageInputCommand::DeleteSelection);
+		Keys.FinishPath = Primary(EStageInputCommand::FinishPath);
+		Keys.RemovePoint = Primary(EStageInputCommand::RemovePathPoint);
+		Keys.Fly = StageKeyBindings::DescribeFlyKeys(Bindings);
+		return Keys;
+	}
+
+	FText MakeHint(EStageEditMode Mode, const FText& ArmedItemName, int32 SelectedCount, const FHintKeys& Keys)
+	{
+		const FText LeavePlace = EitherKey(Keys.Cancel, Keys.TogglePlace);
 		if (Mode == EStageEditMode::Place)
 		{
 			return ArmedItemName.IsEmpty()
-				? LOCTEXT("PlaceNoItem", "Pick an item in the Library to place it   ·   Esc or P: back to Select")
-				: FText::Format(LOCTEXT("PlaceItem", "Placing {0}: each click places a copy   ·   Esc or P: finish"), ArmedItemName);
+				? JoinParts({ LOCTEXT("PlaceNoItem", "Pick an item in the Library to place it"), KeyPart(LeavePlace, LOCTEXT("BackToSelect", "back to Select")) })
+				: JoinParts({ FText::Format(LOCTEXT("PlaceItem", "Placing {0}: each click places a copy"), ArmedItemName), KeyPart(LeavePlace, LOCTEXT("Finish", "finish")) });
 		}
 		if (SelectedCount > 1)
 		{
-			return FText::Format(LOCTEXT("SelectGroup", "{0} items selected: the gizmo moves them together   ·   Delete: remove all   ·   Ctrl+Click: add / remove"),
-				FText::AsNumber(SelectedCount));
+			return JoinParts({ FText::Format(LOCTEXT("SelectGroup", "{0} items selected: the gizmo moves them together"), FText::AsNumber(SelectedCount)),
+				KeyPart(Keys.Delete, LOCTEXT("RemoveAll", "remove all")), LOCTEXT("CtrlClickToggle", "Ctrl+Click: add / remove") });
 		}
-		return ArmedItemName.IsEmpty()
-			? LOCTEXT("SelectNoItem", "Click an item to select it   ·   Ctrl+Click: select several   ·   Space: Move / Rotate / Scale   ·   Right mouse + WASD: fly")
-			: FText::Format(LOCTEXT("SelectItem", "Click an item to select it   ·   Ctrl+Click: select several   ·   Space: Move / Rotate / Scale   ·   P: place {0}"), ArmedItemName);
+		const FText Tools = KeyPart(Keys.CycleTool, LOCTEXT("CycleTools", "Move / Rotate / Scale"));
+		if (ArmedItemName.IsEmpty())
+		{
+			const FText Fly = Keys.Fly.IsEmpty() ? LOCTEXT("LookAround", "Right mouse: look around") : FText::Format(LOCTEXT("Fly", "Right mouse + {0}: fly"), Keys.Fly);
+			return JoinParts({ LOCTEXT("ClickSelect", "Click an item to select it"), LOCTEXT("CtrlClickSeveral", "Ctrl+Click: select several"), Tools, Fly });
+		}
+		return JoinParts({ LOCTEXT("ClickSelect", "Click an item to select it"), LOCTEXT("CtrlClickSeveral", "Ctrl+Click: select several"), Tools,
+			KeyPart(Keys.TogglePlace, FText::Format(LOCTEXT("PlaceArmed", "place {0}"), ArmedItemName)) });
 	}
 
-	FText MakeSpanHint(const FStageSpanToolStatus& Status)
+	FText MakeSpanHint(const FStageSpanToolStatus& Status, const FHintKeys& Keys)
 	{
 		if (Status.Phase == EStageSpanToolPhase::PickStart)
 		{
-			return FText::Format(LOCTEXT("SpanStart", "Drawing {0}: click where the path starts   ·   Esc or P: finish"), Status.ItemName);
+			return JoinParts({ FText::Format(LOCTEXT("SpanStart", "Drawing {0}: click where the path starts"), Status.ItemName),
+				KeyPart(EitherKey(Keys.Cancel, Keys.TogglePlace), LOCTEXT("Finish", "finish")) });
 		}
+		const FText RemovePoint = KeyPart(Keys.RemovePoint, LOCTEXT("RemoveLastPoint", "remove last point"));
+		const FText DropPath = KeyPart(Keys.Cancel, LOCTEXT("DropPath", "drop the path"));
 		if (!Status.bHasRun)
 		{
-			return FText::Format(LOCTEXT("SpanEndNoRun", "Drawing {0}: click the next point   ·   Backspace: remove last point   ·   Esc: drop the path"), Status.ItemName);
+			return JoinParts({ FText::Format(LOCTEXT("SpanEndNoRun", "Drawing {0}: click the next point"), Status.ItemName), RemovePoint, DropPath });
 		}
 
 		FNumberFormattingOptions TwoDecimals;
@@ -75,20 +138,29 @@ namespace StageStatusBar
 		// Checked before bRefused: a loop that cannot close also shows a refused ghost, but the limits are not the reason.
 		if (Status.bCloseBlocked)
 		{
-			return FText::Format(LOCTEXT("SpanCloseBlocked", "{0}: the loop does not close in whole sections   ·   adjust a side, or press Enter to place it open"), Status.ItemName);
+			return Keys.FinishPath.IsEmpty()
+				? FText::Format(LOCTEXT("SpanCloseBlockedNoKey", "{0}: the loop does not close in whole sections   ·   adjust a side"), Status.ItemName)
+				: FText::Format(LOCTEXT("SpanCloseBlocked", "{0}: the loop does not close in whole sections   ·   adjust a side, or press {1} to place it open"), Status.ItemName, Keys.FinishPath);
 		}
 		if (Status.bRefused)
 		{
-			return FText::Format(LOCTEXT("SpanRefused", "{0}: {1}, not allowed by this stage's limits   ·   Backspace: remove last point   ·   Esc: drop the path"), Status.ItemName, Shape);
+			return JoinParts({ FText::Format(LOCTEXT("SpanRefused", "{0}: {1}, not allowed by this stage's limits"), Status.ItemName, Shape), RemovePoint, DropPath });
 		}
 		if (Status.bClosing)
 		{
 			return FText::Format(LOCTEXT("SpanClosing", "{0}: {1}   ·   click to close the loop and place it"), Status.ItemName, Shape);
 		}
-		// Enter needs a placed point beyond the start; the leg under the cursor only becomes one with the next click.
-		return Status.PointCount >= 2
-			? FText::Format(LOCTEXT("SpanEnd", "{0}: {1}   ·   click: add point   ·   Enter or double-click: place   ·   Backspace: undo point   ·   Esc: drop"), Status.ItemName, Shape)
-			: FText::Format(LOCTEXT("SpanSecond", "{0}: {1}   ·   click: add point (double-click: place this run)   ·   Esc: drop"), Status.ItemName, Shape);
+		// The finish key needs a placed point beyond the start; the leg under the cursor only becomes one with the next click.
+		const FText Head = FText::Format(LOCTEXT("SpanRunHead", "{0}: {1}"), Status.ItemName, Shape);
+		const FText Drop = KeyPart(Keys.Cancel, LOCTEXT("Drop", "drop"));
+		if (Status.PointCount >= 2)
+		{
+			const FText Place = Keys.FinishPath.IsEmpty()
+				? LOCTEXT("DoubleClickPlace", "double-click: place")
+				: FText::Format(LOCTEXT("FinishOrDoubleClick", "{0} or double-click: place"), Keys.FinishPath);
+			return JoinParts({ Head, LOCTEXT("ClickAddPoint", "click: add point"), Place, KeyPart(Keys.RemovePoint, LOCTEXT("UndoPoint", "undo point")), Drop });
+		}
+		return JoinParts({ Head, LOCTEXT("ClickAddPointRun", "click: add point (double-click: place this run)"), Drop });
 	}
 }
 
@@ -257,6 +329,13 @@ void UStageStatusBarWidget::BindSources()
 		ImportSubsystem->OnImportStarted.AddUniqueDynamic(this, &ThisClass::HandleModelImportStarted);
 		ImportSubsystem->OnImportFinished.AddUniqueDynamic(this, &ThisClass::HandleModelImportFinished);
 	}
+
+	// The hints name the user's keys.
+	if (UStageInputPreferencesSubsystem* Preferences = ULocalPlayer::GetSubsystem<UStageInputPreferencesSubsystem>(GetOwningLocalPlayer()))
+	{
+		InputPreferences = Preferences;
+		Preferences->OnInputPreferencesChanged.AddUniqueDynamic(this, &ThisClass::HandleInputPreferencesChanged);
+	}
 }
 
 void UStageStatusBarWidget::UnbindSources()
@@ -313,6 +392,11 @@ void UStageStatusBarWidget::UnbindSources()
 		ImportSubsystem->OnImportStarted.RemoveDynamic(this, &ThisClass::HandleModelImportStarted);
 		ImportSubsystem->OnImportFinished.RemoveDynamic(this, &ThisClass::HandleModelImportFinished);
 	}
+	if (UStageInputPreferencesSubsystem* Preferences = InputPreferences.Get())
+	{
+		Preferences->OnInputPreferencesChanged.RemoveDynamic(this, &ThisClass::HandleInputPreferencesChanged);
+	}
+	InputPreferences.Reset();
 	BindCameraPawn(nullptr);
 
 	Controller.Reset();
@@ -368,13 +452,20 @@ void UStageStatusBarWidget::RefreshMode()
 	{
 		const USelectionComponent* SelectionComponent = Selection.Get();
 		const UStageSpanToolComponent* Span = SpanTool.Get();
+		const UStageInputPreferencesSubsystem* Preferences = InputPreferences.Get();
+		const StageStatusBar::FHintKeys Keys = Preferences ? StageStatusBar::FHintKeys::FromBindings(Preferences->GetKeyBindings()) : StageStatusBar::FHintKeys::Defaults();
 		HintText->SetText(Span && Span->IsToolActive()
-			? StageStatusBar::MakeSpanHint(Span->GetStatus())
-			: StageStatusBar::MakeHint(Mode, ArmedName, SelectionComponent ? SelectionComponent->GetSelectionCount() : 0));
+			? StageStatusBar::MakeSpanHint(Span->GetStatus(), Keys)
+			: StageStatusBar::MakeHint(Mode, ArmedName, SelectionComponent ? SelectionComponent->GetSelectionCount() : 0, Keys));
 	}
 }
 
 void UStageStatusBarWidget::HandleSpanStatusChanged(const FStageSpanToolStatus& Status)
+{
+	RefreshMode();
+}
+
+void UStageStatusBarWidget::HandleInputPreferencesChanged()
 {
 	RefreshMode();
 }
