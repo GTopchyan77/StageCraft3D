@@ -50,6 +50,13 @@ namespace StageProductionReportTests
 		return Node;
 	}
 
+	/** A plan with no rigged fixtures and the default cabling rules, for the tests that are about power and DMX. */
+	FStageCableSchedule BuildPlan(TArray<FStagePowerLoad> Loads, TArray<FStageDmxNode> Nodes, const FStagePowerDistribution& Supply, const FString& SceneName,
+		const FDateTime& GeneratedAt, const FStageCablingRules& Cabling = FStageCablingRules())
+	{
+		return StageCableSchedule::Build(MoveTemp(Loads), MoveTemp(Nodes), {}, Supply, Cabling, SceneName, GeneratedAt);
+	}
+
 	/** Circuit number of the load called Label, or 0 when it is not in the plan. */
 	int32 FindCircuitOf(const FStageCableSchedule& Schedule, const FString& Label)
 	{
@@ -99,7 +106,7 @@ bool FStageCableSchedulePowerTest::RunTest(const FString& Parameters)
 		{
 			Loads.Add(MakeLoad(*FString::Printf(TEXT("Load %d"), Index), 1000.0));
 		}
-		const FStageCableSchedule Plan = StageCableSchedule::Build(Loads, {}, FStagePowerDistribution(), TEXT("Arena"), When);
+		const FStageCableSchedule Plan = BuildPlan(Loads, {}, FStagePowerDistribution(), TEXT("Arena"), When);
 		TestEqual(TEXT("Balanced: three circuits"), Plan.Circuits.Num(), 3);
 		TestEqual(TEXT("Balanced: three phases"), Plan.Phases.Num(), 3);
 		for (const FStagePowerPhase& Phase : Plan.Phases)
@@ -112,7 +119,7 @@ bool FStageCableSchedulePowerTest::RunTest(const FString& Parameters)
 		TestEqual(TEXT("Balanced: loads 1 and 4 share circuit 1"), FindCircuitOf(Plan, TEXT("Load 4")), FindCircuitOf(Plan, TEXT("Load 1")));
 		TestEqual(TEXT("Balanced: one power cable per load"), Plan.PowerCables.Num(), 6);
 		TestEqual(TEXT("Balanced: first cable id"), Plan.PowerCables[0].CableId, FString(TEXT("P-001")));
-		TestEqual(TEXT("Balanced: cable starts at its circuit"), Plan.PowerCables[0].From, FString(TEXT("Distro C01 / L1")));
+		TestEqual(TEXT("Balanced: cable starts at its circuit"), Plan.PowerCables[0].From, FString(TEXT("PD1 C01 / L1")));
 		TestTrue(TEXT("Balanced: no warnings"), StageCableSchedule::GetWarnings(Plan).IsEmpty());
 	}
 
@@ -120,7 +127,7 @@ bool FStageCableSchedulePowerTest::RunTest(const FString& Parameters)
 	{
 		FStagePowerDistribution Single;
 		Single.PhaseCount = 1;
-		const FStageCableSchedule Plan = StageCableSchedule::Build({ MakeLoad(TEXT("A"), 1400.0), MakeLoad(TEXT("B"), 1400.0), MakeLoad(TEXT("C"), 1400.0),
+		const FStageCableSchedule Plan = BuildPlan({ MakeLoad(TEXT("A"), 1400.0), MakeLoad(TEXT("B"), 1400.0), MakeLoad(TEXT("C"), 1400.0),
 			MakeLoad(TEXT("D"), 1400.0), MakeLoad(TEXT("E"), 1400.0) }, {}, Single, TEXT("Club"), When);
 		TestEqual(TEXT("Packing: one phase"), Plan.Phases.Num(), 1);
 		TestEqual(TEXT("Packing: three circuits for five loads"), Plan.Circuits.Num(), 3);
@@ -133,7 +140,7 @@ bool FStageCableSchedulePowerTest::RunTest(const FString& Parameters)
 
 	// A load exactly at the usable share fits; one above it gets its own circuit, flagged, never split.
 	{
-		const FStageCableSchedule Plan = StageCableSchedule::Build({ MakeLoad(TEXT("LED wall"), 5000.0), MakeLoad(TEXT("Exact"), 2944.0), MakeLoad(TEXT("Small"), 100.0) },
+		const FStageCableSchedule Plan = BuildPlan({ MakeLoad(TEXT("LED wall"), 5000.0), MakeLoad(TEXT("Exact"), 2944.0), MakeLoad(TEXT("Small"), 100.0) },
 			{}, FStagePowerDistribution(), TEXT("Arena"), When);
 		TestEqual(TEXT("Overload: one overloaded circuit"), Plan.OverloadedCircuits, 1);
 		TestTrue(TEXT("Overload: the largest load is first, alone and flagged"), Plan.Circuits[0].bOverloaded && Plan.Circuits[0].Loads.Num() == 1 && Plan.Loads[0].Load.Label == TEXT("LED wall"));
@@ -146,7 +153,7 @@ bool FStageCableSchedulePowerTest::RunTest(const FString& Parameters)
 
 	// Bad data: NaN and zero loads draw nothing; a lighting fixture without power data is counted.
 	{
-		const FStageCableSchedule Plan = StageCableSchedule::Build({ MakeLoad(TEXT("NaN"), std::numeric_limits<double>::quiet_NaN()), MakeLoad(TEXT("Truss"), 0.0),
+		const FStageCableSchedule Plan = BuildPlan({ MakeLoad(TEXT("NaN"), std::numeric_limits<double>::quiet_NaN()), MakeLoad(TEXT("Truss"), 0.0),
 			MakeLoad(TEXT("Dark spot"), 0.0, 7), MakeLoad(TEXT("Negative"), -50.0), MakeLoad(TEXT("Real"), 500.0) }, {}, FStagePowerDistribution(), TEXT("Arena"), When);
 		TestEqual(TEXT("Bad data: one real load"), Plan.Loads.Num(), 1);
 		TestEqual(TEXT("Bad data: the fixture without power data is counted"), Plan.FixturesWithoutPowerData, 1);
@@ -157,10 +164,10 @@ bool FStageCableSchedulePowerTest::RunTest(const FString& Parameters)
 	{
 		TArray<FStagePowerLoad> Loads = { MakeLoad(TEXT("Spot 10"), 700.0, 10), MakeLoad(TEXT("Spot 2"), 700.0, 2), MakeLoad(TEXT("Amp"), 1800.0),
 			MakeLoad(TEXT("Wash"), 450.0, 3), MakeLoad(TEXT("Hazer"), 1200.0), MakeLoad(TEXT("Spot 1"), 700.0, 1) };
-		const FStageCableSchedule First = StageCableSchedule::Build(Loads, {}, FStagePowerDistribution(), TEXT("Arena"), When);
+		const FStageCableSchedule First = BuildPlan(Loads, {}, FStagePowerDistribution(), TEXT("Arena"), When);
 		Algo::Reverse(Loads);
 		Swap(Loads[0], Loads[3]);
-		const FStageCableSchedule Second = StageCableSchedule::Build(Loads, {}, FStagePowerDistribution(), TEXT("Arena"), When);
+		const FStageCableSchedule Second = BuildPlan(Loads, {}, FStagePowerDistribution(), TEXT("Arena"), When);
 		bool bSame = First.Loads.Num() == Second.Loads.Num();
 		for (int32 Index = 0; bSame && Index < First.Loads.Num(); ++Index)
 		{
@@ -181,15 +188,12 @@ bool FStageCableScheduleDmxTest::RunTest(const FString& Parameters)
 {
 	using namespace StageProductionReportTests;
 
-	TestEqual(TEXT("Stock: 0 m takes the shortest cable"), StageCableSchedule::GetStockLength(0.0), 1.0);
-	TestEqual(TEXT("Stock: exactly 1 m"), StageCableSchedule::GetStockLength(1.0), 1.0);
-	TestEqual(TEXT("Stock: just over 1 m"), StageCableSchedule::GetStockLength(1.01), 2.0);
-	TestEqual(TEXT("Stock: 6 m takes 10 m"), StageCableSchedule::GetStockLength(6.0), 10.0);
-	TestEqual(TEXT("Stock: exactly 50 m"), StageCableSchedule::GetStockLength(50.0), 50.0);
-	TestEqual(TEXT("Stock: over 50 m does not exist"), StageCableSchedule::GetStockLength(50.5), -1.0);
-	TestEqual(TEXT("Stock: NaN does not exist"), StageCableSchedule::GetStockLength(std::numeric_limits<double>::quiet_NaN()), -1.0);
+	// The control node at the origin, so every length below can be worked out by hand.
+	FStageCablingRules Cabling;
+	Cabling.ControlAnchor = EStageCableAnchor::Fixed;
+	Cabling.ControlLocationMeters = FVector::ZeroVector;
 
-	const FStageCableSchedule Plan = StageCableSchedule::Build({}, {
+	const FStageCableSchedule Plan = BuildPlan({}, {
 		MakeNode(3, TEXT("Spot C"), 1, 33, FVector(3.0, 4.0, 0.0)),
 		MakeNode(1, TEXT("Spot A"), 1, 1, FVector::ZeroVector),
 		MakeNode(2, TEXT("Spot B"), 1, 17, FVector(3.0, 4.0, 0.0)),
@@ -197,7 +201,7 @@ bool FStageCableScheduleDmxTest::RunTest(const FString& Parameters)
 		MakeNode(5, TEXT("Far"), 2, 17, FVector(160.0, 0.0, 0.0)),
 		MakeNode(6, TEXT("Unpatched"), 0, 0, FVector::ZeroVector),
 		MakeNode(7, TEXT("Beyond 512"), 1, 600, FVector(std::numeric_limits<double>::infinity(), 0.0, 0.0)),
-	}, FStagePowerDistribution(), TEXT("Arena"), When);
+	}, FStagePowerDistribution(), TEXT("Arena"), When, Cabling);
 
 	TestEqual(TEXT("Two unpatched fixtures are counted, not chained"), Plan.UnpatchedFixtures, 2);
 	if (!TestEqual(TEXT("Five links"), Plan.DmxCables.Num(), 5))
@@ -208,28 +212,36 @@ bool FStageCableScheduleDmxTest::RunTest(const FString& Parameters)
 
 	const FStageCableRun& First = Plan.DmxCables[0];
 	TestEqual(TEXT("First link id"), First.CableId, FString(TEXT("D1-01")));
-	TestEqual(TEXT("First link starts at the source"), First.From, FString(TEXT("DMX source U1")));
+	TestEqual(TEXT("First link starts at the control node"), First.From, FString(TEXT("DMX node out U1")));
 	TestEqual(TEXT("First link goes to address 1, named by fixture ID and label"), First.To, FString(TEXT("#1 Spot A")));
-	TestTrue(TEXT("Source distance is unknown, length decided on site"), First.DistanceMeters < 0.0 && First.StockLengthMeters == 0.0);
+	TestTrue(TEXT("Node at the fixture: the shortest stock cable"), First.DistanceMeters == 0.0 && First.Cable.Count == 1 && First.Cable.StockMeters == 2.0);
 
 	const FStageCableRun& Second = Plan.DmxCables[1];
 	TestEqual(TEXT("Chain in address order"), Second.From + TEXT(">") + Second.To, FString(TEXT("#1 Spot A>#2 Spot B")));
-	TestEqual(TEXT("Distance 5 m"), Second.DistanceMeters, 5.0, 1e-9);
-	TestEqual(TEXT("5 m + 20 % = 6 m takes a 10 m cable"), Second.StockLengthMeters, 10.0);
+	TestEqual(TEXT("Route 5 m"), Second.DistanceMeters, 5.0, 1e-9);
+	TestEqual(TEXT("5 m + 10 % = 5.5 m takes a 10 m cable"), StageShoppingList::FormatAssembly(Second.Cable), FString(TEXT("10 m")));
 	TestFalse(TEXT("Not the end of the universe"), Second.bTerminate);
 
 	const FStageCableRun& Third = Plan.DmxCables[2];
-	TestEqual(TEXT("Same position: shortest cable"), Third.StockLengthMeters, 1.0);
+	TestEqual(TEXT("Same position: shortest cable"), StageShoppingList::FormatAssembly(Third.Cable), FString(TEXT("2 m")));
 	TestTrue(TEXT("Last of universe 1 is terminated"), Third.bTerminate && Third.To == TEXT("#3 Spot C") && Third.ToAddress == 33);
 
-	TestEqual(TEXT("Universe 2 restarts numbering"), Plan.DmxCables[3].CableId, FString(TEXT("D2-01")));
-	TestEqual(TEXT("A fixture without a label reads its ID"), Plan.DmxCables[3].To, FString(TEXT("#4")));
-	TestTrue(TEXT("60 m link is too long for one cable"), Plan.DmxCables[4].StockLengthMeters < 0.0 && Plan.OverlongDmxLinks == 1);
+	const FStageCableRun& Fourth = Plan.DmxCables[3];
+	TestEqual(TEXT("Universe 2 restarts numbering"), Fourth.CableId, FString(TEXT("D2-01")));
+	TestEqual(TEXT("A fixture without a label reads its ID"), Fourth.To, FString(TEXT("#4")));
+	TestEqual(TEXT("100 m + 10 % from the node: five 20 m cables and a 10 m"), StageShoppingList::FormatAssembly(Fourth.Cable), FString(TEXT("5 x 20 m + 10 m")));
+	TestEqual(TEXT("60 m + 10 %: three 20 m cables and a 10 m"), StageShoppingList::FormatAssembly(Plan.DmxCables[4].Cable), FString(TEXT("3 x 20 m + 10 m")));
 	TestTrue(TEXT("Last of universe 2 is terminated"), Plan.DmxCables[4].bTerminate);
+	TestEqual(TEXT("Two joined runs"), Plan.Shopping.JoinedRuns, 2);
 
 	const TArray<FString> Warnings = StageCableSchedule::GetWarnings(Plan);
-	TestTrue(TEXT("Warns about the long link"), Warnings.ContainsByPredicate([](const FString& Warning) { return Warning.Contains(TEXT("opto-splitter")); }));
 	TestTrue(TEXT("Warns about unpatched fixtures"), Warnings.ContainsByPredicate([](const FString& Warning) { return Warning.Contains(TEXT("2 lighting fixtures are unpatched")); }));
+
+	// Automatic: the node stands at the centre of the patched fixtures, on the floor.
+	const FStageCableSchedule Automatic = BuildPlan({}, { MakeNode(1, TEXT("A"), 1, 1, FVector(0.0, 0.0, 6.0)), MakeNode(2, TEXT("B"), 1, 17, FVector(10.0, 4.0, 6.0)) },
+		FStagePowerDistribution(), TEXT("Arena"), When);
+	TestTrue(TEXT("Automatic node position"), Automatic.ControlLocationMeters.Equals(FVector(5.0, 2.0, 0.0), 1e-9));
+	TestEqual(TEXT("Node to the first fixture: 5.4 m across + 6 m up"), Automatic.DmxCables[0].DistanceMeters, FMath::Sqrt(29.0) + 6.0, 1e-9);
 	return true;
 }
 
@@ -249,18 +261,20 @@ bool FStageCableScheduleExportTest::RunTest(const FString& Parameters)
 	{
 		Nodes.Add(MakeNode(Index, *FString::Printf(TEXT("Spot %d"), Index), 1 + (Index - 1) / 32, 1 + ((Index - 1) % 32) * 16, FVector(Index, 0.0, 6.0)));
 	}
-	const FStageCableSchedule Plan = StageCableSchedule::Build(Loads, Nodes, FStagePowerDistribution(), TEXT("Arena Tour"), When);
+	const FStageCableSchedule Plan = BuildPlan(Loads, Nodes, FStagePowerDistribution(), TEXT("Arena Tour"), When);
 	TestEqual(TEXT("All loads planned"), Plan.Loads.Num(), 92);
 	TestEqual(TEXT("Three universes"), Plan.Universes.Num(), 3);
 	TestTrue(TEXT("90 fixtures on 3 phases stay within 15 % imbalance"), Plan.ImbalancePercent <= StageCableSchedule::ImbalanceWarningPercent);
 
 	const FString Csv = StageCableSchedule::ToCsv(Plan);
 	TestTrue(TEXT("CSV: byte order mark"), Csv.StartsWith(TEXT("﻿")));
-	TestTrue(TEXT("CSV: title"), Csv.Contains(TEXT("StageCraft 3D Cable Schedule and Power Plan (generated proposal)\r\n")));
+	TestTrue(TEXT("CSV: title (quoted: it contains a comma)"), Csv.Contains(TEXT("\"StageCraft 3D Cable Schedule, Power Plan and Shopping List (generated proposal)\"\r\n")));
 	TestTrue(TEXT("CSV: supply line (quoted: it contains a comma)"), Csv.Contains(TEXT("Supply,\"3-phase 230 V")));
 	TestTrue(TEXT("CSV: phase header"), Csv.Contains(TEXT("\r\nPhase,Circuits,Load (W),Current (A),Share of load (%)\r\n")));
-	TestTrue(TEXT("CSV: circuit header"), Csv.Contains(TEXT("\r\nCircuit,Phase,Loads,Load (W),Current (A),Use of rating (%),Note\r\n")));
-	TestTrue(TEXT("CSV: DMX header"), Csv.Contains(TEXT("\r\nCable,Universe,From,To,Start address,Distance (m),Stock length,Note\r\n")));
+	TestTrue(TEXT("CSV: circuit header"), Csv.Contains(TEXT("\r\nCircuit,Distro,Phase,Loads,Load (W),Current (A),Use of rating (%),Note\r\n")));
+	TestTrue(TEXT("CSV: shopping list header"), Csv.Contains(TEXT("\r\nSection,Item,Size,Quantity,Note\r\n")));
+	TestTrue(TEXT("CSV: one DMX terminator per universe"), Csv.Contains(TEXT("\r\nDMX,DMX terminator,\"XLR 5-pin, 120 ohm\",3,")));
+	TestTrue(TEXT("CSV: DMX header"), Csv.Contains(TEXT("\r\nCable,Universe,From,To,Start address,Route (m),Cables,Note\r\n")));
 	TestTrue(TEXT("CSV: a formula label is defused and quoted"), Csv.Contains(TEXT(",\"'=HYPERLINK(\"\"x\"\")\",")));
 	TestTrue(TEXT("CSV: a comma in a label is quoted"), Csv.Contains(TEXT("\"Amp, rack 2\"")));
 	TestTrue(TEXT("CSV: one power cable row per load"), Csv.Contains(TEXT("\r\nP-092,")) && !Csv.Contains(TEXT("\r\nP-093,")));
@@ -273,10 +287,11 @@ bool FStageCableScheduleExportTest::RunTest(const FString& Parameters)
 	TestTrue(TEXT("PDF: several pages for 92 loads and 90 links"), Pages >= 4);
 	TestTrue(TEXT("PDF: footer on the last page"), Text.Contains(FString::Printf(TEXT("(Page %d of %d) Tj"), Pages, Pages)));
 	TestEqual(TEXT("PDF: title on every page"), CountOccurrences(Text, TEXT("(CABLE SCHEDULE & POWER) Tj")), Pages);
-	TestTrue(TEXT("PDF: sections"), Text.Contains(TEXT("(Phase loads) Tj")) && Text.Contains(TEXT("(Circuits) Tj")) && Text.Contains(TEXT("(DMX cables")));
+	TestTrue(TEXT("PDF: sections"), Text.Contains(TEXT("(Shopping & assembly list) Tj")) && Text.Contains(TEXT("(Phase loads) Tj")) && Text.Contains(TEXT("(Distros) Tj"))
+		&& Text.Contains(TEXT("(Circuits) Tj")) && Text.Contains(TEXT("(DMX cables")));
 
 	// Nothing to plan still prints a valid page.
-	const TArray<uint8> Empty = StageCableSchedule::ToPdf(StageCableSchedule::Build({}, {}, FStagePowerDistribution(), FString(), When));
+	const TArray<uint8> Empty = StageCableSchedule::ToPdf(BuildPlan({}, {}, FStagePowerDistribution(), FString(), When));
 	TestTrue(TEXT("Empty PDF: structure"), VerifyPdfStructure(*this, Empty, TEXT("Empty cable schedule PDF")));
 	TestTrue(TEXT("Empty PDF: says so"), BytesToLatin1(Empty).Contains(TEXT("(No equipment on the stage draws power.) Tj")));
 

@@ -351,3 +351,13 @@ See `STATE.md` for detailed history of completed work.
 - [ ] Manual verification (Gevor): Preferences panel by mouse (click a shortcut, press keys, CLEAR, RESET, RESET ALL, refusal messages, look speed/invert while flying); Edit menu labels after a rebind; real keyboard Ctrl+Z/Ctrl+Shift+Z; File > Open of a scene with a missing imported model
 - [ ] Unplaced items: show them somewhere (Outliner group) and allow discarding them; Clear Stage keeps them today
 - [ ] Mouse buttons are not remappable (viewport capture depends on them)
+
+## Phase 18 — Shopping & cable assembly list (requested by Gevor 2026-10-21; STATE.md #41, ADR 0014)
+- [x] Pure model `StageShoppingList`: rules sanitizing, route = horizontal + vertical, stock assembly with safety margin (joined runs), rigging classification, clamps by weight, bonds by rating; tests
+- [x] Cable schedule: every power and DMX run measured from the distros / DMX node (automatic centre on the floor, or fixed in Project Settings); circuits assigned to distros by outputs and feed; the shopping list built with the plan
+- [x] `UStageCablingSettings` (Project Settings › StageCraft Cabling & Rigging): margin, stock lengths, cable names, positions, distro outputs/feed, rigging height, kg per clamp, bond ratings
+- [x] "Shopping & assembly list" and "Distros" sections in the cable schedule PDF and CSV; menu entry renamed
+- [x] Builds: Editor, Game Shipping (0 warnings); 71/71 automation; scripted export of "R38 Cues"
+- [ ] Manual verification (Gevor): File > Production > Export Cable Schedule, Power & Shopping List on a rigged stage; Project Settings page; quantities against a real rental pick list
+- [ ] Placeable distro / DMX node items to replace the automatic positions; per-distro placement near its loads
+- [ ] Not modelled yet: TRUE1 daisy-chains, truss/speaker rigging hardware, mains feed cables, spares

@@ -4,6 +4,7 @@
 
 #include "CoreMinimal.h"
 #include "Misc/DateTime.h"
+#include "Report/StageShoppingList.h"
 
 /**
  * The electrical supply a power plan is made for (Docs/ADR/0012-production-reports-and-fixture-benchmark.md §2.3). Configured in
@@ -34,6 +35,8 @@ struct FStagePowerLoad
 	int32 FixtureId = 0;
 	/** Maximum draw of the whole placement (unit power x quantity). A fixture with 0 W is reported as missing power data. */
 	double Watts = 0.0;
+	/** World position, metres: where its power cable runs to from the distros. */
+	FVector LocationMeters = FVector::ZeroVector;
 };
 
 /** One lighting fixture's DMX patch and position, for the DMX cable chains. */
@@ -65,6 +68,8 @@ struct FStagePowerCircuit
 	int32 Number = 0;
 	/** 1-based phase (L1..L3). */
 	int32 Phase = 1;
+	/** 1-based distro the circuit is an output of. */
+	int32 DistroNumber = 1;
 	/** Indices into FStageCableSchedule::Loads. */
 	TArray<int32> Loads;
 	double Watts = 0.0;
@@ -73,6 +78,16 @@ struct FStagePowerCircuit
 	double RatingShare = 0.0;
 	/** Holds one load larger than a circuit's usable share: needs a larger feed. */
 	bool bOverloaded = false;
+};
+
+/** One power distro: up to FStageCablingRules::DistroOutputs circuits, within its feed rating on every phase. */
+struct FStagePowerDistro
+{
+	/** 1-based. */
+	int32 Number = 0;
+	int32 CircuitCount = 0;
+	/** Current drawn on L1..L3 of the distro's feed. */
+	double PhaseAmps[3] = { 0.0, 0.0, 0.0 };
 };
 
 struct FStagePowerPhase
@@ -103,10 +118,10 @@ struct FStageCableRun
 	int32 Universe = 0;
 	/** DMX: the start address of the fixture the link goes to. */
 	int32 ToAddress = 0;
-	/** Straight-line distance between the two ends; negative when an end is not on the stage (distro, console). */
-	double DistanceMeters = -1.0;
-	/** The stock cable to take; 0 when it is decided on site, negative when the run is too long for one cable. */
-	double StockLengthMeters = 0.0;
+	/** The route between the two ends (StageShoppingList::GetRouteMeters), before the safety margin. */
+	double DistanceMeters = 0.0;
+	/** The stock cables the run is made of: the route plus the safety margin, rounded up to stock (StageShoppingList::AssembleRun). */
+	FStageCableAssembly Cable;
 	/** The last link of a DMX universe: the fixture's DMX out needs a terminator. */
 	bool bTerminate = false;
 };
@@ -118,14 +133,23 @@ struct FStageCableSchedule
 	FDateTime GeneratedAt;
 	/** Sanitized. */
 	FStagePowerDistribution Supply;
+	/** Sanitized. */
+	FStageCablingRules Cabling;
+	/** Where the distros and the DMX control node stand (resolved from Cabling), metres. */
+	FVector DistroLocationMeters = FVector::ZeroVector;
+	FVector ControlLocationMeters = FVector::ZeroVector;
 
 	/** In circuit order, largest load first within a circuit. */
 	TArray<FStagePlannedLoad> Loads;
 	TArray<FStagePowerCircuit> Circuits;
+	/** The distros the circuits are outputs of, in order; empty when nothing draws power. */
+	TArray<FStagePowerDistro> Distros;
 	/** One per phase of the supply, L1 first, including phases with no load. */
 	TArray<FStagePowerPhase> Phases;
 	TArray<FStageCableRun> PowerCables;
 	TArray<FStageCableRun> DmxCables;
+	/** What to bring for the runs above and the rig's hardware. */
+	FStageShoppingList Shopping;
 
 	double TotalWatts = 0.0;
 	/** (largest - smallest phase load) / largest, in percent; 0 for a single phase or no load. */
@@ -134,8 +158,6 @@ struct FStageCableSchedule
 	int32 UnpatchedFixtures = 0;
 	/** Lighting fixtures whose catalog entry gives no power draw: their load is missing from the plan. */
 	int32 FixturesWithoutPowerData = 0;
-	/** DMX links longer than the longest stock cable. */
-	int32 OverlongDmxLinks = 0;
 	/** Patched universes, ascending. */
 	TArray<int32> Universes;
 
@@ -144,15 +166,13 @@ struct FStageCableSchedule
 
 /**
  * Pure planning and export of the cable schedule and power distribution (Docs/ADR/0012-production-reports-and-fixture-benchmark.md
- * §2.3). Deterministic for the same inputs in any order; covered by the StageCraft.Report.CableSchedule tests. Any thread.
+ * §2.3, Docs/ADR/0014-shopping-and-assembly-list.md). Deterministic for the same inputs in any order; covered by the
+ * StageCraft.Report.CableSchedule and StageCraft.Report.ShoppingList tests. Any thread.
  */
 namespace StageCableSchedule
 {
 	/** Phase imbalance above this is reported as a warning. */
 	inline constexpr double ImbalanceWarningPercent = 15.0;
-
-	/** Slack added to a DMX link's straight-line distance for routing along truss and drops. */
-	inline constexpr double DmxRoutingSlack = 1.2;
 
 	/** Every value clamped into its range; non-finite values take the default. */
 	MODULARSCENEBUILDER_API FStagePowerDistribution Sanitize(const FStagePowerDistribution& Supply);
@@ -160,21 +180,24 @@ namespace StageCableSchedule
 	/** The real power one circuit may carry continuously: voltage x rating x usable share x power factor (Supply sanitized first). */
 	MODULARSCENEBUILDER_API double GetUsableWattsPerCircuit(const FStagePowerDistribution& Supply);
 
-	/** The shortest stock DMX cable (1, 2, 3, 5, 10, 15, 20, 25, 30, 50 m) at least Meters long; -1 when none is, 1 for 0 or less. */
-	MODULARSCENEBUILDER_API double GetStockLength(double Meters);
-
 	/**
-	 * Plans the circuits and the wiring list.
+	 * Plans the circuits, the distros and the wiring list, and counts the shopping list.
 	 * - Loads with no finite positive watts draw nothing and are left out (a lighting fixture among them is counted in
 	 *   FixturesWithoutPowerData).
 	 * - Loads are taken largest first (ties: label in natural order, fixture ID, type), each onto the least-loaded phase (ties:
 	 *   the lower phase), on that phase's first circuit with room within the usable share, or a new circuit there. A load larger
 	 *   than a circuit's usable share gets a circuit of its own, marked overloaded; it is never split.
-	 * - One power home-run per load. Patched fixtures are chained per universe in address order; link lengths are the
-	 *   straight-line distance x DmxRoutingSlack rounded up to stock lengths. Unpatched fixtures are counted, not chained.
+	 * - Circuits are outputs of distros in circuit order: a distro takes circuits until its outputs are used or one more would
+	 *   take a phase of its feed past DistroFeedAmps, then the next distro opens.
+	 * - The distros stand together at one position and the DMX control node at another (Cabling anchors; Automatic is the centre
+	 *   of the loads, or of the patched fixtures, on the floor).
+	 * - One power home-run per load from the distros. Patched fixtures are chained per universe in address order, from the
+	 *   control node. Every run is measured along its route and made of stock cables (StageShoppingList::AssembleRun).
+	 *   Unpatched fixtures are counted, not chained.
+	 * - The shopping list counts the cables and the hardware for the rigged fixtures among Fixtures.
 	 */
-	MODULARSCENEBUILDER_API FStageCableSchedule Build(TArray<FStagePowerLoad> Loads, TArray<FStageDmxNode> Nodes, const FStagePowerDistribution& Supply,
-		const FString& SceneName, const FDateTime& GeneratedAt);
+	MODULARSCENEBUILDER_API FStageCableSchedule Build(TArray<FStagePowerLoad> Loads, TArray<FStageDmxNode> Nodes, TConstArrayView<FStageRiggedFixture> Fixtures,
+		const FStagePowerDistribution& Supply, const FStageCablingRules& Cabling, const FString& SceneName, const FDateTime& GeneratedAt);
 
 	/** "L1".."L3". */
 	MODULARSCENEBUILDER_API FString FormatPhase(int32 Phase);
@@ -187,17 +210,29 @@ namespace StageCableSchedule
 
 	/**
 	 * The plan as CSV with the bill of materials' conventions (UTF-8 byte order mark, CRLF, "." decimals, every text field through
-	 * StageBillOfMaterials::EscapeCsvField): a title block with the supply and warnings, then the phases, circuits, power cables
-	 * and DMX cables, each with its own header row and separated by a blank line.
+	 * StageBillOfMaterials::EscapeCsvField): a title block with the supply and warnings, then the shopping and assembly list, phases,
+	 * distros, circuits, power cables and DMX cables, each with its own header row and separated by a blank line.
 	 */
 	MODULARSCENEBUILDER_API FString ToCsv(const FStageCableSchedule& Schedule);
 
 	/**
-	 * The plan as a print-ready A4 landscape PDF in black and grey: warnings and the supply first, then phase loads, circuits,
-	 * power cables and DMX cables, with "Page n of m" footers. The footer states that the plan is a generated proposal.
+	 * The plan as a print-ready A4 landscape PDF in black and grey: warnings and the supply first, then the shopping and assembly
+	 * list, phase loads, distros, circuits, power cables and DMX cables, with "Page n of m" footers. The footer states that the
+	 * plan is a generated proposal.
 	 */
 	MODULARSCENEBUILDER_API TArray<uint8> ToPdf(const FStageCableSchedule& Schedule);
 
 	/** "CableSchedule_<Scene>_<yyyyMMdd-HHmmss>" without extension, sanitized like StageBillOfMaterials::MakeFileName. */
 	MODULARSCENEBUILDER_API FString MakeFileStem(const FString& SceneName, const FDateTime& GeneratedAt);
+}
+
+// Declared here rather than in StageShoppingList.h because it reads a whole cable schedule, which includes the list.
+namespace StageShoppingList
+{
+	/**
+	 * Counts what to bring for Schedule's runs (with Schedule.Cabling) and the rigged fixtures among Fixtures: power and DMX
+	 * cables by stock length, the distros, one DMX node output and one terminator per universe, clamps, and safety bonds by
+	 * rating. StageCableSchedule::Build calls it; the result is Schedule.Shopping.
+	 */
+	MODULARSCENEBUILDER_API FStageShoppingList Build(const FStageCableSchedule& Schedule, TConstArrayView<FStageRiggedFixture> Fixtures);
 }

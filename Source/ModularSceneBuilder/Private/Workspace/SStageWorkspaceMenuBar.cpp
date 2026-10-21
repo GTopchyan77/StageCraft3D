@@ -187,8 +187,8 @@ void SStageWorkspaceMenuBar::FillReportSection(FMenuBuilder& MenuBuilder, const 
 			FExecuteAction::CreateLambda([WeakController]() { if (WeakController.IsValid()) { WeakController->RequestExportPatchSheet(); } }),
 			FCanExecuteAction::CreateLambda([bCanExport = PatchSheet && ShowControl && !PatchSheet->IsExporting() && !ShowControl->GetFixtures().IsEmpty()]() { return bCanExport; })));
 	const UStageCableScheduleSubsystem* CableSchedule = UWorld::GetSubsystem<UStageCableScheduleSubsystem>(WeakController->GetWorld());
-	MenuBuilder.AddMenuEntry(LOCTEXT("ExportCableSchedule", "Export Cable Schedule & Power (PDF + CSV)"),
-		LOCTEXT("ExportCableScheduleTip", "Write a power distribution plan (loads balanced over phases and circuits, current per circuit) and a wiring list (power home-runs, DMX chains with cable lengths) as a print-ready PDF and a CSV to the Reports folder."), FSlateIcon(),
+	MenuBuilder.AddMenuEntry(LOCTEXT("ExportCableSchedule", "Export Cable Schedule, Power & Shopping List (PDF + CSV)"),
+		LOCTEXT("ExportCableScheduleTip", "Write a power distribution plan (loads balanced over phases and circuits, current per circuit), a wiring list (power home-runs, DMX chains with measured cable lengths) and a shopping and assembly list (cables by stock length, distros, DMX parts, clamps and safety bonds) as a print-ready PDF and a CSV to the Reports folder."), FSlateIcon(),
 		FUIAction(
 			FExecuteAction::CreateLambda([WeakController]() { if (WeakController.IsValid()) { WeakController->RequestExportCableSchedule(); } }),
 			FCanExecuteAction::CreateLambda([bCanExport = CableSchedule && !CableSchedule->IsExporting() && CableSchedule->HasPlannableEquipment()]() { return bCanExport; })));

@@ -1,6 +1,6 @@
 # StageCraft 3D: current systems
 
-Updated 2026-10-21 after STATE.md #40. This is a quick reference to what exists, how well it works, and where it lives. It was audited on 2026-10-20 at commit `960f5da`. Evidence, file:line references and the risk list are in `Docs/PROJECT_AUDIT.md`.
+Updated 2026-10-21 after STATE.md #41. This is a quick reference to what exists, how well it works, and where it lives. It was audited on 2026-10-20 at commit `960f5da`. Evidence, file:line references and the risk list are in `Docs/PROJECT_AUDIT.md`.
 
 **Legend**
 
@@ -81,7 +81,8 @@ Paths are relative to `Source/ModularSceneBuilder/` (`Public/` and `Private/` sh
 | Not saved in scenes | Camera | — |
 | Autosave (while unsaved, every 120 s), File > Recover Autosave, exit prompt Save / Don't Save / Cancel | 🟢 scripted Standalone runs (#37); buttons need a mouse check | `Scene/StageSceneComponent`, `Workspace/SStageUnsavedChangesDialog`, `Workspace/StageWorkspaceSubsystem` |
 | Bill of materials as PDF + CSV (File > Production, BOM panel EXPORT PDF) | ✅ model and PDF / 🟢 export (scripted run, #39) | `Report/StageBillOfMaterials*`, `Report/StageReportPdfComposer`, `UI/StageBillOfMaterialsPanel` |
-| Cable schedule and power plan as PDF + CSV: loads balanced over phases and circuits, power home-runs, DMX chains with stock lengths, warnings (File > Production) | ✅ model and PDF / 🟢 export (scripted run, #39) | `Report/StageCableSchedule*`, `Report/StagePowerDistributionSettings` (Project Settings) |
+| Cable schedule and power plan as PDF + CSV: loads balanced over phases, circuits and distros, power home-runs and DMX chains measured along floor and truss with a safety margin, warnings (File > Production) | ✅ model and PDF / 🟢 export (scripted run, #39, #41) | `Report/StageCableSchedule*`, `Report/StagePowerDistributionSettings` (Project Settings) |
+| Shopping & assembly list in the cable schedule PDF + CSV: cables by stock length (configurable 2/5/10/15/20 m, +10 %), distros, DMX node outputs and terminators, clamps and safety bonds scaled to fixture weight | ✅ model and PDF / 🟢 export (scripted run, #41) | `Report/StageShoppingList`, `Report/StageCablingSettings` (Project Settings › StageCraft Cabling & Rigging) |
 | Fixture benchmark (`StageCraft.Bench.Fixtures`, `Scripts/Bench/RunFixtureBench.ps1`): 200 crossfading fixtures 14.2 ms a frame (was 26.0), 500 crossfading 29 ms (was 56; render-thread bound) (#39) | ✅ stats / 🟢 harness (Development only) | `Diagnostics/StageFixtureBenchmark`, `Diagnostics/StageFrameStats` |
 | DMX patch sheet as PDF + CSV (File > Production, Patch panel) | ✅ model and PDF / 🟢 export (scripted run) | `Report/StagePatchSheet`, `Report/StagePdfWriter`, `Report/StagePatchSheetSubsystem` |
 | XLSX, saved circuit assignment, power cable lengths, rigging loads, light plot drawings | ⚪ | — |
@@ -106,6 +107,6 @@ Paths are relative to `Source/ModularSceneBuilder/` (`Public/` and `Private/` sh
 | Engine | UE 5.8 |
 | Plugins enabled | Interchange, SkyCreatorPlugin (plus Python and ModelingTools in the editor only) |
 | Plugins tracked but disabled | 19 |
-| Tests | 69 `StageCraft.*` automation tests: pure logic (reports, PDF composer, cable schedule, frame statistics, key bindings, crash-safe files, import list file, kept scene items) plus world tests for Sky Creator, undo/redo rules and transactions, cues, the fixture output path and restored-state sanitizing |
+| Tests | 71 `StageCraft.*` automation tests: pure logic (reports, PDF composer, cable schedule, shopping list, frame statistics, key bindings, crash-safe files, import list file, kept scene items) plus world tests for Sky Creator, undo/redo rules and transactions, cues, the fixture output path and restored-state sanitizing |
 | Areas with no tests | Request bridge, selection, session, economy/profile, patch conflicts, fixture playback (scripted runs only) |
 | Console commands | About 88, all inside `#if !UE_BUILD_SHIPPING` |

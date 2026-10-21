@@ -3335,7 +3335,7 @@ The design is in `Docs/ADR/0013-preferences-key-bindings-and-audit-fixes.md`.
   - Opening a scene that references a missing imported model.
 - Status: **implemented, awaiting manual verification.**
 
-**Commit:** uncommitted (working tree).
+**Commit:** `7e23626`.
 
 **Known issues / follow-ups**
 - **Kept items are invisible:** nothing lists them (only the load and save messages), and Clear Stage does not discard them. An Outliner group with a discard action is the follow-up.
@@ -3346,3 +3346,90 @@ The design is in `Docs/ADR/0013-preferences-key-bindings-and-audit-fixes.md`.
 - **Start-up model re-import** still blocks the game thread for tens of seconds (AG1.FBX); scene loads now wait for it instead of losing items.
 - **From #39:** the render-thread limit at 500 fixtures, the per-attribute broadcasts during fades, and the cable schedule follow-ups.
 - **Audit risks still open:** R1 and R9–R14.
+
+---
+
+## #41 — Shopping & assembly list: measured cable runs, stock lengths with safety margin, distros, DMX parts, clamps and safety bonds in the cable schedule PDF + CSV (2026-10-21)
+
+**What & why**
+- **Request (Gevor, 2026-10-21, "Step 1: Detailed Shopping & Cable Assembly Export"):**
+  - real 3D distances between fixtures, power distros and control nodes;
+  - stock cable lengths (2/5/10/15/20 m) with a configurable +10 % margin, grouped ("XLR 5-pin 10 m — 12x");
+  - clamps, safety bonds and power distro units scaled to fixture count, wattage and weight;
+  - a "Shopping & Assembly List" section in the PDF and CSV under File › Production.
+  - Design: `Docs/ADR/0014-shopping-and-assembly-list.md`.
+- **Before:** power home-runs had no length ("site"). DMX links were the straight line × 1.2 on a fixed 1–50 m list, with the first link "site" and anything over 50 m "split". There was no hardware and no count by length.
+- **Measuring** (`Report/StageShoppingList`, pure, any thread):
+  - Route = horizontal distance + height difference (along the floor or truss, then up or down a drop).
+  - Required = route × (1 + margin).
+  - Then the shortest stock length that covers it. A longer run is N × the longest stock plus the shortest covering tail, printed as "2 x 20 m + 5 m" and flagged "Joined cables".
+  - Coordinates are clamped to ±10 km and NaN reads 0, so one run's cable count stays bounded.
+- **Positions:**
+  - The distros stand together at the centre of the powered equipment on the floor (Automatic), or at a Fixed position from Project Settings.
+  - The DMX control node stands at the centre of the patched fixtures, or at a fixed position.
+  - Every power run (distro → load) and DMX run (node → first fixture, then fixture → fixture) is now measured.
+- **Distros:**
+  - Circuits (planned as before) become outputs of distros in circuit order. A new distro opens when the outputs (12) are used or a phase of the feed (63 A) would be exceeded.
+  - Cables name their distro ("PD1 C03 / L2"). A new "Distros" table shows circuits and the highest phase current.
+- **Rigging:**
+  - A fixture is rigged when it is at least 2 m high (world Z) or tilted more than 30° from upright.
+  - Clamps: ⌈weight / 20 kg⌉, at least 1. One safety bond each, the lightest rated for the weight (10/25/50/100 kg).
+  - Heavier than every bond → "Secondary suspension, rigger to specify" (bold) plus a warning. Missing weight → 1 clamp and the lightest bond, plus a warning.
+  - The rigged fixture weight is totalled.
+- **DMX:** one node output and one terminator per universe.
+- **Shopping list:** printed first after the warnings in the PDF, and as its own block in the CSV (Section, Item, Size, Quantity, Note), with cable totals.
+- **Settings:** `UStageCablingSettings` (Project Settings › Game › StageCraft Cabling & Rigging, DefaultGame.ini). `ToRules()` sanitizes everything:
+  - bad list entries are dropped, and lists sorted and de-duplicated;
+  - an empty list or a blank name takes the default.
+- **Build fix during the work:** `StageShoppingList::Build` was first declared with `const struct FStageCableSchedule&` inside the namespace. That declared a new namespaced type (C2027), the documented pitfall. It is now declared in `StageCableSchedule.h` after the type.
+- No tick, no polling, no new UObject members. The subsystem still gathers plain values on the game thread and builds and writes on a worker.
+
+**Files changed**
+- New:
+  - `Source/ModularSceneBuilder/Public/Report/StageShoppingList.h`, `Private/Report/StageShoppingList.cpp`
+  - `Public/Report/StageCablingSettings.h`, `Private/Report/StageCablingSettings.cpp`
+  - `Private/Report/Tests/StageShoppingListTests.cpp`
+  - `Docs/ADR/0014-shopping-and-assembly-list.md`
+- Modified:
+  - `Public/Report/StageCableSchedule.h`:
+    - `FStagePowerLoad::LocationMeters`, `FStagePowerCircuit::DistroNumber`, `FStagePowerDistro`;
+    - `FStageCableRun::Cable` replaces `StockLengthMeters`, with the distance now the route;
+    - schedule `Cabling`, anchors, `Distros`, `Shopping`;
+    - removed `OverlongDmxLinks`, `DmxRoutingSlack`, `GetStockLength`;
+    - `Build` takes fixtures and rules; `StageShoppingList::Build` is declared here.
+  - `Private/Report/StageCableSchedule.cpp`:
+    - `AssignDistros`, `ResolveAnchors`, `MeasureRun`;
+    - new warnings;
+    - CSV and PDF sections (shopping list, distros, route and cables columns).
+  - `Public/Report/StageCableScheduleSubsystem.h`, `Private/Report/StageCableScheduleSubsystem.cpp`: gather positions, fixture weight and up vector; read `UStageCablingSettings`; new export message.
+  - `Private/Workspace/SStageWorkspaceMenuBar.cpp`: menu entry "Export Cable Schedule, Power & Shopping List (PDF + CSV)" and its tooltip.
+  - `Private/Report/Tests/StageProductionReportTests.cpp`: `BuildPlan` helper, DMX test rewritten for measured and joined runs, new CSV and PDF expectations.
+  - `Docs/ADR/0012-production-reports-and-fixture-benchmark.md` (superseded note), `Docs/CURRENT_SYSTEMS.md`, `tasks/todo.md` (Phase 18), `STATE.md` (#40 hash `7e23626`, this entry).
+- No content assets, Blueprints, maps or input assets changed.
+
+**Verification**
+- Editor build: 0 warnings. Game **Shipping** build (`-DisableAdaptiveUnity`): succeeded, 0 warnings.
+- Automation `StageCraft`: **71/71 pass**, including the new `Report.ShoppingList.Rules` and `Report.ShoppingList.Build`.
+- Scripted `-game` run (Claude, 2026-10-21): loaded "R38 Cues" (2 moving heads), then `StageCraft.Report.ExportCables`.
+  - It wrote `Saved/StageCraft/Reports/CableSchedule_R38_Cues_20261021-184408.pdf/.csv`.
+  - The shopping list showed:
+    - PowerCON TRUE1 5 m 2x;
+    - XLR 5-pin DMX 5 m 1x and 10 m 1x;
+    - 1 distro;
+    - 1 node output, 1 terminator;
+    - no rigging (both fixtures stand on the floor).
+  - The PDF read back cleanly over 2 pages (title block, shopping table, distros, measured routes).
+  - The user's `Imports.json` and GameUserSettings.ini were compared after the run and are unchanged.
+- **Not verified by a person:**
+  - the menu entry on a rigged stage;
+  - the Project Settings page;
+  - whether the counts match a real rental pick list.
+- Status: **implemented, awaiting manual verification.**
+
+**Commit:** uncommitted (working tree).
+
+**Known issues / follow-ups**
+- **Positions are assumed:** automatic means the centre of the equipment on the floor. Placeable distro and DMX node items (and per-distro placement near its loads) are the follow-up. The PDF prints the assumed positions.
+- **Not modelled:** TRUE1 daisy-chains (still one home-run per load), truss and speaker rigging, mains feed cables, spares.
+- **Rigged is decided by height (world Z ≥ 2 m) or tilt;** a fixture on a high deck counts as rigged.
+- The phase imbalance warning for very small rigs (2 loads → 100 %) is unchanged from #39.

@@ -77,6 +77,7 @@ A professional cable schedule records decisions a crew makes on site: which dist
   2. Put each load on the phase that carries the least power so far (ties: the lower phase), on the first circuit of that phase that still has room within the usable share. If none has room, open a new circuit on that phase.
   3. A single load larger than one circuit's usable share gets its own circuit, flagged **OVERLOAD: needs a larger feed**. It is never silently split.
   4. Current = watts / (voltage × power factor). Each circuit and phase reports W, A and the share of its rating used. Phase imbalance = (largest − smallest phase load) / largest phase load.
+- **Superseded 2026-10-21 by ADR 0014 §2.3–2.4:** every run is now measured along its route (floor and truss) from the distros or the DMX node, with a configurable safety margin and stock list; long runs are joined cables instead of "split"; circuits are outputs of counted distros ("PD1 C03 / L2").
 - **Power cables.** One home-run per load: "P-001" from "Distro C03 / L2" to the item. Lengths are not computed, because the distro position is not part of the stage; the column reads "site".
 - **DMX cables.** One daisy chain per universe, ordered by start address:
   - "D1-01" runs from the console or node to the first fixture, then each fixture links to the next, and the chain ends with a terminator note. Ends are named "#ID label" ("#4 Spot 101"), because unlabelled fixtures of one type share a name.

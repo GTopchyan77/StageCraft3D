@@ -11,6 +11,7 @@
 #include "Misc/Paths.h"
 #include "ModularSceneBuilder.h"
 #include "Report/StageCableSchedule.h"
+#include "Report/StageCablingSettings.h"
 #include "Report/StagePowerDistributionSettings.h"
 #include "Report/StageReportFiles.h"
 #include "Subsystems/StageSessionSubsystem.h"
@@ -35,7 +36,7 @@ void UStageCableScheduleSubsystem::Deinitialize()
 	Super::Deinitialize();
 }
 
-void UStageCableScheduleSubsystem::GatherInputs(TArray<FStagePowerLoad>& OutLoads, TArray<FStageDmxNode>& OutNodes) const
+void UStageCableScheduleSubsystem::GatherInputs(TArray<FStagePowerLoad>& OutLoads, TArray<FStageDmxNode>& OutNodes, TArray<FStageRiggedFixture>& OutFixtures) const
 {
 	const UStageSessionSubsystem* Session = UWorld::GetSubsystem<UStageSessionSubsystem>(GetWorld());
 	if (!Session)
@@ -55,14 +56,18 @@ void UStageCableScheduleSubsystem::GatherInputs(TArray<FStagePowerLoad>& OutLoad
 
 		// The one place a fixture differs from other equipment here: it has an ID and a DMX patch.
 		const ALightingFixtureActor* Fixture = Cast<ALightingFixtureActor>(Item);
+		const int32 Quantity = FMath::Max(Item->GetQuantity(), 1);
 		const double UnitWatts = Data->Specs.PowerDrawWatts;
+		// Unreal units are centimetres; crews work in metres.
+		const FVector LocationMeters = Item->GetActorLocation() / 100.0;
 		if (UnitWatts > 0.0 || Fixture)
 		{
 			FStagePowerLoad& Load = OutLoads.AddDefaulted_GetRef();
 			Load.Label = Item->GetInstanceLabel().ToString();
 			Load.ItemType = Data->DisplayName.IsEmpty() ? Data->GetName() : Data->DisplayName.ToString();
 			Load.FixtureId = Fixture ? Fixture->GetFixtureId() : 0;
-			Load.Watts = UnitWatts * FMath::Max(Item->GetQuantity(), 1);
+			Load.Watts = UnitWatts * Quantity;
+			Load.LocationMeters = LocationMeters;
 		}
 
 		if (Fixture)
@@ -74,8 +79,14 @@ void UStageCableScheduleSubsystem::GatherInputs(TArray<FStagePowerLoad>& OutLoad
 			Node.Universe = Patch.Universe;
 			Node.Address = Patch.Address;
 			Node.Footprint = Fixture->GetDMXFootprint();
-			// Unreal units are centimetres; crews work in metres.
-			Node.LocationMeters = Fixture->GetActorLocation() / 100.0;
+			Node.LocationMeters = LocationMeters;
+
+			FStageRiggedFixture& Rigged = OutFixtures.AddDefaulted_GetRef();
+			Rigged.FixtureId = Node.FixtureId;
+			Rigged.Label = Node.Label;
+			Rigged.WeightKg = Data->Specs.WeightKg * Quantity;
+			Rigged.LocationMeters = LocationMeters;
+			Rigged.UpZ = Fixture->GetActorUpVector().Z;
 		}
 	}
 }
@@ -84,7 +95,8 @@ bool UStageCableScheduleSubsystem::HasPlannableEquipment() const
 {
 	TArray<FStagePowerLoad> Loads;
 	TArray<FStageDmxNode> Nodes;
-	GatherInputs(Loads, Nodes);
+	TArray<FStageRiggedFixture> Fixtures;
+	GatherInputs(Loads, Nodes, Fixtures);
 	return !Loads.IsEmpty() || !Nodes.IsEmpty();
 }
 
@@ -105,7 +117,8 @@ bool UStageCableScheduleSubsystem::StartExport(FText& OutReason)
 
 	TArray<FStagePowerLoad> Loads;
 	TArray<FStageDmxNode> Nodes;
-	GatherInputs(Loads, Nodes);
+	TArray<FStageRiggedFixture> Fixtures;
+	GatherInputs(Loads, Nodes, Fixtures);
 	if (Loads.IsEmpty() && Nodes.IsEmpty())
 	{
 		OutReason = LOCTEXT("ExportEmpty", "Nothing on the stage draws power or takes DMX: there is no cable schedule to export.");
@@ -113,6 +126,7 @@ bool UStageCableScheduleSubsystem::StartExport(FText& OutReason)
 	}
 
 	const FStagePowerDistribution Supply = GetDefault<UStagePowerDistributionSettings>()->ToDistribution();
+	const FStageCablingRules Cabling = GetDefault<UStageCablingSettings>()->ToRules();
 	const FString SceneName = Session->GetSceneName();
 	const FDateTime Now = FDateTime::Now();
 	const FString Directory = StageReportFiles::GetOutputDirectory();
@@ -125,9 +139,9 @@ bool UStageCableScheduleSubsystem::StartExport(FText& OutReason)
 
 	// The inputs are plain values gathered above; the worker plans, renders and writes from its own copies and touches no UObject.
 	UE::Tasks::Launch(UE_SOURCE_LOCATION, [WeakThis = TWeakObjectPtr<UStageCableScheduleSubsystem>(this), Serial, Loads = MoveTemp(Loads), Nodes = MoveTemp(Nodes),
-		Supply, SceneName, Now, Directory, Stem]() mutable
+		Fixtures = MoveTemp(Fixtures), Supply, Cabling, SceneName, Now, Directory, Stem]() mutable
 	{
-		const FStageCableSchedule Schedule = StageCableSchedule::Build(MoveTemp(Loads), MoveTemp(Nodes), Supply, SceneName, Now);
+		const FStageCableSchedule Schedule = StageCableSchedule::Build(MoveTemp(Loads), MoveTemp(Nodes), Fixtures, Supply, Cabling, SceneName, Now);
 		const TArray<uint8> Pdf = StageCableSchedule::ToPdf(Schedule);
 		const FString Csv = StageCableSchedule::ToCsv(Schedule);
 
@@ -167,12 +181,12 @@ void UStageCableScheduleSubsystem::FinishExport(uint64 Serial, bool bWritten, co
 	}
 	else if (WarningCount > 0)
 	{
-		LastExport.Message = FText::Format(LOCTEXT("ExportDoneWarnings", "Exported the cable schedule {0} and .csv ({1} {1}|plural(one=load,other=loads) on {2} {2}|plural(one=circuit,other=circuits)); {3} {3}|plural(one=warning,other=warnings) on page 1."),
+		LastExport.Message = FText::Format(LOCTEXT("ExportDoneWarnings", "Exported the cable schedule and shopping list {0} and .csv ({1} {1}|plural(one=load,other=loads) on {2} {2}|plural(one=circuit,other=circuits)); {3} {3}|plural(one=warning,other=warnings) on page 1."),
 			FText::FromString(FPaths::GetCleanFilename(PdfPath)), LoadCount, CircuitCount, WarningCount);
 	}
 	else
 	{
-		LastExport.Message = FText::Format(LOCTEXT("ExportDone", "Exported the cable schedule {0} and .csv ({1} {1}|plural(one=load,other=loads) on {2} {2}|plural(one=circuit,other=circuits))."),
+		LastExport.Message = FText::Format(LOCTEXT("ExportDone", "Exported the cable schedule and shopping list {0} and .csv ({1} {1}|plural(one=load,other=loads) on {2} {2}|plural(one=circuit,other=circuits))."),
 			FText::FromString(FPaths::GetCleanFilename(PdfPath)), LoadCount, CircuitCount);
 	}
 

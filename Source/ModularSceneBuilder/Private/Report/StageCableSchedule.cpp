@@ -12,7 +12,6 @@ namespace StageCableSchedule
 	{
 		const TCHAR* const LineEnd = TEXT("\r\n");
 		constexpr int32 DmxUniverseSize = 512;
-		constexpr double StockDmxLengths[] = { 1.0, 2.0, 3.0, 5.0, 10.0, 15.0, 20.0, 25.0, 30.0, 50.0 };
 
 		double ClampOrDefault(double Value, double Min, double Max, double Default)
 		{
@@ -142,6 +141,79 @@ namespace StageCableSchedule
 			Schedule.ImbalancePercent = Schedule.Phases.Num() > 1 && MaxWatts > 0.0 ? (MaxWatts - MinWatts) / MaxWatts * 100.0 : 0.0;
 		}
 
+		/**
+		 * Makes circuits outputs of distros in circuit order. A distro is full when its outputs are used or one more circuit would
+		 * take a phase of its feed past the rating; a circuit that alone exceeds the feed still gets a distro (it is already
+		 * reported as overloaded or needs a larger feed).
+		 */
+		void AssignDistros(FStageCableSchedule& Schedule)
+		{
+			const FStageCablingRules& Rules = Schedule.Cabling;
+			for (FStagePowerCircuit& Circuit : Schedule.Circuits)
+			{
+				const int32 PhaseSlot = FMath::Clamp(Circuit.Phase - 1, 0, 2);
+				FStagePowerDistro* Distro = Schedule.Distros.IsEmpty() ? nullptr : &Schedule.Distros.Last();
+				const bool bFits = Distro && Distro->CircuitCount < Rules.DistroOutputs
+					&& Distro->PhaseAmps[PhaseSlot] + Circuit.Amps <= Rules.DistroFeedAmps + 1e-6;
+				if (!bFits)
+				{
+					Distro = &Schedule.Distros.AddDefaulted_GetRef();
+					Distro->Number = Schedule.Distros.Num();
+				}
+				++Distro->CircuitCount;
+				Distro->PhaseAmps[PhaseSlot] += Circuit.Amps;
+				Circuit.DistroNumber = Distro->Number;
+			}
+		}
+
+		/** The centre of Locations on the floor (Z = 0); Fallback when there are none. */
+		FVector GetFloorCentre(TConstArrayView<FVector> Locations, const FVector& Fallback)
+		{
+			if (Locations.IsEmpty())
+			{
+				return Fallback;
+			}
+			FVector Sum = FVector::ZeroVector;
+			for (const FVector& Location : Locations)
+			{
+				Sum += SanitizeLocation(Location);
+			}
+			const FVector Centre = Sum / Locations.Num();
+			return FVector(Centre.X, Centre.Y, 0.0);
+		}
+
+		void ResolveAnchors(FStageCableSchedule& Schedule, TConstArrayView<FStageDmxNode> Nodes)
+		{
+			const FStageCablingRules& Rules = Schedule.Cabling;
+			TArray<FVector> LoadLocations;
+			LoadLocations.Reserve(Schedule.Loads.Num());
+			for (const FStagePlannedLoad& Planned : Schedule.Loads)
+			{
+				LoadLocations.Add(Planned.Load.LocationMeters);
+			}
+			Schedule.DistroLocationMeters = Rules.DistroAnchor == EStageCableAnchor::Fixed
+				? Rules.DistroLocationMeters : GetFloorCentre(LoadLocations, FVector::ZeroVector);
+
+			TArray<FVector> NodeLocations;
+			NodeLocations.Reserve(Nodes.Num());
+			for (const FStageDmxNode& Node : Nodes)
+			{
+				if (IsPatched(Node))
+				{
+					NodeLocations.Add(Node.LocationMeters);
+				}
+			}
+			// With no patched fixture the node position is printed only; the distros are the natural place for it.
+			Schedule.ControlLocationMeters = Rules.ControlAnchor == EStageCableAnchor::Fixed
+				? Rules.ControlLocationMeters : GetFloorCentre(NodeLocations, Schedule.DistroLocationMeters);
+		}
+
+		void MeasureRun(FStageCableRun& Run, const FVector& From, const FVector& To, const FStageCablingRules& Rules)
+		{
+			Run.DistanceMeters = StageShoppingList::GetRouteMeters(From, To);
+			Run.Cable = StageShoppingList::AssembleRun(Run.DistanceMeters, Rules);
+		}
+
 		void ListPowerCables(FStageCableSchedule& Schedule)
 		{
 			Schedule.PowerCables.Reserve(Schedule.Loads.Num());
@@ -153,9 +225,10 @@ namespace StageCableSchedule
 				FStageCableRun& Run = Schedule.PowerCables.AddDefaulted_GetRef();
 				Run.CableId = FString::Printf(TEXT("P-%03d"), LoadIndex + 1);
 				Run.Kind = EStageCableKind::Power;
-				Run.From = FString::Printf(TEXT("Distro %s / %s"), *FormatCircuit(Circuit.Number), *FormatPhase(Circuit.Phase));
+				Run.From = FString::Printf(TEXT("PD%d %s / %s"), Circuit.DistroNumber, *FormatCircuit(Circuit.Number), *FormatPhase(Circuit.Phase));
 				Run.To = GetLoadName(Planned.Load);
 				Run.LoadIndex = LoadIndex;
+				MeasureRun(Run, Schedule.DistroLocationMeters, Planned.Load.LocationMeters, Schedule.Cabling);
 			}
 		}
 
@@ -211,31 +284,25 @@ namespace StageCableSchedule
 				Run.bTerminate = Index + 1 == Patched.Num() || Patched[Index + 1].Universe != Node.Universe;
 				if (bFirstInUniverse)
 				{
-					// The console or node is not part of the stage: its run is measured on site.
-					Run.From = FString::Printf(TEXT("DMX source U%d"), Node.Universe);
+					Run.From = FString::Printf(TEXT("DMX node out U%d"), Node.Universe);
+					MeasureRun(Run, Schedule.ControlLocationMeters, Node.LocationMeters, Schedule.Cabling);
 					continue;
 				}
 
 				const FStageDmxNode& Previous = Patched[Index - 1];
 				Run.From = GetNodeName(Previous);
-				Run.DistanceMeters = FVector::Dist(Previous.LocationMeters, Node.LocationMeters);
-				Run.StockLengthMeters = GetStockLength(Run.DistanceMeters * DmxRoutingSlack);
-				Schedule.OverlongDmxLinks += Run.StockLengthMeters < 0.0 ? 1 : 0;
+				MeasureRun(Run, Previous.LocationMeters, Node.LocationMeters, Schedule.Cabling);
 			}
 		}
 
 		FString FormatWatts(double Value) { return FString::Printf(TEXT("%.0f"), Value); }
 		FString FormatAmps(double Value) { return FString::Printf(TEXT("%.1f"), Value); }
 		FString FormatPercent(double Share) { return FString::Printf(TEXT("%.0f"), Share * 100.0); }
-		FString FormatMeters(double Value) { return Value < 0.0 ? FString(TEXT("site")) : FString::Printf(TEXT("%.1f"), Value); }
+		FString FormatMeters(double Value) { return FString::Printf(TEXT("%.1f"), Value); }
 
-		FString FormatStockLength(double Meters)
+		FString FormatLocation(const FVector& Meters)
 		{
-			if (Meters < 0.0)
-			{
-				return TEXT("split");
-			}
-			return Meters == 0.0 ? FString(TEXT("site")) : FString::Printf(TEXT("%.0f m"), Meters);
+			return FString::Printf(TEXT("X %.1f, Y %.1f, Z %.1f m"), Meters.X, Meters.Y, Meters.Z);
 		}
 
 		FString FormatAddress(int32 Universe, int32 Address)
@@ -243,13 +310,53 @@ namespace StageCableSchedule
 			return FString::Printf(TEXT("%d.%03d"), Universe, Address);
 		}
 
-		FString GetDmxNote(const FStageCableRun& Run)
+		FString GetCableNote(const FStageCableRun& Run)
 		{
-			if (Run.StockLengthMeters < 0.0)
+			FString Note = Run.Cable.IsJoined() ? FString(TEXT("Joined cables")) : FString();
+			if (Run.bTerminate)
 			{
-				return TEXT("Too long: add a node or splitter");
+				Note += Note.IsEmpty() ? TEXT("Terminate DMX out") : TEXT("; terminate DMX out");
 			}
-			return Run.bTerminate ? FString(TEXT("Terminate DMX out")) : FString();
+			return Note;
+		}
+
+		FString DescribeAnchor(EStageCableAnchor Anchor, const TCHAR* AutomaticRule)
+		{
+			return Anchor == EStageCableAnchor::Fixed ? FString(TEXT("fixed in Project Settings")) : FString::Printf(TEXT("automatic: %s"), AutomaticRule);
+		}
+
+		FString DescribeStock(const FStageCablingRules& Rules)
+		{
+			TArray<FString> Lengths;
+			for (const double Length : Rules.StockLengthsMeters)
+			{
+				Lengths.Add(FString::Printf(TEXT("%g"), Length));
+			}
+			return FString::Join(Lengths, TEXT("/")) + TEXT(" m");
+		}
+
+		/** How the lengths were found, printed under the wiring list and in the CSV title block. */
+		FString DescribeMeasuring(const FStageCableSchedule& Schedule)
+		{
+			return FString::Printf(TEXT("Lengths: route along floor and truss (horizontal distance + height difference) + %.0f %% safety margin, rounded up to stock %s; longer runs join several cables."),
+				Schedule.Cabling.SafetyMargin * 100.0, *DescribeStock(Schedule.Cabling));
+		}
+
+		FString DescribeDistro(const FStageCableSchedule& Schedule)
+		{
+			return FString::Printf(TEXT("Distros at %s (%s)"), *FormatLocation(Schedule.DistroLocationMeters),
+				*DescribeAnchor(Schedule.Cabling.DistroAnchor, TEXT("centre of the loads, on the floor")));
+		}
+
+		FString DescribeControl(const FStageCableSchedule& Schedule)
+		{
+			return FString::Printf(TEXT("DMX control node at %s (%s)"), *FormatLocation(Schedule.ControlLocationMeters),
+				*DescribeAnchor(Schedule.Cabling.ControlAnchor, TEXT("centre of the patched fixtures, on the floor")));
+		}
+
+		double GetMaxPhaseAmps(const FStagePowerDistro& Distro)
+		{
+			return FMath::Max3(Distro.PhaseAmps[0], Distro.PhaseAmps[1], Distro.PhaseAmps[2]);
 		}
 
 		FString DescribeSupply(const FStagePowerDistribution& Supply)
@@ -303,29 +410,14 @@ namespace StageCableSchedule
 		return Safe.PhaseVoltage * Safe.CircuitRatingAmps * Safe.UsableShare * Safe.PowerFactor;
 	}
 
-	double GetStockLength(double Meters)
-	{
-		if (!FMath::IsFinite(Meters))
-		{
-			return -1.0;
-		}
-		for (const double Stock : StockDmxLengths)
-		{
-			if (Meters <= Stock)
-			{
-				return Stock;
-			}
-		}
-		return -1.0;
-	}
-
-	FStageCableSchedule Build(TArray<FStagePowerLoad> Loads, TArray<FStageDmxNode> Nodes, const FStagePowerDistribution& Supply,
-		const FString& SceneName, const FDateTime& GeneratedAt)
+	FStageCableSchedule Build(TArray<FStagePowerLoad> Loads, TArray<FStageDmxNode> Nodes, TConstArrayView<FStageRiggedFixture> Fixtures,
+		const FStagePowerDistribution& Supply, const FStageCablingRules& Cabling, const FString& SceneName, const FDateTime& GeneratedAt)
 	{
 		FStageCableSchedule Schedule;
 		Schedule.SceneName = SceneName;
 		Schedule.GeneratedAt = GeneratedAt;
 		Schedule.Supply = Sanitize(Supply);
+		Schedule.Cabling = StageShoppingList::Sanitize(Cabling);
 
 		TArray<FStagePowerLoad> Powered;
 		Powered.Reserve(Loads.Num());
@@ -360,8 +452,11 @@ namespace StageCableSchedule
 		});
 
 		PlanCircuits(Schedule, Powered);
+		AssignDistros(Schedule);
+		ResolveAnchors(Schedule, Nodes);
 		ListPowerCables(Schedule);
 		ChainDmx(Schedule, MoveTemp(Nodes));
+		Schedule.Shopping = StageShoppingList::Build(Schedule, Fixtures);
 		return Schedule;
 	}
 
@@ -392,10 +487,16 @@ namespace StageCableSchedule
 			Warnings.Add(FString::Printf(TEXT("%s without power data in the catalog: their load is missing from this plan."),
 				*Plural(Schedule.FixturesWithoutPowerData, TEXT("lighting fixture"), TEXT("lighting fixtures"))));
 		}
-		if (Schedule.OverlongDmxLinks > 0)
+		const FStageShoppingList& Shopping = Schedule.Shopping;
+		if (Shopping.OverweightFixtures > 0)
 		{
-			Warnings.Add(FString::Printf(TEXT("%s longer than the longest stock cable (50 m): add a DMX node or an opto-splitter."),
-				*Plural(Schedule.OverlongDmxLinks, TEXT("DMX link"), TEXT("DMX links"))));
+			Warnings.Add(FString::Printf(TEXT("%s heavier than the strongest stocked safety bond (WLL %.0f kg): a rigger must specify the secondary suspension."),
+				*Plural(Shopping.OverweightFixtures, TEXT("rigged fixture is"), TEXT("rigged fixtures are")), Schedule.Cabling.SafetyBondRatingsKg.Last()));
+		}
+		if (Shopping.FixturesWithoutWeight > 0)
+		{
+			Warnings.Add(FString::Printf(TEXT("%s without weight data in the catalog: one clamp and the lightest bond are listed; check their rigging."),
+				*Plural(Shopping.FixturesWithoutWeight, TEXT("rigged fixture"), TEXT("rigged fixtures"))));
 		}
 		if (Schedule.UnpatchedFixtures > 0)
 		{
@@ -406,21 +507,36 @@ namespace StageCableSchedule
 
 	FString ToCsv(const FStageCableSchedule& Schedule)
 	{
+		const FStageShoppingList& Shopping = Schedule.Shopping;
 		FString Out;
-		Out.Reserve(512 + (Schedule.Loads.Num() + Schedule.DmxCables.Num() + Schedule.Circuits.Num()) * 96);
+		Out.Reserve(1024 + (Schedule.Loads.Num() + Schedule.DmxCables.Num() + Schedule.Circuits.Num() + Shopping.Lines.Num()) * 96);
 
 		// U+FEFF: written as the UTF-8 byte order mark, which spreadsheet programs need to read non-ASCII names correctly.
 		Out += TEXT("﻿");
-		AppendRow(Out, { TEXT("StageCraft 3D Cable Schedule and Power Plan (generated proposal)") });
+		AppendRow(Out, { TEXT("StageCraft 3D Cable Schedule, Power Plan and Shopping List (generated proposal)") });
 		AppendRow(Out, { TEXT("Scene"), GetDisplaySceneName(Schedule.SceneName) });
 		AppendRow(Out, { TEXT("Generated"), Schedule.GeneratedAt.ToString(TEXT("%Y-%m-%d %H:%M")) });
 		AppendRow(Out, { TEXT("Supply"), DescribeSupply(Schedule.Supply) });
 		AppendRow(Out, { TEXT("Total load (W)"), FormatWatts(Schedule.TotalWatts) });
 		AppendRow(Out, { TEXT("Phase imbalance (%)"), FString::Printf(TEXT("%.0f"), Schedule.ImbalancePercent) });
+		AppendRow(Out, { TEXT("Distros"), DescribeDistro(Schedule) });
+		AppendRow(Out, { TEXT("DMX control"), DescribeControl(Schedule) });
+		AppendRow(Out, { TEXT("Cable lengths"), DescribeMeasuring(Schedule) });
 		for (const FString& Warning : GetWarnings(Schedule))
 		{
 			AppendRow(Out, { TEXT("Warning"), Warning });
 		}
+		Out += LineEnd;
+
+		AppendRow(Out, { TEXT("Section"), TEXT("Item"), TEXT("Size"), TEXT("Quantity"), TEXT("Note") });
+		for (const FStageShoppingLine& Line : Shopping.Lines)
+		{
+			AppendRow(Out, { StageShoppingList::GetSectionName(Line.Section), Line.Item, Line.Size, FString::FromInt(Line.Quantity), Line.Note });
+		}
+		AppendRow(Out, { TEXT("Total"), TEXT("Power cable"), FormatMeters(Shopping.PowerCableMeters) + TEXT(" m"), FString::FromInt(Shopping.PowerCableCount), FString() });
+		AppendRow(Out, { TEXT("Total"), TEXT("DMX cable"), FormatMeters(Shopping.DmxCableMeters) + TEXT(" m"), FString::FromInt(Shopping.DmxCableCount), FString() });
+		AppendRow(Out, { TEXT("Total"), TEXT("Rigged fixture weight"), FString::Printf(TEXT("%.1f kg"), Shopping.RiggedWeightKg), FString::FromInt(Shopping.RiggedFixtures),
+			TEXT("Fixtures only: add truss, clamps and cable") });
 		Out += LineEnd;
 
 		AppendRow(Out, { TEXT("Phase"), TEXT("Circuits"), TEXT("Load (W)"), TEXT("Current (A)"), TEXT("Share of load (%)") });
@@ -431,40 +547,50 @@ namespace StageCableSchedule
 		}
 		Out += LineEnd;
 
-		AppendRow(Out, { TEXT("Circuit"), TEXT("Phase"), TEXT("Loads"), TEXT("Load (W)"), TEXT("Current (A)"), TEXT("Use of rating (%)"), TEXT("Note") });
-		for (const FStagePowerCircuit& Circuit : Schedule.Circuits)
+		AppendRow(Out, { TEXT("Distro"), TEXT("Circuits"), TEXT("Highest phase current (A)"), TEXT("Use of feed (%)") });
+		for (const FStagePowerDistro& Distro : Schedule.Distros)
 		{
-			AppendRow(Out, { FormatCircuit(Circuit.Number), FormatPhase(Circuit.Phase), FString::FromInt(Circuit.Loads.Num()), FormatWatts(Circuit.Watts),
-				FormatAmps(Circuit.Amps), FormatPercent(Circuit.RatingShare), Circuit.bOverloaded ? FString(TEXT("OVERLOAD: needs a larger feed")) : FString() });
+			AppendRow(Out, { FString::Printf(TEXT("PD%d"), Distro.Number), FString::FromInt(Distro.CircuitCount), FormatAmps(GetMaxPhaseAmps(Distro)),
+				FormatPercent(GetMaxPhaseAmps(Distro) / Schedule.Cabling.DistroFeedAmps) });
 		}
 		Out += LineEnd;
 
-		AppendRow(Out, { TEXT("Cable"), TEXT("From"), TEXT("To"), TEXT("Type"), TEXT("Fixture ID"), TEXT("Load (W)"), TEXT("Current (A)"), TEXT("Length") });
+		AppendRow(Out, { TEXT("Circuit"), TEXT("Distro"), TEXT("Phase"), TEXT("Loads"), TEXT("Load (W)"), TEXT("Current (A)"), TEXT("Use of rating (%)"), TEXT("Note") });
+		for (const FStagePowerCircuit& Circuit : Schedule.Circuits)
+		{
+			AppendRow(Out, { FormatCircuit(Circuit.Number), FString::Printf(TEXT("PD%d"), Circuit.DistroNumber), FormatPhase(Circuit.Phase), FString::FromInt(Circuit.Loads.Num()),
+				FormatWatts(Circuit.Watts), FormatAmps(Circuit.Amps), FormatPercent(Circuit.RatingShare), Circuit.bOverloaded ? FString(TEXT("OVERLOAD: needs a larger feed")) : FString() });
+		}
+		Out += LineEnd;
+
+		AppendRow(Out, { TEXT("Cable"), TEXT("From"), TEXT("To"), TEXT("Type"), TEXT("Fixture ID"), TEXT("Load (W)"), TEXT("Current (A)"), TEXT("Route (m)"), TEXT("Cables"), TEXT("Note") });
 		for (const FStageCableRun& Run : Schedule.PowerCables)
 		{
 			const FStagePlannedLoad& Planned = Schedule.Loads[Run.LoadIndex];
 			AppendRow(Out, { Run.CableId, Run.From, Run.To, Planned.Load.ItemType, Planned.Load.FixtureId > 0 ? FString::FromInt(Planned.Load.FixtureId) : FString(),
-				FormatWatts(Planned.Load.Watts), FormatAmps(Planned.Amps), FormatStockLength(Run.StockLengthMeters) });
+				FormatWatts(Planned.Load.Watts), FormatAmps(Planned.Amps), FormatMeters(Run.DistanceMeters), StageShoppingList::FormatAssembly(Run.Cable), GetCableNote(Run) });
 		}
 		Out += LineEnd;
 
-		AppendRow(Out, { TEXT("Cable"), TEXT("Universe"), TEXT("From"), TEXT("To"), TEXT("Start address"), TEXT("Distance (m)"), TEXT("Stock length"), TEXT("Note") });
+		AppendRow(Out, { TEXT("Cable"), TEXT("Universe"), TEXT("From"), TEXT("To"), TEXT("Start address"), TEXT("Route (m)"), TEXT("Cables"), TEXT("Note") });
 		for (const FStageCableRun& Run : Schedule.DmxCables)
 		{
 			AppendRow(Out, { Run.CableId, FString::FromInt(Run.Universe), Run.From, Run.To, FormatAddress(Run.Universe, Run.ToAddress),
-				FormatMeters(Run.DistanceMeters), FormatStockLength(Run.StockLengthMeters), GetDmxNote(Run) });
+				FormatMeters(Run.DistanceMeters), StageShoppingList::FormatAssembly(Run.Cable), GetCableNote(Run) });
 		}
 		return Out;
 	}
 
 	TArray<uint8> ToPdf(const FStageCableSchedule& Schedule)
 	{
-		FStageReportPdfComposer Composer(TEXT("CABLE SCHEDULE & POWER"), TEXT("Cable schedule & power plan (generated proposal)"), Schedule.SceneName, Schedule.GeneratedAt);
-		Composer.SetSummary(FString::Printf(TEXT("%s · %.2f kW · %s on %s · imbalance %.0f %% · %s in %s"),
+		const FStageShoppingList& Shopping = Schedule.Shopping;
+		FStageReportPdfComposer Composer(TEXT("CABLE SCHEDULE & POWER"), TEXT("Cable schedule, power plan & shopping list (generated proposal)"), Schedule.SceneName, Schedule.GeneratedAt);
+		Composer.SetSummary(FString::Printf(TEXT("%s · %.2f kW · %s on %s · %s · imbalance %.0f %% · %s in %s · %s"),
 			*Plural(Schedule.Loads.Num(), TEXT("load"), TEXT("loads")), Schedule.TotalWatts / 1000.0,
 			*Plural(Schedule.Circuits.Num(), TEXT("circuit"), TEXT("circuits")), *Plural(Schedule.Phases.Num(), TEXT("phase"), TEXT("phases")),
-			Schedule.ImbalancePercent, *Plural(Schedule.DmxCables.Num(), TEXT("DMX link"), TEXT("DMX links")),
-			*Plural(Schedule.Universes.Num(), TEXT("universe"), TEXT("universes"))));
+			*Plural(Schedule.Distros.Num(), TEXT("distro"), TEXT("distros")), Schedule.ImbalancePercent,
+			*Plural(Schedule.DmxCables.Num(), TEXT("DMX link"), TEXT("DMX links")), *Plural(Schedule.Universes.Num(), TEXT("universe"), TEXT("universes")),
+			*Plural(Shopping.PowerCableCount + Shopping.DmxCableCount, TEXT("cable"), TEXT("cables"))));
 
 		Composer.AddNote(TEXT("Supply: ") + DescribeSupply(Schedule.Supply));
 		const TArray<FString> Warnings = GetWarnings(Schedule);
@@ -476,8 +602,33 @@ namespace StageCableSchedule
 		{
 			Composer.AddNote(TEXT("No warnings."), EStageReportTone::Muted);
 		}
-		Composer.AddNote(TEXT("Generated proposal: loads are balanced automatically from each item's maximum power draw. Confirm circuits and cable runs on site."),
+		Composer.AddNote(TEXT("Generated proposal: loads are balanced automatically from each item's maximum power draw. Confirm circuits, cable runs and rigging on site."),
 			EStageReportTone::Muted);
+
+		Composer.AddHeading(TEXT("Shopping & assembly list"));
+		if (Shopping.IsEmpty())
+		{
+			Composer.AddNote(TEXT("Nothing on the stage needs cables or rigging hardware."), EStageReportTone::Muted);
+		}
+		else
+		{
+			Composer.BeginTable({ { TEXT("Section"), 1.4 }, { TEXT("Item"), 2.6 }, { TEXT("Size"), 2.2 }, { TEXT("Qty"), 0.7, EStageReportAlign::Right }, { TEXT("Note"), 3.4 } });
+			for (const FStageShoppingLine& Line : Shopping.Lines)
+			{
+				Composer.AddRow({ FStageReportCell(StageShoppingList::GetSectionName(Line.Section), EStageReportTone::Muted), Line.Item,
+					FStageReportCell(Line.Size, EStageReportTone::Muted), FString::Printf(TEXT("%dx"), Line.Quantity),
+					FStageReportCell(Line.Note, Line.bNeedsAttention ? EStageReportTone::Strong : EStageReportTone::Muted) });
+			}
+			Composer.AddRow({ TEXT("Cable to bring"), FString::Printf(TEXT("Power %.0f m, DMX %.0f m"), Shopping.PowerCableMeters, Shopping.DmxCableMeters), FString(),
+				FString::Printf(TEXT("%dx"), Shopping.PowerCableCount + Shopping.DmxCableCount),
+				FString::Printf(TEXT("Rigged: %s, %.1f kg (fixtures only)"), *Plural(Shopping.RiggedFixtures, TEXT("fixture"), TEXT("fixtures")), Shopping.RiggedWeightKg) },
+				EStageReportRowStyle::Total);
+			Composer.EndTable();
+		}
+		Composer.AddNote(DescribeMeasuring(Schedule), EStageReportTone::Muted);
+		Composer.AddNote(DescribeDistro(Schedule) + TEXT(" · ") + DescribeControl(Schedule), EStageReportTone::Muted);
+		Composer.AddNote(FString::Printf(TEXT("Rigged: at least %.1f m high or tilted over 30 degrees. One clamp per %.0f kg of fixture; one safety bond per fixture, the lightest rated for its weight."),
+			Schedule.Cabling.RiggedAboveMeters, Schedule.Cabling.WeightPerClampKg), EStageReportTone::Muted);
 
 		Composer.AddHeading(TEXT("Phase loads"));
 		if (Schedule.Loads.IsEmpty())
@@ -496,26 +647,39 @@ namespace StageCableSchedule
 			Composer.AddRow({ TEXT("Total"), FString::FromInt(Schedule.Circuits.Num()), FormatWatts(Schedule.TotalWatts), FString(), TEXT("100 %") }, EStageReportRowStyle::Total);
 			Composer.EndTable();
 
+			Composer.AddHeading(TEXT("Distros"));
+			Composer.BeginTable({ { TEXT("Distro"), 1.0 }, { TEXT("Circuits"), 1.0, EStageReportAlign::Right }, { TEXT("Highest phase (A)"), 1.4, EStageReportAlign::Right },
+				{ TEXT("Use of feed"), 1.2, EStageReportAlign::Right }, { FString(), 4.0 } });
+			for (const FStagePowerDistro& Distro : Schedule.Distros)
+			{
+				Composer.AddRow({ FString::Printf(TEXT("PD%d"), Distro.Number), FString::Printf(TEXT("%d of %d"), Distro.CircuitCount, Schedule.Cabling.DistroOutputs),
+					FormatAmps(GetMaxPhaseAmps(Distro)), FormatPercent(GetMaxPhaseAmps(Distro) / Schedule.Cabling.DistroFeedAmps) + TEXT(" %") });
+			}
+			Composer.EndTable();
+
 			Composer.AddHeading(TEXT("Circuits"));
-			Composer.BeginTable({ { TEXT("Circuit"), 1.0 }, { TEXT("Phase"), 1.0 }, { TEXT("Loads"), 1.0, EStageReportAlign::Right }, { TEXT("Load (W)"), 1.2, EStageReportAlign::Right },
-				{ TEXT("Current (A)"), 1.2, EStageReportAlign::Right }, { TEXT("Use of rating"), 1.2, EStageReportAlign::Right }, { TEXT("Note"), 3.4 } });
+			Composer.BeginTable({ { TEXT("Circuit"), 1.0 }, { TEXT("Distro"), 0.8 }, { TEXT("Phase"), 0.8 }, { TEXT("Loads"), 1.0, EStageReportAlign::Right },
+				{ TEXT("Load (W)"), 1.2, EStageReportAlign::Right }, { TEXT("Current (A)"), 1.2, EStageReportAlign::Right }, { TEXT("Use of rating"), 1.2, EStageReportAlign::Right },
+				{ TEXT("Note"), 3.0 } });
 			for (const FStagePowerCircuit& Circuit : Schedule.Circuits)
 			{
-				Composer.AddRow({ FormatCircuit(Circuit.Number), FormatPhase(Circuit.Phase), FString::FromInt(Circuit.Loads.Num()), FormatWatts(Circuit.Watts),
-					FormatAmps(Circuit.Amps), FormatPercent(Circuit.RatingShare) + TEXT(" %"),
+				Composer.AddRow({ FormatCircuit(Circuit.Number), FString::Printf(TEXT("PD%d"), Circuit.DistroNumber), FormatPhase(Circuit.Phase), FString::FromInt(Circuit.Loads.Num()),
+					FormatWatts(Circuit.Watts), FormatAmps(Circuit.Amps), FormatPercent(Circuit.RatingShare) + TEXT(" %"),
 					Circuit.bOverloaded ? FStageReportCell(TEXT("OVERLOAD: needs a larger feed"), EStageReportTone::Strong) : FStageReportCell() });
 			}
 			Composer.EndTable();
 
 			Composer.AddHeading(TEXT("Power cables (one home-run per load)"));
-			Composer.BeginTable({ { TEXT("Cable"), 0.8 }, { TEXT("From"), 1.6 }, { TEXT("To"), 2.6 }, { TEXT("Type"), 2.2 }, { TEXT("FID"), 0.6, EStageReportAlign::Right },
-				{ TEXT("Load (W)"), 1.0, EStageReportAlign::Right }, { TEXT("Current (A)"), 1.0, EStageReportAlign::Right }, { TEXT("Length"), 0.8, EStageReportAlign::Right } });
+			Composer.BeginTable({ { TEXT("Cable"), 0.7 }, { TEXT("From"), 1.5 }, { TEXT("To"), 2.3 }, { TEXT("Type"), 1.9 }, { TEXT("FID"), 0.5, EStageReportAlign::Right },
+				{ TEXT("Load (W)"), 0.8, EStageReportAlign::Right }, { TEXT("Current (A)"), 0.9, EStageReportAlign::Right }, { TEXT("Route (m)"), 0.8, EStageReportAlign::Right },
+				{ TEXT("Cables"), 1.2, EStageReportAlign::Right } });
 			for (const FStageCableRun& Run : Schedule.PowerCables)
 			{
 				const FStagePlannedLoad& Planned = Schedule.Loads[Run.LoadIndex];
 				Composer.AddRow({ Run.CableId, Run.From, Run.To, FStageReportCell(Planned.Load.ItemType, EStageReportTone::Muted),
 					Planned.Load.FixtureId > 0 ? FString::FromInt(Planned.Load.FixtureId) : FString(), FormatWatts(Planned.Load.Watts), FormatAmps(Planned.Amps),
-					FStageReportCell(FormatStockLength(Run.StockLengthMeters), EStageReportTone::Muted) });
+					FStageReportCell(FormatMeters(Run.DistanceMeters), EStageReportTone::Muted),
+					FStageReportCell(StageShoppingList::FormatAssembly(Run.Cable), Run.Cable.IsJoined() ? EStageReportTone::Strong : EStageReportTone::Normal) });
 			}
 			Composer.EndTable();
 		}
@@ -527,18 +691,17 @@ namespace StageCableSchedule
 		}
 		else
 		{
-			Composer.BeginTable({ { TEXT("Cable"), 0.8 }, { TEXT("Univ."), 0.6, EStageReportAlign::Right }, { TEXT("From"), 2.4 }, { TEXT("To"), 2.4 },
-				{ TEXT("Address"), 0.9, EStageReportAlign::Right }, { TEXT("Distance (m)"), 1.0, EStageReportAlign::Right }, { TEXT("Cable"), 0.8, EStageReportAlign::Right },
-				{ TEXT("Note"), 2.2 } });
+			Composer.BeginTable({ { TEXT("Cable"), 0.8 }, { TEXT("Univ."), 0.6, EStageReportAlign::Right }, { TEXT("From"), 2.2 }, { TEXT("To"), 2.2 },
+				{ TEXT("Address"), 0.9, EStageReportAlign::Right }, { TEXT("Route (m)"), 0.9, EStageReportAlign::Right }, { TEXT("Cables"), 1.2, EStageReportAlign::Right },
+				{ TEXT("Note"), 2.0 } });
 			for (const FStageCableRun& Run : Schedule.DmxCables)
 			{
 				Composer.AddRow({ Run.CableId, FString::FromInt(Run.Universe), Run.From, Run.To, FormatAddress(Run.Universe, Run.ToAddress),
-					FormatMeters(Run.DistanceMeters), FormatStockLength(Run.StockLengthMeters),
-					FStageReportCell(GetDmxNote(Run), Run.StockLengthMeters < 0.0 ? EStageReportTone::Strong : EStageReportTone::Muted) });
+					FStageReportCell(FormatMeters(Run.DistanceMeters), EStageReportTone::Muted),
+					FStageReportCell(StageShoppingList::FormatAssembly(Run.Cable), Run.Cable.IsJoined() ? EStageReportTone::Strong : EStageReportTone::Normal),
+					FStageReportCell(GetCableNote(Run), EStageReportTone::Muted) });
 			}
 			Composer.EndTable();
-			Composer.AddNote(FString::Printf(TEXT("DMX link lengths: straight-line distance + %.0f %% for routing and drops, rounded up to stock lengths."),
-				(DmxRoutingSlack - 1.0) * 100.0), EStageReportTone::Muted);
 		}
 		return Composer.Finish();
 	}
