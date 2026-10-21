@@ -15,6 +15,7 @@
 #include "ModularSceneBuilder.h"
 #include "Placement/StagePlacementToolComponent.h"
 #include "Scene/StageSceneStore.h"
+#include "Subsystems/ShowControlSubsystem.h"
 #include "Subsystems/StageItemSubsystem.h"
 #include "Subsystems/StageSessionSubsystem.h"
 #include "Tasks/Task.h"
@@ -112,6 +113,10 @@ FStageSceneDocument UStageSceneComponent::CaptureStage(const FString& Name) cons
 	if (const UStageEnvironmentSubsystem* Environment = UWorld::GetSubsystem<UStageEnvironmentSubsystem>(GetWorld()))
 	{
 		Document.Environment = Environment->GetSettings();
+	}
+	if (const UShowControlSubsystem* Show = UWorld::GetSubsystem<UShowControlSubsystem>(GetWorld()))
+	{
+		Document.Cues = Show->GetCues();
 	}
 	return Document;
 }
@@ -339,6 +344,15 @@ FStageSceneOperationResult UStageSceneComponent::ApplyDocument(const FStageScene
 	if (UStageEnvironmentSubsystem* Environment = UWorld::GetSubsystem<UStageEnvironmentSubsystem>(GetWorld()))
 	{
 		Environment->SetSettings(Document.Environment);
+	}
+	// After the items: their fixtures have registered with the IDs the cues refer to. A file without cues clears the list.
+	if (UShowControlSubsystem* Show = UWorld::GetSubsystem<UShowControlSubsystem>(GetWorld()))
+	{
+		Show->SetCues(Document.Cues);
+	}
+	if (Report.InvalidCueEntries > 0)
+	{
+		UE_LOG(LogStageCraft, Warning, TEXT("Scene \"%s\": %d damaged cue entries were skipped; %d cues loaded."), *Document.Name, Report.InvalidCueEntries, Document.Cues.Num());
 	}
 
 	if (UStageEditHistorySubsystem* History = UWorld::GetSubsystem<UStageEditHistorySubsystem>(GetWorld()))

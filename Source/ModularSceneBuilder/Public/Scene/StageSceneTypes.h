@@ -5,6 +5,7 @@
 #include "CoreMinimal.h"
 #include "Environment/StageEnvironmentTypes.h"
 #include "History/StageItemSnapshot.h"
+#include "Show/ShowControlTypes.h"
 #include "StageSceneTypes.generated.h"
 
 /** Outcome of a scene file operation (Docs/ADR/0004-selection-scenes-and-rendering.md §4). */
@@ -85,4 +86,7 @@ struct FStageSceneDocument
 
 	/** Sky, time of day, sun path and weather (format version 2). A version 1 file reads as the default environment. Sanitized. */
 	FStageEnvironmentSettings Environment;
+
+	/** The show's cue list (format version 3). Version 1 and 2 files read as no cues. Sanitized (StageCueRules). */
+	TArray<FShowCue> Cues;
 };

@@ -10,6 +10,7 @@
 
 #include "HAL/FileManager.h"
 #include "Interaction/StageTransformRules.h"
+#include "Data/StageParameterTypes.h"
 #include "Misc/AutomationTest.h"
 #include "Misc/FileHelper.h"
 #include "Misc/Paths.h"
@@ -162,7 +163,7 @@ bool FStageSceneMigrationTest::RunTest(const FString& Parameters)
 	Document.Environment.Fog = 0.6f;
 	const FString Saved = FStageSceneStore::Serialize(Document);
 	TestTrue(TEXT("Saves write the current version"), Saved.Contains(FString::Printf(TEXT("\"version\": %d"), FStageSceneStore::FormatVersion)));
-	TestEqual(TEXT("Version 2 parses"), Str(FStageSceneStore::Parse(Saved, Parsed, Report)), Str(EStageSceneResult::Success));
+	TestEqual(TEXT("The current version parses"), Str(FStageSceneStore::Parse(Saved, Parsed, Report)), Str(EStageSceneResult::Success));
 	TestTrue(TEXT("Environment round-trips"), Parsed.Environment.Equals(Document.Environment));
 	TestEqual(TEXT("Items still round-trip"), Parsed.Items.Num(), 1);
 
@@ -179,7 +180,7 @@ bool FStageSceneMigrationTest::RunTest(const FString& Parameters)
 
 	// Versions outside [MinReadableVersion, FormatVersion] are refused whole, never half-read.
 	TestEqual(TEXT("Version 0"), Str(FStageSceneStore::Parse(MakeSceneJson(ValidItemFields, FStageSceneStore::MinReadableVersion - 1), Parsed, Report)), Str(EStageSceneResult::VersionMismatch));
-	TestEqual(TEXT("Version 3"), Str(FStageSceneStore::Parse(MakeSceneJson(ValidItemFields, FStageSceneStore::FormatVersion + 1), Parsed, Report)), Str(EStageSceneResult::VersionMismatch));
+	TestEqual(TEXT("The next version"), Str(FStageSceneStore::Parse(MakeSceneJson(ValidItemFields, FStageSceneStore::FormatVersion + 1), Parsed, Report)), Str(EStageSceneResult::VersionMismatch));
 
 	// A version 2 file is untrusted input: missing values keep their defaults, out-of-range ones are wrapped or clamped.
 	const FString NoEnvironment = TEXT("{\"format\":\"StageCraftScene\",\"version\":2,\"items\":[]}");
@@ -212,6 +213,81 @@ bool FStageSceneMigrationTest::RunTest(const FString& Parameters)
 	TestEqual(TEXT("... and loads"), Str(Store.Load(TEXT("Old Show"), Loaded, Report)), Str(EStageSceneResult::Success));
 	TestEqual(TEXT("... with its item"), Loaded.Items.Num(), 1);
 	IFileManager::Get().DeleteDirectory(*Directory, /*RequireExists*/ false, /*Tree*/ true);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FStageSceneCuesTest, "StageCraft.Scene.Cues", StageSceneStoreTests::Flags)
+
+/** Format version 3 (Docs/ADR/0011-cue-list-and-patch-sheet-export.md §2.5): the cue round trip, v2 -> v3 migration, damaged cues. */
+bool FStageSceneCuesTest::RunTest(const FString& Parameters)
+{
+	using namespace StageSceneStoreTests;
+
+	FStageSceneDocument Parsed;
+	FStageSceneParseReport Report;
+
+	// A cue list survives a round trip exactly: numbers, labels, fades, fixtures and attribute values.
+	FStageSceneDocument Document;
+	Document.Name = TEXT("Show");
+	FShowCue& First = Document.Cues.AddDefaulted_GetRef();
+	First.Number = 1.f;
+	First.Label = FText::FromString(TEXT("Walk-in, \"house\" lights"));
+	First.FadeTime = 3.5f;
+	FShowCueFixtureState& State = First.Fixtures.AddDefaulted_GetRef();
+	State.FixtureId = 101;
+	State.Attributes.Add(StageCraftTags::Attribute_Dimmer, 0.75f);
+	State.Attributes.Add(StageCraftTags::Attribute_Pan, -0.25f);
+	FShowCue& Second = Document.Cues.AddDefaulted_GetRef();
+	Second.Number = 2.5f;
+	Second.FadeTime = 0.f;
+
+	const FString Saved = FStageSceneStore::Serialize(Document);
+	TestEqual(TEXT("Version 3 parses"), Str(FStageSceneStore::Parse(Saved, Parsed, Report)), Str(EStageSceneResult::Success));
+	if (TestEqual(TEXT("Both cues"), Parsed.Cues.Num(), 2))
+	{
+		TestEqual(TEXT("Number"), Parsed.Cues[0].Number, 1.f);
+		TestEqual(TEXT("Label"), Parsed.Cues[0].Label.ToString(), First.Label.ToString());
+		TestEqual(TEXT("Fade"), Parsed.Cues[0].FadeTime, 3.5f);
+		TestEqual(TEXT("Decimal number"), Parsed.Cues[1].Number, 2.5f);
+		if (TestEqual(TEXT("Fixture"), Parsed.Cues[0].Fixtures.Num(), 1))
+		{
+			TestEqual(TEXT("Fixture id"), Parsed.Cues[0].Fixtures[0].FixtureId, 101);
+			const float* Dimmer = Parsed.Cues[0].Fixtures[0].Attributes.Find(StageCraftTags::Attribute_Dimmer);
+			TestTrue(TEXT("Dimmer value"), Dimmer && FMath::IsNearlyEqual(*Dimmer, 0.75f));
+			TestEqual(TEXT("Both attributes"), Parsed.Cues[0].Fixtures[0].Attributes.Num(), 2);
+		}
+	}
+	TestEqual(TEXT("Nothing dropped"), Report.InvalidCueEntries, 0);
+
+	// Migration 2 -> 3: a version 2 file has no cues and opens with an empty list; a stray "cues" in it is ignored.
+	const FString V2 = TEXT("{\"format\":\"StageCraftScene\",\"version\":2,\"items\":[],\"cues\":[{\"number\":1,\"fade\":1,\"fixtures\":[]}]}");
+	TestEqual(TEXT("Version 2 parses"), Str(FStageSceneStore::Parse(V2, Parsed, Report)), Str(EStageSceneResult::Success));
+	TestEqual(TEXT("... with no cues"), Parsed.Cues.Num(), 0);
+	TestEqual(TEXT("Version 1 parses with no cues"), Str(FStageSceneStore::Parse(MakeSceneJson(ValidItemFields, 1), Parsed, Report)), Str(EStageSceneResult::Success));
+	TestEqual(TEXT("... no cues"), Parsed.Cues.Num(), 0);
+
+	// A damaged cue list loads what it can: bad cues, fixtures and attributes are dropped and counted, duplicates repaired.
+	const FString Damaged = TEXT("{\"format\":\"StageCraftScene\",\"version\":3,\"items\":[],\"cues\":["
+		"{\"number\":2,\"label\":\"B\",\"fade\":9999,\"fixtures\":[{\"id\":7,\"attributes\":{\"StageCraft.Attribute.Dimmer\":0.5,\"StageCraft.Attribute.NoSuchThing\":1,\"StageCraft.Attribute.Pan\":\"left\"}},{\"id\":-3,\"attributes\":{}},\"junk\"]},"
+		"{\"number\":0,\"fade\":1},"
+		"{\"number\":\"one\"},"
+		"{\"number\":1,\"label\":\"A\"},"
+		"{\"number\":2.0001,\"label\":\"duplicate\"},"
+		"17]}");
+	TestEqual(TEXT("A damaged cue list parses"), Str(FStageSceneStore::Parse(Damaged, Parsed, Report)), Str(EStageSceneResult::Success));
+	if (TestEqual(TEXT("Two good cues"), Parsed.Cues.Num(), 2))
+	{
+		TestEqual(TEXT("Sorted"), Parsed.Cues[0].Label.ToString(), FString(TEXT("A")));
+		TestEqual(TEXT("The first of a duplicate number wins"), Parsed.Cues[1].Label.ToString(), FString(TEXT("B")));
+		TestEqual(TEXT("A huge fade is clamped"), Parsed.Cues[1].FadeTime, StageCueRules::MaxFadeTime);
+		TestEqual(TEXT("A missing fade is 0"), Parsed.Cues[0].FadeTime, 0.f);
+		if (TestEqual(TEXT("Only the good fixture"), Parsed.Cues[1].Fixtures.Num(), 1))
+		{
+			TestEqual(TEXT("... with only its good attribute"), Parsed.Cues[1].Fixtures[0].Attributes.Num(), 1);
+		}
+	}
+	// Unknown tag + wrong-typed value + bad fixture id + junk fixture + cue 0 + text number + duplicate + junk cue.
+	TestEqual(TEXT("Every dropped entry is counted"), Report.InvalidCueEntries, 8);
 	return true;
 }
 

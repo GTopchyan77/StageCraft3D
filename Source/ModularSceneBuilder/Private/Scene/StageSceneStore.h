@@ -14,6 +14,9 @@ struct FStageSceneParseReport
 
 	/** Items whose instance id repeated an earlier one in the file; they were given a fresh id. */
 	int32 RepairedIds = 0;
+
+	/** Cues, fixtures in cues and cue attributes dropped because they were invalid (format version 3). Logged; the rest loads. */
+	int32 InvalidCueEntries = 0;
 };
 
 /**
@@ -40,13 +43,17 @@ public:
 	 * reads (Docs/ADR/0010-edit-rules-autosave-scene-v2.md §4):
 	 *  - 1: items only.
 	 *  - 2: adds "environment" (sky, time of day, sun path, weather). A version 1 file loads with the default environment.
+	 *  - 3: adds "cues" (Docs/ADR/0011-cue-list-and-patch-sheet-export.md §2.5). Version 1 and 2 files load with no cues.
 	 */
-	static constexpr int32 FormatVersion = 2;
+	static constexpr int32 FormatVersion = 3;
 	/** The oldest version Parse still migrates. Older or newer files are refused as VersionMismatch and left untouched. */
 	static constexpr int32 MinReadableVersion = 1;
 	static constexpr int32 MaxItems = 10000;
 	static constexpr int32 MaxStateBytes = 64 * 1024;
 	static constexpr int32 MaxLabelLength = 256;
+	static constexpr int32 MaxCues = 2000;
+	static constexpr int32 MaxFixturesPerCue = 4096;
+	static constexpr int32 MaxAttributesPerFixture = 256;
 	/** The same limit every transform write uses (StageTransformRules::MaxCoordinate). */
 	static constexpr double MaxCoordinate = StageTransformRules::MaxCoordinate;
 

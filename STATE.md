@@ -2856,7 +2856,7 @@ Design record, with verified engine facts F1–F11: `Docs/ADR/0008-viewport-tool
 - Findings R2, R3, R4, R5 and R8 were re-read in source after the area reports came in. The runtime effects are inferred from code and have not been reproduced.
 - Status: **audit complete; findings awaiting review by Gevor.** Nothing was implemented.
 
-**Commit:** uncommitted (working tree).
+**Commit:** `a28dbf6` (together with #37; hash set 2026-10-21).
 
 **Housekeeping.** Commit `960f5da` ("ngg-assets.json") only changed `.claude/.ngg-assets.json`, which is MCP tooling state. It had no entry; it is recorded here.
 
@@ -2991,8 +2991,9 @@ All `Source/...` paths above are under `Source/ModularSceneBuilder/`.
   Moving-head beams stay visible with the sky on (screenshot), which disproves the audit's inference.
 - **Not verified by a person:** one undo step per spin-box drag by mouse (the transaction itself is tested), and the dialog's buttons and name field by mouse.
 - Status: **implemented, awaiting manual verification** of those items.
+- **2026-10-21:** Gevor reported the features verified ("I've verified the features") and accepted the 120 s autosave default in the controller defaults; no user setting for the interval for now. Status: **done.**
 
-**Commit:** uncommitted (working tree). It is staged together with #36, which was also still uncommitted.
+**Commit:** `a28dbf6` (together with #36; hash set 2026-10-21).
 
 **Known issues / follow-ups**
 - Audit R2 is still open: a partial load is marked clean, so re-saving drops the skipped items, and a load does not wait for pending imports. R6 (restored state not sanitized) and R8 (corrupt `Imports.json` overwritten) are also open.
@@ -3001,3 +3002,96 @@ All `Source/...` paths above are under `Source/ModularSceneBuilder/`.
 - `exit` / `RequestExit` and PIE never show the prompt (by design). An autosave left behind by such an exit stays recoverable.
 - Re-measure the sky with no second editor open. The local video memory budget the OS reported fell from 7.2 GB to 4.3–4.5 GB during the runs, most likely because the other editor was using the GPU.
 - Cues are still not saved (needs format version 3).
+
+## #38 — Cue list panel, cues saved in scenes (format v3) and undoable, DMX patch sheet export as PDF + CSV (2026-10-21)
+
+**Request (Gevor).** Next milestone after #37: a Show Control / Cue panel and professional documentation export. Scope chosen by Gevor (2026-10-21): the full cue list (Store/Update, Go/Back, Delete, label and fade time, Internal/External), cues saved with scenes, cue edits undoable; and a patch sheet as PDF + CSV. Design: `Docs/ADR/0011-cue-list-and-patch-sheet-export.md`.
+
+**Housekeeping first.** #36 and #37 still said "uncommitted"; both now carry `a28dbf6`. #37 records Gevor's verification and his decision to keep the 120 s autosave default without a user setting.
+
+**What changed and why**
+- **Cue rules (`StageCueRules`, `Show/ShowControlTypes.h/.cpp`).**
+  - **Root cause addressed:** the Phase 5 cue engine accepted any number (clamped to 0), any fade, and kept duplicates if two numbers were within the 0.001 lookup tolerance.
+  - **Rules:** a cue number is finite and 0.001 to 9999.999, stored rounded to 0.001; a fade is clamped to 0..600 s; a label is trimmed and at most 256 characters. `SanitizeCueList` repairs untrusted lists: invalid and duplicate numbers dropped (the first wins), the rest sorted.
+  - **Float pitfall found by the tests:** near 10000 a float step is about 0.001, so float rounding let 10000 pass as 9999.999 and turned 1.5 into 1.5000001. Rounding now goes through whole thousandths in double precision (`ToThousandths`), and divides by 1000 instead of multiplying by 0.001.
+- **Show control (`UShowControlSubsystem`).**
+  - `StoreCue` now returns false for an invalid number instead of clamping it to cue 0, and inserts in order.
+  - New: `UpdateCue` (label and fade, the recorded look kept; no event when nothing changed), `Back` (the previous cue with its own fade), `FindCue`, and `ReplaceCues` (undo/redo: replaces the list but keeps playback). `SetCues` (loading) still resets playback and now repairs the list.
+- **Request path.**
+  - New GameMode rule `AStageCraftGameModeBase::EvaluateCueRequest(Player, EStageCueRequest, CueNumber)` (BlueprintNativeEvent). It refuses when there is no show control, an invalid number for Store, a missing cue for Update or Delete, and playback while the source is External. Storing under External is allowed, because it captures the look the external console sends. Unknown request kinds are denied by default.
+  - New controller requests: `RequestStoreCue`, `RequestUpdateCue`, `RequestDeleteCue`, `RequestGoToCue`, `RequestCueGo`, `RequestCueBack`, `RequestSetControlSource`. Each asks the GameMode, calls the subsystem and reports refusals on `OnRequestRejected` (status bar) with a reason ("This is the last cue.", "An external console is driving the fixtures...").
+- **Undo.**
+  - `FStageCueListCommand` (new, `History/StageCueCommands`) holds the whole cue list before and after one edit. Undo and Redo write it through a new `IStageItemEditor::SetCueList`, which the live editor implements with `ReplaceCues`. It has a default implementation (Invalid), so test fakes are unchanged.
+  - `UStageEditHistoryComponent::RecordCueListChange` ends any open inspector transaction first, so a drag and a cue edit never merge.
+  - Store, Update and Delete are undoable. Playback and the control source are not, like a lighting console. An Update that changes nothing records nothing.
+- **Dirty and scene format v3.**
+  - `UStageSessionSubsystem` binds `OnCueListChanged` (after play has begun) and marks the stage dirty, so autosave and the exit prompt (#37) cover cue edits.
+  - `FStageSceneStore::FormatVersion` is 3. A `cues` array holds number, label, fade and per-fixture attributes (tag names, values). Version 1 and 2 files load with no cues; a stray `cues` in a v2 file is ignored.
+  - Reading is tolerant and bounded: at most 2000 cues, 4096 fixtures per cue and 256 attributes per fixture. Unknown tags, non-finite values, bad fixture ids and bad cue numbers are dropped and counted (`FStageSceneParseReport::InvalidCueEntries`, logged on load).
+  - `UStageSceneComponent` captures the cue list with the stage and applies it after the items, so the fixture IDs exist, and before `MarkClean`.
+- **Cue panel (`UStageCuePanel`, new).**
+  - A code-built UMG dock panel like the Patch panel; `DA_Panel_Cues` (tag `StageCraft.Panel.Cues`) was created headlessly by `Scripts/Content/create_cue_content.py`. It is a tab in the default layout's bottom stack, after Faders and Patch, and in File › Production › Cue List...
+  - **Transport row:** GO, BACK, the active cue, label and "(fading)", the cue count, and an INTERNAL / EXTERNAL DMX segment with the active source lit.
+  - **Record row:** cue number, which suggests the next whole number; label; fade; and STORE, which reads RE-RECORD when that number exists.
+  - **Cue list:** number, label and fade (edited in place, committed through `RequestUpdateCue`), fixture count, GO TO and DELETE. The active row is highlighted.
+  - It reads the subsystem only and rebuilds on the next tick after `OnCueListChanged`, `OnCueStarted`, `OnCueFinished` or `OnControlSourceChanged`; there is no tick and no polling. Every write goes through the controller.
+- **Patch sheet export.**
+  - **`FStagePdfDocument` (new, `Report/StagePdfWriter`):** a dependency-free PDF 1.4 writer (written by a subagent; reviewed and tested here). It uses the standard Helvetica and Helvetica-Bold fonts with WinAnsi encoding and real Adobe metrics for truncation, and writes a correct xref table. Non-Latin text prints as "?" in the PDF; the CSV keeps full Unicode.
+  - **`StagePatchSheet` (new, pure):** sorts and counts the rows (patched, unpatched, conflicts, universes) and renders a print-ready A4 landscape PDF (title block on every page, repeated header row, zebra rows, "Page n of m" footer) and a CSV (UTF-8 BOM, CSV-injection-safe through `StageBillOfMaterials::EscapeCsvField`).
+  - **`UStagePatchSheetSubsystem` (new, world):** gathers the rows on the game thread from show control (FID, label, type, mode, universe/address, footprint, position in metres, conflict). It renders and writes both files on a worker to `Saved/StageCraft/Reports/PatchSheet_<Scene>_<time>.pdf/.csv` (both or neither), one export at a time, and the result goes to the status bar.
+  - **`StageReportFiles` (new, private):** the report folder, unique file stems and atomic byte writes, now shared by the bill of materials export.
+  - **Entry points:** File › Production › Export Patch Sheet (PDF + CSV), an EXPORT PDF button on the Patch panel, `AModularPlayerController::RequestExportPatchSheet`.
+- **Dev console commands** (compiled out of Shipping): `StageCraft.Show.Cue Store <n> [fade] [label] | Update <n> <fade> [label] | Delete <n> | Go | Back | GoTo <n> | Source Internal|External | List`, and `StageCraft.Report.ExportPatch`.
+
+**Files changed**
+- **New:**
+  - `Docs/ADR/0011-cue-list-and-patch-sheet-export.md`
+  - `Scripts/Content/create_cue_content.py`
+  - `Content/StageCraft/UI/Panels/DA_Panel_Cues.uasset`
+  - `Source/ModularSceneBuilder/Private/Show/ShowControlTypes.cpp`
+  - `Source/ModularSceneBuilder/Public/History/StageCueCommands.h`, `Private/History/StageCueCommands.cpp`
+  - `Source/ModularSceneBuilder/Public/UI/StageCuePanel.h`, `Private/UI/StageCuePanel.cpp`
+  - `Source/ModularSceneBuilder/Public/Report/StagePdfWriter.h`, `Private/Report/StagePdfWriter.cpp`
+  - `Source/ModularSceneBuilder/Public/Report/StagePatchSheet.h`, `Private/Report/StagePatchSheet.cpp`
+  - `Source/ModularSceneBuilder/Public/Report/StagePatchSheetSubsystem.h`, `Private/Report/StagePatchSheetSubsystem.cpp`
+  - `Source/ModularSceneBuilder/Private/Report/StageReportFiles.h/.cpp`
+  - Tests: `Private/Show/Tests/StageCueRulesTests.cpp`, `Private/Report/Tests/StagePatchSheetTests.cpp`
+- **Show, rules, history:** `Public/Show/ShowControlTypes.h`, `Public/Subsystems/ShowControlSubsystem.h`, `Private/Subsystems/ShowControlSubsystem.cpp`, `Public/Game/StageCraftGameModeBase.h`, `Private/Game/StageCraftGameModeBase.cpp`, `Public/Player/ModularPlayerController.h`, `Private/Player/ModularPlayerController.cpp`, `Public/History/StageEditCommand.h`, `Public/History/StageEditHistoryComponent.h`, `Private/History/StageEditHistoryComponent.cpp`, `Private/Show/StageShowConsoleCommands.cpp`
+- **Scenes and session:** `Public/Scene/StageSceneTypes.h`, `Private/Scene/StageSceneStore.h`, `Private/Scene/StageSceneStore.cpp`, `Private/Scene/StageSceneComponent.cpp`, `Public/Subsystems/StageSessionSubsystem.h`, `Private/Subsystems/StageSessionSubsystem.cpp`
+- **Reports and UI:** `Private/Report/StageBillOfMaterialsSubsystem.cpp`, `Private/Report/StageReportConsoleCommands.cpp`, `Public/UI/StagePatchPanel.h`, `Private/UI/StagePatchPanel.cpp`, `Public/UI/StageStatusBarWidget.h`, `Private/UI/StageStatusBarWidget.cpp`
+- **Workspace:** `Public/Workspace/StageWorkspaceTypes.h`, `Private/Workspace/StageWorkspaceTypes.cpp`, `Private/Workspace/StageWorkspaceShell.cpp`, `Private/Workspace/SStageWorkspaceMenuBar.cpp`
+- **Tests changed:** `Private/History/Tests/StageHistoryWorldTests.cpp` (new `History.Cues`), `Private/Scene/Tests/StageSceneStoreTests.cpp` (new `Scene.Cues`; labels for v3)
+- **Docs:** `Docs/CURRENT_SYSTEMS.md`, `tasks/todo.md`, this file
+- **Not changed:** no Blueprints, maps, input assets or plugins. Config unchanged: panel assets are cooked by the existing `StagePanel` Asset Manager rule.
+
+**Verification (Claude, 2026-10-21)**
+- **Builds (UE 5.8):** Editor Development, Game Development and Game Shipping (`-DisableAdaptiveUnity`) all succeeded with no warnings or errors.
+- **Automation:** 54/54 StageCraft tests passed, exit code 0. New tests:
+  - `Show.CueRules`: number range including 0.0004, 10000, NaN and infinity; rounding; fade and label limits; list repair.
+  - `History.Cues` (real game world): the GameMode cue rules; Store, Update and re-store ordering; Go/Back/GoTo and the end of the list; the External refusal; ReplaceCues keeping playback; SetCues repairing and resetting; undo/redo of a delete; a cue edit marking the stage dirty; a cue edit closing an open drag as its own step.
+  - `Scene.Cues`: exact round trip; v1 and v2 migrate with no cues; a damaged list keeps 2 good cues and counts all 8 dropped entries.
+  - `Report.PatchSheet` and `Report.Pdf`: sorting and counts, sanitizing, CSV injection and quoting, PDF structure (xref offsets, stream lengths, page count for 0 and 100 rows), escaping, non-Latin to "?", text metrics.
+  - The first run caught the float rounding bug above (2 failures), fixed before the final run.
+- **Scripted Standalone runs** (`-game -windowed`, logs `Saved/Logs/R38_Run1-4.log`, screenshots `ScreenShot00025`-`00031`):
+  1. **Run 1:**
+     - Store 1, 2 and 1.5 sorted. Update 2 changed the label and fade. Store 0 was refused with "Cue numbers run from 0.001 to 9,999.999".
+     - Go → 1 → 1.5, Back → 1. External dropped the running fade and refused Go with the reason.
+     - Ctrl+Z undid "Edit Cue 2" and redo re-applied it; Delete 1.5 was undone.
+     - The patch sheet was exported: `PatchSheet_R37_Test_20261021-102508.pdf` (3.6 KB, checked visually: title block, both fixtures, 1.001–1.021 / 1.022–1.042, positions, footer) and `.csv`.
+     - Saved "R38 Cues" as a version 3 file with 3 cues. Loading v2 "R37 Test" gave 0 cues; loading "R38 Cues" again gave the 3 cues and a clean stage.
+  2. **Runs 2 and 3:** the default layout shows the Cues tab beside Faders and Patch. In the screenshots the active cue row is highlighted, "Cue 2 Dim look" shows, External shows "External DMX is driving the fixtures" with GO/BACK disabled, and the Patch panel shows EXPORT PDF. Run 2 showed the active Internal/External segment greyed (it read as disabled); that is fixed: the active segment is now lit (run 3). Gevor's layout was saved and restored around these runs.
+  3. **Run 4 (playback on real fixtures):** cue 1 had both spots at dimmer 0.2 and cue 2 at 1.0 with a 2 s fade. GoTo 1 gave 5000 lm; 1 s into Go to cue 2 it read 15028 lm, and 25000 lm at the end; Back gave 5000 lm again.
+- **Not run:** a new packaged build (the panel asset is cooked by the existing `StagePanel` rule, the same as the other panels).
+- **Not verified by a person:** the Cue panel by mouse (buttons, inline label and fade edits, STORE / RE-RECORD), the File › Production entries, the EXPORT PDF button, and printing the PDF.
+- Status: **implemented, awaiting manual verification.**
+
+**Commit:** uncommitted (working tree).
+
+**Known issues / follow-ups**
+- **Saved layouts:** a layout saved before this change (including the restored session) has no Cues tab. The panel opens floating from File › Production › Cue List... or the Window menu, and Layout › Reset puts it in the bottom stack.
+- **PDF text:** non-Latin characters print as "?" (standard fonts). Embedding a Unicode font is a follow-up if needed.
+- **Cue keys:** there is no GO keyboard shortcut yet; the panel button and the console command only.
+- **Undo gaps (from #37):** fixture attribute, patch, visibility, lock and label edits are still not undoable.
+- **Cue features not built:** tracking, per-attribute timing, follow/wait times and a timeline. Clear Stage keeps the cue list (cues are keyed by fixture ID).
+- **Test coverage:** `History.Cues` runs without fixtures (no fixture data in a bare world); fixture playback is covered by scripted run 4.
+- **Audit risks still open:** R2, R6 and R8.

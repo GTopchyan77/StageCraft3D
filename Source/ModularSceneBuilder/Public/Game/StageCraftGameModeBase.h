@@ -7,6 +7,7 @@
 #include "Data/StageParameterTypes.h"
 #include "Economy/StageEconomyTypes.h"
 #include "Game/StageSessionTypes.h"
+#include "Show/ShowControlTypes.h"
 #include "StageCraftGameModeBase.generated.h"
 
 /**
@@ -56,6 +57,15 @@ public:
 	 * Not a BlueprintNativeEvent itself: it composes EvaluateParameterChange, which is the extension point.
 	 */
 	FStageEconomyResultInfo EvaluateTransformChange(const APlayerController* Player, const class AModularBaseActor& Item, const FTransform& NewTransform) const;
+
+	/**
+	 * May Player make a cue request now (Docs/ADR/0011-cue-list-and-patch-sheet-export.md §2.2)? Refused without show control in
+	 * the world; Store / Update / Delete need a valid cue number (StageCueRules), and Update / Delete an existing cue; playback
+	 * is refused while an external console drives the fixtures. CueNumber is ignored for Play without a target (Go, Back) and
+	 * for SetControlSource.
+	 */
+	UFUNCTION(BlueprintNativeEvent, BlueprintCallable, Category = "StageCraft|Rules")
+	FStageEconomyResultInfo EvaluateCueRequest(const APlayerController* Player, EStageCueRequest Request, float CueNumber) const;
 
 	/** May Player import model files into the Library? Off when SessionRules.bAllowModelImport is false. */
 	UFUNCTION(BlueprintNativeEvent, BlueprintCallable, Category = "StageCraft|Rules")

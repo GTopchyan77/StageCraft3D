@@ -8,6 +8,7 @@
 #include "Data/BaseItemData.h"
 #include "Engine/World.h"
 #include "History/StageBatchCommand.h"
+#include "History/StageCueCommands.h"
 #include "History/StageEditHistorySubsystem.h"
 #include "History/StageItemCommands.h"
 #include "History/StageItemSnapshot.h"
@@ -16,6 +17,7 @@
 #include "ModularSceneBuilder.h"
 #include "Placement/StagePlacementToolComponent.h"
 #include "Placement/StageSpanToolComponent.h"
+#include "Subsystems/ShowControlSubsystem.h"
 #include "Subsystems/StageSessionSubsystem.h"
 
 #include UE_INLINE_GENERATED_CPP_BY_NAME(StageEditHistoryComponent)
@@ -119,6 +121,18 @@ namespace StageEditHistory
 			return Session.ApplyParameterChange(Item, ParameterId, Value) ? EStageCommandResult::Succeeded : EStageCommandResult::Invalid;
 		}
 
+		virtual EStageCommandResult SetCueList(const TArray<FShowCue>& Cues) override
+		{
+			UShowControlSubsystem* Show = UWorld::GetSubsystem<UShowControlSubsystem>(Session.GetWorld());
+			if (!Show)
+			{
+				return EStageCommandResult::Invalid;
+			}
+			// The session marks itself dirty through OnCueListChanged, as for a cue edit made in the panel.
+			Show->ReplaceCues(Cues);
+			return EStageCommandResult::Succeeded;
+		}
+
 	private:
 		UStageSessionSubsystem& Session;
 		USpawnSystemComponent& SpawnSystem;
@@ -193,6 +207,12 @@ void UStageEditHistoryComponent::HandleItemPlaced(AModularBaseActor* PlacedActor
 	{
 		Record(MakeShared<FStagePlaceItemCommand>(PlacedActor->CaptureSnapshot()));
 	}
+}
+
+void UStageEditHistoryComponent::RecordCueListChange(const FText& Description, const TArray<FShowCue>& Before, const TArray<FShowCue>& After)
+{
+	EndTransaction();
+	Record(MakeShared<FStageCueListCommand>(Description, Before, After));
 }
 
 void UStageEditHistoryComponent::RecordAsOneStep(TArray<TSharedRef<IStageEditCommand>> Commands, const FText& BatchDescription) const

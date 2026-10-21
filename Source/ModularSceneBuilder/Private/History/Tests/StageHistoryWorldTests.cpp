@@ -2,7 +2,7 @@
 
 // Integration tests for undo/redo against a real game world (Docs/ADR/0010-edit-rules-autosave-scene-v2.md §2): the rules
 // decide every undone or redone transform (a locked item stays put, a group step is all-or-nothing), damaged steps are
-// dropped, and a continuous edit inside a transaction becomes exactly one step.
+// dropped, and a continuous edit inside a transaction becomes exactly one step. History.Cues covers cue edits (ADR 0011 §2).
 // Run: UnrealEditor-Cmd <project> -ExecCmds="Automation RunTests StageCraft.History; Quit" -unattended -nullrhi
 
 #include "CoreMinimal.h"
@@ -22,6 +22,8 @@
 #include "Interaction/StageParameterInterface.h"
 #include "Interaction/StageTransformRules.h"
 #include "Misc/AutomationTest.h"
+#include "Subsystems/ShowControlSubsystem.h"
+#include "Subsystems/StageSessionSubsystem.h"
 
 #include <limits>
 
@@ -266,6 +268,120 @@ bool FStageHistoryTransactionTest::RunTest(const FString& Parameters)
 	const int32 StepsNow = Stage.History->GetUndoCount();
 	Stage.EditHistory->EndTransaction();
 	TestEqual(TEXT("A stray end records nothing"), Stage.History->GetUndoCount(), StepsNow);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FStageHistoryCuesTest, "StageCraft.History.Cues", StageHistoryWorldTests::Flags)
+
+// The cue list against a real world (Docs/ADR/0011-cue-list-and-patch-sheet-export.md §2): the GameMode's cue rules, playback
+// order and the External refusal, undo / redo of cue edits as whole-list steps, and cue edits marking the stage dirty.
+bool FStageHistoryCuesTest::RunTest(const FString& Parameters)
+{
+	using namespace StageHistoryWorldTests;
+
+	FScopedStage Stage;
+	UShowControlSubsystem* Show = UWorld::GetSubsystem<UShowControlSubsystem>(Stage.World);
+	UStageSessionSubsystem* Session = UWorld::GetSubsystem<UStageSessionSubsystem>(Stage.World);
+	if (!TestNotNull(TEXT("Show control"), Show) || !TestNotNull(TEXT("Session"), Session) || !TestNotNull(TEXT("History"), Stage.History))
+	{
+		return false;
+	}
+	const auto Numbers = [Show]()
+	{
+		TArray<float> Result;
+		for (const FShowCue& Cue : Show->GetCues())
+		{
+			Result.Add(Cue.Number);
+		}
+		return Result;
+	};
+	const auto Allowed = [&Stage](EStageCueRequest Request, float Number)
+	{
+		return Stage.GameMode->EvaluateCueRequest(Stage.Player, Request, Number).IsSuccess();
+	};
+
+	// Rules.
+	TestTrue(TEXT("Rules: storing cue 1 is allowed"), Allowed(EStageCueRequest::Store, 1.f));
+	TestFalse(TEXT("Rules: cue 0 is refused"), Allowed(EStageCueRequest::Store, 0.f));
+	TestFalse(TEXT("Rules: a negative cue is refused"), Allowed(EStageCueRequest::Store, -2.f));
+	TestFalse(TEXT("Rules: a NaN cue is refused"), Allowed(EStageCueRequest::Store, std::numeric_limits<float>::quiet_NaN()));
+	TestFalse(TEXT("Rules: cue 10000 is refused"), Allowed(EStageCueRequest::Store, 10000.f));
+	TestFalse(TEXT("Rules: updating a cue that does not exist is refused"), Allowed(EStageCueRequest::Update, 4.f));
+	TestFalse(TEXT("Rules: deleting a cue that does not exist is refused"), Allowed(EStageCueRequest::Delete, 4.f));
+	TestFalse(TEXT("Rules: a missing player is refused"), Stage.GameMode->EvaluateCueRequest(nullptr, EStageCueRequest::Store, 1.f).IsSuccess());
+
+	// Store keeps the list sorted; decimals insert; re-storing a number replaces it rather than adding a second.
+	TestFalse(TEXT("Store refuses an invalid number itself too"), Show->StoreCue(0.f, FText::GetEmpty(), 1.f));
+	TestTrue(TEXT("Store 1"), Show->StoreCue(1.f, FText::FromString(TEXT("Walk-in")), 3.f));
+	TestTrue(TEXT("Store 2"), Show->StoreCue(2.f, FText::GetEmpty(), 2.f));
+	TestTrue(TEXT("Store 1.5"), Show->StoreCue(1.5f, FText::GetEmpty(), 900.f));
+	TestTrue(TEXT("Re-store 2"), Show->StoreCue(2.0004f, FText::FromString(TEXT("Again")), 1.f));
+	TestTrue(TEXT("Sorted, no duplicate"), Numbers() == TArray<float>({ 1.f, 1.5f, 2.f }));
+	TestEqual(TEXT("A fade above the limit is clamped"), Show->FindCue(1.5f)->FadeTime, StageCueRules::MaxFadeTime);
+	TestEqual(TEXT("Re-storing replaced the label"), Show->FindCue(2.f)->Label.ToString(), FString(TEXT("Again")));
+	TestTrue(TEXT("Rules: updating an existing cue is allowed"), Allowed(EStageCueRequest::Update, 2.f));
+
+	// Update changes label and fade only.
+	TestTrue(TEXT("Update"), Show->UpdateCue(1.f, FText::FromString(TEXT("  Doors  ")), 4.f));
+	TestEqual(TEXT("... label trimmed"), Show->FindCue(1.f)->Label.ToString(), FString(TEXT("Doors")));
+	TestEqual(TEXT("... fade"), Show->FindCue(1.f)->FadeTime, 4.f);
+	TestFalse(TEXT("Update of a missing cue"), Show->UpdateCue(7.f, FText::GetEmpty(), 1.f));
+
+	// Playback: Go walks forward, Back walks back with no wrap, External refuses.
+	TestFalse(TEXT("Back before any Go"), Show->Back());
+	TestTrue(TEXT("Go"), Show->Go());
+	TestEqual(TEXT("... cue 1"), Show->GetActiveCueNumber(), 1.f);
+	TestTrue(TEXT("Go"), Show->Go());
+	TestEqual(TEXT("... cue 1.5"), Show->GetActiveCueNumber(), 1.5f);
+	TestTrue(TEXT("Back"), Show->Back());
+	TestEqual(TEXT("... cue 1"), Show->GetActiveCueNumber(), 1.f);
+	TestFalse(TEXT("Back at the first cue"), Show->Back());
+	TestTrue(TEXT("Go To 2"), Show->GoToCue(2.f));
+	TestFalse(TEXT("Go after the last cue"), Show->Go());
+	Show->SetControlSource(EStageControlSource::External);
+	TestFalse(TEXT("Rules: playback under external DMX is refused"), Allowed(EStageCueRequest::Play, 0.f));
+	TestTrue(TEXT("Rules: storing under external DMX is allowed"), Allowed(EStageCueRequest::Store, 3.f));
+	TestFalse(TEXT("Go To under external DMX"), Show->GoToCue(1.f));
+	Show->SetControlSource(EStageControlSource::Internal);
+
+	// ReplaceCues (undo) keeps playback; SetCues (loading) resets it and repairs the list.
+	const TArray<FShowCue> Snapshot = Show->GetCues();
+	Show->ReplaceCues(Snapshot);
+	TestEqual(TEXT("ReplaceCues keeps the active cue"), Show->GetActiveCueNumber(), 2.f);
+	TArray<FShowCue> Damaged = Snapshot;
+	Damaged.Add(Snapshot[0]);
+	Damaged.AddDefaulted_GetRef().Number = -1.f;
+	Show->SetCues(Damaged);
+	TestTrue(TEXT("SetCues drops duplicates and invalid numbers"), Numbers() == TArray<float>({ 1.f, 1.5f, 2.f }));
+	TestTrue(TEXT("SetCues resets playback"), Show->GetActiveCueNumber() < 0.f);
+
+	// Undo / redo of cue edits, recorded the way the controller records them; and cue edits make the stage dirty.
+	Session->MarkClean();
+	const TArray<FShowCue> BeforeDelete = Show->GetCues();
+	TestTrue(TEXT("Delete 1.5"), Show->DeleteCue(1.5f));
+	TestTrue(TEXT("A cue edit makes the stage dirty"), Session->IsDirty());
+	Stage.EditHistory->RecordCueListChange(FText::FromString(TEXT("Delete Cue 1.5")), BeforeDelete, Show->GetCues());
+	TestEqual(TEXT("One step"), Stage.History->GetUndoCount(), 1);
+	TestEqual(TEXT("Undo the delete"), Str(Stage.EditHistory->Undo()), Str(EStageCommandResult::Succeeded));
+	TestTrue(TEXT("... cue 1.5 is back"), Show->FindCue(1.5f) != nullptr);
+	TestEqual(TEXT("Redo the delete"), Str(Stage.EditHistory->Redo()), Str(EStageCommandResult::Succeeded));
+	TestTrue(TEXT("... gone again"), Show->FindCue(1.5f) == nullptr);
+
+	// A cue edit while an inspector drag is open: the drag becomes its own step first, they never merge.
+	AModularBaseActor* Item = Stage.SpawnItem(FVector::ZeroVector);
+	if (TestNotNull(TEXT("Item"), Item))
+	{
+		const int32 Steps = Stage.History->GetUndoCount();
+		Stage.EditHistory->BeginTransaction();
+		Stage.MoveAndRecord(*Item, FVector(50.0, 0.0, 0.0));
+		const TArray<FShowCue> BeforeStore = Show->GetCues();
+		Show->StoreCue(5.f, FText::GetEmpty(), 1.f);
+		Stage.EditHistory->RecordCueListChange(FText::FromString(TEXT("Store Cue 5")), BeforeStore, Show->GetCues());
+		TestFalse(TEXT("The cue edit closed the open drag"), Stage.EditHistory->IsTransactionOpen());
+		TestEqual(TEXT("... drag and cue edit are two steps"), Stage.History->GetUndoCount(), Steps + 2);
+		Stage.EditHistory->Undo();
+		TestTrue(TEXT("... undo removes the cue only"), Show->FindCue(5.f) == nullptr && Item->GetActorLocation().Equals(FVector(50.0, 0.0, 0.0)));
+	}
 	return true;
 }
 

@@ -145,6 +145,80 @@ namespace StageShowCommands
 			ShowControl->GetStrobingFixtureCount());
 	}
 
+	/** Cue requests through the controller (the Cue panel's path): Store <n> [fade] [label...], Update <n> <fade> [label...], Delete <n>, Go, Back, GoTo <n>, Source Internal|External, List. */
+	void Cue(const TArray<FString>& Args, UWorld* World)
+	{
+		AModularPlayerController* Controller = GetController(World);
+		const UShowControlSubsystem* ShowControl = World ? World->GetSubsystem<UShowControlSubsystem>() : nullptr;
+		if (!Controller || !ShowControl || Args.IsEmpty())
+		{
+			UE_LOG(LogStageCraft, Display, TEXT("StageCraft.Show.Cue Store <n> [fade] [label] | Update <n> <fade> [label] | Delete <n> | Go | Back | GoTo <n> | Source Internal|External | List"));
+			return;
+		}
+
+		const FString& Verb = Args[0];
+		float Number = 0.f;
+		const bool bHasNumber = Args.Num() >= 2 && LexTryParseString(Number, *Args[1]);
+		float Fade = 2.f;
+		const bool bHasFade = Args.Num() >= 3 && LexTryParseString(Fade, *Args[2]);
+		FString Label;
+		for (int32 Index = 3; Index < Args.Num(); ++Index)
+		{
+			Label += (Label.IsEmpty() ? TEXT("") : TEXT(" ")) + Args[Index];
+		}
+
+		bool bOk = false;
+		if (Verb == TEXT("Store") && bHasNumber)
+		{
+			bOk = Controller->RequestStoreCue(Number, FText::FromString(Label), bHasFade ? Fade : 2.f);
+		}
+		else if (Verb == TEXT("Update") && bHasNumber && bHasFade)
+		{
+			bOk = Controller->RequestUpdateCue(Number, FText::FromString(Label), Fade);
+		}
+		else if (Verb == TEXT("Delete") && bHasNumber)
+		{
+			bOk = Controller->RequestDeleteCue(Number);
+		}
+		else if (Verb == TEXT("Go"))
+		{
+			bOk = Controller->RequestCueGo();
+		}
+		else if (Verb == TEXT("Back"))
+		{
+			bOk = Controller->RequestCueBack();
+		}
+		else if (Verb == TEXT("GoTo") && bHasNumber)
+		{
+			bOk = Controller->RequestGoToCue(Number);
+		}
+		else if (Verb == TEXT("Source") && Args.Num() >= 2)
+		{
+			bOk = Controller->RequestSetControlSource(Args[1] == TEXT("External") ? EStageControlSource::External : EStageControlSource::Internal);
+		}
+		else if (Verb != TEXT("List"))
+		{
+			UE_LOG(LogStageCraft, Display, TEXT("StageCraft.Show.Cue: unknown or incomplete command \"%s\"."), *FString::Join(Args, TEXT(" ")));
+			return;
+		}
+
+		if (Verb != TEXT("List"))
+		{
+			UE_LOG(LogStageCraft, Display, TEXT("StageCraft.Show.Cue %s: %s."), *FString::Join(Args, TEXT(" ")), bOk ? TEXT("done") : TEXT("refused"));
+		}
+		for (const FShowCue& Each : ShowControl->GetCues())
+		{
+			UE_LOG(LogStageCraft, Display, TEXT("StageCraft.Show.Cue: %s%.3f \"%s\" fade %.2f s, %d fixtures."),
+				FMath::IsNearlyEqual(Each.Number, ShowControl->GetActiveCueNumber(), 0.0005f) ? TEXT("> ") : TEXT("  "),
+				Each.Number, *Each.Label.ToString(), Each.FadeTime, Each.Fixtures.Num());
+		}
+		UE_LOG(LogStageCraft, Display, TEXT("StageCraft.Show.Cue: %d cues, active %.3f, %s, source %s."), ShowControl->GetCues().Num(),
+			ShowControl->GetActiveCueNumber(), ShowControl->IsFading() ? TEXT("fading") : TEXT("idle"),
+			*UEnum::GetValueAsString(ShowControl->GetControlSource()));
+	}
+
+	FAutoConsoleCommandWithWorldAndArgs CueCommand(TEXT("StageCraft.Show.Cue"), TEXT("Store <n> [fade] [label] | Update <n> <fade> [label] | Delete <n> | Go | Back | GoTo <n> | Source Internal|External | List (validated, undoable like the Cue panel)."),
+		FConsoleCommandWithWorldAndArgsDelegate::CreateStatic(&Cue));
 	FAutoConsoleCommandWithWorldAndArgs SetCommand(TEXT("StageCraft.Show.Set"), TEXT("<Attribute|Param> <value> Inspector-equivalent edit of the selected item (validated)."),
 		FConsoleCommandWithWorldAndArgsDelegate::CreateStatic(&Set));
 	FAutoConsoleCommandWithWorldAndArgs PhotometricsCommand(TEXT("StageCraft.Show.Photometrics"), TEXT("Logs the selected fixture's beam angle, intensity, throw, illuminance and strobe rate."),

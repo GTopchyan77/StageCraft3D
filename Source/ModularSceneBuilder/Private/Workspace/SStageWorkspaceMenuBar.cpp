@@ -18,8 +18,10 @@
 #include "Player/ModularPlayerController.h"
 #include "Render/StageRenderSubsystem.h"
 #include "Report/StageBillOfMaterialsSubsystem.h"
+#include "Report/StagePatchSheetSubsystem.h"
 #include "Scene/StageSceneComponent.h"
 #include "Scene/StageSceneStore.h"
+#include "Subsystems/ShowControlSubsystem.h"
 #include "Subsystems/StageSessionSubsystem.h"
 #include "Widgets/Input/SEditableTextBox.h"
 #include "Widgets/Input/SSlider.h"
@@ -161,6 +163,16 @@ void SStageWorkspaceMenuBar::FillReportSection(FMenuBuilder& MenuBuilder, const 
 		FUIAction(
 			FExecuteAction::CreateLambda([WeakController]() { if (WeakController.IsValid()) { WeakController->RequestExportBillOfMaterials(); } }),
 			FCanExecuteAction::CreateLambda([bCanExport = !Report->IsExporting() && !Current.IsEmpty()]() { return bCanExport; })));
+	const UStagePatchSheetSubsystem* PatchSheet = UWorld::GetSubsystem<UStagePatchSheetSubsystem>(WeakController->GetWorld());
+	const UShowControlSubsystem* ShowControl = UWorld::GetSubsystem<UShowControlSubsystem>(WeakController->GetWorld());
+	MenuBuilder.AddMenuEntry(LOCTEXT("ExportPatchSheet", "Export Patch Sheet (PDF + CSV)"),
+		LOCTEXT("ExportPatchSheetTip", "Write the DMX patch sheet (fixture ID, type, mode, universe and address, position) as a print-ready PDF and a CSV to the Reports folder."), FSlateIcon(),
+		FUIAction(
+			FExecuteAction::CreateLambda([WeakController]() { if (WeakController.IsValid()) { WeakController->RequestExportPatchSheet(); } }),
+			FCanExecuteAction::CreateLambda([bCanExport = PatchSheet && ShowControl && !PatchSheet->IsExporting() && !ShowControl->GetFixtures().IsEmpty()]() { return bCanExport; })));
+	MenuBuilder.AddMenuEntry(LOCTEXT("ShowCues", "Cue List..."),
+		LOCTEXT("ShowCuesTip", "Show the Cues panel: store, play and edit the show's lighting cues."), FSlateIcon(),
+		FUIAction(FExecuteAction::CreateSP(this, &SStageWorkspaceMenuBar::ShowPanel, FGameplayTag(StageCraftTags::Panel_Cues))));
 	MenuBuilder.AddMenuEntry(LOCTEXT("OpenReportsFolder", "Open Reports Folder"), FText::FromString(Report->GetOutputDirectory()), FSlateIcon(),
 		FUIAction(FExecuteAction::CreateLambda([Directory = Report->GetOutputDirectory()]() { OpenFolder(Directory); })));
 	MenuBuilder.EndSection();

@@ -88,9 +88,19 @@ public:
 
 	// --- Cues ---
 
-	/** Records every fixture's current attributes as a cue. Overwrites an existing cue with the same number. */
+	// Cue edits from the UI go through AModularPlayerController (RequestStoreCue etc.), which asks the GameMode and records undo
+	// (Docs/ADR/0011-cue-list-and-patch-sheet-export.md §2.2). Every entry point applies StageCueRules.
+
+	/**
+	 * Records every fixture's current attributes as a cue. Overwrites the recorded look, label and fade of an existing cue with
+	 * the same number. False (nothing changes) for an invalid number (StageCueRules::IsValidCueNumber).
+	 */
 	UFUNCTION(BlueprintCallable, Category = "StageCraft|Show")
-	void StoreCue(float CueNumber, const FText& Label, float FadeTime = 2.f);
+	bool StoreCue(float CueNumber, const FText& Label, float FadeTime = 2.f);
+
+	/** Changes a cue's label and fade time; its recorded look is kept. False if no cue has CueNumber. */
+	UFUNCTION(BlueprintCallable, Category = "StageCraft|Show")
+	bool UpdateCue(float CueNumber, const FText& Label, float FadeTime);
 
 	UFUNCTION(BlueprintCallable, Category = "StageCraft|Show")
 	bool DeleteCue(float CueNumber);
@@ -103,6 +113,13 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "StageCraft|Show")
 	bool Go();
 
+	/** Plays the cue before the active one, with that cue's fade time, like a console's Back key. False at the first cue. */
+	UFUNCTION(BlueprintCallable, Category = "StageCraft|Show")
+	bool Back();
+
+	/** The cue with CueNumber, or null. The pointer is valid until the cue list next changes. */
+	const FShowCue* FindCue(float CueNumber) const;
+
 	/** Snaps a running fade to its end state. */
 	UFUNCTION(BlueprintCallable, Category = "StageCraft|Show")
 	void FinishFade();
@@ -111,9 +128,18 @@ public:
 	UFUNCTION(BlueprintPure, Category = "StageCraft|Show")
 	const TArray<FShowCue>& GetCues() const { return Cues; }
 
-	/** Replaces the cue list, e.g. when loading a show file. */
+	/**
+	 * Replaces the cue list when a show is loaded: a running fade snaps to its end and no cue is active afterwards. The list is
+	 * repaired first (StageCueRules::SanitizeCueList), because it comes from a file.
+	 */
 	UFUNCTION(BlueprintCallable, Category = "StageCraft|Show")
 	void SetCues(const TArray<FShowCue>& InCues);
+
+	/**
+	 * Replaces the cue list for undo / redo. Unlike SetCues, playback carries on: the active cue number and a running fade
+	 * (which holds its own target values) are kept. Repaired like SetCues.
+	 */
+	void ReplaceCues(const TArray<FShowCue>& InCues);
 
 	/** Number of the last cue started, or a negative value if none. */
 	UFUNCTION(BlueprintPure, Category = "StageCraft|Show")
@@ -192,7 +218,7 @@ private:
 	void TickFades(float DeltaTime);
 	void TickDMXOutput(float DeltaTime);
 	void CompleteFade();
-	void SortCues();
+	void AssignSanitizedCues(const TArray<FShowCue>& InCues, const TCHAR* Source);
 	int32 FindCueIndex(float CueNumber) const;
 
 	TArray<TWeakObjectPtr<class ALightingFixtureActor>> Fixtures;

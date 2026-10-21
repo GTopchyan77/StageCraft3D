@@ -63,6 +63,53 @@ struct MODULARSCENEBUILDER_API FShowCue
 	TArray<FShowCueFixtureState> Fixtures;
 };
 
+/**
+ * What a valid cue is (Docs/ADR/0011-cue-list-and-patch-sheet-export.md §2.1). Applied by UShowControlSubsystem on every
+ * entry (store, update, load, undo) and by the GameMode before a request runs. Pure, any thread.
+ */
+namespace StageCueRules
+{
+	/** Cue numbers are compared with this tolerance, so they are stored rounded to it. */
+	inline constexpr float NumberResolution = 0.001f;
+	inline constexpr float MinCueNumber = 0.001f;
+	inline constexpr float MaxCueNumber = 9999.999f;
+	inline constexpr float MaxFadeTime = 600.f;
+	inline constexpr int32 MaxLabelLength = 256;
+
+	/** Finite and within MinCueNumber..MaxCueNumber after rounding. */
+	MODULARSCENEBUILDER_API bool IsValidCueNumber(float CueNumber);
+
+	/** CueNumber rounded to NumberResolution (call IsValidCueNumber first). */
+	MODULARSCENEBUILDER_API float RoundCueNumber(float CueNumber);
+
+	/** Clamped to 0..MaxFadeTime; a non-finite time becomes 0. */
+	MODULARSCENEBUILDER_API float SanitizeFadeTime(float FadeTime);
+
+	/** Trimmed and cut to MaxLabelLength. */
+	MODULARSCENEBUILDER_API FText SanitizeLabel(const FText& Label);
+
+	/**
+	 * Repairs a cue list from an untrusted source (a file, an undo step): drops cues with invalid numbers and later duplicates
+	 * of a number, rounds numbers, sanitizes fades and labels, and sorts by number. Returns how many cues were dropped.
+	 */
+	MODULARSCENEBUILDER_API int32 SanitizeCueList(TArray<FShowCue>& Cues);
+}
+
+/** A cue request a player makes, judged by AStageCraftGameModeBase::EvaluateCueRequest. */
+UENUM(BlueprintType)
+enum class EStageCueRequest : uint8
+{
+	/** Record the current look as a cue (a new number, or re-record an existing one). */
+	Store,
+	/** Change an existing cue's label or fade time. */
+	Update,
+	Delete,
+	/** Playback: Go, Back or Go To a cue. */
+	Play,
+	/** Switch between the internal cue list and external DMX. */
+	SetControlSource,
+};
+
 /** Who owns the fixture attributes right now. */
 UENUM(BlueprintType)
 enum class EStageControlSource : uint8

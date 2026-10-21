@@ -22,6 +22,7 @@
 #include "Player/ModularPlayerController.h"
 #include "Player/StageCameraPawn.h"
 #include "Render/StageRenderSubsystem.h"
+#include "Report/StagePatchSheetSubsystem.h"
 #include "Scene/StageSceneComponent.h"
 #include "Subsystems/StageEconomySubsystem.h"
 #include "TimerManager.h"
@@ -238,6 +239,11 @@ void UStageStatusBarWidget::BindSources()
 		BillOfMaterials = Report;
 		Report->OnExportFinished.AddUniqueDynamic(this, &ThisClass::HandleReportExportFinished);
 	}
+	if (UStagePatchSheetSubsystem* PatchSheetSubsystem = UWorld::GetSubsystem<UStagePatchSheetSubsystem>(GetWorld()))
+	{
+		PatchSheet = PatchSheetSubsystem;
+		PatchSheetSubsystem->OnExportFinished.AddUniqueDynamic(this, &ThisClass::HandleReportExportFinished);
+	}
 
 	if (UStageMeshImportSubsystem* ImportSubsystem = GameInstance ? GameInstance->GetSubsystem<UStageMeshImportSubsystem>() : nullptr)
 	{
@@ -287,6 +293,10 @@ void UStageStatusBarWidget::UnbindSources()
 	if (UStageBillOfMaterialsSubsystem* Report = BillOfMaterials.Get())
 	{
 		Report->OnExportFinished.RemoveDynamic(this, &ThisClass::HandleReportExportFinished);
+	}
+	if (UStagePatchSheetSubsystem* PatchSheetSubsystem = PatchSheet.Get())
+	{
+		PatchSheetSubsystem->OnExportFinished.RemoveDynamic(this, &ThisClass::HandleReportExportFinished);
 	}
 	if (UStageMeshImportSubsystem* ImportSubsystem = Importer.Get())
 	{

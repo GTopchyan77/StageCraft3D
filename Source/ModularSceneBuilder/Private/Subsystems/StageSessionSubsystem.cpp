@@ -8,6 +8,7 @@
 #include "Environment/StageEnvironmentSubsystem.h"
 #include "Interaction/StageParameterInterface.h"
 #include "ModularSceneBuilder.h"
+#include "Subsystems/ShowControlSubsystem.h"
 
 #include UE_INLINE_GENERATED_CPP_BY_NAME(StageSessionSubsystem)
 
@@ -28,6 +29,21 @@ void UStageSessionSubsystem::Initialize(FSubsystemCollectionBase& Collection)
 		Environment->OnEnvironmentChanged.AddUniqueDynamic(this, &ThisClass::HandleEnvironmentChanged);
 		BoundEnvironment = Environment;
 	}
+	if (UShowControlSubsystem* Show = Collection.InitializeDependency<UShowControlSubsystem>())
+	{
+		Show->OnCueListChanged.AddUniqueDynamic(this, &ThisClass::HandleCueListChanged);
+		BoundShowControl = Show;
+	}
+}
+
+void UStageSessionSubsystem::HandleCueListChanged()
+{
+	// Same rule as the environment: only edits during play count (loading a scene marks it clean afterwards).
+	const UWorld* World = GetWorld();
+	if (World && World->GetBegunPlay())
+	{
+		SetDirty(true);
+	}
 }
 
 void UStageSessionSubsystem::HandleEnvironmentChanged(const FStageEnvironmentSettings& Settings)
@@ -47,6 +63,11 @@ void UStageSessionSubsystem::Deinitialize()
 		Environment->OnEnvironmentChanged.RemoveDynamic(this, &ThisClass::HandleEnvironmentChanged);
 	}
 	BoundEnvironment.Reset();
+	if (UShowControlSubsystem* Show = BoundShowControl.Get())
+	{
+		Show->OnCueListChanged.RemoveDynamic(this, &ThisClass::HandleCueListChanged);
+	}
+	BoundShowControl.Reset();
 
 	for (const TWeakObjectPtr<AModularBaseActor>& Item : Items)
 	{

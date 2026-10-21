@@ -126,6 +126,10 @@ private:
 	UFUNCTION()
 	void HandlePatchUnpatchedClicked();
 
+	/** Exports the patch sheet as PDF + CSV through the controller (Docs/ADR/0011-cue-list-and-patch-sheet-export.md §3.2). */
+	UFUNCTION()
+	void HandleExportClicked();
+
 	UPROPERTY(Transient)
 	TObjectPtr<class UVerticalBox> TableBody = nullptr;
 
@@ -143,6 +147,9 @@ private:
 
 	UPROPERTY(Transient)
 	TObjectPtr<class UButton> PatchUnpatchedButton = nullptr;
+
+	UPROPERTY(Transient)
+	TObjectPtr<class UButton> ExportButton = nullptr;
 
 	/** Fixtures in table order, matched to a clicked row by index. */
 	TArray<TWeakObjectPtr<class ALightingFixtureActor>> RowFixtures;

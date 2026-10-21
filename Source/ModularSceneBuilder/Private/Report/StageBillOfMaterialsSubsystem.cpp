@@ -9,6 +9,7 @@
 #include "HAL/FileManager.h"
 #include "Misc/Paths.h"
 #include "ModularSceneBuilder.h"
+#include "Report/StageReportFiles.h"
 #include "Subsystems/StageSessionSubsystem.h"
 #include "Tasks/Task.h"
 #include "Workspace/StageLayoutStore.h"
@@ -16,29 +17,6 @@
 #include UE_INLINE_GENERATED_CPP_BY_NAME(StageBillOfMaterialsSubsystem)
 
 #define LOCTEXT_NAMESPACE "StageBillOfMaterials"
-
-namespace StageBillOfMaterialsExport
-{
-	/** Path, or Path with "_2", "_3"... before the extension when a file of that name exists (two exports within one second). Any thread. */
-	FString MakeUniquePath(const FString& Path)
-	{
-		if (!IFileManager::Get().FileExists(*Path))
-		{
-			return Path;
-		}
-		const FString Base = FPaths::GetBaseFilename(Path, /*bRemovePath*/ false);
-		const FString Extension = FPaths::GetExtension(Path, /*bIncludeDot*/ true);
-		for (int32 Suffix = 2; Suffix < 1000; ++Suffix)
-		{
-			const FString Candidate = FString::Printf(TEXT("%s_%d%s"), *Base, Suffix, *Extension);
-			if (!IFileManager::Get().FileExists(*Candidate))
-			{
-				return Candidate;
-			}
-		}
-		return Path;
-	}
-}
 
 bool UStageBillOfMaterialsSubsystem::DoesSupportWorldType(const EWorldType::Type WorldType) const
 {
@@ -122,7 +100,7 @@ const FStageBillOfMaterials& UStageBillOfMaterialsSubsystem::GetReport() const
 
 FString UStageBillOfMaterialsSubsystem::GetOutputDirectory() const
 {
-	return FPaths::ConvertRelativePathToFull(FPaths::ProjectSavedDir() / TEXT("StageCraft") / TEXT("Reports"));
+	return StageReportFiles::GetOutputDirectory();
 }
 
 bool UStageBillOfMaterialsSubsystem::StartExport(FText& OutReason)
@@ -157,7 +135,7 @@ bool UStageBillOfMaterialsSubsystem::StartExport(FText& OutReason)
 	UE::Tasks::Launch(UE_SOURCE_LOCATION, [WeakThis = TWeakObjectPtr<UStageBillOfMaterialsSubsystem>(this), Serial, Csv = MoveTemp(Csv), Directory, Path, LineCount]()
 	{
 		IFileManager::Get().MakeDirectory(*Directory, /*Tree*/ true);
-		const FString FinalPath = StageBillOfMaterialsExport::MakeUniquePath(Path);
+		const FString FinalPath = StageReportFiles::MakeUniqueStemPath(Directory, FPaths::GetBaseFilename(Path), { TEXT(".csv") }) + TEXT(".csv");
 		const bool bWritten = FStageLayoutStore::WriteFileAtomic(FinalPath, Csv);
 		AsyncTask(ENamedThreads::GameThread, [WeakThis, Serial, bWritten, FinalPath, LineCount]()
 		{

@@ -61,6 +61,13 @@ public:
 	 * accept the value.
 	 */
 	virtual EStageCommandResult SetItemParameter(const FGuid& InstanceId, const struct FGameplayTag& ParameterId, const struct FStageParameterValue& Value) = 0;
+
+	/**
+	 * Replaces the show's cue list (Docs/ADR/0011-cue-list-and-patch-sheet-export.md §2.4); playback carries on. Cues belong to
+	 * the stage rather than to one item, but they share its history. Invalid where there is no show control; the default is
+	 * for editors (test fakes, tools) that never see cue steps.
+	 */
+	virtual EStageCommandResult SetCueList(const TArray<struct FShowCue>& Cues) { return EStageCommandResult::Invalid; }
 };
 
 /**

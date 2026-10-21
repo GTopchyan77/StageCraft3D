@@ -308,5 +308,19 @@ See `STATE.md` for detailed history of completed work.
 - [x] Builds: Editor Development, Game Development, Game Shipping; automation
 - [x] Package (Development + Shipping): Sky Creator assets cooked, no missing-asset errors; packaged run with sky on; GPU frame time and VRAM measured sky off / on
 - [x] ADR 0010; STATE.md #37
-- [ ] Manual verification (Gevor): one undo step per inspector spin-box drag (Location / Rotation / Scale, span Length / Sag); exit prompt buttons and name field by mouse; File > Recover Autosave (STATE.md #37)
+- [x] Manual verification (Gevor, reported 2026-10-21): one undo step per inspector spin-box drag (Location / Rotation / Scale, span Length / Sag); exit prompt buttons and name field by mouse; File > Recover Autosave (STATE.md #37)
 - [ ] Measure the sky on a machine without a second editor open (STATE.md #37 numbers were taken with the Kmidden editor sharing the GPU)
+
+## Phase 15 — Cue list panel, cues in scenes (v3), patch sheet PDF + CSV (requested by Gevor 2026-10-21; STATE.md #38, ADR 0011)
+- [x] `StageCueRules`: number range 0.001..9999.999 (thousandths, double precision), fade 0..600 s, label 256, list repair; tests
+- [x] Show control: Store returns false for bad numbers, UpdateCue, Back, FindCue, ReplaceCues (undo keeps playback)
+- [x] GameMode `EvaluateCueRequest`; controller RequestStoreCue / UpdateCue / DeleteCue / GoToCue / CueGo / CueBack / SetControlSource
+- [x] Undo: `FStageCueListCommand` (whole-list snapshots) through `IStageItemEditor::SetCueList`; cue edits close an open drag first
+- [x] Cue edits mark the stage dirty; scene format v3 `cues` (v1/v2 migrate with none; damaged entries dropped and counted); tests
+- [x] Cue panel (`UStageCuePanel`, `DA_Panel_Cues`), default layout tab, File > Production > Cue List...
+- [x] Patch sheet: `FStagePdfDocument`, `StagePatchSheet` (PDF + CSV), `UStagePatchSheetSubsystem`, File > Production entry, Patch panel EXPORT PDF, status bar; tests
+- [x] Builds: Editor / Game Development / Game Shipping; 54/54 automation; scripted runs R38_Run1-4 (cue ops, refusals, undo, save/load v3, playback on fixtures, PDF checked)
+- [ ] Manual verification (Gevor): Cue panel by mouse (GO/BACK, STORE/RE-RECORD, inline label/fade, GO TO, DELETE, source segment), File > Production entries, EXPORT PDF, print the PDF (STATE.md #38)
+- [ ] GO keyboard shortcut; tracking cues, follow/wait times, timeline
+- [ ] Packaged build check with the new panel asset
+- [ ] PDF: embedded Unicode font if non-Latin labels matter

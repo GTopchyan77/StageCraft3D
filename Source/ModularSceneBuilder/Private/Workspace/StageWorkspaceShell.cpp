@@ -95,8 +95,9 @@ TSharedRef<FTabManager::FLayout> FStageWorkspaceShell::MakeDefaultLayout()
 				(
 					FTabManager::NewStack()->SetSizeCoefficient(0.26f)
 					->AddTab(ToTabId(StageCraftTags::Panel_FaderBank), ETabState::OpenedTab)
-					// The patch sheet is wide like the fader bar, so it shares its stack; the faders stay in front.
+					// The patch sheet and the cue list are wide like the fader bar, so they share its stack; the faders stay in front.
 					->AddTab(ToTabId(StageCraftTags::Panel_Patch), ETabState::OpenedTab)
+					->AddTab(ToTabId(StageCraftTags::Panel_Cues), ETabState::OpenedTab)
 					->SetForegroundTab(ToTabId(StageCraftTags::Panel_FaderBank))
 				)
 			)

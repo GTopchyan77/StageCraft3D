@@ -39,7 +39,9 @@
 #include "Player/StageCraftGameViewportClient.h"
 #include "Render/StageRenderSubsystem.h"
 #include "Report/StageBillOfMaterialsSubsystem.h"
+#include "Report/StagePatchSheetSubsystem.h"
 #include "Scene/StageSceneComponent.h"
+#include "Subsystems/ShowControlSubsystem.h"
 #include "Subsystems/StageEconomySubsystem.h"
 #include "Subsystems/StageItemSubsystem.h"
 #include "Subsystems/StageSessionSubsystem.h"
@@ -1225,6 +1227,157 @@ bool AModularPlayerController::RequestExportBillOfMaterials()
 	}
 	ReportRejection(FStageEconomyResultInfo::Fail(EStageEconomyResult::InvalidRequest, Reason));
 	return false;
+}
+
+bool AModularPlayerController::RequestExportPatchSheet()
+{
+	UStagePatchSheetSubsystem* PatchSheet = UWorld::GetSubsystem<UStagePatchSheetSubsystem>(GetWorld());
+	FText Reason = LOCTEXT("NoPatchSheet", "The patch sheet is not available in this level.");
+	if (PatchSheet && PatchSheet->StartExport(Reason))
+	{
+		return true;
+	}
+	ReportRejection(FStageEconomyResultInfo::Fail(EStageEconomyResult::InvalidRequest, Reason));
+	return false;
+}
+
+UShowControlSubsystem* AModularPlayerController::ApproveCueRequest(EStageCueRequest Request, float CueNumber)
+{
+	const AStageCraftGameModeBase* GameMode = GetStageGameMode();
+	UShowControlSubsystem* Show = UWorld::GetSubsystem<UShowControlSubsystem>(GetWorld());
+	const FStageEconomyResultInfo Verdict = GameMode && Show
+		? GameMode->EvaluateCueRequest(this, Request, CueNumber)
+		: FStageEconomyResultInfo::Fail(EStageEconomyResult::InvalidRequest, LOCTEXT("NoCues", "Cues are not available in this level."));
+	if (!Verdict.IsSuccess())
+	{
+		ReportRejection(Verdict);
+		return nullptr;
+	}
+	return Show;
+}
+
+void AModularPlayerController::RecordCueEdit(const FText& Description, const TArray<FShowCue>& Before, const UShowControlSubsystem& Show) const
+{
+	if (EditHistory)
+	{
+		EditHistory->RecordCueListChange(Description, Before, Show.GetCues());
+	}
+}
+
+bool AModularPlayerController::RequestStoreCue(float CueNumber, const FText& Label, float FadeTime)
+{
+	UShowControlSubsystem* Show = ApproveCueRequest(EStageCueRequest::Store, CueNumber);
+	if (!Show)
+	{
+		return false;
+	}
+	const FText Description = FText::Format(Show->FindCue(CueNumber) ? LOCTEXT("UpdateCueLook", "Re-record Cue {0}") : LOCTEXT("StoreCue", "Store Cue {0}"),
+		FText::AsNumber(StageCueRules::RoundCueNumber(CueNumber)));
+	const TArray<FShowCue> Before = Show->GetCues();
+	if (!Show->StoreCue(CueNumber, Label, FadeTime))
+	{
+		return false;
+	}
+	RecordCueEdit(Description, Before, *Show);
+	return true;
+}
+
+bool AModularPlayerController::RequestUpdateCue(float CueNumber, const FText& Label, float FadeTime)
+{
+	UShowControlSubsystem* Show = ApproveCueRequest(EStageCueRequest::Update, CueNumber);
+	if (!Show)
+	{
+		return false;
+	}
+	const TArray<FShowCue> Before = Show->GetCues();
+	if (!Show->UpdateCue(CueNumber, Label, FadeTime))
+	{
+		return false;
+	}
+	// An update that changed nothing records nothing.
+	const FShowCue* Old = Before.FindByPredicate([CueNumber](const FShowCue& Cue)
+	{
+		return FMath::IsNearlyEqual(Cue.Number, CueNumber, StageCueRules::NumberResolution * 0.5f);
+	});
+	const FShowCue* New = Show->FindCue(CueNumber);
+	if (Old && New && (!Old->Label.EqualTo(New->Label) || !FMath::IsNearlyEqual(Old->FadeTime, New->FadeTime)))
+	{
+		RecordCueEdit(FText::Format(LOCTEXT("EditCue", "Edit Cue {0}"), FText::AsNumber(New->Number)), Before, *Show);
+	}
+	return true;
+}
+
+bool AModularPlayerController::RequestDeleteCue(float CueNumber)
+{
+	UShowControlSubsystem* Show = ApproveCueRequest(EStageCueRequest::Delete, CueNumber);
+	if (!Show)
+	{
+		return false;
+	}
+	const TArray<FShowCue> Before = Show->GetCues();
+	if (!Show->DeleteCue(CueNumber))
+	{
+		return false;
+	}
+	RecordCueEdit(FText::Format(LOCTEXT("DeleteCue", "Delete Cue {0}"), FText::AsNumber(StageCueRules::RoundCueNumber(CueNumber))), Before, *Show);
+	return true;
+}
+
+bool AModularPlayerController::RequestGoToCue(float CueNumber)
+{
+	UShowControlSubsystem* Show = ApproveCueRequest(EStageCueRequest::Play, CueNumber);
+	if (!Show)
+	{
+		return false;
+	}
+	if (!Show->GoToCue(CueNumber))
+	{
+		ReportRejection(FStageEconomyResultInfo::Fail(EStageEconomyResult::InvalidRequest, LOCTEXT("NoCueToGo", "That cue does not exist.")));
+		return false;
+	}
+	return true;
+}
+
+bool AModularPlayerController::RequestCueGo()
+{
+	UShowControlSubsystem* Show = ApproveCueRequest(EStageCueRequest::Play, 0.f);
+	if (!Show)
+	{
+		return false;
+	}
+	if (!Show->Go())
+	{
+		ReportRejection(FStageEconomyResultInfo::Fail(EStageEconomyResult::InvalidRequest,
+			Show->GetCues().IsEmpty() ? LOCTEXT("NoCues_Go", "There are no cues yet. Store one first.") : LOCTEXT("LastCue", "This is the last cue.")));
+		return false;
+	}
+	return true;
+}
+
+bool AModularPlayerController::RequestCueBack()
+{
+	UShowControlSubsystem* Show = ApproveCueRequest(EStageCueRequest::Play, 0.f);
+	if (!Show)
+	{
+		return false;
+	}
+	if (!Show->Back())
+	{
+		ReportRejection(FStageEconomyResultInfo::Fail(EStageEconomyResult::InvalidRequest, LOCTEXT("FirstCue", "There is no earlier cue to go back to.")));
+		return false;
+	}
+	return true;
+}
+
+bool AModularPlayerController::RequestSetControlSource(EStageControlSource Source)
+{
+	UShowControlSubsystem* Show = ApproveCueRequest(EStageCueRequest::SetControlSource, 0.f);
+	if (!Show)
+	{
+		return false;
+	}
+	Show->SetControlSource(Source);
+	return true;
 }
 
 int32 AModularPlayerController::RequestImportModelFiles(const TArray<FString>& Files)

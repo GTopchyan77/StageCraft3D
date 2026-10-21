@@ -8,6 +8,7 @@
 #include "Interaction/StageTransformRules.h"
 #include "Player/ModularPlayerController.h"
 #include "Player/StageCameraPawn.h"
+#include "Subsystems/ShowControlSubsystem.h"
 #include "Subsystems/StageEconomySubsystem.h"
 #include "Subsystems/StageSessionSubsystem.h"
 
@@ -63,6 +64,50 @@ FStageEconomyResultInfo AStageCraftGameModeBase::EvaluatePlacement_Implementatio
 		}
 	}
 	return Session->EvaluateSessionLimits(Item, Quantity);
+}
+
+FStageEconomyResultInfo AStageCraftGameModeBase::EvaluateCueRequest_Implementation(const APlayerController* Player, EStageCueRequest Request, float CueNumber) const
+{
+	const UShowControlSubsystem* Show = UWorld::GetSubsystem<UShowControlSubsystem>(GetWorld());
+	if (!Player || !Show)
+	{
+		return FStageEconomyResultInfo::Fail(EStageEconomyResult::InvalidRequest, LOCTEXT("NoShowControl", "Cues are not available in this level."));
+	}
+
+	switch (Request)
+	{
+	case EStageCueRequest::Store:
+		if (!StageCueRules::IsValidCueNumber(CueNumber))
+		{
+			return FStageEconomyResultInfo::Fail(EStageEconomyResult::InvalidRequest, FText::Format(
+				LOCTEXT("BadCueNumber", "Cue numbers run from {0} to {1}."),
+				FText::AsNumber(StageCueRules::MinCueNumber), FText::AsNumber(StageCueRules::MaxCueNumber)));
+		}
+		return FStageEconomyResultInfo::Ok();
+
+	case EStageCueRequest::Update:
+	case EStageCueRequest::Delete:
+		if (!StageCueRules::IsValidCueNumber(CueNumber) || !Show->FindCue(CueNumber))
+		{
+			return FStageEconomyResultInfo::Fail(EStageEconomyResult::InvalidRequest, LOCTEXT("NoSuchCue", "That cue does not exist."));
+		}
+		return FStageEconomyResultInfo::Ok();
+
+	case EStageCueRequest::Play:
+		// The subsystem refuses too; asking here gives the user a reason instead of a silent no.
+		if (Show->GetControlSource() == EStageControlSource::External)
+		{
+			return FStageEconomyResultInfo::Fail(EStageEconomyResult::SessionRuleViolation,
+				LOCTEXT("ExternalControl", "An external console is driving the fixtures. Switch to Internal to play cues."));
+		}
+		return FStageEconomyResultInfo::Ok();
+
+	case EStageCueRequest::SetControlSource:
+		return FStageEconomyResultInfo::Ok();
+	}
+
+	// Deny by default: a request kind added without a rule here is refused.
+	return FStageEconomyResultInfo::Fail(EStageEconomyResult::InvalidRequest, LOCTEXT("UnknownCueRequest", "That cue action is not available."));
 }
 
 FStageEconomyResultInfo AStageCraftGameModeBase::EvaluateModelImport_Implementation(const APlayerController* Player) const

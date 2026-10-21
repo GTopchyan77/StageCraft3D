@@ -39,6 +39,7 @@ DECLARE_DELEGATE_RetVal_TwoParams(bool, FStageTransformValidator, const class AM
  *  - Delete: DeleteItem, which the controller's Delete key goes through.
  *  - Transform: RecordTransformChange, called by the controller when a gizmo drag ends and after a
  *    validated Location / Rotation / Scale edit.
+ *  - Cues: RecordCueListChange, called by the controller after a validated cue store / update / delete.
  * Undo and redo never go through those entry points, so they can never record themselves.
  *
  * Transactions (BeginTransaction / EndTransaction): a continuous edit (dragging an inspector field) changes the stage many
@@ -99,6 +100,13 @@ public:
 	 * what is recorded). Ignored when nothing changed meaningfully or Target is not a stage item. ParameterName names the step.
 	 */
 	void RecordParameterChange(AActor* Target, const FGameplayTag& ParameterId, const FText& ParameterName, const FStageParameterValue& Before);
+
+	/**
+	 * Records a cue edit (store, update, delete) as one step holding the whole cue list before and after it
+	 * (Docs/ADR/0011-cue-list-and-patch-sheet-export.md §2.4). An open transaction is ended first, so the two never merge.
+	 * Description names the step ("Store Cue 3").
+	 */
+	void RecordCueListChange(const FText& Description, const TArray<struct FShowCue>& Before, const TArray<struct FShowCue>& After);
 
 	/** How undo / redo write parameters. See FStageParameterApplier. */
 	FStageParameterApplier ParameterApplier;

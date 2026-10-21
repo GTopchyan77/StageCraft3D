@@ -282,22 +282,34 @@ TArray<int32> UShowControlSubsystem::FindPatchConflicts() const
 
 int32 UShowControlSubsystem::FindCueIndex(float CueNumber) const
 {
-	return Cues.IndexOfByPredicate([CueNumber](const FShowCue& Cue) { return FMath::IsNearlyEqual(Cue.Number, CueNumber, 0.001f); });
+	// Stored numbers are rounded to the resolution, so half a step finds exactly one cue.
+	return Cues.IndexOfByPredicate([CueNumber](const FShowCue& Cue)
+	{
+		return FMath::IsNearlyEqual(Cue.Number, CueNumber, StageCueRules::NumberResolution * 0.5f);
+	});
 }
 
-void UShowControlSubsystem::SortCues()
+const FShowCue* UShowControlSubsystem::FindCue(float CueNumber) const
 {
-	Cues.Sort([](const FShowCue& A, const FShowCue& B) { return A.Number < B.Number; });
+	const int32 Index = FindCueIndex(CueNumber);
+	return Index != INDEX_NONE ? &Cues[Index] : nullptr;
 }
 
-void UShowControlSubsystem::StoreCue(float CueNumber, const FText& Label, float FadeTime)
+bool UShowControlSubsystem::StoreCue(float CueNumber, const FText& Label, float FadeTime)
 {
+	if (!StageCueRules::IsValidCueNumber(CueNumber))
+	{
+		UE_LOG(LogStageCraft, Warning, TEXT("StoreCue: %g is not a valid cue number; nothing was stored."), CueNumber);
+		return false;
+	}
+
 	FShowCue Cue;
-	Cue.Number = FMath::Max(0.f, CueNumber);
-	Cue.Label = Label;
-	Cue.FadeTime = FMath::Max(0.f, FadeTime);
+	Cue.Number = StageCueRules::RoundCueNumber(CueNumber);
+	Cue.Label = StageCueRules::SanitizeLabel(Label);
+	Cue.FadeTime = StageCueRules::SanitizeFadeTime(FadeTime);
 
-	for (ALightingFixtureActor* Fixture : GetFixtures())
+	const TArray<ALightingFixtureActor*> Recorded = GetFixtures();
+	for (ALightingFixtureActor* Fixture : Recorded)
 	{
 		FShowCueFixtureState& State = Cue.Fixtures.AddDefaulted_GetRef();
 		State.FixtureId = Fixture->GetFixtureId();
@@ -311,12 +323,35 @@ void UShowControlSubsystem::StoreCue(float CueNumber, const FText& Label, float 
 	}
 	else
 	{
-		Cues.Add(MoveTemp(Cue));
-		SortCues();
+		const float Number = Cue.Number;
+		const int32 Insert = Cues.IndexOfByPredicate([Number](const FShowCue& Other) { return Other.Number > Number; });
+		Cues.Insert(MoveTemp(Cue), Insert == INDEX_NONE ? Cues.Num() : Insert);
 	}
 
-	UE_LOG(LogStageCraft, Log, TEXT("Stored cue %.3g (%d fixtures)."), CueNumber, Fixtures.Num());
+	UE_LOG(LogStageCraft, Log, TEXT("Stored cue %.3f (%d fixtures)."), StageCueRules::RoundCueNumber(CueNumber), Recorded.Num());
 	OnCueListChanged.Broadcast();
+	return true;
+}
+
+bool UShowControlSubsystem::UpdateCue(float CueNumber, const FText& Label, float FadeTime)
+{
+	const int32 Index = FindCueIndex(CueNumber);
+	if (Index == INDEX_NONE)
+	{
+		return false;
+	}
+
+	FShowCue& Cue = Cues[Index];
+	const FText NewLabel = StageCueRules::SanitizeLabel(Label);
+	const float NewFade = StageCueRules::SanitizeFadeTime(FadeTime);
+	if (Cue.Label.EqualTo(NewLabel) && FMath::IsNearlyEqual(Cue.FadeTime, NewFade))
+	{
+		return true; // Nothing changed: no event, so the stage does not become dirty and no undo step is recorded.
+	}
+	Cue.Label = NewLabel;
+	Cue.FadeTime = NewFade;
+	OnCueListChanged.Broadcast();
+	return true;
 }
 
 bool UShowControlSubsystem::DeleteCue(float CueNumber)
@@ -331,12 +366,27 @@ bool UShowControlSubsystem::DeleteCue(float CueNumber)
 	return true;
 }
 
+void UShowControlSubsystem::AssignSanitizedCues(const TArray<FShowCue>& InCues, const TCHAR* Source)
+{
+	Cues = InCues;
+	const int32 Dropped = StageCueRules::SanitizeCueList(Cues);
+	if (Dropped > 0)
+	{
+		UE_LOG(LogStageCraft, Warning, TEXT("%s: %d cue(s) with an invalid or duplicate number were dropped."), Source, Dropped);
+	}
+}
+
 void UShowControlSubsystem::SetCues(const TArray<FShowCue>& InCues)
 {
 	FinishFade();
-	Cues = InCues;
-	SortCues();
+	AssignSanitizedCues(InCues, TEXT("SetCues"));
 	ActiveCueNumber = -1.f;
+	OnCueListChanged.Broadcast();
+}
+
+void UShowControlSubsystem::ReplaceCues(const TArray<FShowCue>& InCues)
+{
+	AssignSanitizedCues(InCues, TEXT("ReplaceCues"));
 	OnCueListChanged.Broadcast();
 }
 
@@ -395,9 +445,26 @@ bool UShowControlSubsystem::Go()
 {
 	for (const FShowCue& Cue : Cues)
 	{
-		if (Cue.Number > ActiveCueNumber + 0.0005f)
+		if (Cue.Number > ActiveCueNumber + StageCueRules::NumberResolution * 0.5f)
 		{
 			return GoToCue(Cue.Number);
+		}
+	}
+	return false;
+}
+
+bool UShowControlSubsystem::Back()
+{
+	// Nothing active means nothing to go back from; a console's Back does nothing before the first Go either.
+	if (ActiveCueNumber < 0.f)
+	{
+		return false;
+	}
+	for (int32 Index = Cues.Num() - 1; Index >= 0; --Index)
+	{
+		if (Cues[Index].Number < ActiveCueNumber - StageCueRules::NumberResolution * 0.5f)
+		{
+			return GoToCue(Cues[Index].Number);
 		}
 	}
 	return false;

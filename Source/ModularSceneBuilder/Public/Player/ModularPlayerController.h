@@ -9,6 +9,7 @@
 #include "History/StageEditCommand.h"
 #include "Placement/StagePlacementTypes.h"
 #include "Scene/StageSceneTypes.h"
+#include "Show/ShowControlTypes.h"
 #include "ModularPlayerController.generated.h"
 
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FOnStageRequestRejected, const FStageEconomyResultInfo&, Result);
@@ -207,6 +208,43 @@ public:
 	 */
 	UFUNCTION(BlueprintCallable, Category = "StageCraft|Requests")
 	bool RequestExportBillOfMaterials();
+
+	/**
+	 * Exports the DMX patch sheet as PDF and CSV to Saved/StageCraft/Reports (Patch panel, File menu;
+	 * Docs/ADR/0011-cue-list-and-patch-sheet-export.md §3). Returns true when the export started; the result arrives on
+	 * UStagePatchSheetSubsystem::OnExportFinished. A refusal (no show control, already exporting) is reported on OnRequestRejected.
+	 */
+	UFUNCTION(BlueprintCallable, Category = "StageCraft|Requests")
+	bool RequestExportPatchSheet();
+
+	// --- Cues (Docs/ADR/0011-cue-list-and-patch-sheet-export.md §2.2) ---
+	// Each asks AStageCraftGameModeBase::EvaluateCueRequest, then calls UShowControlSubsystem. Store, Update and Delete are
+	// recorded as one undo step each. A refusal is reported on OnRequestRejected and returns false.
+
+	/** Records the current look as cue CueNumber (re-records it if it exists). */
+	UFUNCTION(BlueprintCallable, Category = "StageCraft|Requests")
+	bool RequestStoreCue(float CueNumber, const FText& Label, float FadeTime);
+
+	/** Changes an existing cue's label and fade time. */
+	UFUNCTION(BlueprintCallable, Category = "StageCraft|Requests")
+	bool RequestUpdateCue(float CueNumber, const FText& Label, float FadeTime);
+
+	UFUNCTION(BlueprintCallable, Category = "StageCraft|Requests")
+	bool RequestDeleteCue(float CueNumber);
+
+	UFUNCTION(BlueprintCallable, Category = "StageCraft|Requests")
+	bool RequestGoToCue(float CueNumber);
+
+	/** Plays the next cue. */
+	UFUNCTION(BlueprintCallable, Category = "StageCraft|Requests")
+	bool RequestCueGo();
+
+	/** Plays the previous cue. */
+	UFUNCTION(BlueprintCallable, Category = "StageCraft|Requests")
+	bool RequestCueBack();
+
+	UFUNCTION(BlueprintCallable, Category = "StageCraft|Requests")
+	bool RequestSetControlSource(EStageControlSource Source);
 
 	/**
 	 * Imports model files into the Library (files dropped on a panel, Import Model...). The GameMode decides whether imports are
@@ -457,6 +495,13 @@ private:
 
 	/** Undo / redo of a recorded transform, per item: the GameMode's EvaluateTransformChange decides; a refusal is reported. */
 	bool ValidateHistoryTransform(const class AModularBaseActor& Item, const FTransform& Transform);
+
+	/** The world's show control when the GameMode allows Request on CueNumber; null (refusal reported) otherwise. */
+	class UShowControlSubsystem* ApproveCueRequest(EStageCueRequest Request, float CueNumber);
+
+	/** Records the cue list change from Before to the current list as one undo step named Description. */
+	void RecordCueEdit(const FText& Description, const TArray<FShowCue>& Before, const class UShowControlSubsystem& Show) const;
+
 	void ReportRejection(const FStageEconomyResultInfo& Result);
 	class AStageCraftGameModeBase* GetStageGameMode() const;
 	class UStageEconomySubsystem* GetEconomy() const;

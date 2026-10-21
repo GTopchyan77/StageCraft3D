@@ -129,6 +129,12 @@ private:
 
 	TWeakObjectPtr<class UStageEnvironmentSubsystem> BoundEnvironment;
 
+	/** Cues are part of the scene file (format version 3), so storing, editing or deleting one is an unsaved edit. */
+	UFUNCTION()
+	void HandleCueListChanged();
+
+	TWeakObjectPtr<class UShowControlSubsystem> BoundShowControl;
+
 	void RecomputeStats();
 	void SetDirty(bool bNewDirty);
 

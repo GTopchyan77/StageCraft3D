@@ -5,6 +5,7 @@
 #include "Data/BaseItemData.h"
 #include "Dom/JsonObject.h"
 #include "Dom/JsonValue.h"
+#include "GameplayTagContainer.h"
 #include "HAL/FileManager.h"
 #include "Import/StageMeshImportTypes.h"
 #include "Interaction/StageTransformRules.h"
@@ -48,6 +49,138 @@ namespace StageSceneStore
 		const TCHAR* Rain = TEXT("rain");
 		const TCHAR* Snow = TEXT("snow");
 		const TCHAR* Fog = TEXT("fog");
+
+		// Version 3: the cue list.
+		const TCHAR* Cues = TEXT("cues");
+		const TCHAR* Number = TEXT("number");
+		const TCHAR* Fade = TEXT("fade");
+		const TCHAR* Fixtures = TEXT("fixtures");
+		const TCHAR* Attributes = TEXT("attributes");
+	}
+
+	TArray<TSharedPtr<FJsonValue>> WriteCues(const TArray<FShowCue>& Cues)
+	{
+		TArray<TSharedPtr<FJsonValue>> Array;
+		Array.Reserve(Cues.Num());
+		for (const FShowCue& Cue : Cues)
+		{
+			TArray<TSharedPtr<FJsonValue>> Fixtures;
+			Fixtures.Reserve(Cue.Fixtures.Num());
+			for (const FShowCueFixtureState& State : Cue.Fixtures)
+			{
+				// Tags by name: a name stays readable and survives tag table changes; unknown ones are dropped on load.
+				const TSharedRef<FJsonObject> Attributes = MakeShared<FJsonObject>();
+				for (const TPair<FGameplayTag, float>& Pair : State.Attributes)
+				{
+					Attributes->SetNumberField(Pair.Key.ToString(), Pair.Value);
+				}
+				const TSharedRef<FJsonObject> Fixture = MakeShared<FJsonObject>();
+				Fixture->SetNumberField(Field::Id, State.FixtureId);
+				Fixture->SetObjectField(Field::Attributes, Attributes);
+				Fixtures.Add(MakeShared<FJsonValueObject>(Fixture));
+			}
+
+			const TSharedRef<FJsonObject> Object = MakeShared<FJsonObject>();
+			Object->SetNumberField(Field::Number, Cue.Number);
+			Object->SetStringField(Field::Label, Cue.Label.ToString());
+			Object->SetNumberField(Field::Fade, Cue.FadeTime);
+			Object->SetArrayField(Field::Fixtures, Fixtures);
+			Array.Add(MakeShared<FJsonValueObject>(Object));
+		}
+		return Array;
+	}
+
+	/** One fixture of a cue. Invalid attributes are dropped and counted; false drops the whole fixture. */
+	bool ReadCueFixture(const FJsonObject& Object, FShowCueFixtureState& OutState, int32& InOutInvalid)
+	{
+		int32 FixtureId = 0;
+		const TSharedPtr<FJsonObject>* Attributes = nullptr;
+		if (!Object.TryGetNumberField(Field::Id, FixtureId) || FixtureId <= 0 || !Object.TryGetObjectField(Field::Attributes, Attributes) || !Attributes->IsValid())
+		{
+			return false;
+		}
+		OutState.FixtureId = FixtureId;
+
+		int32 Read = 0;
+		for (const TPair<FString, TSharedPtr<FJsonValue>>& Pair : (*Attributes)->Values)
+		{
+			double Value = 0.0;
+			// ErrorIfNotFound = false: a tag this build does not know (removed attribute, hand edit) is skipped, not fatal.
+			const FGameplayTag Tag = FGameplayTag::RequestGameplayTag(FName(*Pair.Key), /*ErrorIfNotFound*/ false);
+			if (Read >= FStageSceneStore::MaxAttributesPerFixture || !Tag.IsValid() || !Pair.Value.IsValid() || !Pair.Value->TryGetNumber(Value) || !FMath::IsFinite(Value))
+			{
+				++InOutInvalid;
+				continue;
+			}
+			OutState.Attributes.Add(Tag, static_cast<float>(Value));
+			++Read;
+		}
+		return true;
+	}
+
+	/** One cue. False drops it (bad number); bad fixtures inside it are dropped and counted. */
+	bool ReadCue(const FJsonObject& Object, FShowCue& OutCue, int32& InOutInvalid)
+	{
+		double Number = 0.0;
+		if (!Object.TryGetNumberField(Field::Number, Number) || !StageCueRules::IsValidCueNumber(static_cast<float>(Number)))
+		{
+			return false;
+		}
+		OutCue.Number = StageCueRules::RoundCueNumber(static_cast<float>(Number));
+
+		FString Label;
+		Object.TryGetStringField(Field::Label, Label);
+		OutCue.Label = StageCueRules::SanitizeLabel(FText::FromString(Label));
+
+		double Fade = 0.0;
+		OutCue.FadeTime = Object.TryGetNumberField(Field::Fade, Fade) ? StageCueRules::SanitizeFadeTime(static_cast<float>(Fade)) : 0.f;
+
+		const TArray<TSharedPtr<FJsonValue>>* Fixtures = nullptr;
+		if (Object.TryGetArrayField(Field::Fixtures, Fixtures))
+		{
+			for (const TSharedPtr<FJsonValue>& Value : *Fixtures)
+			{
+				const TSharedPtr<FJsonObject>* FixtureObject = nullptr;
+				FShowCueFixtureState State;
+				if (OutCue.Fixtures.Num() >= FStageSceneStore::MaxFixturesPerCue || !Value.IsValid() || !Value->TryGetObject(FixtureObject)
+					|| !FixtureObject->IsValid() || !ReadCueFixture(**FixtureObject, State, InOutInvalid))
+				{
+					++InOutInvalid;
+					continue;
+				}
+				OutCue.Fixtures.Add(MoveTemp(State));
+			}
+		}
+		return true;
+	}
+
+	/**
+	 * The cue list of a version 3 file. Tolerant like ReadEnvironment: what cannot be read is dropped and counted, the rest loads,
+	 * and the list is repaired by the same rules as every other cue entry (duplicates, order).
+	 */
+	TArray<FShowCue> ReadCues(const FJsonObject& Root, int32& InOutInvalid)
+	{
+		TArray<FShowCue> Cues;
+		const TArray<TSharedPtr<FJsonValue>>* Array = nullptr;
+		if (!Root.TryGetArrayField(Field::Cues, Array))
+		{
+			return Cues;
+		}
+		Cues.Reserve(FMath::Min(Array->Num(), FStageSceneStore::MaxCues));
+		for (const TSharedPtr<FJsonValue>& Value : *Array)
+		{
+			const TSharedPtr<FJsonObject>* Object = nullptr;
+			FShowCue Cue;
+			if (Cues.Num() >= FStageSceneStore::MaxCues || !Value.IsValid() || !Value->TryGetObject(Object) || !Object->IsValid()
+				|| !ReadCue(**Object, Cue, InOutInvalid))
+			{
+				++InOutInvalid;
+				continue;
+			}
+			Cues.Add(MoveTemp(Cue));
+		}
+		InOutInvalid += StageCueRules::SanitizeCueList(Cues);
+		return Cues;
 	}
 
 	TSharedRef<FJsonObject> WriteEnvironment(const FStageEnvironmentSettings& Settings)
@@ -303,6 +436,7 @@ FString FStageSceneStore::Serialize(const FStageSceneDocument& Document)
 	Root->SetStringField(Field::SavedAt, Document.SavedAtUtc.ToIso8601());
 	Root->SetArrayField(Field::Items, Items);
 	Root->SetObjectField(Field::Environment, WriteEnvironment(Document.Environment));
+	Root->SetArrayField(Field::Cues, WriteCues(Document.Cues));
 
 	FString Contents;
 	const TSharedRef<TJsonWriter<TCHAR, TPrettyJsonPrintPolicy<TCHAR>>> Writer = TJsonWriterFactory<TCHAR, TPrettyJsonPrintPolicy<TCHAR>>::Create(&Contents);
@@ -352,6 +486,11 @@ EStageSceneResult FStageSceneStore::Parse(const FString& Contents, FStageSceneDo
 
 	// Migration 1 -> 2: a version 1 stage had no saved environment; it opens with the default one (sky off, the indoor stage).
 	OutDocument.Environment = Version >= 2 ? ReadEnvironment(*Root) : FStageEnvironmentSettings();
+	// Migration 2 -> 3: older stages had no saved cues; they open with an empty cue list.
+	if (Version >= 3)
+	{
+		OutDocument.Cues = ReadCues(*Root, OutReport.InvalidCueEntries);
+	}
 
 	TSet<FGuid> SeenIds;
 	SeenIds.Reserve(Items->Num());

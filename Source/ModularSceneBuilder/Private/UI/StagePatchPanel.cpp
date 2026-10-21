@@ -135,6 +135,10 @@ void UStagePatchPanel::NativeOnInitialized()
 	{
 		PatchUnpatchedButton->OnClicked.AddUniqueDynamic(this, &ThisClass::HandlePatchUnpatchedClicked);
 	}
+	if (ExportButton)
+	{
+		ExportButton->OnClicked.AddUniqueDynamic(this, &ThisClass::HandleExportClicked);
+	}
 }
 
 void UStagePatchPanel::BuildTree()
@@ -246,6 +250,22 @@ UWidget* UStagePatchPanel::BuildHeader()
 	if (UHorizontalBoxSlot* ButtonSlot = Line->AddChildToHorizontalBox(BuildPatchButton()))
 	{
 		ButtonSlot->SetVerticalAlignment(VAlign_Center);
+	}
+
+	ExportButton = WidgetTree->ConstructWidget<UButton>(UStageToolButton::StaticClass(), TEXT("ExportButton"));
+	FButtonStyle ExportStyle = MakeFlatButton(FLinearColor::Transparent, Palette.RowHover, Palette.Divider);
+	ExportStyle.SetNormal(MakeBox(FLinearColor::Transparent, CornerRadius, Palette.Divider, 1.f));
+	ExportButton->SetStyle(ExportStyle);
+	ExportButton->SetToolTipText(LOCTEXT("ExportTip", "Export the patch sheet as a print-ready PDF and a CSV to the Reports folder (File > Production > Open Reports Folder)."));
+	if (UButtonSlot* LabelSlot = Cast<UButtonSlot>(ExportButton->AddChild(MakeText(LOCTEXT("Export", "EXPORT PDF"), 7, TEXT("Bold"), Palette.TextSecondary))))
+	{
+		LabelSlot->SetPadding(FMargin(8.f, 6.f));
+		LabelSlot->SetHorizontalAlignment(HAlign_Center);
+	}
+	if (UHorizontalBoxSlot* ExportSlot = Line->AddChildToHorizontalBox(ExportButton))
+	{
+		ExportSlot->SetVerticalAlignment(VAlign_Center);
+		ExportSlot->SetPadding(FMargin(4.f, 0.f, 0.f, 0.f));
 	}
 	return Header;
 }
@@ -518,6 +538,7 @@ void UStagePatchPanel::Rebuild()
 
 	EmptyText->SetVisibility(Fixtures.IsEmpty() ? ESlateVisibility::HitTestInvisible : ESlateVisibility::Collapsed);
 	PatchUnpatchedButton->SetIsEnabled(Unpatched > 0);
+	ExportButton->SetIsEnabled(!Fixtures.IsEmpty());
 	SubtitleText->SetText(FText::Format(LOCTEXT("Subtitle", "{0} {0}|plural(one=fixture,other=fixtures)   ·   {1} unpatched   ·   {2} {2}|plural(one=conflict,other=conflicts)"),
 		Fixtures.Num(), Unpatched, Conflicts.Num()));
 	SubtitleText->SetColorAndOpacity(FSlateColor(Conflicts.IsEmpty() ? GetTheme().TextSecondary : GetTheme().WarningColor));
@@ -702,6 +723,15 @@ void UStagePatchPanel::HandlePatchUnpatchedClicked()
 			Controller->RequestParameterChange(Fixture, StageCraftTags::Param_Patch_Universe, FStageParameterValue::MakeInteger(Free.Universe));
 			Controller->RequestParameterChange(Fixture, StageCraftTags::Param_Patch_Address, FStageParameterValue::MakeInteger(Free.Address));
 		}
+	}
+}
+
+void UStagePatchPanel::HandleExportClicked()
+{
+	// The result (or a refusal) reaches the status bar through OnExportFinished / OnRequestRejected.
+	if (AModularPlayerController* Controller = GetStageController())
+	{
+		Controller->RequestExportPatchSheet();
 	}
 }
 
