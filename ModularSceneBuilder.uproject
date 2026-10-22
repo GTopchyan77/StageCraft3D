@@ -21,6 +21,10 @@
 			"Enabled": true
 		},
 		{
+			"Name": "AudioCapture",
+			"Enabled": true
+		},
+		{
 			"Name": "ModelingToolsEditorMode",
 
 			"Enabled": true,

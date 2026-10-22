@@ -40,6 +40,27 @@ enum class EStageSketchTool : uint8
 	Erase,
 };
 
+/** Who reads an imported photo or scan (Docs/ADR/0017-multilingual-voice-and-photo-import.md §2.6-2.7). */
+UENUM(BlueprintType)
+enum class EStageSketchReader : uint8
+{
+	/** The edge pipeline on this computer (StageSketchImageTrace): offline and deterministic. */
+	Local,
+	/** Claude reading the image (StageSketchVision), with the local reading as the fallback. */
+	Claude,
+};
+
+/** What a photo import is doing. */
+UENUM(BlueprintType)
+enum class EStageSketchImportState : uint8
+{
+	Idle,
+	/** The file is being decoded and traced on a worker thread. */
+	Reading,
+	/** Waiting for the online reading. */
+	ReadingOnline,
+};
+
 /** Where a generated fixture stands. */
 enum class EStageSketchFixtureMount : uint8
 {
@@ -101,10 +122,14 @@ struct MODULARSCENEBUILDER_API FStageSketchSettings
 	UPROPERTY(BlueprintReadOnly, Category = "StageCraft|Sketch")
 	float Smoothing = 0.5f;
 
+	/** Real width, in cm, of the next photo or scan imported into the sketch (Docs/ADR/0017 §2.6): it sets the drawing's scale. */
+	UPROPERTY(BlueprintReadOnly, Category = "StageCraft|Sketch", meta = (Units = "cm"))
+	float PhotoWidth = 2000.f;
+
 	bool operator==(const FStageSketchSettings& Other) const
 	{
 		return DeckHeight == Other.DeckHeight && TrussHeight == Other.TrussHeight && GridStep == Other.GridStep
-			&& bSnapToGrid == Other.bSnapToGrid && Smoothing == Other.Smoothing;
+			&& bSnapToGrid == Other.bSnapToGrid && Smoothing == Other.Smoothing && PhotoWidth == Other.PhotoWidth;
 	}
 };
 

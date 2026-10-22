@@ -201,6 +201,7 @@ namespace StageSketchMath
 		Clean.TrussHeight = ClampOrDefault(Settings.TrussHeight, MinTrussHeight, MaxTrussHeight, Defaults.TrussHeight);
 		Clean.GridStep = ClampOrDefault(Settings.GridStep, MinGridStep, MaxGridStep, Defaults.GridStep);
 		Clean.Smoothing = ClampOrDefault(Settings.Smoothing, 0.f, MaxSmoothing, Defaults.Smoothing);
+		Clean.PhotoWidth = ClampOrDefault(Settings.PhotoWidth, MinPhotoWidth, MaxPhotoWidth, Defaults.PhotoWidth);
 		return Clean;
 	}
 }

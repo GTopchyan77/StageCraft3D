@@ -53,7 +53,7 @@ namespace StageAICommandSchema
 
 	/**
 	 * Checks and normalizes Command in place: the intent is known, counts and numbers are finite and in range, strings trimmed and
-	 * capped. False, with a user-facing reason, when it must not run; Command is then unspecified.
+	 * capped. False, with a user-facing reason in the command's language, when it must not run; Command is then unspecified.
 	 */
 	MODULARSCENEBUILDER_API bool Validate(FStageAICommand& Command, FText& OutError);
 
@@ -63,8 +63,12 @@ namespace StageAICommandSchema
 	/** The stage_command tool definition, as a JSON object (name, description, strict, input_schema). */
 	MODULARSCENEBUILDER_API FString MakeToolDefinitionJson();
 
-	/** A command from the tool's input object (JSON text), then validated. False, with a reason, when it is malformed or invalid. */
-	MODULARSCENEBUILDER_API bool CommandFromToolInputJson(const FString& InputJson, FStageAICommand& OutCommand, FText& OutError);
+	/**
+	 * A command from the tool's input object (JSON text), then validated. Its reply language is the input's reply_language, else
+	 * DefaultLanguage (the prompt's). False, with a reason, when it is malformed or invalid.
+	 */
+	MODULARSCENEBUILDER_API bool CommandFromToolInputJson(const FString& InputJson, FStageAICommand& OutCommand, FText& OutError,
+		EStageAILanguage DefaultLanguage = EStageAILanguage::English);
 
 	/** The assistant's instructions to the model. Stable text (no per-request values), so it can be cached. */
 	MODULARSCENEBUILDER_API FString GetSystemPrompt();
@@ -80,6 +84,9 @@ namespace StageAICommandSchema
 	MODULARSCENEBUILDER_API FString BuildRequestBody(const FStageAIModelOptions& Options, TConstArrayView<FStageAIMessage> History, const FString& Prompt,
 		const FString& SceneSummary);
 
-	/** Reads a response: status, error object, stop_reason, then one stage_command tool call or the text blocks. */
-	MODULARSCENEBUILDER_API FStageAIModelResponse ParseResponseBody(int32 HttpStatus, const FString& Body);
+	/**
+	 * Reads a response: status, error object, stop_reason, then one stage_command tool call or the text blocks. A command without
+	 * reply_language replies in PromptLanguage.
+	 */
+	MODULARSCENEBUILDER_API FStageAIModelResponse ParseResponseBody(int32 HttpStatus, const FString& Body, EStageAILanguage PromptLanguage = EStageAILanguage::English);
 }

@@ -3,6 +3,7 @@
 #include "UI/StageSketchSurfaceWidget.h"
 
 #include "Data/StageParameterTypes.h"
+#include "Engine/Texture2D.h"
 #include "Engine/World.h"
 #include "Framework/Application/SlateApplication.h"
 #include "Placement/StageDeckMath.h"
@@ -39,6 +40,9 @@ namespace StageSketchSurface
 	constexpr float FixtureRadius = 6.f;
 	constexpr int32 CircleSegments = 16;
 
+	/** The imported photo shows through the grid and strokes, faintly enough not to hide them. */
+	constexpr float ReferenceOpacity = 0.4f;
+
 	FVector2f ToF(const FVector2D& Point)
 	{
 		return FVector2f(float(Point.X), float(Point.Y));
@@ -61,7 +65,9 @@ void UStageSketchSurfaceWidget::NativeConstruct()
 	{
 		BoundSketch = Sketch;
 		Sketch->OnSketchChanged.AddUniqueDynamic(this, &ThisClass::HandleSketchChanged);
+		Sketch->OnImportChanged.AddUniqueDynamic(this, &ThisClass::HandleImportChanged);
 	}
+	UpdateReferenceBrush();
 }
 
 void UStageSketchSurfaceWidget::NativeDestruct()
@@ -69,8 +75,10 @@ void UStageSketchSurfaceWidget::NativeDestruct()
 	if (UStageSketchSubsystem* Sketch = BoundSketch.Get())
 	{
 		Sketch->OnSketchChanged.RemoveDynamic(this, &ThisClass::HandleSketchChanged);
+		Sketch->OnImportChanged.RemoveDynamic(this, &ThisClass::HandleImportChanged);
 	}
 	BoundSketch.Reset();
+	ReferenceBrush.SetResourceObject(nullptr);
 	Pending.Reset();
 	Gesture = EGesture::None;
 	Super::NativeDestruct();
@@ -90,6 +98,44 @@ void UStageSketchSurfaceWidget::HandleSketchChanged()
 {
 	HoverStroke = INDEX_NONE;
 	Repaint();
+}
+
+void UStageSketchSurfaceWidget::HandleImportChanged()
+{
+	UpdateReferenceBrush();
+	Repaint();
+}
+
+void UStageSketchSurfaceWidget::UpdateReferenceBrush()
+{
+	const UStageSketchSubsystem* Sketch = GetSketch();
+	UTexture2D* Photo = Sketch ? Sketch->GetReferenceImage() : nullptr;
+	if (ReferenceBrush.GetResourceObject() != Photo)
+	{
+		ReferenceBrush.SetResourceObject(Photo);
+		ReferenceBrush.DrawAs = ESlateBrushDrawType::Image;
+		ReferenceBrush.ImageSize = Photo ? FVector2D(Photo->GetSizeX(), Photo->GetSizeY()) : FVector2D::ZeroVector;
+	}
+}
+
+void UStageSketchSurfaceWidget::PaintReference(const FGeometry& Geometry, FSlateWindowElementList& Elements, int32 Layer, const FVector2D& Size) const
+{
+	const UStageSketchSubsystem* Sketch = GetSketch();
+	if (!Sketch || !Sketch->IsReferenceVisible() || ReferenceBrush.GetResourceObject() != Sketch->GetReferenceImage())
+	{
+		return;
+	}
+	// Image up is plan +X and image right is plan +Y, like the canvas, so the photo is drawn upright between its plan corners.
+	const FBox2D& Bounds = Sketch->GetReferenceBounds();
+	const FVector2D TopLeft = WorldToLocal(FVector2D(Bounds.Max.X, Bounds.Min.Y), Size);
+	const FVector2D BottomRight = WorldToLocal(FVector2D(Bounds.Min.X, Bounds.Max.Y), Size);
+	const FVector2D Extent = BottomRight - TopLeft;
+	if (Extent.X < 1.0 || Extent.Y < 1.0)
+	{
+		return;
+	}
+	FSlateDrawElement::MakeBox(Elements, Layer, Geometry.ToPaintGeometry(FVector2f(Extent), FSlateLayoutTransform(FVector2f(TopLeft))), &ReferenceBrush,
+		ESlateDrawEffect::None, FLinearColor(1.f, 1.f, 1.f, StageSketchSurface::ReferenceOpacity));
 }
 
 void UStageSketchSurfaceWidget::Repaint()
@@ -131,6 +177,10 @@ void UStageSketchSurfaceWidget::FrameSketch()
 			{
 				Bounds += Point;
 			}
+		}
+		if (Sketch->IsReferenceVisible())
+		{
+			Bounds += Sketch->GetReferenceBounds();
 		}
 	}
 	const FVector2D Size = GetCachedGeometry().GetLocalSize();
@@ -416,9 +466,10 @@ int32 UStageSketchSurfaceWidget::NativePaint(const FPaintArgs& Args, const FGeom
 
 	// A plain white brush tinted with the theme: a rounded-box brush painted directly ignores its fill colour here.
 	FSlateDrawElement::MakeBox(OutDrawElements, LayerId, AllottedGeometry.ToPaintGeometry(), StageCraftWidgetStyle::AppBrush(TEXT("WhiteBrush")), ESlateDrawEffect::None, Palette.WindowBackground);
-	PaintGrid(AllottedGeometry, OutDrawElements, LayerId + 1, Size);
+	PaintReference(AllottedGeometry, OutDrawElements, LayerId + 1, Size);
+	PaintGrid(AllottedGeometry, OutDrawElements, LayerId + 2, Size);
 
-	const int32 StrokeLayer = LayerId + 2;
+	const int32 StrokeLayer = LayerId + 3;
 	if (const UStageSketchSubsystem* Sketch = GetSketch())
 	{
 		const TArray<FStageSketchStroke>& Strokes = Sketch->GetStrokes();

@@ -5,6 +5,7 @@
 #include "CoreMinimal.h"
 #include "Blueprint/UserWidget.h"
 #include "Sketch/StageSketchTypes.h"
+#include "Styling/SlateBrush.h"
 #include "StageSketchSurfaceWidget.generated.h"
 
 /**
@@ -17,7 +18,8 @@
  *  - Clicked points snap to the sketch grid when snapping is on; the generator snaps again by its own rules.
  *
  * Only the stroke in progress and the view live here (transient UI state). Finished strokes go to UStageSketchSubsystem::AddStroke;
- * everything drawn is read from the subsystem, and a repaint is requested on OnSketchChanged and on input. No tick
+ * everything drawn is read from the subsystem, and a repaint is requested on OnSketchChanged, OnImportChanged and on input. An
+ * imported photo is drawn faintly under the grid where the import placed it. No tick
  * (DisableNativeTick); bound in NativeConstruct, unbound in NativeDestruct. It takes keyboard focus on a click so Enter, Esc and
  * Backspace reach it while drawing.
  */
@@ -91,6 +93,15 @@ private:
 	UFUNCTION()
 	void HandleSketchChanged();
 
+	/** The reference photo appeared, changed visibility or was removed. */
+	UFUNCTION()
+	void HandleImportChanged();
+
+	/** Points ReferenceBrush at the sketch's photo (or at nothing). */
+	void UpdateReferenceBrush();
+
+	void PaintReference(const FGeometry& Geometry, FSlateWindowElementList& Elements, int32 Layer, const FVector2D& Size) const;
+
 	void PaintGrid(const FGeometry& Geometry, FSlateWindowElementList& Elements, int32 Layer, const FVector2D& Size) const;
 	void PaintStroke(const FGeometry& Geometry, FSlateWindowElementList& Elements, int32 Layer, const FVector2D& Size,
 		const FStageSketchStroke& Stroke, bool bHighlighted) const;
@@ -101,6 +112,10 @@ private:
 	TObjectPtr<const class UStageCraftUITheme> Theme = nullptr;
 
 	TWeakObjectPtr<class UStageSketchSubsystem> BoundSketch;
+
+	/** The imported photo under the strokes (Docs/ADR/0017 §2.6). A property, so it keeps the texture it draws alive until it changes. */
+	UPROPERTY(Transient)
+	FSlateBrush ReferenceBrush;
 
 	EStageSketchTool Tool = EStageSketchTool::Shape;
 	EGesture Gesture = EGesture::None;

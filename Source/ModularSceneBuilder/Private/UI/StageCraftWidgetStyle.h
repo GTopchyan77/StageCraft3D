@@ -74,7 +74,7 @@ namespace StageCraftWidgetStyle
 	/** Thin scroll bar that blends into the panel. */
 	FScrollBarStyle MakeScrollBar(const UStageCraftUITheme& Theme);
 
-	/** Engine Roboto at a given size. Typeface: "Regular", "Bold", "Italic"... */
+	/** The UI font at a given size: engine Roboto, with Noto Sans Armenian for Armenian text. Typeface: "Regular", "Bold", "Italic"... */
 	FSlateFontInfo MakeFont(int32 Size, FName Typeface = TEXT("Regular"));
 
 	/** A brush from the app style (Starship in game builds), e.g. "Icons.Search". Never null. */

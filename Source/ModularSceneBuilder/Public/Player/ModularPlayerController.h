@@ -96,6 +96,9 @@ public:
 	UFUNCTION(BlueprintPure, Category = "StageCraft")
 	class UStageEditHistoryComponent* GetEditHistory() const { return EditHistory; }
 
+	/** The AI assistant's voice prompts (Docs/ADR/0017 §2.5): MIC in the assistant panel records and transcribes through it. */
+	class UStageVoiceInputComponent* GetVoiceInput() const { return VoiceInput; }
+
 	UFUNCTION(BlueprintPure, Category = "StageCraft")
 	class UStageSnappingComponent* GetSnapping() const { return Snapping; }
 
@@ -409,6 +412,9 @@ protected:
 
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Components")
 	TObjectPtr<class UStageViewportComponent> ViewportView = nullptr;
+
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Components")
+	TObjectPtr<class UStageVoiceInputComponent> VoiceInput = nullptr;
 
 	/** Spawned once for the local player and re-targeted on every selection change. */
 	UPROPERTY(EditDefaultsOnly, Category = "StageCraft|Gizmo")

@@ -3653,7 +3653,7 @@ The design is in `Docs/ADR/0013-preferences-key-bindings-and-audit-fixes.md`.
   - **the online model with a real API key**: none is available on this machine, so the HTTP path is covered only by the request and response tests.
 - Status: **implemented, awaiting manual verification.**
 
-**Commit:** uncommitted (working tree).
+**Commit:** `23b71ba`.
 
 **Known issues / follow-ups**
 - The online model is untested against the live API (no key here). The `server-side-fallback-2026-07-01` beta and `fallbacks: "default"` follow the current API reference. If the account rejects them, the reply falls back to the local parser and the HTTP error is quoted.
@@ -3662,3 +3662,173 @@ The design is in `Docs/ADR/0013-preferences-key-bindings-and-audit-fixes.md`.
 - Environment panel edits are still not undoable (only assistant changes are). Undoing an assistant change restores the whole environment as it was before, including panel edits made since.
 - "moving heads" picks the first matching fixture when several types tie (the Spot before the Wash); name the type ("washes") to choose.
 - The conversation is not saved with scenes. The grammar is English only.
+
+## #44 — Armenian & English assistant, voice prompts (MIC), and photo / scan import for Sketch to Stage (2026-10-22)
+
+**Request (Gevor, 2026-10-22, "Multilingual (Armenian & English) Voice/Text Assistant Support and Real-World Photo/Sketch Import for Sketch-to-3D").**
+1. `UStageAICommandSubsystem` and `UStageAIAssistantWidget` fully process queries and commands in Armenian, using the Claude backend when a key is present.
+2. A microphone / speech-to-text hook in the assistant panel.
+3. Sketch to Stage accepts PNG / JPEG drawings and floor plans; image processing extracts the structure for `StageSketchGenerator` to rebuild decks and truss.
+4. `TObjectPtr`, encapsulation, no per-frame tick, all tests, 0 warnings, STATE.md.
+
+**Gevor's decisions (asked before design, 2026-10-22):** voice through OpenAI transcription; an offline Armenian grammar plus Armenian replies when there is no key; photos read by a local edge pipeline with an optional Claude reading, landing as editable strokes before GENERATE 3D. Design: `Docs/ADR/0017-multilingual-voice-and-photo-import.md`.
+
+**Housekeeping first.** #43 said "uncommitted"; it carries `23b71ba`.
+
+**What changed and why**
+- **Replies follow the prompt's language (ADR 0017 §2.1).**
+  - `EStageAILanguage` and `StageAILanguage::Detect` (Armenian against Latin letters) are new; `FStageAICommand::Language` is the reply language.
+  - Every reply has an Armenian rendition next to its English `LOCTEXT`, through `StageAILanguage::Pick`. This covers help, answers, action outcomes, validation errors, notes and "not understood".
+  - Culture-invariant on purpose: the game's culture is global, while the language changes per prompt.
+  - Not translated: undo step names (Edit-menu entries), catalog names, and refusals worded by the GameMode or economy (quoted as they are).
+- **Offline Armenian (§2.2): `StageAIArmenian::TranslateToGrammar`** rewrites an Armenian prompt into the English grammar's words, and `StageAICommandParser::Parse` runs the same rules.
+  - Stems match longest first, so endings need no rules; short words match exactly.
+  - Number words and ordinals become digits, «»/"" labels are kept as typed, and `՞` or a question word makes a question.
+  - Part of the day plus an hour gives a clock time (`ժամը 8 երեկոյան` → 20:00); "turn on cue 4" plays it; undo and redo move first.
+  - Unknown Armenian words are kept, so `ավելացրու 2 վիշապ` is refused instead of adding the first catalog fixture.
+  - `FPrompt` now treats Armenian letters as word characters (and lowercases them itself; the CRT does not).
+- **Online Armenian (§2.3).** The `stage_command` tool has an optional, validated `reply_language` (en/hy; other values refused).
+  - The system prompt covers Armenian (also in Latin letters), voice transcripts, and English `item` words.
+  - `ParseResponseBody` and `CommandFromToolInputJson` take the prompt's language as the default.
+  - The Messages API transport (endpoint, version and beta headers, key) moved to `StageClaudeHttp`, shared with the sketch reader.
+- **Armenian on screen (§2.4).** No engine font has Armenian glyphs (Roboto, DroidSansFallback and NotoSansThai checked); Armenian drew as boxes.
+  - `StageCraftWidgetStyle::MakeFont` now builds one composite font: the engine's Roboto plus a **Noto Sans Armenian** sub-font (Regular/Bold, SIL OFL 1.1) for U+0530..058F and U+FB13..FB17, lazily loaded.
+  - The files are in `Source/ModularSceneBuilder/Resources/Fonts` with `OFL.txt`, staged by `RuntimeDependencies` (UFS). Under `Content/` the editor's auto-import would make assets of them.
+- **Voice prompts (§2.5).**
+  - `UStageVoiceInputComponent` is new, on `AModularPlayerController`: Idle → Recording → Transcribing → Idle, a status line, and a length-limit timer with a handle. No tick.
+  - It owns `FStageVoiceRecorder`, which wraps `Audio::FAudioCapture`. The device callback only appends mono samples under a lock; Stop and Abort close the stream first.
+  - It also owns `UStageOpenAITranscriptionBackend`: `POST /v1/audio/transcriptions`, multipart with a 16 kHz mono WAV, a bilingual vocabulary hint, and the language fixed or detected.
+  - Pure helpers in `StageSpeechAudio`: resample (a box filter when downsampling), RMS, WAV, multipart body, response.
+  - Short or silent recordings are not sent.
+  - Off by default (Project Settings › StageCraft AI Assistant › Voice Input; key from `OPENAI_API_KEY`).
+  - The transcript goes into the prompt field to be checked (Enter sends it), or straight through `RequestAssistantPrompt` when the settings say so.
+  - The panel gets MIC / STOP / … left of the field and a voice status line. Closing the panel cancels recording.
+  - The AudioCapture plugin is listed explicitly in the .uproject (it was already on by default).
+- **Photo / scan import (§2.6).** `UStageSketchSubsystem::ImportImage(Path, Local | Claude)` adds what a drawing shows to the sketch as ordinary strokes: closed outlines become decks (a nested one a riser), lines become truss, dots and small circles become fixtures. The stage is not touched: the user checks the strokes and generates as before.
+  - `StageSketchImageTrace` (pure, deterministic):
+    1. adaptive threshold from an integral image, read inverted when the image is dark, then a 3 × 3 closing and speck removal;
+    2. enclosed paper regions traced (Moore) and simplified (RDP);
+    3. compact marks become fixtures;
+    4. the remaining ink, less a band around each deck, thinned (Zhang–Suen) and followed end to end;
+    5. the result scaled to the chosen photo width and centred on the origin.
+  - Text and smudges are left out and counted. Caps: 32 decks, 64 runs, 96 fixtures.
+  - File checks (`StageSketchImageImport`): .png / .jpg / .jpeg only, 64 MB, format from the content, dimensions from the header before decoding (12000 px, 60 MP), alpha onto white.
+  - Threads: reading, decoding and tracing run on a `UE::Tasks` worker with a plain job struct. The result returns as a game-thread task and is applied only if its serial is current, so cancel, a newer import or the world ending drops it.
+  - The photo is shown at 40 % under the grid (a transient `UTexture2D` owned by the subsystem), with SHOW / REMOVE; FRAME and a finished import include it.
+  - `FStageSketchSettings::PhotoWidth` is new (5–100 m, default 20 m).
+- **Optional Claude reading (§2.7).** `UStageClaudeSketchVisionBackend` sends a JPEG (≤ 1568 px) with the strict `sketch_plan` tool, in image fractions; effort is never below medium.
+  - `StageSketchVision::ParseResponseBody` validates everything: unknown fields refused, bad or far-out points dropped, near ones clamped, elements with too few points dropped, counts capped, every drop counted.
+  - The local reading is always made and is the fallback (decline, "not a stage plan", empty plan, network error), and the message says why.
+- **Sketch window:** a PHOTO row with IMPORT PHOTO... (file dialog), REMOVE, the PHOTO WIDTH slider, READ THIS PC / CLAUDE (CLAUDE disabled with its reason when unavailable) and SHOW OFF / ON. The import's message goes on the result line.
+- **Development commands** (compiled out of Shipping): `StageCraft.Assistant.Voice start|stop|cancel|status|devices`, `StageCraft.Sketch.Import <path> [claude]`, and `StageCraft.Sketch.Set PhotoWidth`. `Sketch.Status` shows the photo and the import.
+- **Bug found in the scripted run and fixed:** the newest assistant reply could sit cut off below the panel. Wrapped text finds its height a frame or two after it is built, so the single extra scroll on the next tick was not enough. The list now follows its end for three ticks (`FollowEnd`).
+- **Defects found by an independent review of this change and fixed before handing over:**
+  - **Deck outline tracing could loop forever.** It stopped only when the start pixel was entered from the west. A start that can only be re-entered from the east (a deck drawn wide side up, a slanted top-left corner) circled until the step cap, repeating the outline. It now stops by Jacob's criterion (back at the start, about to leave it the same way). A test for a trapezoid with sides slanting 2 px per row was added.
+  - **Armenian stems:**
+    - `ցանկ` (list) also matched ցանկանում (I want), so "I want to add 4 spots" became a question. It is now whole-word, and ցանկան is a filler.
+    - `կրկն` (redo) also matched կրկնակի (double); redo is now its imperative and infinitive only.
+    - A prohibitive "մի" before a verb ("մի՛ ավելացրու" = don't add) read as "add one". Such a prompt is now not understood rather than run.
+    - A part of the day in an action ("ավելացրու 4 սփոթ երեկոյան") set the time instead; it is dropped from such prompts.
+    - Tests were added for each.
+  - **Voice recorder:** a callback still delivered while the stream stops now finds a flag cleared under the lock and touches nothing (the earlier comment relied on the engine joining its thread).
+  - **Sketch window:** a window opened after an import no longer announces the old import again.
+  - **Claude reading:** the backend is made when first needed and availability is read live, so turning the online model on applies without reloading the level.
+
+**Files changed**
+- New:
+  - `Docs/ADR/0017-multilingual-voice-and-photo-import.md`
+  - `Source/ModularSceneBuilder/Resources/Fonts/NotoSansArmenian-Regular.ttf`, `NotoSansArmenian-Bold.ttf`, `OFL.txt` (Noto Project, SIL OFL 1.1, from notofonts.github.io; glyph coverage of U+0531..0587 checked)
+  - `Public/AI/StageAILanguage.h`, `StageAIArmenian.h`, `StageSpeechTypes.h`, `StageSpeechToTextBackend.h`, `StageVoiceInputComponent.h`
+  - `Private/AI/StageAILanguage.cpp`, `StageAIArmenian.cpp`, `StageSpeechTypes.cpp`, `StageSpeechToTextBackend.cpp`, `StageVoiceInputComponent.cpp`, `StageVoiceRecorder.h/.cpp`, `StageClaudeHttp.h/.cpp`, `Tests/StageAIArmenianTests.cpp`, `Tests/StageAIVoiceTests.cpp`
+  - `Public/Sketch/StageSketchImageTrace.h`, `StageSketchVision.h`, `StageSketchVisionBackend.h`
+  - `Private/Sketch/StageSketchImageTrace.cpp`, `StageSketchImageImport.h/.cpp`, `StageSketchVision.cpp`, `StageSketchVisionBackend.cpp`, `Tests/StageSketchImageTests.cpp`
+- Changed:
+  - `ModularSceneBuilder.uproject` (AudioCapture plugin listed)
+  - `ModularSceneBuilder.Build.cs` (AudioCaptureCore, ImageWrapper, font RuntimeDependencies)
+  - AI:
+    - `Public/AI/StageAITypes.h` (`Language`), `StageAICommandParser.h` (answers take a language), `StageAICommandSchema.h` (default language), `StageAIAssistantBackend.h`
+    - `StageAIAssistantSettings.h` + `Private/AI/StageAIAssistantSettings.cpp` (Voice Input)
+    - `StageAICommandSubsystem.h` + `Private/AI/StageAICommandSubsystem.cpp`
+    - `Private/AI/StageAICommandParser.cpp`, `StageAICommandRunner.cpp`, `StageAICommandSchema.cpp`, `StageClaudeAssistantBackend.cpp`, `StageAIConsoleCommands.cpp`
+  - `Public/Player/ModularPlayerController.h`, `Private/Player/ModularPlayerController.cpp` (`VoiceInput` component)
+  - Sketch:
+    - `Public/Sketch/StageSketchTypes.h` (`PhotoWidth`, `EStageSketchReader`, `EStageSketchImportState`), `StageSketchMath.h` + `Private/Sketch/StageSketchMath.cpp` (photo width range)
+    - `StageSketchSubsystem.h` + `Private/Sketch/StageSketchSubsystem.cpp` (import, reference photo)
+    - `Private/Sketch/StageSketchConsoleCommands.cpp`
+  - UI:
+    - `Private/UI/StageCraftWidgetStyle.h/.cpp` (composite font)
+    - `Public/UI/StageAIAssistantWidget.h` + `Private/UI/StageAIAssistantWidget.cpp` (MIC, voice line, scroll follow, Armenian welcome line)
+    - `Public/UI/StageSketchCanvasWidget.h` + `.cpp` (PHOTO row)
+    - `Public/UI/StageSketchSurfaceWidget.h` + `.cpp` (reference photo)
+  - `Docs/CURRENT_SYSTEMS.md`, `tasks/todo.md` (Phase 21), this file
+- No maps, Blueprints, content assets or input assets changed. No settings changed in DefaultGame.ini: every new option has a code default and is off.
+
+**Verification (Claude, 2026-10-22)**
+- **Builds (UE 5.8):** Editor Development, Game Development and Game Shipping (`-DisableAdaptiveUnity`) succeed with 0 warnings and 0 errors, rebuilt after the last change. The Shipping exe has no `StageCraft.Assistant.Voice`, `.Ask` or `StageCraft.Sketch.Import` command strings; it does contain the font file name, `sketch_plan`, `reply_language` and the key variable names.
+- **Tests: 86/86** (`Automation RunTests StageCraft`; 80 before). New:
+  - `StageCraft.AI.Armenian`:
+    - script detection and lowercasing;
+    - about 70 Armenian prompts across every intent: fixtures with number words, slang, Latin brand names, "a few", twelve, polite filler; an unknown fixture refused; questions with `՞`;
+    - cues with «labels», ordinals and endings; go / next / back; rain, stop rain, fog, snow, cloudy; 18:30, 8 in the evening, 9 in the morning, sunset, noon; sky on and off;
+    - reports, undo / redo, unsupported operations, help, nonsense;
+    - every one of the 23 examples in the Armenian help text;
+    - the review's cases (want, double, don't, evening);
+    - Armenian replies (weight, kW, summary, not understood);
+    - `reply_language` (hy, en override, default, unknown refused, refusal text in Armenian), the response default, the tool definition and the system prompt.
+  - `StageCraft.AI.Voice`:
+    - resampling 48→16 kHz keeps length and loudness, a 15 kHz tone is damped, up and same-rate cases;
+    - RMS; the WAV header byte by byte, clamping and NaN;
+    - the multipart body (field framing, Armenian as UTF-8, file part, closing boundary);
+    - transcription responses: text, Armenian, 401 with the message, error on 200, not JSON, no or empty text, the length cap;
+    - the settings, and the component refusing while voice input is off.
+  - `StageCraft.Sketch.Image.Trace`:
+    - pixel → plan mapping;
+    - a deck outline (placed within 25 cm, area within 8 %, simple after sanitizing, deterministic, scales with the width);
+    - the wide-side-up trapezoid; a riser one level higher; an open bent line → a truss with 3 points;
+    - dots and a ring → 4 fixtures at their centres; a deck with a dot inside and a line leaving it;
+    - a shadow gradient with dust; a blackboard read inverted; a handwritten "Z" left out; blank and tiny images;
+    - scaling down a 1600 × 1200 image.
+  - `StageCraft.Sketch.Image.Files`: PNG with transparency onto white, JPEG, garbage refused, extensions, the whole worker job on a file (preview, JPEG for the online reading), a missing file.
+  - `StageCraft.Sketch.Image.Vision`:
+    - the strict tool;
+    - the request (image block, fallbacks, auto tool choice, effort at least medium);
+    - a valid plan (height, clamping near the edge, notes, placement equal to the local reading);
+    - hostile answers: bad corners and points dropped, a negative height ignored, unknown field, 120 fixtures capped;
+    - a text answer, a refusal, 401, malformed.
+  - `StageCraft.Sketch.Image.Import` (real game world):
+    - an import through the worker: a deck, a truss and a fixture; the photo 12 m × 8 m under the canvas;
+    - a second import refused while busy; hide and remove the photo with the strokes kept;
+    - a cancel drops the late result; unsupported and missing files refused; Claude refused while off, with the reason;
+    - a fake .jpg failing with its name.
+- **Scripted Standalone `-game` runs** (logs `Saved/Logs/R44_Run1–7.log`; Gevor's workspace session backed up and restored around every run, compared identical):
+  - **Run 1 (photo):**
+    - The input was a 1600 × 1200 JPEG made to look like a phone photo of a hand drawing: off-white paper with a lamp fall-off, 2.5° tilt, wobbly pen lines, sensor noise, handwritten labels.
+    - At 21 m wide it read as **2 decks** (the stage with its thrust, 8 corners, 84.75 m²; the drum riser at 120 cm), **3 truss runs** (upstage and both legs) and **8 fixtures** (six under the upstage truss, two on the riser). The 6 text marks were left out.
+    - GENERATE 3D built all of it in one step: 47 deck panels, 13 truss sections.
+    - Screenshots: `Saved/Screenshots/Sketch_105106.png` (the strokes exactly on the faint photo, the PHOTO row, the message) and `WindowsEditor/ScreenShot00039.png` (the generated stage in 3D).
+    - Run 5 read the same photo the same way after the fixes.
+  - **Run 2 (Armenian):**
+    - Help; "Ավելացրու 4 շարժական գլուխ" (4 fixtures added after streaming); "քանի՞ սարք կա" → "6 լուսային սարք…"; total weight 212 kg.
+    - Cue 1 «Ներածություն» stored with a 3 s fade; rain (the sky turned on); "ժամը 8 երեկոյան" → 20:00; the weather described in Armenian; undo named the step.
+    - "ավելացրու 2 վիշապ" refused, listing the catalog's fixtures; "how many fixtures" answered in English; "ջնջիր ամեն ինչ" explained.
+    - `Saved/Screenshots/Assistant_105301.png`: Armenian prompts and replies render correctly with the Noto sub-font, beside English; MIC is disabled with the reason on the voice line.
+  - **Run 3 (voice):** voice input on through an `-ini` override. `Voice devices` saw 1 recording device without opening it; MIC refused for the missing `OPENAI_API_KEY`, with the reason on the voice line (`Assistant_105540.png`).
+  - **Runs 5 and 7 (overflow):** a long conversation that overflows the panel; after the scroll fix the newest reply is fully visible (`Assistant_111332.png`; it was cut off in Run 2).
+  - The test photo copy (`Saved/R44/`) and the automation test files were removed afterwards.
+- **Not verified:**
+  - by a person: IMPORT PHOTO... with the real file dialog, READ / SHOW / REMOVE and PHOTO WIDTH by mouse; typing Armenian with a real keyboard layout; MIC with a real microphone;
+  - **the online services:** no Anthropic or OpenAI key is available on this machine. Armenian through Claude, the photo reading by Claude and a real transcription are covered only by the request and response tests. Recording the microphone and sending it out was deliberately not done without Gevor.
+- Status: **implemented, awaiting manual verification.**
+
+**Commit:** uncommitted (working tree).
+
+**Known issues / follow-ups**
+- The offline Armenian lexicon is finite. Unusual wording gets "not understood"; free Armenian needs the online model. The Armenian texts were written by Claude and should be read by a native speaker.
+- Refusals worded by the GameMode or economy, catalog names and undo step names stay in English inside Armenian replies.
+- Photo reading:
+  - Phone photos with EXIF rotation are read as stored, and perspective is not corrected: take the photo from straight above.
+  - A closed truss loop reads as a deck (the canvas's convention), and letters such as "o" can become fixtures.
+  - The photo width applies to the next import (CLEAR and import again to rescale).
+- Voice: one recording at a time, no level meter; the transcript is checked in the field by default.
+- Observed while testing, not from this change: quitting within about 35 s of start waits for the runtime model import of `AG1.FBX` from the import list (ADR 0006). In Run 5 that pushed the exit past the script's timeout.
+- PDF exports still print Armenian as "?" (WinAnsi only, ADR 0011).

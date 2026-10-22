@@ -110,6 +110,9 @@ private:
 	/** Note appended to the next answer ("answered offline because ..."), then cleared. */
 	static FText WithNote(const FText& Text, const FText& Note);
 
+	/** "answered offline: <reason>" in the prompt's language. */
+	static FText DescribeOffline(const FText& Reason, EStageAILanguage Language);
+
 	TArray<FStageAIMessage> Messages;
 	EStageAIAssistantState State = EStageAIAssistantState::Idle;
 

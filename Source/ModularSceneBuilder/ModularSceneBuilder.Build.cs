@@ -1,5 +1,6 @@
 // Copyright Epic Games, Inc. All Rights Reserved.
 
+using System.IO;
 using UnrealBuildTool;
 
 public class ModularSceneBuilder : ModuleRules
@@ -15,6 +16,15 @@ public class ModularSceneBuilder : ModuleRules
 		// RenderCore, RHI: render-thread GPU readback of still renders. ImageCore: resizing supersampled renders.
 		// HTTP: the AI assistant's optional online model (Claude Messages API, ADR 0016).
 		PrivateDependencyModuleNames.AddRange(new string[] { "ProceduralMeshComponent", "Slate", "SlateCore", "ApplicationCore", "Json", "DeveloperSettings", "RenderCore", "RHI", "ImageCore", "HTTP" });
+
+		// ADR 0017: AudioCaptureCore records voice prompts (the AudioCapture plugin registers the platform microphone backend);
+		// ImageWrapper decodes the PNG / JPEG drawings imported into Sketch to Stage.
+		PrivateDependencyModuleNames.AddRange(new string[] { "AudioCaptureCore", "ImageWrapper" });
+
+		// The UI font's Armenian sub-font (Noto Sans Armenian, SIL OFL 1.1) is read from these files at runtime, so they ship with the module.
+		RuntimeDependencies.Add(Path.Combine(ModuleDirectory, "Resources", "Fonts", "NotoSansArmenian-Regular.ttf"), StagedFileType.UFS);
+		RuntimeDependencies.Add(Path.Combine(ModuleDirectory, "Resources", "Fonts", "NotoSansArmenian-Bold.ttf"), StagedFileType.UFS);
+		RuntimeDependencies.Add(Path.Combine(ModuleDirectory, "Resources", "Fonts", "OFL.txt"), StagedFileType.UFS);
 
 		// Runtime model import (ADR 0006): Interchange translates .glb/.gltf/.obj (and .fbx in builds with editor code) and builds
 		// static meshes at runtime. InterchangePipelines is the Interchange plugin's generic pipeline, configured in code.

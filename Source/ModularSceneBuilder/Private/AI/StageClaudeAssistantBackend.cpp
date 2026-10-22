@@ -3,7 +3,7 @@
 #include "AI/StageAIAssistantBackend.h"
 
 #include "AI/StageAIAssistantSettings.h"
-#include "HttpModule.h"
+#include "AI/StageClaudeHttp.h"
 #include "Interfaces/IHttpRequest.h"
 #include "Interfaces/IHttpResponse.h"
 #include "ModularSceneBuilder.h"
@@ -12,22 +12,9 @@
 
 #define LOCTEXT_NAMESPACE "StageClaudeAssistantBackend"
 
-namespace StageClaudeAssistantBackend
-{
-	const TCHAR* const Endpoint = TEXT("https://api.anthropic.com/v1/messages");
-	const TCHAR* const ApiVersion = TEXT("2023-06-01");
-	/** Required by the fallbacks "default" request field. */
-	const TCHAR* const FallbackBeta = TEXT("server-side-fallback-2026-07-01");
-}
-
-FString UStageClaudeAssistantBackend::ReadApiKey()
-{
-	return FPlatformMisc::GetEnvironmentVariable(UStageAIAssistantSettings::GetApiKeyVariable()).TrimStartAndEnd();
-}
-
 bool UStageClaudeAssistantBackend::IsAvailable(FText& OutReason) const
 {
-	if (ReadApiKey().IsEmpty())
+	if (StageClaudeHttp::ReadApiKey().IsEmpty())
 	{
 		OutReason = FText::Format(LOCTEXT("NoKey", "the online model needs an API key in the {0} environment variable"),
 			FText::FromString(UStageAIAssistantSettings::GetApiKeyVariable()));
@@ -43,26 +30,20 @@ FText UStageClaudeAssistantBackend::GetDisplayName() const
 
 bool UStageClaudeAssistantBackend::Interpret(const FStageAIBackendRequest& Request, FOnStageAIBackendFinished OnFinished)
 {
-	const FString ApiKey = ReadApiKey();
+	const FString ApiKey = StageClaudeHttp::ReadApiKey();
 	if (PendingRequest.IsValid() || ApiKey.IsEmpty())
 	{
 		return false;
 	}
 	const UStageAIAssistantSettings* Settings = GetDefault<UStageAIAssistantSettings>();
 
-	TSharedRef<IHttpRequest, ESPMode::ThreadSafe> HttpRequest = FHttpModule::Get().CreateRequest();
-	HttpRequest->SetURL(StageClaudeAssistantBackend::Endpoint);
-	HttpRequest->SetVerb(TEXT("POST"));
-	HttpRequest->SetHeader(TEXT("Content-Type"), TEXT("application/json"));
-	HttpRequest->SetHeader(TEXT("x-api-key"), ApiKey);
-	HttpRequest->SetHeader(TEXT("anthropic-version"), StageClaudeAssistantBackend::ApiVersion);
-	HttpRequest->SetHeader(TEXT("anthropic-beta"), StageClaudeAssistantBackend::FallbackBeta);
-	HttpRequest->SetContentAsString(StageAICommandSchema::BuildRequestBody(Settings->GetModelOptions(), Request.History, Request.Prompt, Request.SceneSummary));
-	HttpRequest->SetTimeout(Settings->GetRequestTimeoutSeconds());
+	TSharedRef<IHttpRequest, ESPMode::ThreadSafe> HttpRequest = StageClaudeHttp::MakeMessagesRequest(ApiKey,
+		StageAICommandSchema::BuildRequestBody(Settings->GetModelOptions(), Request.History, Request.Prompt, Request.SceneSummary), Settings->GetRequestTimeoutSeconds());
+	const EStageAILanguage PromptLanguage = StageAILanguage::Detect(Request.Prompt);
 
 	// Completion runs on the game thread. The weak binding never calls into a destroyed backend; Cancel unbinds it first.
 	HttpRequest->OnProcessRequestComplete().BindWeakLambda(this,
-		[this, OnFinished](FHttpRequestPtr, FHttpResponsePtr Response, bool bConnectedSuccessfully)
+		[this, OnFinished, PromptLanguage](FHttpRequestPtr, FHttpResponsePtr Response, bool bConnectedSuccessfully)
 		{
 			PendingRequest.Reset();
 			FStageAIModelResponse Result;
@@ -72,7 +53,7 @@ bool UStageClaudeAssistantBackend::Interpret(const FStageAIBackendRequest& Reque
 			}
 			else
 			{
-				Result = StageAICommandSchema::ParseResponseBody(Response->GetResponseCode(), Response->GetContentAsString());
+				Result = StageAICommandSchema::ParseResponseBody(Response->GetResponseCode(), Response->GetContentAsString(), PromptLanguage);
 			}
 			if (Result.Status == FStageAIModelResponse::EStatus::Failed)
 			{

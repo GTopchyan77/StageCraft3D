@@ -69,8 +69,6 @@ public:
 	//~ End UObject Interface
 
 private:
-	static FString ReadApiKey();
-
 	/** The request in flight; its completion delegate is unbound on Cancel so it can never call back afterwards. */
 	TSharedPtr<class IHttpRequest, ESPMode::ThreadSafe> PendingRequest;
 };

@@ -16,8 +16,11 @@
 #include "Data/BaseItemData.h"
 #include "Engine/GameInstance.h"
 #include "Engine/World.h"
+#include "Import/StageFileDialog.h"
+#include "Misc/Paths.h"
 #include "Player/ModularPlayerController.h"
 #include "Sketch/StageSketchGenerator.h"
+#include "Sketch/StageSketchImageImport.h"
 #include "Sketch/StageSketchMath.h"
 #include "Sketch/StageSketchSubsystem.h"
 #include "Subsystems/StageItemSubsystem.h"
@@ -45,6 +48,7 @@ namespace StageSketchCanvas
 	/** Slider steps, in cm. */
 	constexpr float DeckHeightStep = 10.f;
 	constexpr float TrussHeightStep = 50.f;
+	constexpr float PhotoWidthStep = 100.f;
 
 	/** Grid presets (cm) and smoothing presets, in button order. */
 	constexpr float GridPresets[] = { 25.f, 50.f, 100.f };
@@ -314,12 +318,33 @@ void UStageSketchCanvasWidget::BuildTree()
 	}
 	Add(BuildRow(ItemGroups));
 
+	// A photo or scan of a drawing, read into strokes.
+	UWidget* PhotoSegment = BuildSegment({ LOCTEXT("ImportPhoto", "IMPORT PHOTO..."), LOCTEXT("RemovePhoto", "REMOVE") },
+		{ LOCTEXT("ImportPhotoTip", "Read a PNG or JPEG of a stage drawn from above (paper, whiteboard, printed plan): closed outlines become decks, lines become truss, dots and small circles become fixtures. The strokes are added to the sketch to check before GENERATE 3D."),
+		  LOCTEXT("RemovePhotoTip", "Take the photo away from under the canvas (the strokes stay).") },
+		PhotoButtons, &ThisClass::HandlePhotoPicked);
+	UWidget* PhotoWidthSlider = BuildSlider(ESlider::PhotoWidth, LOCTEXT("PhotoWidth", "PHOTO WIDTH"),
+		LOCTEXT("PhotoWidthTip", "The real width of the whole photo: it sets the drawing's scale. Applies to the next import."), StageSketchMath::MinPhotoWidth, StageSketchMath::MaxPhotoWidth);
+	UHorizontalBox* ReaderGroup = WidgetTree->ConstructWidget<UHorizontalBox>(UHorizontalBox::StaticClass());
+	ReaderGroup->AddChildToHorizontalBox(MakeText(LOCTEXT("Reader", "READ  "), 7, TEXT("Bold"), Palette.TextSecondary))->SetVerticalAlignment(VAlign_Center);
+	ReaderGroup->AddChildToHorizontalBox(BuildSegment({ LOCTEXT("ReaderLocal", "THIS PC"), LOCTEXT("ReaderClaude", "CLAUDE") },
+		{ LOCTEXT("ReaderLocalTip", "Trace the lines on this computer: offline, best with dark lines on plain paper."),
+		  LOCTEXT("ReaderClaudeTip", "Let Claude read the drawing (sends the image to Anthropic); better with photos, labels and messy sketches. Falls back to this computer.") },
+		ReaderButtons, &ThisClass::HandleReaderPicked));
+	UHorizontalBox* ShowGroup = WidgetTree->ConstructWidget<UHorizontalBox>(UHorizontalBox::StaticClass());
+	ShowGroup->AddChildToHorizontalBox(MakeText(LOCTEXT("ShowPhoto", "SHOW  "), 7, TEXT("Bold"), Palette.TextSecondary))->SetVerticalAlignment(VAlign_Center);
+	ShowGroup->AddChildToHorizontalBox(BuildSegment({ LOCTEXT("Off", "OFF"), LOCTEXT("On", "ON") },
+		{ LOCTEXT("ShowPhotoTip", "Show the imported photo faintly under the strokes, to check and correct them.") }, ShowPhotoButtons, &ThisClass::HandleShowPhotoPicked));
+	Add(BuildRow({ PhotoSegment, PhotoWidthSlider, ReaderGroup, ShowGroup }));
+
 	// The canvas.
 	UBorder* CanvasFrame = WidgetTree->ConstructWidget<UBorder>(UBorder::StaticClass(), TEXT("CanvasFrame"));
 	CanvasFrame->SetBrush(MakeBox(Palette.WindowBackground, 0.f, Palette.Divider, 1.f));
 	CanvasFrame->SetPadding(FMargin(1.f));
 	Surface = WidgetTree->ConstructWidget<UStageSketchSurfaceWidget>(UStageSketchSurfaceWidget::StaticClass(), TEXT("Surface"));
 	Surface->SetTheme(Theme);
+	// Strokes and the photo can extend past the visible plan; keep them inside the frame.
+	Surface->SetClipping(EWidgetClipping::ClipToBounds);
 	CanvasFrame->SetContent(Surface);
 	USizeBox* CanvasMin = WidgetTree->ConstructWidget<USizeBox>(USizeBox::StaticClass(), TEXT("CanvasMinimum"));
 	CanvasMin->SetMinDesiredHeight(260.f);
@@ -361,6 +386,9 @@ void UStageSketchCanvasWidget::NativeConstruct()
 		BoundSketch = Sketch;
 		Sketch->OnSketchChanged.AddUniqueDynamic(this, &ThisClass::HandleSketchChanged);
 		Sketch->OnGenerationFinished.AddUniqueDynamic(this, &ThisClass::HandleGenerationFinished);
+		Sketch->OnImportChanged.AddUniqueDynamic(this, &ThisClass::HandleImportChanged);
+		// An import that finished before this window opened is not announced again.
+		ShownImport = Sketch->GetImportsFinished();
 	}
 	if (UStageItemSubsystem* Catalog = GetGameInstance() ? GetGameInstance()->GetSubsystem<UStageItemSubsystem>() : nullptr)
 	{
@@ -377,6 +405,7 @@ void UStageSketchCanvasWidget::NativeDestruct()
 	{
 		Sketch->OnSketchChanged.RemoveDynamic(this, &ThisClass::HandleSketchChanged);
 		Sketch->OnGenerationFinished.RemoveDynamic(this, &ThisClass::HandleGenerationFinished);
+		Sketch->OnImportChanged.RemoveDynamic(this, &ThisClass::HandleImportChanged);
 	}
 	if (UStageItemSubsystem* Catalog = BoundCatalog.Get())
 	{
@@ -443,7 +472,10 @@ void UStageSketchCanvasWidget::Refresh()
 
 	FNumberFormattingOptions TwoDecimals = FNumberFormattingOptions::DefaultNoGrouping();
 	TwoDecimals.SetMinimumFractionalDigits(2).SetMaximumFractionalDigits(2);
-	const float SliderSettings[] = { Settings.DeckHeight, Settings.TrussHeight };
+	FNumberFormattingOptions WholeMetres = FNumberFormattingOptions::DefaultNoGrouping();
+	WholeMetres.SetMaximumFractionalDigits(0);
+	const float SliderSettings[] = { Settings.DeckHeight, Settings.TrussHeight, Settings.PhotoWidth };
+	static_assert(UE_ARRAY_COUNT(SliderSettings) == int32(ESlider::Count), "Every slider needs its setting.");
 	for (int32 Index = 0; Index < int32(ESlider::Count); ++Index)
 	{
 		if (Sliders[Index])
@@ -453,8 +485,46 @@ void UStageSketchCanvasWidget::Refresh()
 		}
 		if (SliderValues[Index])
 		{
-			SliderValues[Index]->SetText(FText::Format(LOCTEXT("Metres", "{0} m"), FText::AsNumber(SliderSettings[Index] * 0.01f, &TwoDecimals)));
+			SliderValues[Index]->SetText(FText::Format(LOCTEXT("Metres", "{0} m"),
+				FText::AsNumber(SliderSettings[Index] * 0.01f, Index == int32(ESlider::PhotoWidth) ? &WholeMetres : &TwoDecimals)));
 		}
+	}
+
+	// The photo row.
+	const bool bImporting = Sketch && Sketch->IsImportPending();
+	const bool bHasPhoto = Sketch && Sketch->GetReferenceImage() != nullptr;
+	FText OnlineUnavailable = LOCTEXT("NoSketch", "The sketch is not available in this level.");
+	const bool bOnline = Sketch && Sketch->CanReadOnline(OnlineUnavailable);
+	if (!bOnline && PhotoReader == EStageSketchReader::Claude)
+	{
+		PhotoReader = EStageSketchReader::Local;
+	}
+	for (UStageChoiceButton* Button : PhotoButtons)
+	{
+		const bool bImport = Button->GetChoiceIndex() == 0;
+		StyleChoice(*Button, false);
+		Button->SetIsEnabled(Sketch && !bImporting && (bImport ? StageFileDialog::IsAvailable() : bHasPhoto));
+		if (UTextBlock* Label = Cast<UTextBlock>(Button->GetContent()); Label && bImport)
+		{
+			Label->SetText(bImporting ? LOCTEXT("ImportingPhoto", "READING...") : LOCTEXT("ImportPhoto", "IMPORT PHOTO..."));
+		}
+	}
+	for (UStageChoiceButton* Button : ReaderButtons)
+	{
+		const bool bClaude = Button->GetChoiceIndex() == 1;
+		StyleChoice(*Button, (PhotoReader == EStageSketchReader::Claude) == bClaude);
+		Button->SetIsEnabled(Sketch && !bImporting && (!bClaude || bOnline));
+		if (bClaude)
+		{
+			Button->SetToolTipText(bOnline
+				? LOCTEXT("ReaderClaudeTip", "Let Claude read the drawing (sends the image to Anthropic); better with photos, labels and messy sketches. Falls back to this computer.")
+				: OnlineUnavailable);
+		}
+	}
+	for (UStageChoiceButton* Button : ShowPhotoButtons)
+	{
+		StyleChoice(*Button, bHasPhoto && Button->GetChoiceIndex() == (Sketch->IsReferenceVisible() ? 1 : 0));
+		Button->SetIsEnabled(bHasPhoto);
 	}
 
 	for (UStageChoiceButton* Button : ItemButtons)
@@ -495,8 +565,8 @@ void UStageSketchCanvasWidget::Refresh()
 	}
 	if (ResultText)
 	{
-		const bool bPending = Sketch && Sketch->IsGenerationPending();
-		ResultText->SetText(bPending ? LOCTEXT("Generating", "Generating...") : ResultMessage);
+		const bool bPending = (Sketch && Sketch->IsGenerationPending()) || bImporting;
+		ResultText->SetText(bImporting ? Sketch->GetImportMessage() : bPending ? LOCTEXT("Generating", "Generating...") : ResultMessage);
 		ResultText->SetColorAndOpacity(FSlateColor(bResultSucceeded || bPending ? Palette.TextSecondary : Palette.WarningColor));
 	}
 	if (GenerateButton)
@@ -600,6 +670,10 @@ void UStageSketchCanvasWidget::HandleSliderMoved(int32 SliderIndex, float Value)
 		{
 			Settings.TrussHeight = FMath::GridSnap(Value, TrussHeightStep);
 		}
+		else if (SliderIndex == int32(ESlider::PhotoWidth))
+		{
+			Settings.PhotoWidth = FMath::GridSnap(Value, PhotoWidthStep);
+		}
 		Sketch->SetSettings(Settings);
 	}
 	Refresh();
@@ -646,6 +720,71 @@ void UStageSketchCanvasWidget::HandleGenerationFinished(const FStageSketchGenera
 
 void UStageSketchCanvasWidget::HandleCatalogChanged()
 {
+	Refresh();
+}
+
+void UStageSketchCanvasWidget::HandlePhotoPicked(int32 Index)
+{
+	UStageSketchSubsystem* Sketch = GetSketch();
+	if (!Sketch)
+	{
+		return;
+	}
+	if (Index == 1)
+	{
+		Sketch->ClearReference();
+		Refresh();
+		return;
+	}
+	TArray<FString> Files;
+	if (!StageFileDialog::OpenFiles(LOCTEXT("ImportPhotoTitle", "Import a Stage Drawing"), LastPhotoDirectory, StageSketchImageImport::GetFileDialogFilter(), Files) || Files.IsEmpty())
+	{
+		return;
+	}
+	LastPhotoDirectory = FPaths::GetPath(Files[0]);
+	FText Error;
+	if (!Sketch->ImportImage(Files[0], PhotoReader, Error))
+	{
+		ResultMessage = Error;
+		bResultSucceeded = false;
+	}
+	Refresh();
+}
+
+void UStageSketchCanvasWidget::HandleReaderPicked(int32 Index)
+{
+	PhotoReader = Index == 1 ? EStageSketchReader::Claude : EStageSketchReader::Local;
+	Refresh();
+}
+
+void UStageSketchCanvasWidget::HandleShowPhotoPicked(int32 Index)
+{
+	if (UStageSketchSubsystem* Sketch = GetSketch())
+	{
+		Sketch->SetReferenceVisible(Index == 1);
+	}
+	Refresh();
+}
+
+void UStageSketchCanvasWidget::HandleImportChanged()
+{
+	const UStageSketchSubsystem* Sketch = GetSketch();
+	if (Sketch && !Sketch->IsImportPending() && !Sketch->GetImportMessage().IsEmpty())
+	{
+		// The reference photo's SHOW / REMOVE fire this too: only a finished import's new message is taken, once.
+		const uint32 Finished = Sketch->GetImportsFinished();
+		if (Finished != ShownImport)
+		{
+			ShownImport = Finished;
+			ResultMessage = Sketch->GetImportMessage();
+			bResultSucceeded = Sketch->WasImportSuccessful();
+			// Frame the new drawing and its photo.
+			if (bResultSucceeded && Surface)
+			{
+				Surface->FrameSketch();
+			}
+		}
+	}
 	Refresh();
 }
 

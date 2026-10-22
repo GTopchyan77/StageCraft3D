@@ -3,11 +3,52 @@
 #include "UI/StageCraftWidgetStyle.h"
 
 #include "Brushes/SlateRoundedBoxBrush.h"
+#include "Fonts/CompositeFont.h"
+#include "Misc/Paths.h"
+#include "ModularSceneBuilder.h"
 #include "Styling/AppStyle.h"
 #include "Styling/CoreStyle.h"
 
 namespace StageCraftWidgetStyle
 {
+	namespace
+	{
+		/** Noto Sans Armenian (SIL Open Font License 1.1, see OFL.txt beside it), staged with the module by its Build.cs (RuntimeDependencies). */
+		FString GetArmenianFontPath(const TCHAR* FileName)
+		{
+			return FPaths::Combine(FPaths::ProjectDir(), TEXT("Source/ModularSceneBuilder/Resources/Fonts"), FileName);
+		}
+
+		/**
+		 * The engine's Roboto composite with an Armenian sub-font (Docs/ADR/0017 §2.4): Roboto and its engine fallbacks have no Armenian
+		 * glyphs, so assistant replies and prompts in Armenian would draw as boxes. Bold-like typefaces map to the bold face, the rest to
+		 * the regular one. Without the font files the engine font is used as it is, and the gap is logged once.
+		 */
+		TSharedRef<const FCompositeFont> BuildUIFont()
+		{
+			const TSharedRef<const FCompositeFont> EngineFont = FCoreStyle::GetDefaultFont();
+			const FString Regular = GetArmenianFontPath(TEXT("NotoSansArmenian-Regular.ttf"));
+			const FString Bold = GetArmenianFontPath(TEXT("NotoSansArmenian-Bold.ttf"));
+			if (!FPaths::FileExists(Regular) || !FPaths::FileExists(Bold))
+			{
+				UE_LOG(LogStageCraft, Warning, TEXT("UI font: %s is missing, so Armenian text cannot be drawn."), *Regular);
+				return EngineFont;
+			}
+			const TSharedRef<FCompositeFont> Font = MakeShared<FCompositeFont>(*EngineFont);
+			FCompositeSubFont& Armenian = Font->SubTypefaces.AddDefaulted_GetRef();
+			Armenian.CharacterRanges = {
+				FInt32Range(FInt32Range::BoundsType::Inclusive(0x0530), FInt32Range::BoundsType::Inclusive(0x058F)),
+				FInt32Range(FInt32Range::BoundsType::Inclusive(0xFB13), FInt32Range::BoundsType::Inclusive(0xFB17)) };
+			for (const FTypefaceEntry& Entry : EngineFont->DefaultTypeface.Fonts)
+			{
+				const FString Name = Entry.Name.ToString();
+				const bool bBold = Name.Contains(TEXT("Bold")) || Name.Contains(TEXT("Black"));
+				Armenian.Typeface.AppendFont(Entry.Name, bBold ? Bold : Regular, EFontHinting::Default, EFontLoadingPolicy::LazyLoad);
+			}
+			return Font;
+		}
+	}
+
 	const UStageCraftUITheme& ResolveTheme(const UStageCraftUITheme* Theme)
 	{
 		return Theme ? *Theme : *GetDefault<UStageCraftUITheme>();
@@ -203,7 +244,9 @@ namespace StageCraftWidgetStyle
 
 	FSlateFontInfo MakeFont(int32 Size, FName Typeface)
 	{
-		return FCoreStyle::GetDefaultFontStyle(Typeface, Size);
+		// Built once; FSlateFontInfo keeps it alive and the font cache keys its glyphs by it.
+		static const TSharedRef<const FCompositeFont> UIFont = BuildUIFont();
+		return FSlateFontInfo(UIFont, float(Size), Typeface);
 	}
 
 	const FSlateBrush* AppBrush(FName BrushName)

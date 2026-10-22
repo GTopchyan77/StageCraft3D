@@ -3,6 +3,7 @@
 #pragma once
 
 #include "CoreMinimal.h"
+#include "AI/StageAILanguage.h"
 #include "Environment/StageEnvironmentTypes.h"
 #include "StageAITypes.generated.h"
 
@@ -87,6 +88,9 @@ struct MODULARSCENEBUILDER_API FStageAICommand
 
 	/** Export. */
 	EStageAIReport Report = EStageAIReport::All;
+
+	/** The language the reply is written in: the prompt's (StageAILanguage::Detect), or the online model's reply_language. */
+	EStageAILanguage Language = EStageAILanguage::English;
 
 	bool IsQuestion() const;
 	bool IsAction() const;

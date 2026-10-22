@@ -2,6 +2,7 @@
 
 #include "AI/StageAICommandParser.h"
 
+#include "AI/StageAIArmenian.h"
 #include "Algo/AllOf.h"
 #include "Algo/Find.h"
 
@@ -32,10 +33,11 @@ namespace StageAICommandParser
 				};
 				for (int32 Index = 0; Index < Raw.Len(); ++Index)
 				{
-					const TCHAR Char = FChar::ToLower(Raw[Index]);
+					// Armenian words the lexicon does not know are kept (StageAIArmenian), so they count as letters here too.
+					const TCHAR Char = FChar::ToLower(StageAILanguage::ToLowerArmenian(Raw[Index]));
 					const bool bDecimalPoint = Char == TEXT('.') && !Word.IsEmpty() && FChar::IsDigit(Word[Word.Len() - 1])
 						&& Index + 1 < Raw.Len() && FChar::IsDigit(Raw[Index + 1]);
-					if (FChar::IsAlnum(Char) || Char == TEXT(':') || bDecimalPoint)
+					if (FChar::IsAlnum(Char) || StageAILanguage::IsArmenianLetter(Char) || Char == TEXT(':') || bDecimalPoint)
 					{
 						Word.AppendChar(Char);
 					}
@@ -553,84 +555,98 @@ namespace StageAICommandParser
 			Command.ItemQuery = FString::Join(Target, TEXT(" "));
 			return Command;
 		}
+
+		/** The English grammar's rules, in order. */
+		TOptional<FStageAICommand> ParseGrammar(const FString& Text)
+		{
+			const FPrompt Prompt(Text);
+			if (Prompt.Words.IsEmpty())
+			{
+				return {};
+			}
+
+			FStageAICommand Command;
+			if (Prompt.Words[0] == TEXT("undo") || Prompt.Words[0] == TEXT("redo"))
+			{
+				Command.Intent = Prompt.Words[0] == TEXT("undo") ? EStageAIIntent::Undo : EStageAIIntent::Redo;
+				return Command;
+			}
+			if (Prompt.HasAny({ TEXT("help"), TEXT("commands") }) || Prompt.HasPhrase({ TEXT("what"), TEXT("can"), TEXT("you"), TEXT("do") })
+				|| Prompt.IsExactly({ TEXT("hi") }) || Prompt.IsExactly({ TEXT("hello") }))
+			{
+				Command.Intent = EStageAIIntent::Help;
+				return Command;
+			}
+			if (TOptional<FStageAICommand> Export = ParseExport(Prompt))
+			{
+				return Export;
+			}
+			if (TOptional<FStageAICommand> StoreCue = ParseStoreCue(Prompt))
+			{
+				return StoreCue;
+			}
+			if (TOptional<FStageAICommand> Playback = ParseCuePlayback(Prompt))
+			{
+				return Playback;
+			}
+			if (Prompt.HasAny({ TEXT("cue"), TEXT("cues") }) && !Prompt.HasAny({ TEXT("delete"), TEXT("remove") }))
+			{
+				Command.Intent = EStageAIIntent::ListCues;
+				return Command;
+			}
+
+			// The environment: a question about it, else a change to it.
+			if (Prompt.bQuestion && Prompt.HasAny({ TEXT("weather"), TEXT("time"), TEXT("sky"), TEXT("sun"), TEXT("raining"), TEXT("snowing"), TEXT("environment"),
+				TEXT("outdoor"), TEXT("outdoors"), TEXT("outside") }))
+			{
+				Command.Intent = EStageAIIntent::EnvironmentStatus;
+				return Command;
+			}
+			if (!Prompt.bQuestion)
+			{
+				if (const TOptional<EStageWeatherPreset> Weather = FindWeather(Prompt))
+				{
+					Command.Intent = EStageAIIntent::SetWeather;
+					Command.Weather = *Weather;
+					return Command;
+				}
+				if (const TOptional<float> Hour = FindHour(Prompt))
+				{
+					Command.Intent = EStageAIIntent::SetTimeOfDay;
+					Command.Hour = *Hour;
+					return Command;
+				}
+				if (const TOptional<bool> bSkyOn = FindSky(Prompt))
+				{
+					Command.Intent = EStageAIIntent::SetSky;
+					Command.bSkyOn = *bSkyOn;
+					return Command;
+				}
+			}
+
+			if (TOptional<FStageAICommand> Unsupported = ParseUnsupported(Prompt))
+			{
+				return Unsupported;
+			}
+			if (TOptional<FStageAICommand> Add = ParseAddFixtures(Prompt))
+			{
+				return Add;
+			}
+			return ParseQuestion(Prompt);
+		}
 	}
 
 	TOptional<FStageAICommand> Parse(const FString& Text)
 	{
-		const FPrompt Prompt(Text);
-		if (Prompt.Words.IsEmpty())
+		const FString Capped = Text.Left(MaxPromptLength);
+		const EStageAILanguage Language = StageAILanguage::Detect(Capped);
+		// Armenian is read through the same rules, rewritten into the words they know.
+		TOptional<FStageAICommand> Command = ParseGrammar(Language == EStageAILanguage::Armenian ? StageAIArmenian::TranslateToGrammar(Capped) : Capped);
+		if (Command.IsSet())
 		{
-			return {};
+			Command->Language = Language;
 		}
-
-		FStageAICommand Command;
-		if (Prompt.Words[0] == TEXT("undo") || Prompt.Words[0] == TEXT("redo"))
-		{
-			Command.Intent = Prompt.Words[0] == TEXT("undo") ? EStageAIIntent::Undo : EStageAIIntent::Redo;
-			return Command;
-		}
-		if (Prompt.HasAny({ TEXT("help"), TEXT("commands") }) || Prompt.HasPhrase({ TEXT("what"), TEXT("can"), TEXT("you"), TEXT("do") })
-			|| Prompt.IsExactly({ TEXT("hi") }) || Prompt.IsExactly({ TEXT("hello") }))
-		{
-			Command.Intent = EStageAIIntent::Help;
-			return Command;
-		}
-		if (TOptional<FStageAICommand> Export = ParseExport(Prompt))
-		{
-			return Export;
-		}
-		if (TOptional<FStageAICommand> StoreCue = ParseStoreCue(Prompt))
-		{
-			return StoreCue;
-		}
-		if (TOptional<FStageAICommand> Playback = ParseCuePlayback(Prompt))
-		{
-			return Playback;
-		}
-		if (Prompt.HasAny({ TEXT("cue"), TEXT("cues") }) && !Prompt.HasAny({ TEXT("delete"), TEXT("remove") }))
-		{
-			Command.Intent = EStageAIIntent::ListCues;
-			return Command;
-		}
-
-		// The environment: a question about it, else a change to it.
-		if (Prompt.bQuestion && Prompt.HasAny({ TEXT("weather"), TEXT("time"), TEXT("sky"), TEXT("sun"), TEXT("raining"), TEXT("snowing"), TEXT("environment"),
-			TEXT("outdoor"), TEXT("outdoors"), TEXT("outside") }))
-		{
-			Command.Intent = EStageAIIntent::EnvironmentStatus;
-			return Command;
-		}
-		if (!Prompt.bQuestion)
-		{
-			if (const TOptional<EStageWeatherPreset> Weather = FindWeather(Prompt))
-			{
-				Command.Intent = EStageAIIntent::SetWeather;
-				Command.Weather = *Weather;
-				return Command;
-			}
-			if (const TOptional<float> Hour = FindHour(Prompt))
-			{
-				Command.Intent = EStageAIIntent::SetTimeOfDay;
-				Command.Hour = *Hour;
-				return Command;
-			}
-			if (const TOptional<bool> bSkyOn = FindSky(Prompt))
-			{
-				Command.Intent = EStageAIIntent::SetSky;
-				Command.bSkyOn = *bSkyOn;
-				return Command;
-			}
-		}
-
-		if (TOptional<FStageAICommand> Unsupported = ParseUnsupported(Prompt))
-		{
-			return Unsupported;
-		}
-		if (TOptional<FStageAICommand> Add = ParseAddFixtures(Prompt))
-		{
-			return Add;
-		}
-		return ParseQuestion(Prompt);
+		return Command;
 	}
 
 	int32 MatchFixture(TConstArrayView<FStageAIFixtureCandidate> Candidates, const FString& Query)
@@ -702,23 +718,26 @@ namespace StageAICommandParser
 	}
 }
 
+
 namespace StageAIAnswers
 {
 	namespace
 	{
-		FText FormatWatts(float Watts)
+		using StageAILanguage::Pick;
+
+		FText FormatWatts(float Watts, EStageAILanguage Language)
 		{
 			FNumberFormattingOptions OneDecimal;
 			OneDecimal.SetMaximumFractionalDigits(1);
 			OneDecimal.SetMinimumFractionalDigits(1);
 			return Watts >= 1000.f
-				? FText::Format(LOCTEXT("Kilowatts", "{0} kW"), FText::AsNumber(Watts / 1000.f, &OneDecimal))
-				: FText::Format(LOCTEXT("Watts", "{0} W"), FText::AsNumber(FMath::RoundToInt(Watts)));
+				? FText::Format(Pick(Language, LOCTEXT("Kilowatts", "{0} kW"), INVTEXT("{0} կՎտ")), FText::AsNumber(Watts / 1000.f, &OneDecimal))
+				: FText::Format(Pick(Language, LOCTEXT("Watts", "{0} W"), INVTEXT("{0} Վտ")), FText::AsNumber(FMath::RoundToInt(Watts)));
 		}
 
-		FText FormatKg(float Kg)
+		FText FormatKg(float Kg, EStageAILanguage Language)
 		{
-			return FText::Format(LOCTEXT("Kilograms", "{0} kg"), FText::AsNumber(FMath::RoundToInt(Kg)));
+			return FText::Format(Pick(Language, LOCTEXT("Kilograms", "{0} kg"), INVTEXT("{0} կգ")), FText::AsNumber(FMath::RoundToInt(Kg)));
 		}
 
 		FText FormatPercent(float Value, float Limit)
@@ -737,22 +756,25 @@ namespace StageAIAnswers
 			return FText::Join(LOCTEXT("ListSeparator", ", "), Parts);
 		}
 
-		FText DescribeEnvironment(const FStageAISceneView& Scene)
+		FText DescribeEnvironment(const FStageAISceneView& Scene, EStageAILanguage Language)
 		{
 			if (!Scene.bHasEnvironment)
 			{
-				return LOCTEXT("NoEnvironment", "This level has no outdoor environment.");
+				return Pick(Language, LOCTEXT("NoEnvironment", "This level has no outdoor environment."), INVTEXT("Այս մակարդակում բացօթյա միջավայր չկա։"));
 			}
 			const FStageEnvironmentSettings& Settings = Scene.Environment;
 			const FText Time = FText::FromString(FormatHour(Settings.TimeOfDay));
 			if (!Settings.bSkyEnabled)
 			{
 				return Scene.bSkyAvailable
-					? FText::Format(LOCTEXT("Indoor", "Indoor stage: the outdoor sky is off (its clock stands at {0}). Say \"go outdoors\" to turn it on."), Time)
-					: LOCTEXT("IndoorNoSky", "Indoor stage. No sky system is installed in this build, so weather cannot be shown.");
+					? FText::Format(Pick(Language, LOCTEXT("Indoor", "Indoor stage: the outdoor sky is off (its clock stands at {0}). Say \"go outdoors\" to turn it on."),
+						INVTEXT("Փակ բեմ. բացօթյա երկինքն անջատված է (նրա ժամացույցը ցույց է տալիս {0})։ Գրեք «բացօթյա»՝ այն միացնելու համար։")), Time)
+					: Pick(Language, LOCTEXT("IndoorNoSky", "Indoor stage. No sky system is installed in this build, so weather cannot be shown."),
+						INVTEXT("Փակ բեմ։ Այս տարբերակում երկնքի համակարգ տեղադրված չէ, ուստի եղանակը չի կարող ցուցադրվել։"));
 			}
-			return FText::Format(LOCTEXT("Outdoor", "Outdoor sky at {0}, {1}: clouds {2}, rain {3}, snow {4}, fog {5}."), Time,
-				DescribeWeather(StageEnvironment::FindWeatherPreset(Settings)), FText::AsPercent(Settings.CloudCoverage), FText::AsPercent(Settings.Rain),
+			return FText::Format(Pick(Language, LOCTEXT("Outdoor", "Outdoor sky at {0}, {1}: clouds {2}, rain {3}, snow {4}, fog {5}."),
+					INVTEXT("Բացօթյա երկինք, ժամը {0}, {1}. ամպեր {2}, անձրև {3}, ձյուն {4}, մառախուղ {5}։")), Time,
+				DescribeWeather(StageEnvironment::FindWeatherPreset(Settings), Language), FText::AsPercent(Settings.CloudCoverage), FText::AsPercent(Settings.Rain),
 				FText::AsPercent(Settings.Snow), FText::AsPercent(Settings.Fog));
 		}
 
@@ -796,22 +818,22 @@ namespace StageAIAnswers
 		return FString::Printf(TEXT("%02d:%02d"), Minutes / 60, Minutes % 60);
 	}
 
-	FText DescribeWeather(EStageWeatherPreset Preset)
+	FText DescribeWeather(EStageWeatherPreset Preset, EStageAILanguage Language)
 	{
 		switch (Preset)
 		{
-		case EStageWeatherPreset::Clear:	return LOCTEXT("WeatherClear", "clear");
-		case EStageWeatherPreset::Cloudy:	return LOCTEXT("WeatherCloudy", "cloudy");
-		case EStageWeatherPreset::Rain:		return LOCTEXT("WeatherRain", "rain");
-		case EStageWeatherPreset::Snow:		return LOCTEXT("WeatherSnow", "snow");
-		case EStageWeatherPreset::Fog:		return LOCTEXT("WeatherFog", "fog");
-		default:							return LOCTEXT("WeatherCustom", "custom weather");
+		case EStageWeatherPreset::Clear:	return Pick(Language, LOCTEXT("WeatherClear", "clear"), INVTEXT("պարզ"));
+		case EStageWeatherPreset::Cloudy:	return Pick(Language, LOCTEXT("WeatherCloudy", "cloudy"), INVTEXT("ամպամած"));
+		case EStageWeatherPreset::Rain:		return Pick(Language, LOCTEXT("WeatherRain", "rain"), INVTEXT("անձրև"));
+		case EStageWeatherPreset::Snow:		return Pick(Language, LOCTEXT("WeatherSnow", "snow"), INVTEXT("ձյուն"));
+		case EStageWeatherPreset::Fog:		return Pick(Language, LOCTEXT("WeatherFog", "fog"), INVTEXT("մառախուղ"));
+		default:							return Pick(Language, LOCTEXT("WeatherCustom", "custom weather"), INVTEXT("անհատական եղանակ"));
 		}
 	}
 
-	FText DescribeHelp()
+	FText DescribeHelp(EStageAILanguage Language)
 	{
-		return LOCTEXT("Help",
+		return Pick(Language, LOCTEXT("Help",
 			"I can answer questions about the stage and make safe, undoable changes. Try:\n"
 			"• \"status\", \"how many fixtures\", \"total weight\", \"power draw\", \"list cues\", \"how many truss\"\n"
 			"• \"add 6 moving heads\", \"place a led par\"\n"
@@ -819,52 +841,69 @@ namespace StageAIAnswers
 			"• \"make it rain\", \"fog\", \"set time to 18:30\", \"sunset\", \"go outdoors\"\n"
 			"• \"export bill of materials\", \"export patch sheet\", \"export cable schedule\", \"export all reports\"\n"
 			"• \"undo\", \"redo\"\n"
-			"Everything I change goes through the stage's rules and can be undone with Ctrl+Z.");
+			"I also understand Armenian. Everything I change goes through the stage's rules and can be undone with Ctrl+Z."),
+			INVTEXT(
+			"Կարող եմ պատասխանել բեմի մասին հարցերին և կատարել անվտանգ փոփոխություններ, որոնք կարելի է հետարկել։ Փորձեք՝\n"
+			"• վիճակը · քանի՞ սարք կա · ընդհանուր քաշը · հզորությունը · կյուների ցանկը · քանի՞ ֆերմա կա\n"
+			"• ավելացրու 6 շարժական գլուխ · տեղադրիր մեկ LED փար\n"
+			"• պահիր կյու 5 «Ներածություն» 3 վայրկյան · գնա · հետ · գնա կյու 2\n"
+			"• թող անձրև գա · մառախուղ · ժամը 18:30 · մայրամուտ · բացօթյա\n"
+			"• արտահանիր նյութերի ցուցակը · արտահանիր պատչը · արտահանիր մալուխների ցուցակը · արտահանիր բոլոր հաշվետվությունները\n"
+			"• հետարկիր · կրկնիր\n"
+			"Հասկանում եմ նաև անգլերեն։ Իմ բոլոր փոփոխություններն անցնում են բեմի կանոններով և հետարկվում են Ctrl+Z-ով։"));
 	}
 
 	FText DescribeNotUnderstood(const FString& Prompt)
 	{
-		return FText::Format(LOCTEXT("NotUnderstood", "Sorry, I didn't understand \"{0}\". Type \"help\" to see what I can do."),
-			FText::FromString(Prompt.Left(80)));
+		return FText::Format(Pick(StageAILanguage::Detect(Prompt), LOCTEXT("NotUnderstood", "Sorry, I didn't understand \"{0}\". Type \"help\" to see what I can do."),
+			INVTEXT("Ներեցեք, չհասկացա «{0}»։ Գրեք «օգնություն»՝ տեսնելու, թե ինչ կարող եմ անել։")), FText::FromString(Prompt.Left(80)));
 	}
 
-	FText DescribeUnsupported(const FString& Operation)
+	FText DescribeUnsupported(const FString& Operation, EStageAILanguage Language)
 	{
 		if (Operation == TEXT("open") || Operation == TEXT("save"))
 		{
-			return LOCTEXT("UnsupportedFile", "I don't open, save or replace scenes from the chat, so nothing is lost by accident. Use the File menu (Save, Save As, Open); it asks before discarding changes.");
+			return Pick(Language, LOCTEXT("UnsupportedFile", "I don't open, save or replace scenes from the chat, so nothing is lost by accident. Use the File menu (Save, Save As, Open); it asks before discarding changes."),
+				INVTEXT("Զրույցից չեմ բացում, չեմ պահպանում և չեմ փոխարինում տեսարաններ, որպեսզի ոչինչ պատահաբար չկորչի։ Օգտագործեք File ընտրացանկը (Save, Save As, Open). այն հարցնում է նախքան փոփոխությունները կորցնելը։"));
 		}
-		return LOCTEXT("UnsupportedDelete", "I don't delete or clear things from the chat. Select items and press Delete, or use Edit › Clear Stage, which asks first. Ctrl+Z brings them back. Cues are deleted in the Cues panel.");
+		return Pick(Language, LOCTEXT("UnsupportedDelete", "I don't delete or clear things from the chat. Select items and press Delete, or use Edit › Clear Stage, which asks first. Ctrl+Z brings them back. Cues are deleted in the Cues panel."),
+			INVTEXT("Զրույցից չեմ ջնջում և չեմ մաքրում իրեր։ Ընտրեք դրանք և սեղմեք Delete, կամ օգտագործեք Edit › Clear Stage, որը նախ հարցնում է։ Ctrl+Z-ը դրանք հետ է բերում։ Կյուները ջնջվում են Cues վահանակում։"));
 	}
 
 	FText AnswerQuestion(const FStageAICommand& Command, const FStageAISceneView& Scene)
 	{
+		const EStageAILanguage Language = Command.Language;
 		switch (Command.Intent)
 		{
 		case EStageAIIntent::ItemCount:
 			return Scene.MaxPlacedItems > 0
-				? FText::Format(LOCTEXT("ItemCountLimit", "{0} {0}|plural(one=item is,other=items are) placed, of {1} allowed."), FText::AsNumber(Scene.PlacedItems), FText::AsNumber(Scene.MaxPlacedItems))
-				: FText::Format(LOCTEXT("ItemCount", "{0} {0}|plural(one=item is,other=items are) placed."), FText::AsNumber(Scene.PlacedItems));
+				? FText::Format(Pick(Language, LOCTEXT("ItemCountLimit", "{0} {0}|plural(one=item is,other=items are) placed, of {1} allowed."), INVTEXT("Տեղադրված է {0} իր՝ թույլատրված {1}-ից։")),
+					FText::AsNumber(Scene.PlacedItems), FText::AsNumber(Scene.MaxPlacedItems))
+				: FText::Format(Pick(Language, LOCTEXT("ItemCount", "{0} {0}|plural(one=item is,other=items are) placed."), INVTEXT("Տեղադրված է {0} իր։")), FText::AsNumber(Scene.PlacedItems));
 
 		case EStageAIIntent::TotalWeight:
 			return Scene.MaxWeightKg > 0.f
-				? FText::Format(LOCTEXT("WeightLimit", "Total weight: {0} of {1} allowed ({2})."), FormatKg(Scene.TotalWeightKg), FormatKg(Scene.MaxWeightKg),
-					FormatPercent(Scene.TotalWeightKg, Scene.MaxWeightKg))
-				: FText::Format(LOCTEXT("Weight", "Total weight: {0}, across {1} {1}|plural(one=item,other=items)."), FormatKg(Scene.TotalWeightKg), FText::AsNumber(Scene.PlacedItems));
+				? FText::Format(Pick(Language, LOCTEXT("WeightLimit", "Total weight: {0} of {1} allowed ({2})."), INVTEXT("Ընդհանուր քաշը՝ {0}՝ թույլատրված {1}-ից ({2})։")),
+					FormatKg(Scene.TotalWeightKg, Language), FormatKg(Scene.MaxWeightKg, Language), FormatPercent(Scene.TotalWeightKg, Scene.MaxWeightKg))
+				: FText::Format(Pick(Language, LOCTEXT("Weight", "Total weight: {0}, across {1} {1}|plural(one=item,other=items)."), INVTEXT("Ընդհանուր քաշը՝ {0} ({1} իր)։")),
+					FormatKg(Scene.TotalWeightKg, Language), FText::AsNumber(Scene.PlacedItems));
 
 		case EStageAIIntent::PowerDraw:
 			return Scene.MaxPowerWatts > 0.f
-				? FText::Format(LOCTEXT("PowerLimit", "Total power draw: {0} of the venue's {1} ({2})."), FormatWatts(Scene.TotalPowerWatts), FormatWatts(Scene.MaxPowerWatts),
-					FormatPercent(Scene.TotalPowerWatts, Scene.MaxPowerWatts))
-				: FText::Format(LOCTEXT("Power", "Total power draw: {0}, across {1} {1}|plural(one=item,other=items). The cable schedule export plans the circuits."),
-					FormatWatts(Scene.TotalPowerWatts), FText::AsNumber(Scene.PlacedItems));
+				? FText::Format(Pick(Language, LOCTEXT("PowerLimit", "Total power draw: {0} of the venue's {1} ({2})."), INVTEXT("Ընդհանուր հզորությունը՝ {0}՝ վայրի {1}-ից ({2})։")),
+					FormatWatts(Scene.TotalPowerWatts, Language), FormatWatts(Scene.MaxPowerWatts, Language), FormatPercent(Scene.TotalPowerWatts, Scene.MaxPowerWatts))
+				: FText::Format(Pick(Language, LOCTEXT("Power", "Total power draw: {0}, across {1} {1}|plural(one=item,other=items). The cable schedule export plans the circuits."),
+					INVTEXT("Ընդհանուր հզորությունը՝ {0} ({1} իր)։ Մալուխների ցուցակի արտահանումը պլանավորում է շղթաները։")),
+					FormatWatts(Scene.TotalPowerWatts, Language), FText::AsNumber(Scene.PlacedItems));
 
 		case EStageAIIntent::FixtureCount:
 		{
 			const int32 Fixtures = Scene.GetFixtureCount();
 			return Fixtures == 0
-				? LOCTEXT("NoFixtures", "No lighting fixtures are placed. Say \"add 4 fixtures\" to place some.")
-				: FText::Format(LOCTEXT("Fixtures", "{0} {0}|plural(one=fixture,other=fixtures): {1}."), FText::AsNumber(Fixtures), JoinCounts(Scene.FixturesByName));
+				? Pick(Language, LOCTEXT("NoFixtures", "No lighting fixtures are placed. Say \"add 4 fixtures\" to place some."),
+					INVTEXT("Լուսային սարքեր տեղադրված չեն։ Գրեք «ավելացրու 4 լույս»՝ մի քանիսը տեղադրելու համար։"))
+				: FText::Format(Pick(Language, LOCTEXT("Fixtures", "{0} {0}|plural(one=fixture,other=fixtures): {1}."), INVTEXT("{0} լուսային սարք՝ {1}։")),
+					FText::AsNumber(Fixtures), JoinCounts(Scene.FixturesByName));
 		}
 
 		case EStageAIIntent::CountMatching:
@@ -876,16 +915,18 @@ namespace StageAIAnswers
 				Total += Entry.Value;
 			}
 			return Total == 0
-				? FText::Format(LOCTEXT("NoneMatch", "None of the {0} placed {0}|plural(one=item,other=items) match \"{1}\"."), FText::AsNumber(Scene.PlacedItems), FText::FromString(Command.ItemQuery))
-				: FText::Format(LOCTEXT("Matches", "{0} placed {0}|plural(one=item matches,other=items match) \"{1}\": {2}."), FText::AsNumber(Total),
-					FText::FromString(Command.ItemQuery), JoinCounts(Counts));
+				? FText::Format(Pick(Language, LOCTEXT("NoneMatch", "None of the {0} placed {0}|plural(one=item,other=items) match \"{1}\"."), INVTEXT("Տեղադրված {0} իրերից ոչ մեկը չի համապատասխանում «{1}»-ին։")),
+					FText::AsNumber(Scene.PlacedItems), FText::FromString(Command.ItemQuery))
+				: FText::Format(Pick(Language, LOCTEXT("Matches", "{0} placed {0}|plural(one=item matches,other=items match) \"{1}\": {2}."), INVTEXT("«{1}»-ին համապատասխանում է {0} տեղադրված իր՝ {2}։")),
+					FText::AsNumber(Total), FText::FromString(Command.ItemQuery), JoinCounts(Counts));
 		}
 
 		case EStageAIIntent::ListCues:
 		{
 			if (Scene.Cues.IsEmpty())
 			{
-				return LOCTEXT("NoCues", "There are no cues yet. Set up a look, then say \"store cue 1\".");
+				return Pick(Language, LOCTEXT("NoCues", "There are no cues yet. Set up a look, then say \"store cue 1\"."),
+					INVTEXT("Կյուներ դեռ չկան։ Ստեղծեք լուսային պատկեր, ապա գրեք «պահիր կյու 1»։"));
 			}
 			constexpr int32 MaxListed = 12;
 			FNumberFormattingOptions CueFormat;
@@ -896,31 +937,34 @@ namespace StageAIAnswers
 				const FStageAISceneView::FCue& Cue = Scene.Cues[Index];
 				const FText Number = FText::AsNumber(Cue.Number, &CueFormat);
 				Parts.Add(Cue.Label.IsEmpty()
-					? FText::Format(LOCTEXT("CueEntry", "Q{0} ({1} s)"), Number, FText::AsNumber(Cue.FadeSeconds, &CueFormat))
-					: FText::Format(LOCTEXT("CueEntryLabel", "Q{0} {1} ({2} s)"), Number, FText::FromString(Cue.Label), FText::AsNumber(Cue.FadeSeconds, &CueFormat)));
+					? FText::Format(Pick(Language, LOCTEXT("CueEntry", "Q{0} ({1} s)"), INVTEXT("Q{0} ({1} վ)")), Number, FText::AsNumber(Cue.FadeSeconds, &CueFormat))
+					: FText::Format(Pick(Language, LOCTEXT("CueEntryLabel", "Q{0} {1} ({2} s)"), INVTEXT("Q{0} {1} ({2} վ)")), Number, FText::FromString(Cue.Label),
+						FText::AsNumber(Cue.FadeSeconds, &CueFormat)));
 			}
 			FText List = FText::Join(LOCTEXT("ListSeparator", ", "), Parts);
 			if (Scene.Cues.Num() > MaxListed)
 			{
-				List = FText::Format(LOCTEXT("CueMore", "{0} and {1} more"), List, FText::AsNumber(Scene.Cues.Num() - MaxListed));
+				List = FText::Format(Pick(Language, LOCTEXT("CueMore", "{0} and {1} more"), INVTEXT("{0} և ևս {1}")), List, FText::AsNumber(Scene.Cues.Num() - MaxListed));
 			}
 			const FText Active = Scene.ActiveCue > 0.f
-				? FText::Format(LOCTEXT("ActiveCue", " Cue {0} is on stage."), FText::AsNumber(Scene.ActiveCue, &CueFormat))
+				? FText::Format(Pick(Language, LOCTEXT("ActiveCue", " Cue {0} is on stage."), INVTEXT(" Այժմ բեմում է կյու {0}-ը։")), FText::AsNumber(Scene.ActiveCue, &CueFormat))
 				: FText::GetEmpty();
-			return FText::Format(LOCTEXT("Cues", "{0} {0}|plural(one=cue,other=cues): {1}.{2}"), FText::AsNumber(Scene.Cues.Num()), List, Active);
+			return FText::Format(Pick(Language, LOCTEXT("Cues", "{0} {0}|plural(one=cue,other=cues): {1}.{2}"), INVTEXT("{0} կյու՝ {1}։{2}")), FText::AsNumber(Scene.Cues.Num()), List, Active);
 		}
 
 		case EStageAIIntent::EnvironmentStatus:
-			return DescribeEnvironment(Scene);
+			return DescribeEnvironment(Scene, Language);
 
 		case EStageAIIntent::StageSummary:
 		default:
 		{
-			const FText Items = FText::Format(LOCTEXT("SummaryItems", "{0} {0}|plural(one=item,other=items) ({1} {1}|plural(one=fixture,other=fixtures))"),
-				FText::AsNumber(Scene.PlacedItems), FText::AsNumber(Scene.GetFixtureCount()));
-			const FText Totals = FText::Format(LOCTEXT("SummaryTotals", "drawing {0} and weighing {1}"), FormatWatts(Scene.TotalPowerWatts), FormatKg(Scene.TotalWeightKg));
-			const FText Cues = FText::Format(LOCTEXT("SummaryCues", "{0} {0}|plural(one=cue,other=cues)"), FText::AsNumber(Scene.Cues.Num()));
-			return FText::Format(LOCTEXT("Summary", "The stage has {0}, {1}. {2}. {3}"), Items, Totals, Cues, DescribeEnvironment(Scene));
+			const FText Items = FText::Format(Pick(Language, LOCTEXT("SummaryItems", "{0} {0}|plural(one=item,other=items) ({1} {1}|plural(one=fixture,other=fixtures))"),
+				INVTEXT("{0} իր ({1} լուսային սարք)")), FText::AsNumber(Scene.PlacedItems), FText::AsNumber(Scene.GetFixtureCount()));
+			const FText Totals = FText::Format(Pick(Language, LOCTEXT("SummaryTotals", "drawing {0} and weighing {1}"), INVTEXT("{0} հզորությամբ և {1} քաշով")),
+				FormatWatts(Scene.TotalPowerWatts, Language), FormatKg(Scene.TotalWeightKg, Language));
+			const FText Cues = FText::Format(Pick(Language, LOCTEXT("SummaryCues", "{0} {0}|plural(one=cue,other=cues)"), INVTEXT("{0} կյու")), FText::AsNumber(Scene.Cues.Num()));
+			return FText::Format(Pick(Language, LOCTEXT("Summary", "The stage has {0}, {1}. {2}. {3}"), INVTEXT("Բեմում կա {0}, {1}։ {2}։ {3}")), Items, Totals, Cues,
+				DescribeEnvironment(Scene, Language));
 		}
 		}
 	}

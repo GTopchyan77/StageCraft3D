@@ -9,6 +9,8 @@
 #if !UE_BUILD_SHIPPING
 
 #include "AI/StageAICommandSubsystem.h"
+#include "AI/StageVoiceInputComponent.h"
+#include "AudioCaptureCore.h"
 #include "Engine/World.h"
 #include "Framework/Application/SlateApplication.h"
 #include "HAL/IConsoleManager.h"
@@ -117,12 +119,56 @@ namespace StageAICommands
 		UE_LOG(LogStageCraft, Display, TEXT("StageCraft.Assistant.Screenshot: the AI Assistant window is not open."));
 	}
 
+	/** "StageCraft.Assistant.Voice start|stop|cancel|status|devices": the MIC button's path, for scripted runs. */
+	void Voice(const TArray<FString>& Args, UWorld* World)
+	{
+		const AModularPlayerController* Controller = World ? Cast<AModularPlayerController>(World->GetFirstPlayerController()) : nullptr;
+		UStageVoiceInputComponent* VoiceInput = Controller ? Controller->GetVoiceInput() : nullptr;
+		if (!VoiceInput)
+		{
+			UE_LOG(LogStageCraft, Display, TEXT("StageCraft.Assistant.Voice: no stage controller with voice input."));
+			return;
+		}
+		const FString Action = Args.IsEmpty() ? FString(TEXT("status")) : Args[0].ToLower();
+		if (Action == TEXT("start"))
+		{
+			VoiceInput->StartRecording();
+		}
+		else if (Action == TEXT("stop"))
+		{
+			VoiceInput->StopRecording();
+		}
+		else if (Action == TEXT("cancel"))
+		{
+			VoiceInput->Cancel();
+		}
+		else if (Action == TEXT("devices"))
+		{
+			// Lists the recording devices the capture backend sees; nothing is opened or recorded.
+			Audio::FAudioCapture Capture;
+			TArray<Audio::FCaptureDeviceInfo> Devices;
+			Capture.GetCaptureDevicesAvailable(Devices);
+			UE_LOG(LogStageCraft, Display, TEXT("StageCraft.Assistant.Voice devices: %d recording %s."), Devices.Num(), Devices.Num() == 1 ? TEXT("device") : TEXT("devices"));
+			for (const Audio::FCaptureDeviceInfo& Device : Devices)
+			{
+				UE_LOG(LogStageCraft, Display, TEXT("  %s: %d channels, %d Hz"), *Device.DeviceName, Device.InputChannels, Device.PreferredSampleRate);
+			}
+		}
+		FText Reason;
+		const bool bAvailable = VoiceInput->IsAvailable(Reason);
+		UE_LOG(LogStageCraft, Display, TEXT("StageCraft.Assistant.Voice %s: state %s, %s. Status: %s"), *Action, *UEnum::GetValueAsString(VoiceInput->GetState()),
+			bAvailable ? TEXT("available") : *FString::Printf(TEXT("unavailable (%s)"), *Reason.ToString()), *VoiceInput->GetStatus().ToString());
+	}
+
 	FAutoConsoleCommandWithWorldAndArgs AskCommand(TEXT("StageCraft.Assistant.Ask"),
 		TEXT("<request>  Sends a request to the AI assistant through the controller (rules and undo as in the panel)."), FConsoleCommandWithWorldAndArgsDelegate::CreateStatic(&Ask));
 	FAutoConsoleCommandWithWorldAndArgs TranscriptCommand(TEXT("StageCraft.Assistant.Transcript"),
 		TEXT("Prints the AI assistant's conversation and which interpreter is in use."), FConsoleCommandWithWorldAndArgsDelegate::CreateStatic(&Transcript));
 	FAutoConsoleCommandWithWorldAndArgs ClearCommand(TEXT("StageCraft.Assistant.Clear"),
 		TEXT("Clears the AI assistant's conversation (the stage is unchanged)."), FConsoleCommandWithWorldAndArgsDelegate::CreateStatic(&Clear));
+	FAutoConsoleCommandWithWorldAndArgs VoiceCommand(TEXT("StageCraft.Assistant.Voice"),
+		TEXT("start|stop|cancel|status|devices  Drives the assistant's voice prompt like the MIC button; devices lists microphones without recording."),
+		FConsoleCommandWithWorldAndArgsDelegate::CreateStatic(&Voice));
 	FAutoConsoleCommandWithWorldAndArgs ScreenshotCommand(TEXT("StageCraft.Assistant.Screenshot"),
 		TEXT("Saves the AI Assistant window (wherever it is docked or floating) to Saved/Screenshots."), FConsoleCommandWithWorldAndArgsDelegate::CreateStatic(&Screenshot));
 }

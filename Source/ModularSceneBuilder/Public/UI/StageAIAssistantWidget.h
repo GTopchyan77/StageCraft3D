@@ -8,8 +8,9 @@
 
 /**
  * The AI Assistant window (StageCraft.Panel.Assistant, Docs/ADR/0016-ai-assistant.md §2.6): the conversation as user and assistant
- * lines, quick-prompt chips, a text field with SEND (Enter sends), CLEAR, and a footer naming the interpreter in use. Opens as a
- * floating pop-up window from Edit › Assistant › AI Assistant..., the Window menu and the viewport toolbar's ASSIST button.
+ * lines, quick-prompt chips, a text field with SEND (Enter sends), MIC for a spoken request (Docs/ADR/0017 §2.5), CLEAR, and a footer
+ * naming the interpreter in use. Prompts and replies may be English or Armenian. Opens as a floating pop-up window from
+ * Edit › Assistant › AI Assistant..., the Window menu and the viewport toolbar's ASSIST button.
  *
  * A view in the project's binding pattern:
  *  - The conversation is read from UStageAICommandSubsystem. A prompt goes only through AModularPlayerController::
@@ -53,9 +54,25 @@ private:
 	void RequestRebuild();
 	void Rebuild();
 
+	/** Scrolls the conversation to its end again on each of the next Frames ticks, while new rows settle their size. */
+	void FollowEnd(int32 Frames);
+
 	void HandleChipPicked(int32 Index);
 	void HandleSendPicked(int32 Unused);
 	void HandleClearPicked(int32 Unused);
+
+	/** MIC: starts recording, or stops it (STOP) and sends it for transcription. */
+	void HandleMicPicked(int32 Unused);
+
+	/** The MIC button and the voice status line, from the voice input component (not structural, so it runs in the event). */
+	void RefreshVoice();
+
+	UFUNCTION()
+	void HandleVoiceInputChanged();
+
+	/** A transcript goes into the field to check (Enter sends it), or straight to the assistant when the settings say so. */
+	UFUNCTION()
+	void HandleTranscriptReady(const FString& Text);
 
 	UFUNCTION()
 	void HandleTextCommitted(const FText& Text, ETextCommit::Type CommitMethod);
@@ -64,6 +81,7 @@ private:
 	void HandleConversationChanged();
 
 	class UStageAICommandSubsystem* GetAssistant() const { return BoundAssistant.Get(); }
+	class UStageVoiceInputComponent* GetVoice() const { return BoundVoice.Get(); }
 
 	UPROPERTY(Transient)
 	TObjectPtr<class UScrollBox> MessageScroll = nullptr;
@@ -86,6 +104,14 @@ private:
 	UPROPERTY(Transient)
 	TObjectPtr<class UTextBlock> FooterText = nullptr;
 
+	UPROPERTY(Transient)
+	TObjectPtr<class UStageChoiceButton> MicButton = nullptr;
+
+	/** What the microphone is doing, or the last voice error; collapsed when empty. */
+	UPROPERTY(Transient)
+	TObjectPtr<class UTextBlock> VoiceText = nullptr;
+
 	TWeakObjectPtr<class UStageAICommandSubsystem> BoundAssistant;
+	TWeakObjectPtr<class UStageVoiceInputComponent> BoundVoice;
 	bool bRebuildQueued = false;
 };

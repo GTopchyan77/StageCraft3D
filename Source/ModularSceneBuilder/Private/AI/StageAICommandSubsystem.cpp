@@ -85,6 +85,11 @@ FText UStageAICommandSubsystem::WithNote(const FText& Text, const FText& Note)
 	return Note.IsEmpty() ? Text : FText::Format(LOCTEXT("WithNote", "{0}\n({1})"), Text, Note);
 }
 
+FText UStageAICommandSubsystem::DescribeOffline(const FText& Reason, EStageAILanguage Language)
+{
+	return FText::Format(StageAILanguage::Pick(Language, LOCTEXT("AnsweredOffline", "answered offline: {0}"), INVTEXT("պատասխանվեց օֆլայն՝ {0}")), Reason);
+}
+
 bool UStageAICommandSubsystem::SubmitPrompt(const FString& Prompt, FStageAICommandExecutor Executor)
 {
 	const FString Trimmed = Prompt.TrimStartAndEnd().Left(StageAICommandParser::MaxPromptLength);
@@ -122,7 +127,7 @@ bool UStageAICommandSubsystem::SubmitPrompt(const FString& Prompt, FStageAIComma
 	// Say once per answer why the online model was skipped, only when it is meant to be used.
 	if (Backend)
 	{
-		Interpretation.Note = FText::Format(LOCTEXT("AnsweredOffline", "answered offline: {0}"), Unavailable);
+		Interpretation.Note = DescribeOffline(Unavailable, StageAILanguage::Detect(Trimmed));
 	}
 	Respond(Interpretation);
 	return true;
@@ -152,8 +157,9 @@ void UStageAICommandSubsystem::HandleBackendFinished(const FStageAIModelResponse
 		Interpretation = FStageAIInterpretation::MakeReply(FText::FromString(Response.Text));
 		break;
 	case FStageAIModelResponse::EStatus::Refused:
-		Interpretation = FStageAIInterpretation::MakeReply(LOCTEXT("Declined", "The online model declined that request. Try rephrasing it as a stage command, or type \"help\"."),
-			EStageAIOutcome::Refused);
+		Interpretation = FStageAIInterpretation::MakeReply(StageAILanguage::Pick(StageAILanguage::Detect(Prompt),
+			LOCTEXT("Declined", "The online model declined that request. Try rephrasing it as a stage command, or type \"help\"."),
+			INVTEXT("Առցանց մոդելը մերժեց այդ հարցումը։ Փորձեք այն ձևակերպել որպես բեմի հրաման կամ գրեք «օգնություն»։")), EStageAIOutcome::Refused);
 		break;
 	default:
 		// A validation failure of the model's own command is reported, never retried as something else.
@@ -163,7 +169,7 @@ void UStageAICommandSubsystem::HandleBackendFinished(const FStageAIModelResponse
 			break;
 		}
 		Interpretation = InterpretLocally(Prompt);
-		Interpretation.Note = FText::Format(LOCTEXT("FellBack", "answered offline: {0}"), Response.Error);
+		Interpretation.Note = DescribeOffline(Response.Error, StageAILanguage::Detect(Prompt));
 		break;
 	}
 	SetState(EStageAIAssistantState::Idle);
@@ -191,11 +197,11 @@ void UStageAICommandSubsystem::Respond(const FStageAIInterpretation& Interpretat
 
 	if (Command.Intent == EStageAIIntent::Help)
 	{
-		AddMessage(EStageAISpeaker::Assistant, EStageAIOutcome::Info, WithNote(StageAIAnswers::DescribeHelp(), Interpretation.Note));
+		AddMessage(EStageAISpeaker::Assistant, EStageAIOutcome::Info, WithNote(StageAIAnswers::DescribeHelp(Command.Language), Interpretation.Note));
 	}
 	else if (Command.Intent == EStageAIIntent::Unsupported)
 	{
-		AddMessage(EStageAISpeaker::Assistant, EStageAIOutcome::Info, WithNote(StageAIAnswers::DescribeUnsupported(Command.ItemQuery), Interpretation.Note));
+		AddMessage(EStageAISpeaker::Assistant, EStageAIOutcome::Info, WithNote(StageAIAnswers::DescribeUnsupported(Command.ItemQuery, Command.Language), Interpretation.Note));
 	}
 	else if (Command.IsQuestion())
 	{
@@ -203,7 +209,8 @@ void UStageAICommandSubsystem::Respond(const FStageAIInterpretation& Interpretat
 	}
 	else if (!PendingExecutor.IsBound())
 	{
-		AddMessage(EStageAISpeaker::Assistant, EStageAIOutcome::Refused, LOCTEXT("NoPlayer", "There is no player to make that change for."));
+		AddMessage(EStageAISpeaker::Assistant, EStageAIOutcome::Refused, StageAILanguage::Pick(Command.Language,
+			LOCTEXT("NoPlayer", "There is no player to make that change for."), INVTEXT("Չկա խաղացող, որի համար կատարեմ այդ փոփոխությունը։")));
 	}
 	else
 	{

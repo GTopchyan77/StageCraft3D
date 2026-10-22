@@ -4,6 +4,7 @@
 
 #include "CoreMinimal.h"
 #include "AI/StageAICommandSchema.h"
+#include "AI/StageSpeechTypes.h"
 #include "Engine/DeveloperSettings.h"
 #include "StageAIAssistantSettings.generated.h"
 
@@ -38,6 +39,22 @@ public:
 	/** The environment variable the API key is read from. */
 	static const TCHAR* GetApiKeyVariable() { return TEXT("ANTHROPIC_API_KEY"); }
 
+	// --- Voice prompts (Docs/ADR/0017 §2.5) ---
+
+	bool UsesVoiceInput() const { return bUseVoiceInput; }
+
+	/** How recordings are transcribed: the model, the expected language, the stage vocabulary and the timeout, sanitized. */
+	FStageTranscriptionOptions GetTranscriptionOptions() const;
+
+	/** Longest recording, 3 to 120 s; the microphone closes by itself after it. */
+	float GetMaxRecordingSeconds() const;
+
+	/** Send a transcript as soon as it arrives, instead of putting it in the field to check first. */
+	bool SendsTranscriptImmediately() const { return bSendTranscriptImmediately; }
+
+	/** The environment variable the speech service's API key is read from. */
+	static const TCHAR* GetSpeechApiKeyVariable() { return TEXT("OPENAI_API_KEY"); }
+
 private:
 	/**
 	 * Let a Claude model interpret requests the local grammar may not know. Off by default: when on, prompts, a scene summary
@@ -62,4 +79,30 @@ private:
 
 	UPROPERTY(Config, EditAnywhere, Category = "Online Model", meta = (EditCondition = "bUseOnlineModel", ClampMin = "0", ClampMax = "40"))
 	int32 MaxHistoryMessages = 10;
+
+	/**
+	 * Show the MIC button: a spoken request is recorded from the default microphone and transcribed into the prompt field, in
+	 * English or Armenian. Off by default: when on, each recording is sent to OpenAI's transcription API, with the key from the
+	 * OPENAI_API_KEY environment variable. Nothing is recorded until MIC is pressed.
+	 */
+	UPROPERTY(Config, EditAnywhere, Category = "Voice Input")
+	bool bUseVoiceInput = false;
+
+	/** The transcription model: gpt-4o-transcribe, gpt-4o-mini-transcribe or whisper-1. */
+	UPROPERTY(Config, EditAnywhere, Category = "Voice Input", meta = (EditCondition = "bUseVoiceInput"))
+	FString SpeechModel = TEXT("gpt-4o-transcribe");
+
+	/** The language to expect. Auto detects English or Armenian per recording; fixing it helps with short or noisy recordings. */
+	UPROPERTY(Config, EditAnywhere, Category = "Voice Input", meta = (EditCondition = "bUseVoiceInput"))
+	EStageSpeechLanguage SpeechLanguage = EStageSpeechLanguage::Auto;
+
+	UPROPERTY(Config, EditAnywhere, Category = "Voice Input", meta = (EditCondition = "bUseVoiceInput", ClampMin = "3", ClampMax = "120", Units = "s"))
+	float MaxRecordingSeconds = 30.f;
+
+	UPROPERTY(Config, EditAnywhere, Category = "Voice Input", meta = (EditCondition = "bUseVoiceInput", ClampMin = "5", ClampMax = "120", Units = "s"))
+	float SpeechTimeoutSeconds = 30.f;
+
+	/** Off: the transcript goes into the prompt field to check, and Enter sends it. On: it is sent right away. */
+	UPROPERTY(Config, EditAnywhere, Category = "Voice Input", meta = (EditCondition = "bUseVoiceInput"))
+	bool bSendTranscriptImmediately = false;
 };

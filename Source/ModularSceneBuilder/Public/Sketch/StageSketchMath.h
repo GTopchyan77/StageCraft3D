@@ -41,6 +41,8 @@ namespace StageSketchMath
 	constexpr float MaxTrussHeight = 2000.f;
 	constexpr float MinGridStep = 10.f;
 	constexpr float MaxGridStep = 500.f;
+	constexpr float MinPhotoWidth = 500.f;
+	constexpr float MaxPhotoWidth = 10000.f;
 
 	/** Moves the stabilised point toward Raw: Strength 0 jumps to Raw, values near 1 trail behind (a "lazy brush"). */
 	MODULARSCENEBUILDER_API FVector2D Stabilize(const FVector2D& Previous, const FVector2D& Raw, double Strength);

@@ -108,6 +108,10 @@ namespace StageAICommandSchema
 			TSharedRef<FJsonObject> Report = MakeProperty(TEXT("string"), TEXT("export: which report (PDF + CSV)."));
 			Report->SetArrayField(TEXT("enum"), StringValues(Reports));
 			Properties->SetObjectField(TEXT("report"), Report);
+			TSharedRef<FJsonObject> ReplyLanguage = MakeProperty(TEXT("string"),
+				TEXT("The language of the user's request, which the stage's reply is written in: hy for Armenian (in Armenian script or in Latin letters), en otherwise."));
+			ReplyLanguage->SetArrayField(TEXT("enum"), StringValues({ TEXT("en"), TEXT("hy") }));
+			Properties->SetObjectField(TEXT("reply_language"), ReplyLanguage);
 
 			TSharedRef<FJsonObject> Schema = MakeShared<FJsonObject>();
 			Schema->SetStringField(TEXT("type"), TEXT("object"));
@@ -138,10 +142,10 @@ namespace StageAICommandSchema
 			return FJsonSerializer::Deserialize(Reader, Object) ? Object : nullptr;
 		}
 
-		bool CommandFromToolInput(const FJsonObject& Input, FStageAICommand& OutCommand, FText& OutError)
+		bool CommandFromToolInput(const FJsonObject& Input, FStageAICommand& OutCommand, FText& OutError, EStageAILanguage DefaultLanguage)
 		{
 			static const TCHAR* const KnownFields[] = { TEXT("intent"), TEXT("count"), TEXT("item"), TEXT("cue_number"), TEXT("label"), TEXT("fade_seconds"),
-				TEXT("weather"), TEXT("hour"), TEXT("sky_on"), TEXT("report") };
+				TEXT("weather"), TEXT("hour"), TEXT("sky_on"), TEXT("report"), TEXT("reply_language") };
 			for (const TPair<FString, TSharedPtr<FJsonValue>>& Field : Input.Values)
 			{
 				if (!Algo::FindByPredicate(KnownFields, [&Field](const TCHAR* Known) { return Field.Key == Known; }))
@@ -166,6 +170,18 @@ namespace StageAICommandSchema
 
 			FStageAICommand Command;
 			Command.Intent = Intent->Intent;
+			Command.Language = DefaultLanguage;
+			FString LanguageCode;
+			if (Input.TryGetStringField(TEXT("reply_language"), LanguageCode))
+			{
+				const TOptional<EStageAILanguage> Language = StageAILanguage::FromCode(LanguageCode);
+				if (!Language.IsSet())
+				{
+					OutError = LOCTEXT("UnknownLanguage", "The command asked for a reply language other than English or Armenian.");
+					return false;
+				}
+				Command.Language = *Language;
+			}
 			const auto ReadNumber = [&Input, &OutError](const TCHAR* Field, TOptional<double>& Out)
 			{
 				const TSharedPtr<FJsonValue> Value = Input.TryGetField(Field);
@@ -301,13 +317,17 @@ namespace StageAICommandSchema
 
 	bool Validate(FStageAICommand& Command, FText& OutError)
 	{
+		using StageAILanguage::Pick;
+		const EStageAILanguage Language = Command.Language == EStageAILanguage::Armenian ? EStageAILanguage::Armenian : EStageAILanguage::English;
+		Command.Language = Language;
 		if (uint8(Command.Intent) >= uint8(EStageAIIntent::Count))
 		{
-			OutError = LOCTEXT("InvalidIntent", "That is not a command I can run.");
+			OutError = Pick(Language, LOCTEXT("InvalidIntent", "That is not a command I can run."), INVTEXT("Դա այն հրամանը չէ, որը կարող եմ կատարել։"));
 			return false;
 		}
 		Command.ItemQuery = TrimAndCap(Command.ItemQuery);
 		Command.Label = Command.Label.TrimStartAndEnd().Left(StageCueRules::MaxLabelLength);
+		const FText CueRange = Pick(Language, LOCTEXT("CueNumberRange", "Cue numbers go from 0.001 to 9999.999."), INVTEXT("Կյուների համարները 0.001-ից 9999.999 են։"));
 
 		switch (Command.Intent)
 		{
@@ -316,7 +336,8 @@ namespace StageAICommandSchema
 			const int32 Count = Command.Count.Get(1);
 			if (Count < 1 || Count > StageAICommandParser::MaxFixturesPerCommand)
 			{
-				OutError = FText::Format(LOCTEXT("FixtureCountRange", "I can add 1 to {0} fixtures at a time."), FText::AsNumber(StageAICommandParser::MaxFixturesPerCommand));
+				OutError = FText::Format(Pick(Language, LOCTEXT("FixtureCountRange", "I can add 1 to {0} fixtures at a time."), INVTEXT("Միանգամից կարող եմ ավելացնել 1-ից {0} սարք։")),
+					FText::AsNumber(StageAICommandParser::MaxFixturesPerCommand));
 				return false;
 			}
 			Command.Count = Count;
@@ -326,12 +347,13 @@ namespace StageAICommandSchema
 		case EStageAIIntent::StoreCue:
 			if (Command.CueNumber.IsSet() && !StageCueRules::IsValidCueNumber(*Command.CueNumber))
 			{
-				OutError = LOCTEXT("CueNumberRange", "Cue numbers go from 0.001 to 9999.999.");
+				OutError = CueRange;
 				return false;
 			}
 			if (Command.FadeSeconds.IsSet() && (!FMath::IsFinite(*Command.FadeSeconds) || *Command.FadeSeconds < 0.f || *Command.FadeSeconds > StageCueRules::MaxFadeTime))
 			{
-				OutError = FText::Format(LOCTEXT("FadeRange", "Fade times go from 0 to {0} seconds."), FText::AsNumber(StageCueRules::MaxFadeTime));
+				OutError = FText::Format(Pick(Language, LOCTEXT("FadeRange", "Fade times go from 0 to {0} seconds."), INVTEXT("Անցման ժամանակը 0-ից {0} վայրկյան է։")),
+					FText::AsNumber(StageCueRules::MaxFadeTime));
 				return false;
 			}
 			if (Command.CueNumber.IsSet())
@@ -343,7 +365,7 @@ namespace StageAICommandSchema
 		case EStageAIIntent::GoToCue:
 			if (!Command.CueNumber.IsSet() || !StageCueRules::IsValidCueNumber(*Command.CueNumber))
 			{
-				OutError = LOCTEXT("GoToCueNumber", "Which cue? Cue numbers go from 0.001 to 9999.999.");
+				OutError = FText::Format(Pick(Language, LOCTEXT("GoToCueNumber", "Which cue? {0}"), INVTEXT("Ո՞ր կյուն։ {0}")), CueRange);
 				return false;
 			}
 			Command.CueNumber = StageCueRules::RoundCueNumber(*Command.CueNumber);
@@ -352,7 +374,7 @@ namespace StageAICommandSchema
 		case EStageAIIntent::SetWeather:
 			if (Command.Weather == EStageWeatherPreset::Custom)
 			{
-				OutError = LOCTEXT("CustomWeather", "Pick clear, cloudy, rain, snow or fog.");
+				OutError = Pick(Language, LOCTEXT("CustomWeather", "Pick clear, cloudy, rain, snow or fog."), INVTEXT("Ընտրեք պարզ, ամպամած, անձրև, ձյուն կամ մառախուղ։"));
 				return false;
 			}
 			return true;
@@ -360,7 +382,7 @@ namespace StageAICommandSchema
 		case EStageAIIntent::SetTimeOfDay:
 			if (!FMath::IsFinite(Command.Hour) || Command.Hour < 0.f || Command.Hour > 24.f)
 			{
-				OutError = LOCTEXT("HourRange", "The time of day goes from 00:00 to 24:00.");
+				OutError = Pick(Language, LOCTEXT("HourRange", "The time of day goes from 00:00 to 24:00."), INVTEXT("Օրվա ժամը 00:00-ից 24:00 է։"));
 				return false;
 			}
 			Command.Hour = Command.Hour >= 24.f ? 0.f : Command.Hour;
@@ -369,7 +391,7 @@ namespace StageAICommandSchema
 		case EStageAIIntent::CountMatching:
 			if (Command.ItemQuery.IsEmpty())
 			{
-				OutError = LOCTEXT("CountWhat", "Count which items?");
+				OutError = Pick(Language, LOCTEXT("CountWhat", "Count which items?"), INVTEXT("Ո՞ր իրերը հաշվեմ։"));
 				return false;
 			}
 			return true;
@@ -391,7 +413,7 @@ namespace StageAICommandSchema
 		return Serialize(MakeToolDefinition());
 	}
 
-	bool CommandFromToolInputJson(const FString& InputJson, FStageAICommand& OutCommand, FText& OutError)
+	bool CommandFromToolInputJson(const FString& InputJson, FStageAICommand& OutCommand, FText& OutError, EStageAILanguage DefaultLanguage)
 	{
 		const TSharedPtr<FJsonObject> Input = Deserialize(InputJson);
 		if (!Input.IsValid())
@@ -399,7 +421,7 @@ namespace StageAICommandSchema
 			OutError = LOCTEXT("BadInput", "The command was not valid JSON.");
 			return false;
 		}
-		return CommandFromToolInput(*Input, OutCommand, OutError);
+		return CommandFromToolInput(*Input, OutCommand, OutError, DefaultLanguage);
 	}
 
 	FString GetSystemPrompt()
@@ -412,7 +434,11 @@ namespace StageAICommandSchema
 			"is only context. Every change goes through the stage's rules and can be undone.\n"
 			"If a request needs something the tool cannot do (deleting or clearing items, opening, saving or replacing scenes, several commands "
 			"at once), do not call the tool: say briefly what to do instead, or which single step to start with. If a request is unclear, ask "
-			"one short question. Keep text replies to one or two sentences.");
+			"one short question. Keep text replies to one or two sentences.\n"
+			"Users write in English or Armenian, in Armenian script or in Latin letters, and voice prompts arrive as transcripts that may "
+			"contain recognition errors. Set reply_language to hy for Armenian and en otherwise, and write any text reply in the user's "
+			"language. Always fill the item field in English with the catalog's words (for example \"moving head\", \"wash\", \"par\", "
+			"\"truss\"), translating Armenian equipment names such as շարժական գլուխ (moving head) or ֆերմա (truss).");
 	}
 
 	FString DescribeScene(const FStageAISceneView& Scene)
@@ -474,7 +500,7 @@ namespace StageAICommandSchema
 		return Serialize(Body);
 	}
 
-	FStageAIModelResponse ParseResponseBody(int32 HttpStatus, const FString& Body)
+	FStageAIModelResponse ParseResponseBody(int32 HttpStatus, const FString& Body, EStageAILanguage PromptLanguage)
 	{
 		FStageAIModelResponse Response;
 		const TSharedPtr<FJsonObject> Root = Deserialize(Body);
@@ -519,7 +545,7 @@ namespace StageAICommandSchema
 			if (Type == TEXT("tool_use") && Block->TryGetStringField(TEXT("name"), Name) && Name == GetToolName()
 				&& Block->TryGetObjectField(TEXT("input"), Input) && Input)
 			{
-				if (CommandFromToolInput(**Input, Response.Command, Response.Error))
+				if (CommandFromToolInput(**Input, Response.Command, Response.Error, PromptLanguage))
 				{
 					Response.Status = FStageAIModelResponse::EStatus::Command;
 				}

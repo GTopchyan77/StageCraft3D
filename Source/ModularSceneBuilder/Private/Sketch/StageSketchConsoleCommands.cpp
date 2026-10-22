@@ -10,6 +10,7 @@
 
 #include "Actors/StageDeckActor.h"
 #include "Data/BaseItemData.h"
+#include "Engine/Texture2D.h"
 #include "Engine/World.h"
 #include "Framework/Application/SlateApplication.h"
 #include "HAL/IConsoleManager.h"
@@ -98,6 +99,8 @@ namespace StageSketchCommands
 			UE_LOG(LogStageCraft, Display, TEXT("  stroke %d: %s, %d points%s, becomes %s"), Index + 1, *UEnum::GetValueAsString(Stroke.Kind), Stroke.Points.Num(),
 				Stroke.bClosed ? TEXT(", closed") : TEXT(""), *UEnum::GetValueAsString(Stroke.GetElement()));
 		}
+		UE_LOG(LogStageCraft, Display, TEXT("  photo: %s, width %.0f m%s; import %s: %s"), Sketch->GetReferenceImage() ? *FString::Printf(TEXT("%dx%d"), Sketch->GetReferenceImage()->GetSizeX(), Sketch->GetReferenceImage()->GetSizeY()) : TEXT("none"),
+			Settings.PhotoWidth * 0.01f, Sketch->IsReferenceVisible() ? TEXT(", shown") : TEXT(""), *UEnum::GetValueAsString(Sketch->GetImportState()), *Sketch->GetImportMessage().ToString());
 		const FStageSketchBuildPlan Plan = Sketch->MakePlan();
 		UE_LOG(LogStageCraft, Display, TEXT("  plan: %s"), *StageSketchGenerator::DescribePlan(Plan).ToString());
 		for (const FText& Warning : Plan.Warnings)
@@ -122,7 +125,7 @@ namespace StageSketchCommands
 		UStageSketchSubsystem* Sketch = GetSketch(World);
 		if (!Sketch || Args.Num() < 2)
 		{
-			UE_LOG(LogStageCraft, Display, TEXT("Usage: StageCraft.Sketch.Set DeckHeight|TrussHeight|Grid <cm> | Snap 0|1 | Smoothing <0..0.9>"));
+			UE_LOG(LogStageCraft, Display, TEXT("Usage: StageCraft.Sketch.Set DeckHeight|TrussHeight|Grid|PhotoWidth <cm> | Snap 0|1 | Smoothing <0..0.9>"));
 			return;
 		}
 		FStageSketchSettings Settings = Sketch->GetSettings();
@@ -132,8 +135,24 @@ namespace StageSketchCommands
 		else if (Args[0] == TEXT("Grid")) { Settings.GridStep = Value; }
 		else if (Args[0] == TEXT("Snap")) { Settings.bSnapToGrid = Value != 0.f; }
 		else if (Args[0] == TEXT("Smoothing")) { Settings.Smoothing = Value; }
+		else if (Args[0] == TEXT("PhotoWidth")) { Settings.PhotoWidth = Value; }
 		Sketch->SetSettings(Settings);
 		Status({}, World);
+	}
+
+	/** "Import C:/plans/stage.jpg [claude]": the IMPORT PHOTO... path without the dialog (no spaces in the path inside -ExecCmds). */
+	void Import(const TArray<FString>& Args, UWorld* World)
+	{
+		UStageSketchSubsystem* Sketch = GetSketch(World);
+		if (!Sketch || Args.IsEmpty())
+		{
+			UE_LOG(LogStageCraft, Display, TEXT("Usage: StageCraft.Sketch.Import <png or jpg path> [claude]   (PhotoWidth sets the scale)"));
+			return;
+		}
+		const bool bClaude = Args.Num() > 1 && Args[1].Equals(TEXT("claude"), ESearchCase::IgnoreCase);
+		FText Error;
+		const bool bStarted = Sketch->ImportImage(Args[0], bClaude ? EStageSketchReader::Claude : EStageSketchReader::Local, Error);
+		UE_LOG(LogStageCraft, Display, TEXT("StageCraft.Sketch.Import %s: %s"), *Args[0], bStarted ? TEXT("started (see Status)") : *Error.ToString());
 	}
 
 	void Clear(const TArray<FString>& Args, UWorld* World)
@@ -200,7 +219,9 @@ namespace StageSketchCommands
 	FAutoConsoleCommandWithWorldAndArgs StatusCommand(TEXT("StageCraft.Sketch.Status"),
 		TEXT("Lists the sketch, its settings, the plan and its warnings, and the decks on stage."), FConsoleCommandWithWorldAndArgsDelegate::CreateStatic(&Status));
 	FAutoConsoleCommandWithWorldAndArgs SetCommand(TEXT("StageCraft.Sketch.Set"),
-		TEXT("DeckHeight|TrussHeight|Grid <cm> | Snap 0|1 | Smoothing <0..0.9>  Changes a sketch setting."), FConsoleCommandWithWorldAndArgsDelegate::CreateStatic(&Set));
+		TEXT("DeckHeight|TrussHeight|Grid|PhotoWidth <cm> | Snap 0|1 | Smoothing <0..0.9>  Changes a sketch setting."), FConsoleCommandWithWorldAndArgsDelegate::CreateStatic(&Set));
+	FAutoConsoleCommandWithWorldAndArgs ImportCommand(TEXT("StageCraft.Sketch.Import"),
+		TEXT("<png or jpg path> [claude]  Reads a drawing into the sketch, like IMPORT PHOTO..."), FConsoleCommandWithWorldAndArgsDelegate::CreateStatic(&Import));
 	FAutoConsoleCommandWithWorldAndArgs ClearCommand(TEXT("StageCraft.Sketch.Clear"),
 		TEXT("Empties the sketch (the stage is unchanged)."), FConsoleCommandWithWorldAndArgsDelegate::CreateStatic(&Clear));
 	FAutoConsoleCommandWithWorldAndArgs UndoStrokeCommand(TEXT("StageCraft.Sketch.UndoStroke"),

@@ -17,7 +17,8 @@ struct FStageAIFixtureCandidate
 
 /**
  * The assistant's local interpreter (Docs/ADR/0016-ai-assistant.md §2.1, §2.3): a fixed English grammar that turns a request into
- * one FStageAICommand. Pure and deterministic, works offline, and covered by the StageCraft.AI.Parser tests. Its output is still
+ * one FStageAICommand. An Armenian prompt is first rewritten into its words (StageAIArmenian, Docs/ADR/0017 §2.2) and the command
+ * then replies in Armenian. Pure and deterministic, works offline, and covered by the StageCraft.AI.Parser tests. Its output is still
  * validated by StageAICommandSchema::Validate before anything runs, like a command from the online model.
  */
 namespace StageAICommandParser
@@ -53,21 +54,21 @@ namespace StageAICommandParser
 /** The assistant's words (Docs/ADR/0016-ai-assistant.md §2.3): help, answers to questions and explanations. Pure. */
 namespace StageAIAnswers
 {
-	/** What the assistant can do, with examples. */
-	MODULARSCENEBUILDER_API FText DescribeHelp();
+	/** What the assistant can do, with examples, in Language. */
+	MODULARSCENEBUILDER_API FText DescribeHelp(EStageAILanguage Language = EStageAILanguage::English);
 
-	/** The reply to a prompt the grammar did not understand. */
+	/** The reply to a prompt the grammar did not understand, in the prompt's language. */
 	MODULARSCENEBUILDER_API FText DescribeNotUnderstood(const FString& Prompt);
 
-	/** Why an Unsupported command is not run and where to find it instead. */
-	MODULARSCENEBUILDER_API FText DescribeUnsupported(const FString& Operation);
+	/** Why an Unsupported command is not run and where to find it instead, in Language. */
+	MODULARSCENEBUILDER_API FText DescribeUnsupported(const FString& Operation, EStageAILanguage Language = EStageAILanguage::English);
 
-	/** The answer to a question command (FStageAICommand::IsQuestion) about Scene. */
+	/** The answer to a question command (FStageAICommand::IsQuestion) about Scene, in the command's Language. */
 	MODULARSCENEBUILDER_API FText AnswerQuestion(const FStageAICommand& Command, const FStageAISceneView& Scene);
 
 	/** "14:30" for 14.5 hours. */
 	MODULARSCENEBUILDER_API FString FormatHour(float Hour);
 
-	/** The weather preset's lowercase name ("rain"). */
-	MODULARSCENEBUILDER_API FText DescribeWeather(EStageWeatherPreset Preset);
+	/** The weather preset's lowercase name ("rain") in Language. */
+	MODULARSCENEBUILDER_API FText DescribeWeather(EStageWeatherPreset Preset, EStageAILanguage Language = EStageAILanguage::English);
 }

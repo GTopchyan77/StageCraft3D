@@ -10,7 +10,9 @@
 /**
  * The Sketch to Stage window (StageCraft.Panel.Sketch, Docs/ADR/0015-sketch-to-stage.md §2.7): a 2D drawing canvas with tools
  * (freehand, stage shape, truss line, fixture, erase), undo-stroke and clear, the deck height, truss height, grid, snap and
- * smoothing settings, the catalog item used for each element, a live summary of what the sketch will build, and GENERATE 3D.
+ * smoothing settings, the catalog item used for each element, a live summary of what the sketch will build, and GENERATE 3D. The
+ * PHOTO row imports a PNG or JPEG drawing (UStageSketchSubsystem::ImportImage, Docs/ADR/0017 §2.6) at a chosen real width, read on
+ * this computer or by Claude, and shows it under the canvas.
  * Opens from Edit › Sketch to Stage..., the Window menu and the viewport toolbar's SKETCH button.
  *
  * A view in the project's binding pattern:
@@ -42,6 +44,7 @@ private:
 	{
 		DeckHeight,
 		TrussHeight,
+		PhotoWidth,
 		Count
 	};
 
@@ -66,6 +69,14 @@ private:
 	void HandleItemPicked(int32 Element);
 	void HandleGeneratePicked(int32 Unused);
 	void HandleSliderMoved(int32 SliderIndex, float Value);
+
+	/** IMPORT PHOTO... (index 0) opens the file dialog and starts the import; REMOVE (index 1) takes the photo away. */
+	void HandlePhotoPicked(int32 Index);
+	void HandleReaderPicked(int32 Index);
+	void HandleShowPhotoPicked(int32 Index);
+
+	UFUNCTION()
+	void HandleImportChanged();
 
 	UFUNCTION()
 	void HandleSketchChanged();
@@ -101,6 +112,18 @@ private:
 	UPROPERTY(Transient)
 	TArray<TObjectPtr<class UStageChoiceButton>> ItemButtons;
 
+	/** IMPORT PHOTO..., REMOVE. */
+	UPROPERTY(Transient)
+	TArray<TObjectPtr<class UStageChoiceButton>> PhotoButtons;
+
+	/** Who reads the photo: this computer or Claude. */
+	UPROPERTY(Transient)
+	TArray<TObjectPtr<class UStageChoiceButton>> ReaderButtons;
+
+	/** Photo under the canvas: OFF, ON. */
+	UPROPERTY(Transient)
+	TArray<TObjectPtr<class UStageChoiceButton>> ShowPhotoButtons;
+
 	UPROPERTY(Transient)
 	TArray<TObjectPtr<class UStageValueSlider>> Sliders;
 
@@ -128,4 +151,13 @@ private:
 	/** The last generation's message; cleared by the next sketch edit, so it never describes a different drawing. */
 	FText ResultMessage;
 	bool bResultSucceeded = false;
+
+	/** Who reads the next imported photo: a choice of this window, kept while it is open. */
+	EStageSketchReader PhotoReader = EStageSketchReader::Local;
+
+	/** The folder of the last photo opened, for the next file dialog. */
+	FString LastPhotoDirectory;
+
+	/** The sketch's import count when its message was last shown (UStageSketchSubsystem::GetImportsFinished). */
+	uint32 ShownImport = 0;
 };

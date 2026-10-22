@@ -6,6 +6,7 @@
 #include "Actors/ModularTransformGizmo.h"
 #include "AI/StageAICommandRunner.h"
 #include "AI/StageAICommandSubsystem.h"
+#include "AI/StageVoiceInputComponent.h"
 #include "Algo/AllOf.h"
 #include "Audio/StageEditorAudioFeedbackComponent.h"
 #include "Blueprint/UserWidget.h"
@@ -95,6 +96,7 @@ AModularPlayerController::AModularPlayerController()
 	SceneFiles = CreateDefaultSubobject<UStageSceneComponent>(TEXT("SceneFiles"));
 	SpanTool = CreateDefaultSubobject<UStageSpanToolComponent>(TEXT("SpanTool"));
 	ViewportView = CreateDefaultSubobject<UStageViewportComponent>(TEXT("ViewportView"));
+	VoiceInput = CreateDefaultSubobject<UStageVoiceInputComponent>(TEXT("VoiceInput"));
 	GizmoClass = AModularTransformGizmo::StaticClass();
 }
 

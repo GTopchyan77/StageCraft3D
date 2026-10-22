@@ -382,3 +382,16 @@ See `STATE.md` for detailed history of completed work.
 - [x] Panel `UStageAIAssistantWidget` + `DA_Panel_Assistant` (pop-up 560 × 720); Edit › Assistant › AI Assistant..., Window menu, toolbar ASSIST
 - [ ] Manual verification (Gevor): type in the panel (Enter, SEND, chips, CLEAR), add fixtures and Ctrl+Z them, store/play cues, weather and time with Ctrl+Z, exports, the online model with a real API key
 - [ ] Follow-ups: export completion reported in the chat; several commands in one prompt; hanging added fixtures on truss; Environment panel edits undoable; conversation saved with scenes; more languages
+
+## Phase 21 — Armenian & English assistant, voice prompts, photo / scan import for Sketch to Stage (requested by Gevor 2026-10-22; STATE.md #44, ADR 0017)
+Decisions (Gevor, 2026-10-22): voice via OpenAI transcription (off by default, OPENAI_API_KEY); an offline Armenian grammar plus Armenian replies; photo import = a local edge pipeline, with an optional Claude vision reading, landing as editable strokes in the Sketch canvas.
+- [x] Language: `EStageAILanguage` + script detection; every reply (answers, runner, subsystem) in the prompt's language; the command carries its reply language
+- [x] Offline Armenian: `StageAIArmenian` lexicon (stems → the English grammar's words, numbers, «» labels, question marks) feeding `StageAICommandParser::Parse`; tests with real Armenian phrases
+- [x] Online: system prompt + `reply_language` tool field, so Claude handles free Armenian, English and transliterated Armenian
+- [x] Font: Noto Sans Armenian (OFL) as an Armenian sub-font of the UI's composite font (`StageCraftWidgetStyle::MakeFont`), staged with RuntimeDependencies
+- [x] Voice: `UStageVoiceInputComponent` on the controller (Idle / Recording / Transcribing; mic through AudioCaptureCore; max-length timer; no tick) + `UStageSpeechToTextBackend` / `UStageOpenAITranscriptionBackend` (multipart WAV, 16 kHz mono); pure WAV/resample/multipart/response code with tests; MIC button in the assistant panel; transcript fills the prompt field
+- [x] Photo import: `StageSketchImageTrace` (decode PNG/JPEG, downscale, adaptive threshold, speckle removal, enclosed regions → deck outlines, Zhang–Suen skeleton → truss polylines, blobs → fixtures, pixel → plan cm), run off the game thread; `UStageSketchSubsystem::ImportImage` + reference photo under the canvas; optional Claude vision reading (strict `sketch_plan` tool); IMPORT PHOTO / photo width / SHOW PHOTO in the Sketch window; tests on synthetic images
+- [x] Builds: Editor, Game Development, Game Shipping (0 warnings); all automation; scripted runs
+- [ ] Manual verification (Gevor): Armenian typing and replies; MIC with a real microphone and key; importing a real photo of a hand drawing
+- [ ] Not verified on this machine: the online model with a real key (Armenian through Claude, photo reading by Claude), a real recording through OpenAI
+- [ ] Follow-ups: EXIF rotation of phone photos, perspective correction, re-scaling an import after the fact, Armenian in PDF exports (WinAnsi only), Armenian names in the catalog
