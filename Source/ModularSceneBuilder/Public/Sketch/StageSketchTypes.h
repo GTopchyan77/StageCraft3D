@@ -161,6 +161,25 @@ struct FStageSketchFixturePlan
 	EStageSketchFixtureMount Mount = EStageSketchFixtureMount::Floor;
 };
 
+/** Stairs to build (the AI assistant's build_shape, Docs/ADR/0018 §5.2); the actor sanitizes the sizes against its item. */
+struct FStageSketchStairsPlan
+{
+	FTransform Transform = FTransform::Identity;
+	double Rise = 0.0;
+	double Width = 0.0;
+	bool bHandrails = true;
+};
+
+/** A curved truss to build (Docs/ADR/0018 §5.3): its origin is the arc's apex on the centre line. */
+struct FStageSketchArcTrussPlan
+{
+	FTransform Transform = FTransform::Identity;
+	double Radius = 0.0;
+	double AngleDegrees = 0.0;
+	/** Rental curved sections, as the actor will count them. */
+	int32 Sections = 0;
+};
+
 /**
  * What a sketch will build (StageSketchGenerator::BuildPlan): plain values plus weak references to the catalog items, so a plan
  * kept while its items stream in never keeps an asset alive or points at a destroyed one.
@@ -170,15 +189,20 @@ struct FStageSketchBuildPlan
 	TWeakObjectPtr<class UStageDeckData> DeckItem;
 	TWeakObjectPtr<class UStageSpanData> TrussItem;
 	TWeakObjectPtr<class UBaseItemData> FixtureItem;
+	TWeakObjectPtr<class UStageStairsData> StairsItem;
+	TWeakObjectPtr<class UStageArcTrussData> ArcTrussItem;
 
 	TArray<FStageSketchDeckPlan> Decks;
 	TArray<FStageSketchTrussPlan> Trusses;
 	TArray<FStageSketchFixturePlan> Fixtures;
+	/** Not drawn in the Sketch window; planned by the AI assistant's build_shape. */
+	TArray<FStageSketchStairsPlan> Stairs;
+	TArray<FStageSketchArcTrussPlan> ArcTrusses;
 
 	/** Strokes skipped or changed, user-facing, in stroke order. */
 	TArray<FText> Warnings;
 
-	int32 Num() const { return Decks.Num() + Trusses.Num() + Fixtures.Num(); }
+	int32 Num() const { return Decks.Num() + Trusses.Num() + Fixtures.Num() + Stairs.Num() + ArcTrusses.Num(); }
 	bool IsEmpty() const { return Num() == 0; }
 	int32 GetPanelCount() const;
 	int32 GetSegmentCount() const;
@@ -201,6 +225,12 @@ struct MODULARSCENEBUILDER_API FStageSketchGenerateResult
 
 	UPROPERTY(BlueprintReadOnly, Category = "StageCraft|Sketch")
 	int32 FixtureCount = 0;
+
+	UPROPERTY(BlueprintReadOnly, Category = "StageCraft|Sketch")
+	int32 StairsCount = 0;
+
+	UPROPERTY(BlueprintReadOnly, Category = "StageCraft|Sketch")
+	int32 ArcTrussCount = 0;
 
 	/** User-facing summary: what was built, or why nothing was. */
 	UPROPERTY(BlueprintReadOnly, Category = "StageCraft|Sketch")

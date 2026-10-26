@@ -123,6 +123,14 @@ public:
 	 */
 	void RecordPlacements(TConstArrayView<class AModularBaseActor*> PlacedItems, const FText& Description);
 
+	/**
+	 * Records a replacement that already happened (the assistant's "replace", Docs/ADR/0018 §6) as ONE step named Description:
+	 * Removed are snapshots of the items taken off the stage, Placed the items put in their place. Undo removes the new items and
+	 * restores the old ones through the rules, all or nothing; redo does it again. Placed items that are no longer valid are left
+	 * out; nothing is recorded when both lists end up empty. An open transaction is ended first.
+	 */
+	void RecordReplacement(TConstArrayView<struct FStageItemSnapshot> Removed, TConstArrayView<class AModularBaseActor*> Placed, const FText& Description);
+
 	/** How undo / redo write parameters. See FStageParameterApplier. */
 	FStageParameterApplier ParameterApplier;
 

@@ -45,9 +45,33 @@ namespace StageAICommandSchema
 			{ EStageAIIntent::Export, TEXT("export") },
 			{ EStageAIIntent::Undo, TEXT("undo") },
 			{ EStageAIIntent::Redo, TEXT("redo") },
+			{ EStageAIIntent::DeleteItems, TEXT("delete_items") },
+			{ EStageAIIntent::MoveItems, TEXT("move_items") },
+			{ EStageAIIntent::ReplaceItems, TEXT("replace_items") },
+			{ EStageAIIntent::BuildShape, TEXT("build_shape") },
 			{ EStageAIIntent::Unsupported, TEXT("unsupported") },
 		};
 		static_assert(UE_ARRAY_COUNT(IntentNames) == int32(EStageAIIntent::Count), "Every intent needs a wire name.");
+
+		struct FTargetName { EStageAITarget Target; const TCHAR* Name; };
+		const FTargetName TargetNames[] = { { EStageAITarget::Selection, TEXT("selection") }, { EStageAITarget::Named, TEXT("named") } };
+
+		struct FDirectionName { EStageAIDirection Direction; const TCHAR* Name; };
+		const FDirectionName DirectionNames[] = {
+			{ EStageAIDirection::Left, TEXT("left") }, { EStageAIDirection::Right, TEXT("right") }, { EStageAIDirection::Forward, TEXT("forward") },
+			{ EStageAIDirection::Back, TEXT("back") }, { EStageAIDirection::Up, TEXT("up") }, { EStageAIDirection::Down, TEXT("down") } };
+
+		struct FShapeName { EStageAIShape Shape; const TCHAR* Name; };
+		const FShapeName ShapeNames[] = {
+			{ EStageAIShape::RoundRiser, TEXT("round_riser") }, { EStageAIShape::ArcRiser, TEXT("arc_riser") }, { EStageAIShape::Stairs, TEXT("stairs") },
+			{ EStageAIShape::ArcTruss, TEXT("arc_truss") } };
+
+		/** Sane bounds of the shape sizes a command may ask for; the items' own ranges clamp further when they are built. */
+		constexpr double MinShapeSizeCm = 10.0;
+		constexpr double MaxShapeSizeCm = 5000.0;
+		constexpr double MaxShapeHeightCm = 2000.0;
+		constexpr double MinShapeAngle = 5.0;
+		constexpr double MaxShapeAngle = 360.0;
 
 		struct FWeatherName { EStageWeatherPreset Preset; const TCHAR* Name; };
 		const FWeatherName WeatherNames[] = {
@@ -59,7 +83,25 @@ namespace StageAICommandSchema
 			{ EStageAIReport::BillOfMaterials, TEXT("bill_of_materials") }, { EStageAIReport::PatchSheet, TEXT("patch_sheet") },
 			{ EStageAIReport::CableSchedule, TEXT("cable_schedule") }, { EStageAIReport::All, TEXT("all") } };
 
+		/** "delete" is clearing the whole stage; targeted deletes are delete_items. */
 		const TCHAR* const UnsupportedOperations[] = { TEXT("delete"), TEXT("open"), TEXT("save") };
+
+		template <typename TEntry>
+		const TEntry* FindByName(TConstArrayView<TEntry> Entries, const FString& Name)
+		{
+			return Algo::FindByPredicate(Entries, [&Name](const TEntry& Entry) { return Name == Entry.Name; });
+		}
+
+		template <typename TEntry>
+		TArray<const TCHAR*> NamesOf(TConstArrayView<TEntry> Entries)
+		{
+			TArray<const TCHAR*> Names;
+			for (const TEntry& Entry : Entries)
+			{
+				Names.Add(Entry.Name);
+			}
+			return Names;
+		}
 
 		FString TrimAndCap(const FString& Text)
 		{
@@ -95,8 +137,24 @@ namespace StageAICommandSchema
 			TSharedRef<FJsonObject> Intent = MakeProperty(TEXT("string"), TEXT("What to do. Questions (stage_summary, item_count, total_weight, power_draw, fixture_count, count_matching, list_cues, environment_status) are answered from the live stage; the others change it."));
 			Intent->SetArrayField(TEXT("enum"), StringValues(Intents));
 			Properties->SetObjectField(TEXT("intent"), Intent);
-			Properties->SetObjectField(TEXT("count"), MakeProperty(TEXT("integer"), FString::Printf(TEXT("add_fixtures: how many, 1 to %d. Default 1."), StageAICommandParser::MaxFixturesPerCommand)));
-			Properties->SetObjectField(TEXT("item"), MakeProperty(TEXT("string"), TEXT("add_fixtures: words naming the fixture type or catalog name (e.g. \"moving head spot\"); empty picks the first fixture. count_matching: words naming the placed item to count. unsupported: one of delete, open, save.")));
+			Properties->SetObjectField(TEXT("count"), MakeProperty(TEXT("integer"), FString::Printf(TEXT("add_fixtures: how many, 1 to %d. Default 1. delete_items, move_items, replace_items with target named: at most how many of the matching items (the latest placed first); omit for all of them."), StageAICommandParser::MaxFixturesPerCommand)));
+			Properties->SetObjectField(TEXT("item"), MakeProperty(TEXT("string"), TEXT("add_fixtures: words naming the fixture type or catalog name (e.g. \"moving head spot\"); empty picks the first fixture. count_matching, and delete_items / move_items / replace_items with target named: words naming the placed items (\"spot\", \"truss\", \"lights\" for every fixture). unsupported: one of delete (clearing the whole stage), open, save.")));
+			TSharedRef<FJsonObject> Target = MakeProperty(TEXT("string"), TEXT("delete_items, move_items, replace_items: selection for the user's selected items (\"this\", \"the selected\", \"it\"), named for the placed items matching item."));
+			Target->SetArrayField(TEXT("enum"), StringValues(NamesOf(MakeArrayView(TargetNames))));
+			Properties->SetObjectField(TEXT("target"), Target);
+			Properties->SetObjectField(TEXT("replacement"), MakeProperty(TEXT("string"), TEXT("replace_items: words naming the catalog item to put in each target's place (e.g. \"wash\").")));
+			TSharedRef<FJsonObject> Direction = MakeProperty(TEXT("string"), TEXT("move_items: left, right, forward or back as seen from the user's camera (snapped to the stage axes), or up / down."));
+			Direction->SetArrayField(TEXT("enum"), StringValues(NamesOf(MakeArrayView(DirectionNames))));
+			Properties->SetObjectField(TEXT("direction"), Direction);
+			Properties->SetObjectField(TEXT("distance_cm"), MakeProperty(TEXT("number"), FString::Printf(TEXT("move_items: how far in cm, 1 to %.0f. Default 100."), StageAICommandParser::MaxMoveDistanceCm)));
+			TSharedRef<FJsonObject> Shape = MakeProperty(TEXT("string"), TEXT("build_shape: round_riser (a round deck: radius_cm, height_cm), arc_riser (a curved deck ring: radius_cm to its outer edge, width_cm deep, angle_degrees, height_cm), stairs (height_cm = rise, width_cm, handrails), arc_truss (curved box truss: radius_cm, angle_degrees, 360 for a circle, height_cm = hang height)."));
+			Shape->SetArrayField(TEXT("enum"), StringValues(NamesOf(MakeArrayView(ShapeNames))));
+			Properties->SetObjectField(TEXT("shape"), Shape);
+			Properties->SetObjectField(TEXT("radius_cm"), MakeProperty(TEXT("number"), TEXT("build_shape: radius in cm (half the diameter). Omit for the catalog item's default.")));
+			Properties->SetObjectField(TEXT("width_cm"), MakeProperty(TEXT("number"), TEXT("build_shape: width in cm. Omit for the default.")));
+			Properties->SetObjectField(TEXT("height_cm"), MakeProperty(TEXT("number"), TEXT("build_shape: height in cm (riser top, stair rise, or the truss's hang height). Omit for the default.")));
+			Properties->SetObjectField(TEXT("angle_degrees"), MakeProperty(TEXT("number"), TEXT("build_shape arc_riser and arc_truss: the angle the arc spans, 5 to 360. Omit for the default.")));
+			Properties->SetObjectField(TEXT("handrails"), MakeProperty(TEXT("boolean"), TEXT("build_shape stairs: handrails on both sides. Default true.")));
 			Properties->SetObjectField(TEXT("cue_number"), MakeProperty(TEXT("number"), TEXT("store_cue (omit for the next free number) and go_to_cue: the cue number, 0.001 to 9999.999.")));
 			Properties->SetObjectField(TEXT("label"), MakeProperty(TEXT("string"), TEXT("store_cue: optional cue label.")));
 			Properties->SetObjectField(TEXT("fade_seconds"), MakeProperty(TEXT("number"), TEXT("store_cue: optional crossfade time in seconds, 0 to 600.")));
@@ -145,7 +203,8 @@ namespace StageAICommandSchema
 		bool CommandFromToolInput(const FJsonObject& Input, FStageAICommand& OutCommand, FText& OutError, EStageAILanguage DefaultLanguage)
 		{
 			static const TCHAR* const KnownFields[] = { TEXT("intent"), TEXT("count"), TEXT("item"), TEXT("cue_number"), TEXT("label"), TEXT("fade_seconds"),
-				TEXT("weather"), TEXT("hour"), TEXT("sky_on"), TEXT("report"), TEXT("reply_language") };
+				TEXT("weather"), TEXT("hour"), TEXT("sky_on"), TEXT("report"), TEXT("reply_language"), TEXT("target"), TEXT("replacement"), TEXT("direction"),
+				TEXT("distance_cm"), TEXT("shape"), TEXT("radius_cm"), TEXT("width_cm"), TEXT("height_cm"), TEXT("angle_degrees"), TEXT("handrails") };
 			for (const TPair<FString, TSharedPtr<FJsonValue>>& Field : Input.Values)
 			{
 				if (!Algo::FindByPredicate(KnownFields, [&Field](const TCHAR* Known) { return Field.Key == Known; }))
@@ -199,7 +258,9 @@ namespace StageAICommandSchema
 				return true;
 			};
 			TOptional<double> Count, CueNumber, Fade, Hour;
-			if (!ReadNumber(TEXT("count"), Count) || !ReadNumber(TEXT("cue_number"), CueNumber) || !ReadNumber(TEXT("fade_seconds"), Fade) || !ReadNumber(TEXT("hour"), Hour))
+			if (!ReadNumber(TEXT("count"), Count) || !ReadNumber(TEXT("cue_number"), CueNumber) || !ReadNumber(TEXT("fade_seconds"), Fade) || !ReadNumber(TEXT("hour"), Hour)
+				|| !ReadNumber(TEXT("distance_cm"), Command.DistanceCm) || !ReadNumber(TEXT("radius_cm"), Command.RadiusCm) || !ReadNumber(TEXT("width_cm"), Command.WidthCm)
+				|| !ReadNumber(TEXT("height_cm"), Command.HeightCm) || !ReadNumber(TEXT("angle_degrees"), Command.AngleDegrees))
 			{
 				return false;
 			}
@@ -207,11 +268,55 @@ namespace StageAICommandSchema
 			{
 				if (!FMath::IsFinite(*Count) || *Count != FMath::RoundToDouble(*Count))
 				{
-					OutError = LOCTEXT("CountWhole", "The fixture count must be a whole number.");
+					OutError = LOCTEXT("CountWhole", "The count must be a whole number.");
 					return false;
 				}
-				Command.Count = int32(FMath::Clamp(*Count, -1.0, 1000.0));
+				Command.Count = int32(FMath::Clamp(*Count, -1.0, 100000.0));
 			}
+
+			FString EnumName;
+			if (Input.TryGetStringField(TEXT("target"), EnumName))
+			{
+				const FTargetName* Found = FindByName(MakeArrayView(TargetNames), EnumName);
+				if (!Found)
+				{
+					OutError = LOCTEXT("UnknownTarget", "The target must be selection or named.");
+					return false;
+				}
+				Command.Target = Found->Target;
+			}
+			if (Input.TryGetStringField(TEXT("direction"), EnumName))
+			{
+				const FDirectionName* Found = FindByName(MakeArrayView(DirectionNames), EnumName);
+				if (!Found)
+				{
+					OutError = LOCTEXT("UnknownDirection", "The direction must be left, right, forward, back, up or down.");
+					return false;
+				}
+				Command.Direction = Found->Direction;
+			}
+			else if (Command.Intent == EStageAIIntent::MoveItems)
+			{
+				OutError = LOCTEXT("NoDirection", "The move command did not say which way.");
+				return false;
+			}
+			if (Input.TryGetStringField(TEXT("shape"), EnumName))
+			{
+				const FShapeName* Found = FindByName(MakeArrayView(ShapeNames), EnumName);
+				if (!Found)
+				{
+					OutError = LOCTEXT("UnknownShape", "That shape is not one I can build.");
+					return false;
+				}
+				Command.Shape = Found->Shape;
+			}
+			else if (Command.Intent == EStageAIIntent::BuildShape)
+			{
+				OutError = LOCTEXT("NoShape", "The build command did not say which shape.");
+				return false;
+			}
+			Input.TryGetStringField(TEXT("replacement"), Command.Replacement);
+			Input.TryGetBoolField(TEXT("handrails"), Command.bHandrails);
 			if (CueNumber.IsSet())
 			{
 				Command.CueNumber = float(*CueNumber);
@@ -225,6 +330,11 @@ namespace StageAICommandSchema
 				Command.Hour = float(*Hour);
 			}
 			Input.TryGetStringField(TEXT("item"), Command.ItemQuery);
+			// Items named without a target are the placed items of that name, not the selected ones.
+			if (!Input.HasField(TEXT("target")) && !Command.ItemQuery.TrimStartAndEnd().IsEmpty())
+			{
+				Command.Target = EStageAITarget::Named;
+			}
 			Input.TryGetStringField(TEXT("label"), Command.Label);
 			Input.TryGetBoolField(TEXT("sky_on"), Command.bSkyOn);
 
@@ -396,6 +506,67 @@ namespace StageAICommandSchema
 			}
 			return true;
 
+		case EStageAIIntent::DeleteItems:
+		case EStageAIIntent::MoveItems:
+		case EStageAIIntent::ReplaceItems:
+			if (Command.Target == EStageAITarget::Named && Command.ItemQuery.IsEmpty())
+			{
+				OutError = Pick(Language, LOCTEXT("EditWhich", "Which items? Select them first, or name them (\"the spots\")."),
+					INVTEXT("Ո՞ր իրերը։ Նախ ընտրեք դրանք կամ նշեք անունը («սփոթերը»)։"));
+				return false;
+			}
+			if (Command.Count.IsSet() && (*Command.Count < 1 || *Command.Count > StageAICommandParser::MaxEditTargets))
+			{
+				OutError = FText::Format(Pick(Language, LOCTEXT("EditCountRange", "I can change 1 to {0} items at a time."), INVTEXT("Միանգամից կարող եմ փոխել 1-ից {0} իր։")),
+					FText::AsNumber(StageAICommandParser::MaxEditTargets));
+				return false;
+			}
+			if (Command.Intent == EStageAIIntent::MoveItems)
+			{
+				const double Distance = Command.DistanceCm.Get(StageAICommandParser::DefaultMoveDistanceCm);
+				if (!FMath::IsFinite(Distance) || Distance < 1.0 || Distance > StageAICommandParser::MaxMoveDistanceCm)
+				{
+					OutError = FText::Format(Pick(Language, LOCTEXT("MoveRange", "I can move items 1 cm to {0} m at a time."), INVTEXT("Միանգամից կարող եմ տեղափոխել 1 սմ-ից {0} մ։")),
+						FText::AsNumber(StageAICommandParser::MaxMoveDistanceCm / 100.0));
+					return false;
+				}
+				Command.DistanceCm = Distance;
+			}
+			if (Command.Intent == EStageAIIntent::ReplaceItems)
+			{
+				Command.Replacement = TrimAndCap(Command.Replacement);
+				if (Command.Replacement.IsEmpty())
+				{
+					OutError = Pick(Language, LOCTEXT("ReplaceWith", "Replace them with what? Name a catalog item (\"with washes\")."),
+						INVTEXT("Ինչո՞վ փոխարինեմ։ Նշեք կատալոգի իրը («վոշերով»)։"));
+					return false;
+				}
+			}
+			return true;
+
+		case EStageAIIntent::BuildShape:
+		{
+			const auto InRange = [](const TOptional<double>& Value, double Min, double Max)
+			{
+				return !Value.IsSet() || (FMath::IsFinite(*Value) && *Value >= Min && *Value <= Max);
+			};
+			if (!InRange(Command.RadiusCm, MinShapeSizeCm, MaxShapeSizeCm) || !InRange(Command.WidthCm, MinShapeSizeCm, MaxShapeSizeCm)
+				|| !InRange(Command.HeightCm, 0.0, MaxShapeHeightCm))
+			{
+				OutError = FText::Format(Pick(Language, LOCTEXT("ShapeSizeRange", "Shape sizes go from {0} cm to {1} m, and heights up to {2} m."),
+						INVTEXT("Ձևերի չափերը {0} սմ-ից {1} մ են, իսկ բարձրությունը՝ մինչև {2} մ։")),
+					FText::AsNumber(MinShapeSizeCm), FText::AsNumber(MaxShapeSizeCm / 100.0), FText::AsNumber(MaxShapeHeightCm / 100.0));
+				return false;
+			}
+			if (!InRange(Command.AngleDegrees, MinShapeAngle, MaxShapeAngle))
+			{
+				OutError = FText::Format(Pick(Language, LOCTEXT("ShapeAngleRange", "Arcs span {0} to {1} degrees."), INVTEXT("Աղեղները {0}-ից {1} աստիճան են։")),
+					FText::AsNumber(MinShapeAngle), FText::AsNumber(MaxShapeAngle));
+				return false;
+			}
+			return true;
+		}
+
 		case EStageAIIntent::Unsupported:
 			if (!Algo::FindByPredicate(UnsupportedOperations, [&Command](const TCHAR* Operation) { return Command.ItemQuery == Operation; }))
 			{
@@ -432,7 +603,11 @@ namespace StageAICommandSchema
 			"Translate each request into exactly one call of the stage_command tool. Questions about the stage (counts, weight, power, cues, "
 			"weather) are answered by the tool from the live stage, so call it rather than guessing numbers; the scene summary in the request "
 			"is only context. Every change goes through the stage's rules and can be undone.\n"
-			"If a request needs something the tool cannot do (deleting or clearing items, opening, saving or replacing scenes, several commands "
+			"Placed items can be deleted, moved and replaced: use target selection for what the user has selected (\"this\", \"it\", \"the "
+			"selected spots\", with item to narrow it), or target named with item for placed items by name (\"the pars\"). Round and curved "
+			"risers, stairs and curved or circular truss are built with build_shape in centimetres and degrees; a size given without a role "
+			"is a round riser's or a truss circle's diameter.\n"
+			"If a request needs something the tool cannot do (clearing the whole stage, opening, saving or replacing scenes, several commands "
 			"at once), do not call the tool: say briefly what to do instead, or which single step to start with. If a request is unclear, ask "
 			"one short question. Keep text replies to one or two sentences.\n"
 			"Users write in English or Armenian, in Armenian script or in Latin letters, and voice prompts arrive as transcripts that may "
@@ -454,6 +629,25 @@ namespace StageAICommandSchema
 			Fixtures.Add(FString::Printf(TEXT("%d x %s"), Entry.Value, *Entry.Key));
 		}
 		Lines.Add(FString::Printf(TEXT("Fixtures: %d%s%s."), Scene.GetFixtureCount(), Fixtures.IsEmpty() ? TEXT("") : TEXT(" - "), *FString::Join(Fixtures, TEXT(", "))));
+		// The selection, counted per name, so "this" and "the selected" can be resolved.
+		TArray<TPair<FString, int32>> Selected;
+		for (const FString& Name : Scene.SelectedItemNames)
+		{
+			if (TPair<FString, int32>* Entry = Selected.FindByPredicate([&Name](const TPair<FString, int32>& Existing) { return Existing.Key == Name; }))
+			{
+				++Entry->Value;
+			}
+			else
+			{
+				Selected.Emplace(Name, 1);
+			}
+		}
+		TArray<FString> SelectedParts;
+		for (const TPair<FString, int32>& Entry : Selected)
+		{
+			SelectedParts.Add(FString::Printf(TEXT("%d x %s"), Entry.Value, *Entry.Key));
+		}
+		Lines.Add(FString::Printf(TEXT("Selected: %d%s%s."), Scene.SelectedItemNames.Num(), SelectedParts.IsEmpty() ? TEXT("") : TEXT(" - "), *FString::Join(SelectedParts, TEXT(", "))));
 		Lines.Add(FString::Printf(TEXT("Cues: %d%s."), Scene.Cues.Num(), Scene.ActiveCue > 0.f ? *FString::Printf(TEXT(", cue %g on stage"), Scene.ActiveCue) : TEXT("")));
 		if (Scene.bHasEnvironment)
 		{

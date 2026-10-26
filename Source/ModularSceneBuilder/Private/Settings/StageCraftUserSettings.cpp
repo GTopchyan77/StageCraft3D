@@ -4,6 +4,7 @@
 
 #include "Audio/StageAudioTypes.h"
 #include "Engine/Engine.h"
+#include "Player/StageCameraNavigation.h"
 #include "Viewport/StageViewMath.h"
 
 #include UE_INLINE_GENERATED_CPP_BY_NAME(StageCraftUserSettings)
@@ -29,6 +30,7 @@ void UStageCraftUserSettings::SetToDefaults()
 	GridSnapCm = StageViewMath::DefaultGridSnapCm;
 	AngleSnapDegrees = StageViewMath::DefaultAngleSnapDegrees;
 	bViewportGridVisible = true;
+	bViewportToolbarCollapsed = false;
 	ResetInputToDefaults();
 }
 
@@ -169,11 +171,39 @@ bool UStageCraftUserSettings::SetLookInverted(bool bInverted)
 	return bChanged;
 }
 
+bool UStageCraftUserSettings::SetCameraSpeed(float Speed)
+{
+	if (!FMath::IsFinite(Speed))
+	{
+		return false;
+	}
+	const float Sanitized = StageCameraNavigation::SanitizeCameraSpeed(Speed);
+	const bool bChanged = !FMath::IsNearlyEqual(CameraSpeed, Sanitized);
+	CameraSpeed = Sanitized;
+	return bChanged;
+}
+
+bool UStageCraftUserSettings::SetLookLinkedToCameraSpeed(bool bLinked)
+{
+	const bool bChanged = bLinkLookToCameraSpeed != bLinked;
+	bLinkLookToCameraSpeed = bLinked;
+	return bChanged;
+}
+
+bool UStageCraftUserSettings::SetViewportToolbarCollapsed(bool bCollapsed)
+{
+	const bool bChanged = bViewportToolbarCollapsed != bCollapsed;
+	bViewportToolbarCollapsed = bCollapsed;
+	return bChanged;
+}
+
 void UStageCraftUserSettings::ResetInputToDefaults()
 {
 	KeyBindingOverrides.Reset();
 	LookSensitivity = StageInputPreferences::DefaultLookSensitivity;
 	bInvertLook = false;
+	CameraSpeed = StageCameraNavigation::DefaultCameraSpeed;
+	bLinkLookToCameraSpeed = false;
 	InputSettingsVersion = CurrentInputSettingsVersion;
 }
 
@@ -184,4 +214,5 @@ void UStageCraftUserSettings::SanitizeInput()
 	LookSensitivity = FMath::IsFinite(LookSensitivity)
 		? FMath::Clamp(LookSensitivity, StageInputPreferences::MinLookSensitivity, StageInputPreferences::MaxLookSensitivity)
 		: StageInputPreferences::DefaultLookSensitivity;
+	CameraSpeed = StageCameraNavigation::SanitizeCameraSpeed(CameraSpeed);
 }

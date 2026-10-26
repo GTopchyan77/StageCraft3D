@@ -66,6 +66,7 @@ private:
 	void SetNotice(const FText& Text, bool bWarning);
 
 	void HandleLookInvertPicked(int32 Index);
+	void HandleLookLinkPicked(int32 Index);
 	void HandleSnapItemsPicked(int32 Index);
 	void HandleGridPicked(int32 Index);
 	void HandleMutePicked(int32 Index);
@@ -92,6 +93,9 @@ private:
 
 	UPROPERTY(Transient)
 	TArray<TObjectPtr<class UStageChoiceButton>> LookInvertButtons;
+
+	UPROPERTY(Transient)
+	TArray<TObjectPtr<class UStageChoiceButton>> LookLinkButtons;
 
 	UPROPERTY(Transient)
 	TArray<TObjectPtr<class UStageChoiceButton>> SnapItemsButtons;

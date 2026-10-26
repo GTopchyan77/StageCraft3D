@@ -332,6 +332,20 @@ namespace StageSketchGenerator
 		{
 			Parts.Add(FText::Format(LOCTEXT("FixturePart", "{0} {0}|plural(one=fixture,other=fixtures)"), FText::AsNumber(Plan.Fixtures.Num())));
 		}
+		if (!Plan.Stairs.IsEmpty())
+		{
+			Parts.Add(FText::Format(LOCTEXT("StairsPart", "{0} {0}|plural(one=set,other=sets) of stairs"), FText::AsNumber(Plan.Stairs.Num())));
+		}
+		if (!Plan.ArcTrusses.IsEmpty())
+		{
+			int32 Sections = 0;
+			for (const FStageSketchArcTrussPlan& Arc : Plan.ArcTrusses)
+			{
+				Sections += Arc.Sections;
+			}
+			Parts.Add(FText::Format(LOCTEXT("ArcPart", "{0} curved truss {0}|plural(one=run,other=runs) ({1} curved {1}|plural(one=section,other=sections))"),
+				FText::AsNumber(Plan.ArcTrusses.Num()), FText::AsNumber(Sections)));
+		}
 		return FText::Join(LOCTEXT("PartSeparator", ", "), Parts);
 	}
 }

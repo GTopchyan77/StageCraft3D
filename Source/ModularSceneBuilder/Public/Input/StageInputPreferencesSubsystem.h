@@ -62,6 +62,20 @@ public:
 	bool IsLookInverted() const;
 	void SetLookInverted(bool bInverted);
 
+	/** Look speed follows camera speed (STATE.md #15) instead of the editor's fixed 0.2 degrees per count. Off by default. */
+	bool IsLookLinkedToCameraSpeed() const;
+	void SetLookLinkedToCameraSpeed(bool bLinked);
+
+	/** The camera speed the camera starts a session with (the last one used). */
+	float GetCameraSpeed() const;
+
+	/**
+	 * Remembers the camera's speed for the next session and saves the ini. Called by UStageCameraNavigationComponent when a
+	 * drag or speed change ends, not per wheel notch. Does not broadcast OnInputPreferencesChanged: the camera already has the
+	 * speed, and the broadcast would rebuild the fly mapping mid-flight.
+	 */
+	void StoreCameraSpeed(float Speed);
+
 	/** Why a SetKeyBinding was refused, for the Preferences panel and the console. Empty for Success and Unchanged. */
 	static FText DescribeRefusal(EStageKeyBindingResult Result, const FStageKeyChord& Chord, EStageInputCommand Conflict);
 

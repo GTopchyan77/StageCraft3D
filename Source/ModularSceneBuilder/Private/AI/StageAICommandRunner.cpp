@@ -2,14 +2,23 @@
 
 #include "AI/StageAICommandRunner.h"
 
+#include "Actors/LightingFixtureActor.h"
 #include "Actors/ModularBaseActor.h"
 #include "AI/StageAICommandParser.h"
 #include "AI/StageAICommandSubsystem.h"
+#include "Algo/AllOf.h"
+#include "Camera/PlayerCameraManager.h"
+#include "Components/SelectionComponent.h"
 #include "Data/LightingFixtureData.h"
+#include "Data/StageArcTrussData.h"
+#include "Data/StageDeckData.h"
+#include "Data/StageStairsData.h"
 #include "Engine/GameInstance.h"
 #include "Engine/World.h"
 #include "Environment/StageEnvironmentSubsystem.h"
 #include "History/StageEditHistorySubsystem.h"
+#include "Placement/StageDeckMath.h"
+#include "Placement/StageProceduralShapes.h"
 #include "Sketch/StageSketchGenerator.h"
 #include "Subsystems/ShowControlSubsystem.h"
 #include "Subsystems/StageItemSubsystem.h"
@@ -346,6 +355,470 @@ namespace StageAICommandRunner
 				: Done(FText::Format(Pick(Language, LOCTEXT("ExportPartial", "{0} Also: {1}."), INVTEXT("{0} Նաև՝ {1}։")), StartedText, FText::Join(LOCTEXT("FailSeparator", "; "), Failed)));
 		}
 
+		// --- Targeted edits and stage shapes (Docs/ADR/0018 §6) ---
+
+		/** Gap between new shapes and the items already placed, and the grid their place snaps to (cm). */
+		constexpr double ShapeGap = 200.0;
+		constexpr double ShapeGrid = 50.0;
+
+		/** Hang height of the bottom of a curved truss when none is given, as the Sketch window's default truss height. */
+		constexpr double DefaultArcTrussHeight = 600.0;
+
+		/** A round or curved riser without sizes: 2 m radius; a curved riser is 1 m deep and 180 degrees wide. */
+		constexpr double DefaultRiserRadius = 200.0;
+		constexpr double DefaultArcRiserWidth = 100.0;
+		constexpr double DefaultArcRiserAngle = 180.0;
+		constexpr double MaxRiserRadius = 2500.0;
+
+		/** "2 × Spot 350, 1 × LED Par". */
+		FText DescribeItems(TConstArrayView<AModularBaseActor*> Items)
+		{
+			TArray<TPair<FText, int32>> Counts;
+			for (const AModularBaseActor* Item : Items)
+			{
+				const FText Name = Item && Item->GetItemData() ? Item->GetItemData()->DisplayName : LOCTEXT("UnnamedItem", "item");
+				if (TPair<FText, int32>* Entry = Counts.FindByPredicate([&Name](const TPair<FText, int32>& Existing) { return Existing.Key.EqualTo(Name); }))
+				{
+					++Entry->Value;
+				}
+				else
+				{
+					Counts.Emplace(Name, 1);
+				}
+			}
+			TArray<FText> Parts;
+			for (const TPair<FText, int32>& Entry : Counts)
+			{
+				Parts.Add(FText::Format(LOCTEXT("ItemTimes", "{0} × {1}"), FText::AsNumber(Entry.Value), Entry.Key));
+			}
+			return FText::Join(LOCTEXT("ItemSeparator", ", "), Parts);
+		}
+
+		/**
+		 * The items a targeted edit applies to: the selection (narrowed by ItemQuery when it has one), or the placed items matching
+		 * ItemQuery, the latest placed first, at most Count. Empty, with OutError in the command's language, when none.
+		 */
+		TArray<AModularBaseActor*> FindTargets(const AModularPlayerController& Controller, const FStageAICommand& Command, FText& OutError)
+		{
+			const EStageAILanguage Language = Command.Language;
+			const auto Matches = [&Command](const AModularBaseActor& Item)
+			{
+				const UBaseItemData* Data = Item.GetItemData();
+				return Command.ItemQuery.IsEmpty()
+					|| (Data && StageAICommandParser::MatchesItemName(Data->DisplayName.ToString(), Command.ItemQuery, Item.IsA<ALightingFixtureActor>()));
+			};
+
+			TArray<AModularBaseActor*> Targets;
+			if (Command.Target == EStageAITarget::Selection)
+			{
+				const USelectionComponent* Selection = Controller.GetSelection();
+				for (AActor* Actor : Selection ? Selection->GetSelectedActors() : TArray<AActor*>())
+				{
+					AModularBaseActor* Item = Cast<AModularBaseActor>(Actor);
+					if (IsValid(Item) && Matches(*Item))
+					{
+						Targets.Add(Item);
+					}
+				}
+				if (Targets.IsEmpty())
+				{
+					OutError = Command.ItemQuery.IsEmpty()
+						? Pick(Language, LOCTEXT("NothingSelected", "Nothing is selected. Select the items first, or name them (\"delete the spots\")."),
+							INVTEXT("Ոչինչ ընտրված չէ։ Նախ ընտրեք իրերը կամ նշեք դրանց անունը («ջնջիր սփոթերը»)։"))
+						: FText::Format(Pick(Language, LOCTEXT("NoSelectedMatch", "None of the selected items is a \"{0}\"."), INVTEXT("Ընտրված իրերից ոչ մեկը «{0}» չէ։")),
+							FText::FromString(Command.ItemQuery));
+				}
+			}
+			else
+			{
+				const UStageSessionSubsystem* Session = UWorld::GetSubsystem<UStageSessionSubsystem>(Controller.GetWorld());
+				const TArray<AModularBaseActor*> Placed = Session ? Session->GetPlacedItems() : TArray<AModularBaseActor*>();
+				for (int32 Index = Placed.Num() - 1; Index >= 0; --Index)
+				{
+					if (IsValid(Placed[Index]) && Matches(*Placed[Index]))
+					{
+						Targets.Add(Placed[Index]);
+						if (Command.Count.IsSet() && Targets.Num() >= *Command.Count)
+						{
+							break;
+						}
+					}
+				}
+				if (Targets.IsEmpty())
+				{
+					OutError = FText::Format(Pick(Language, LOCTEXT("NoPlacedMatch", "No placed item matches \"{0}\". Say \"status\" to see what is on the stage."),
+						INVTEXT("Տեղադրված իրերից ոչ մեկը չի համապատասխանում «{0}»-ին։ Գրեք «վիճակը»՝ տեսնելու, թե ինչ կա բեմում։")), FText::FromString(Command.ItemQuery));
+				}
+			}
+			if (Targets.Num() > StageAICommandParser::MaxEditTargets)
+			{
+				OutError = FText::Format(Pick(Language, LOCTEXT("TooManyTargets", "That is {0} items; I change at most {1} at a time. Select fewer, or give a number (\"delete 10 spots\")."),
+						INVTEXT("Դա {0} իր է, իսկ ես միանգամից փոխում եմ առավելագույնը {1}։ Ընտրեք ավելի քիչ կամ նշեք քանակը («ջնջիր 10 սփոթ»)։")),
+					FText::AsNumber(Targets.Num()), FText::AsNumber(StageAICommandParser::MaxEditTargets));
+				Targets.Reset();
+			}
+			return Targets;
+		}
+
+		FStageAIActionOutcome DeleteItems(AModularPlayerController& Controller, const FStageAICommand& Command)
+		{
+			const EStageAILanguage Language = Command.Language;
+			FText Error;
+			const TArray<AModularBaseActor*> Targets = FindTargets(Controller, Command, Error);
+			if (Targets.IsEmpty())
+			{
+				return Refused(Error);
+			}
+			const FText What = DescribeItems(Targets);
+			int32 Deleted = 0;
+			const TArray<FStageEconomyResultInfo> Refusals = Controller.RunCapturingRejections([&]() { Deleted = Controller.RequestDeleteItems(Targets); });
+			if (Deleted == 0)
+			{
+				return Refused(RefusalOf(Refusals, Pick(Language, LOCTEXT("NothingDeleted", "Nothing was deleted."), INVTEXT("Ոչինչ չջնջվեց։"))));
+			}
+			return Done(FText::Format(Pick(Language, LOCTEXT("Deleted", "Deleted {0}. Ctrl+Z brings {1}|plural(one=it,other=them) back."),
+				INVTEXT("Ջնջվեց {0}։ Ctrl+Z-ը կվերադարձնի դրանք։")), What, FText::AsNumber(Deleted)));
+		}
+
+		FText DescribeDirection(EStageAIDirection Direction, EStageAILanguage Language)
+		{
+			switch (Direction)
+			{
+			case EStageAIDirection::Left:		return Pick(Language, LOCTEXT("DirLeft", "left"), INVTEXT("ձախ"));
+			case EStageAIDirection::Right:		return Pick(Language, LOCTEXT("DirRight", "right"), INVTEXT("աջ"));
+			case EStageAIDirection::Forward:	return Pick(Language, LOCTEXT("DirForward", "forward"), INVTEXT("առաջ"));
+			case EStageAIDirection::Back:		return Pick(Language, LOCTEXT("DirBack", "back"), INVTEXT("հետ"));
+			case EStageAIDirection::Up:			return Pick(Language, LOCTEXT("DirUp", "up"), INVTEXT("վեր"));
+			default:							return Pick(Language, LOCTEXT("DirDown", "down"), INVTEXT("ներքև"));
+			}
+		}
+
+		FText DescribeDistance(double Cm, EStageAILanguage Language)
+		{
+			FNumberFormattingOptions Format;
+			Format.SetMaximumFractionalDigits(2);
+			return Cm >= 100.0
+				? FText::Format(Pick(Language, LOCTEXT("DistanceM", "{0} m"), INVTEXT("{0} մ")), FText::AsNumber(Cm / 100.0, &Format))
+				: FText::Format(Pick(Language, LOCTEXT("DistanceCm", "{0} cm"), INVTEXT("{0} սմ")), FText::AsNumber(Cm, &Format));
+		}
+
+		/** Left, right, forward and back as the camera sees the stage, snapped to the nearest stage axis so items stay on their grid. */
+		FVector GetMoveOffset(const AModularPlayerController& Controller, EStageAIDirection Direction, double Distance)
+		{
+			if (Direction == EStageAIDirection::Up || Direction == EStageAIDirection::Down)
+			{
+				return FVector(0.0, 0.0, Direction == EStageAIDirection::Up ? Distance : -Distance);
+			}
+			const double Yaw = Controller.PlayerCameraManager ? Controller.PlayerCameraManager->GetCameraRotation().Yaw : Controller.GetControlRotation().Yaw;
+			const double Snapped = FMath::GridSnap(FRotator::NormalizeAxis(Yaw), 90.0);
+			const auto Axis = [](double Degrees)
+			{
+				const FVector Raw = FRotator(0.0, Degrees, 0.0).Vector();
+				return FVector(FMath::RoundToDouble(Raw.X), FMath::RoundToDouble(Raw.Y), 0.0);
+			};
+			switch (Direction)
+			{
+			case EStageAIDirection::Forward:	return Axis(Snapped) * Distance;
+			case EStageAIDirection::Back:		return -Axis(Snapped) * Distance;
+			case EStageAIDirection::Right:		return Axis(Snapped + 90.0) * Distance;
+			default:							return -Axis(Snapped + 90.0) * Distance;
+			}
+		}
+
+		FStageAIActionOutcome MoveItems(AModularPlayerController& Controller, const FStageAICommand& Command)
+		{
+			const EStageAILanguage Language = Command.Language;
+			FText Error;
+			const TArray<AModularBaseActor*> Targets = FindTargets(Controller, Command, Error);
+			if (Targets.IsEmpty())
+			{
+				return Refused(Error);
+			}
+			const double Distance = Command.DistanceCm.Get(StageAICommandParser::DefaultMoveDistanceCm);
+			const FVector Offset = GetMoveOffset(Controller, Command.Direction, Distance);
+			FStageEconomyResultInfo Result;
+			const TArray<FStageEconomyResultInfo> Refusals = Controller.RunCapturingRejections([&]() { Result = Controller.RequestMoveItems(Targets, Offset); });
+			if (!Result.IsSuccess())
+			{
+				return Refused(FText::Format(Pick(Language, LOCTEXT("MoveRefused", "Nothing was moved: {0}"), INVTEXT("Ոչինչ չտեղափոխվեց՝ {0}")),
+					RefusalOf(Refusals, Result.Message)));
+			}
+			return Done(FText::Format(Pick(Language, LOCTEXT("Moved", "Moved {0} {1} {2}. Ctrl+Z moves {3}|plural(one=it,other=them) back."),
+					INVTEXT("{0}-ը տեղափոխվեց {1} {2}։ Ctrl+Z-ը կվերադարձնի դրանք։")),
+				DescribeItems(Targets), DescribeDistance(Distance, Language), DescribeDirection(Command.Direction, Language), FText::AsNumber(Targets.Num())));
+		}
+
+		/** The catalog item Query names, for a replacement: fixtures first when it only says "light". Null with OutError when none. */
+		UBaseItemData* FindCatalogItem(const UStageItemSubsystem& Catalog, const FString& Query, EStageAILanguage Language, FText& OutError)
+		{
+			const bool bFixturesOnly = StageAICommandParser::IsGenericFixtureQuery(Query);
+			TArray<UBaseItemData*> Items;
+			TArray<FStageAIFixtureCandidate> Candidates;
+			for (UBaseItemData* Item : Catalog.GetCatalog())
+			{
+				const ULightingFixtureData* Fixture = Cast<ULightingFixtureData>(Item);
+				if (!Item || (bFixturesOnly && !Fixture))
+				{
+					continue;
+				}
+				Items.Add(Item);
+				Candidates.Add({ Item->DisplayName.ToString(), Fixture ? UEnum::GetDisplayValueAsText(Fixture->FixtureKind).ToString()
+					: UEnum::GetDisplayValueAsText(Item->ItemType).ToString() });
+			}
+			const int32 Match = StageAICommandParser::MatchFixture(Candidates, Query);
+			if (Match == INDEX_NONE)
+			{
+				OutError = FText::Format(Pick(Language, LOCTEXT("NoCatalogMatch", "Nothing in the catalog matches \"{0}\"."), INVTEXT("Կատալոգում «{0}»-ին համապատասխանող իր չկա։")),
+					FText::FromString(Query));
+				return nullptr;
+			}
+			return Items[Match];
+		}
+
+		FStageAIActionOutcome ReplaceItems(AModularPlayerController& Controller, const FStageAICommand& Command)
+		{
+			const EStageAILanguage Language = Command.Language;
+			UWorld* World = Controller.GetWorld();
+			UStageAICommandSubsystem* Assistant = UWorld::GetSubsystem<UStageAICommandSubsystem>(World);
+			const UGameInstance* GameInstance = World ? World->GetGameInstance() : nullptr;
+			const UStageItemSubsystem* Catalog = GameInstance ? GameInstance->GetSubsystem<UStageItemSubsystem>() : nullptr;
+			if (!Assistant || !Catalog)
+			{
+				return Refused(Pick(Language, LOCTEXT("NoCatalog", "The catalog is not available in this level."), INVTEXT("Կատալոգը հասանելի չէ այս մակարդակում։")));
+			}
+			FText Error;
+			const TArray<AModularBaseActor*> Targets = FindTargets(Controller, Command, Error);
+			if (Targets.IsEmpty())
+			{
+				return Refused(Error);
+			}
+			UBaseItemData* Item = FindCatalogItem(*Catalog, Command.Replacement, Language, Error);
+			if (!Item)
+			{
+				return Refused(Error);
+			}
+			if (Algo::AllOf(Targets, [Item](const AModularBaseActor* Target) { return Target->GetItemData() == Item; }))
+			{
+				return Refused(FText::Format(Pick(Language, LOCTEXT("AlreadyThat", "Those are already {0}."), INVTEXT("Դրանք արդեն {0} են։")), Item->DisplayName));
+			}
+			const FStageEconomyResultInfo Allowed = Controller.CanPlaceItem(Item);
+			if (!Allowed.IsSuccess())
+			{
+				return Refused(FText::Format(Pick(Language, LOCTEXT("NotAllowed", "I can't place {0}: {1}"), INVTEXT("Չեմ կարող տեղադրել {0}՝ {1}")), Item->DisplayName, Allowed.Message));
+			}
+
+			const FText What = DescribeItems(Targets);
+			const FText Name = Item->DisplayName;
+			const FText StepName = FText::Format(LOCTEXT("ReplaceStep", "Assistant: replace {0} with {1}"), What, Name);
+			TArray<TWeakObjectPtr<AModularBaseActor>> WeakTargets(Targets);
+			TWeakObjectPtr<AModularPlayerController> WeakController = &Controller;
+			TWeakObjectPtr<UStageAICommandSubsystem> WeakAssistant = Assistant;
+			TWeakObjectPtr<UBaseItemData> WeakItem = Item;
+			const bool bStarted = Assistant->RequestItemAssets(*Item, FSimpleDelegate::CreateLambda([WeakController, WeakAssistant, WeakTargets, WeakItem, StepName, What, Name, Language]()
+			{
+				UStageAICommandSubsystem* PendingAssistant = WeakAssistant.Get();
+				AModularPlayerController* PendingController = WeakController.Get();
+				if (!PendingAssistant)
+				{
+					return;
+				}
+				TArray<AModularBaseActor*> Remaining;
+				for (const TWeakObjectPtr<AModularBaseActor>& Target : WeakTargets)
+				{
+					if (AModularBaseActor* Valid = Target.Get())
+					{
+						Remaining.Add(Valid);
+					}
+				}
+				if (!PendingController || !WeakItem.IsValid() || Remaining.IsEmpty())
+				{
+					PendingAssistant->FinishPendingAction(Refused(Pick(Language, LOCTEXT("ReplaceGone", "Nothing was replaced: the items or the player are gone."),
+						INVTEXT("Ոչինչ չփոխարինվեց. իրերը կամ խաղացողն այլևս չկան։"))));
+					return;
+				}
+				FStageEconomyResultInfo Result;
+				const TArray<FStageEconomyResultInfo> Refusals = PendingController->RunCapturingRejections([&]()
+				{
+					Result = PendingController->RequestReplaceItems(Remaining, WeakItem.Get(), StepName);
+				});
+				PendingAssistant->FinishPendingAction(Result.IsSuccess()
+					? Done(FText::Format(Pick(Language, LOCTEXT("Replaced", "Replaced {0} with {1} × {2} in the same places. Ctrl+Z brings the old ones back."),
+						INVTEXT("{0}-ը փոխարինվեց {1} × {2}-ով նույն տեղերում։ Ctrl+Z-ը կվերադարձնի նախկինները։")), What, FText::AsNumber(Remaining.Num()), Name))
+					: Refused(RefusalOf(Refusals, Result.Message)));
+			}));
+			return bStarted
+				? FStageAIActionOutcome::Make(EStageAIOutcome::Pending, FText::Format(Pick(Language, LOCTEXT("Replacing", "Replacing {0} with {1}…"), INVTEXT("Փոխարինում եմ {0}-ը {1}-ով…")),
+					What, Name))
+				: Refused(Pick(Language, LOCTEXT("ReplaceLoadNotStarted", "The new item could not be loaded."), INVTEXT("Նոր իրը հնարավոր չեղավ բեռնել։")));
+		}
+
+		template <typename TData>
+		TData* FindCatalogItemOfClass(const UStageItemSubsystem& Catalog)
+		{
+			for (UBaseItemData* Item : Catalog.GetCatalog())
+			{
+				if (TData* Typed = Cast<TData>(Item))
+				{
+					return Typed;
+				}
+			}
+			return nullptr;
+		}
+
+		/** Where a new shape of HalfDepth goes: in front of (towards -X) everything placed, or the stage centre when it is empty. */
+		FVector2D FindShapeSpot(const UWorld* World, double HalfDepth)
+		{
+			const UStageSessionSubsystem* Session = UWorld::GetSubsystem<UStageSessionSubsystem>(World);
+			TOptional<double> LowestX;
+			for (const AModularBaseActor* Placed : Session ? Session->GetPlacedItems() : TArray<AModularBaseActor*>())
+			{
+				if (IsValid(Placed))
+				{
+					FVector Origin, Extent;
+					Placed->GetActorBounds(/*bOnlyCollidingComponents*/ false, Origin, Extent);
+					LowestX = FMath::Min(LowestX.Get(TNumericLimits<double>::Max()), Origin.X - Extent.X);
+				}
+			}
+			return FVector2D(LowestX.IsSet() ? FMath::GridSnap(*LowestX - ShapeGap - HalfDepth, ShapeGrid) : 0.0, 0.0);
+		}
+
+		/** The plan for one shape and the item it uses; false with OutError when the catalog has no item for it. */
+		bool PlanShape(const UWorld* World, const UStageItemSubsystem& Catalog, const FStageAICommand& Command, FStageSketchBuildPlan& OutPlan,
+			UBaseItemData*& OutItem, FText& OutName, FText& OutError)
+		{
+			const EStageAILanguage Language = Command.Language;
+			switch (Command.Shape)
+			{
+			case EStageAIShape::RoundRiser:
+			case EStageAIShape::ArcRiser:
+			{
+				UStageDeckData* Deck = FindCatalogItemOfClass<UStageDeckData>(Catalog);
+				if (!Deck)
+				{
+					OutError = Pick(Language, LOCTEXT("NoDeckItem", "The catalog has no stage deck to build a riser from."), INVTEXT("Կատալոգում հարթակ չկա, որից ռայզեր կառուցեմ։"));
+					return false;
+				}
+				const double Radius = FMath::Clamp(Command.RadiusCm.Get(DefaultRiserRadius), 25.0, MaxRiserRadius);
+				const bool bRound = Command.Shape == EStageAIShape::RoundRiser;
+				TArray<FVector2D> Outline = bRound ? StageProceduralShapes::MakeCircle(Radius)
+					: StageProceduralShapes::MakeArcRing(FMath::Max(0.0, Radius - Command.WidthCm.Get(DefaultArcRiserWidth)), Radius,
+						FMath::Min(Command.AngleDegrees.Get(DefaultArcRiserAngle), 359.0));
+				if (Outline.Num() < 3)
+				{
+					OutError = Pick(Language, LOCTEXT("BadRiserSize", "Those riser sizes do not make a shape."), INVTEXT("Ռայզերի այդ չափերը ձև չեն կազմում։"));
+					return false;
+				}
+				const FVector2D Spot = FindShapeSpot(World, Radius);
+				FStageSketchDeckPlan& Planned = OutPlan.Decks.AddDefaulted_GetRef();
+				Planned.Transform = FTransform(FVector(Spot, 0.0));
+				Planned.Area = FMath::Abs(StageDeckMath::GetSignedArea(Outline));
+				Planned.LocalOutline = MoveTemp(Outline);
+				Planned.Height = FMath::Clamp(Command.HeightCm.Get(Deck->GetDefaultHeight()), double(Deck->GetMinHeight()), double(Deck->GetMaxHeight()));
+				Planned.Panels = StageDeckMath::GetPanelCount(Planned.Area, Deck->GetPanelArea());
+				OutPlan.DeckItem = Deck;
+				OutItem = Deck;
+				OutName = bRound ? Pick(Language, LOCTEXT("RoundRiserName", "a round riser"), INVTEXT("կլոր ռայզեր"))
+					: Pick(Language, LOCTEXT("ArcRiserName", "a curved riser"), INVTEXT("կոր ռայզեր"));
+				return true;
+			}
+			case EStageAIShape::Stairs:
+			{
+				UStageStairsData* Stairs = FindCatalogItemOfClass<UStageStairsData>(Catalog);
+				if (!Stairs)
+				{
+					OutError = Pick(Language, LOCTEXT("NoStairsItem", "The catalog has no stairs item."), INVTEXT("Կատալոգում աստիճաններ չկան։"));
+					return false;
+				}
+				FStageSketchStairsPlan& Planned = OutPlan.Stairs.AddDefaulted_GetRef();
+				Planned.Rise = FMath::Clamp(Command.HeightCm.Get(Stairs->GetDefaultRise()), double(Stairs->GetMinRise()), double(Stairs->GetMaxRise()));
+				Planned.Width = FMath::Clamp(Command.WidthCm.Get(Stairs->GetDefaultWidth()), double(Stairs->GetMinWidth()), double(Stairs->GetMaxWidth()));
+				Planned.bHandrails = Command.bHandrails;
+				const FStageStairsLayout Layout = StageProceduralShapes::LayoutStairs(Planned.Rise, Planned.Width, Stairs->TreadDepth, Stairs->MaxStepRise);
+				Planned.Transform = FTransform(FVector(FindShapeSpot(World, Layout.Run * 0.5), 0.0));
+				OutPlan.StairsItem = Stairs;
+				OutItem = Stairs;
+				OutName = Pick(Language, LOCTEXT("StairsName", "stairs"), INVTEXT("աստիճաններ"));
+				return true;
+			}
+			default:
+			{
+				UStageArcTrussData* Arc = FindCatalogItemOfClass<UStageArcTrussData>(Catalog);
+				if (!Arc)
+				{
+					OutError = Pick(Language, LOCTEXT("NoArcItem", "The catalog has no curved truss item."), INVTEXT("Կատալոգում կոր ֆերմա չկա։"));
+					return false;
+				}
+				FStageSketchArcTrussPlan& Planned = OutPlan.ArcTrusses.AddDefaulted_GetRef();
+				Planned.Radius = FMath::Clamp(Command.RadiusCm.Get(Arc->GetDefaultRadius()), double(Arc->GetMinRadius()), double(Arc->GetMaxRadius()));
+				Planned.AngleDegrees = FMath::Clamp(Command.AngleDegrees.Get(Arc->GetDefaultAngle()), double(Arc->GetMinAngle()), double(Arc->GetMaxAngle()));
+				Planned.Sections = StageProceduralShapes::LayoutArcTruss(Planned.Radius, Planned.AngleDegrees, Arc->ProfileWidth, Arc->SectionLength).Sections;
+				// The arc's centre goes on the spot; the actor's origin is its apex, Radius along +Y from the centre, on the profile's centre line.
+				const FVector2D Spot = FindShapeSpot(World, Planned.Radius + Arc->ProfileWidth);
+				const double Height = FMath::Max(0.0, Command.HeightCm.Get(DefaultArcTrussHeight));
+				Planned.Transform = FTransform(FVector(Spot.X, Spot.Y + Planned.Radius, Height + Arc->ProfileWidth * 0.5));
+				OutPlan.ArcTrussItem = Arc;
+				OutItem = Arc;
+				OutName = Planned.AngleDegrees >= 360.0
+					? Pick(Language, LOCTEXT("CircleTrussName", "a circular truss"), INVTEXT("շրջանաձև ֆերմա"))
+					: Pick(Language, LOCTEXT("ArcTrussName", "a curved truss"), INVTEXT("կոր ֆերմա"));
+				return true;
+			}
+			}
+		}
+
+		FStageAIActionOutcome BuildShape(AModularPlayerController& Controller, const FStageAICommand& Command)
+		{
+			const EStageAILanguage Language = Command.Language;
+			UWorld* World = Controller.GetWorld();
+			UStageAICommandSubsystem* Assistant = UWorld::GetSubsystem<UStageAICommandSubsystem>(World);
+			const UGameInstance* GameInstance = World ? World->GetGameInstance() : nullptr;
+			const UStageItemSubsystem* Catalog = GameInstance ? GameInstance->GetSubsystem<UStageItemSubsystem>() : nullptr;
+			if (!Assistant || !Catalog)
+			{
+				return Refused(Pick(Language, LOCTEXT("NoCatalog", "The catalog is not available in this level."), INVTEXT("Կատալոգը հասանելի չէ այս մակարդակում։")));
+			}
+			FStageSketchBuildPlan Plan;
+			UBaseItemData* Item = nullptr;
+			FText Name, Error;
+			if (!PlanShape(World, *Catalog, Command, Plan, Item, Name, Error))
+			{
+				return Refused(Error);
+			}
+			const FStageEconomyResultInfo Allowed = Controller.CanPlaceItem(Item);
+			if (!Allowed.IsSuccess())
+			{
+				return Refused(FText::Format(Pick(Language, LOCTEXT("NotAllowed", "I can't place {0}: {1}"), INVTEXT("Չեմ կարող տեղադրել {0}՝ {1}")), Item->DisplayName, Allowed.Message));
+			}
+
+			const FText StepName = FText::Format(LOCTEXT("ShapeStep", "Assistant: build {0}"), Name);
+			TWeakObjectPtr<AModularPlayerController> WeakController = &Controller;
+			TWeakObjectPtr<UStageAICommandSubsystem> WeakAssistant = Assistant;
+			const bool bStarted = Assistant->RequestItemAssets(*Item, FSimpleDelegate::CreateLambda([WeakController, WeakAssistant, Plan, StepName, Name, Language]()
+			{
+				UStageAICommandSubsystem* PendingAssistant = WeakAssistant.Get();
+				AModularPlayerController* PendingController = WeakController.Get();
+				if (!PendingAssistant)
+				{
+					return;
+				}
+				if (!PendingController)
+				{
+					PendingAssistant->FinishPendingAction(Refused(Pick(Language, LOCTEXT("ShapePlayerGone", "Nothing was built: the player who asked has left."),
+						INVTEXT("Ոչինչ չկառուցվեց. խնդրողը դուրս է եկել։"))));
+					return;
+				}
+				FStageSketchGenerateResult Result;
+				PendingController->RunCapturingRejections([&]() { Result = PendingController->RequestBuildPlan(Plan, StepName); });
+				PendingAssistant->FinishPendingAction(Result.bSucceeded
+					? Done(FText::Format(Pick(Language, LOCTEXT("ShapeBuilt", "Built {0} in front of the other items. Select it to change its size in the inspector; Ctrl+Z removes it."),
+						INVTEXT("Կառուցվեց {0}՝ մյուս իրերի առջև։ Ընտրեք այն՝ չափերը տեսուչում փոխելու համար. Ctrl+Z-ը կհեռացնի այն։")), Name))
+					: Refused(FText::Format(Pick(Language, LOCTEXT("ShapeRefused", "Nothing was built: {0}"), INVTEXT("Ոչինչ չկառուցվեց՝ {0}")), Result.Message)));
+			}));
+			return bStarted
+				? FStageAIActionOutcome::Make(EStageAIOutcome::Pending, FText::Format(Pick(Language, LOCTEXT("Building", "Building {0}…"), INVTEXT("Կառուցում եմ {0}…")), Name))
+				: Refused(Pick(Language, LOCTEXT("ShapeLoadNotStarted", "The item could not be loaded."), INVTEXT("Իրը հնարավոր չեղավ բեռնել։")));
+		}
+
 		FStageAIActionOutcome StepHistory(AModularPlayerController& Controller, bool bUndo, EStageAILanguage Language)
 		{
 			const UStageEditHistorySubsystem* History = UWorld::GetSubsystem<UStageEditHistorySubsystem>(Controller.GetWorld());
@@ -387,6 +860,10 @@ namespace StageAICommandRunner
 		case EStageAIIntent::Export:		return Export(Controller, Command);
 		case EStageAIIntent::Undo:			return StepHistory(Controller, /*bUndo*/ true, Command.Language);
 		case EStageAIIntent::Redo:			return StepHistory(Controller, /*bUndo*/ false, Command.Language);
+		case EStageAIIntent::DeleteItems:	return DeleteItems(Controller, Command);
+		case EStageAIIntent::MoveItems:		return MoveItems(Controller, Command);
+		case EStageAIIntent::ReplaceItems:	return ReplaceItems(Controller, Command);
+		case EStageAIIntent::BuildShape:	return BuildShape(Controller, Command);
 		default:
 			return Refused(Pick(Command.Language, LOCTEXT("NotAnAction", "That is not something I can change."), INVTEXT("Դա այն չէ, ինչ կարող եմ փոխել։")));
 		}

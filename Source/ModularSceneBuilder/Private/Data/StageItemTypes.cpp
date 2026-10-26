@@ -20,6 +20,7 @@ namespace StageCraftTags
 	UE_DEFINE_GAMEPLAY_TAG_COMMENT(Category_Truss_Straight,			"StageCraft.Category.Truss.Straight",		"Straight truss segments.");
 	UE_DEFINE_GAMEPLAY_TAG_COMMENT(Category_Truss_Corner,			"StageCraft.Category.Truss.Corner",			"Corners, T-pieces and boxes.");
 	UE_DEFINE_GAMEPLAY_TAG_COMMENT(Category_Truss_Tower,			"StageCraft.Category.Truss.Tower",			"Ground-support towers and sleeve blocks.");
+	UE_DEFINE_GAMEPLAY_TAG_COMMENT(Category_Truss_Curved,			"StageCraft.Category.Truss.Curved",			"Curved truss arcs and circles.");
 	UE_DEFINE_GAMEPLAY_TAG_COMMENT(Category_Rigging,				"StageCraft.Category.Rigging",				"Hoists, bridles, spansets and hanging hardware.");
 	UE_DEFINE_GAMEPLAY_TAG_COMMENT(Category_Rigging_Motor,			"StageCraft.Category.Rigging.Motor",		"Chain hoists.");
 	UE_DEFINE_GAMEPLAY_TAG_COMMENT(Category_Lighting_MovingHead,	"StageCraft.Category.Lighting.MovingHead",	"Spot, beam, wash and hybrid moving heads.");

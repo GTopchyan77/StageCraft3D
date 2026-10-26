@@ -94,6 +94,24 @@ public:
 	/** Returns true if the stored value changed. Does not save. */
 	bool SetLookInverted(bool bInverted);
 
+	/** Camera speed (UE editor units: 1 = 20 m/s flight), clamped to StageCameraNavigation::MinCameraSpeed..MaxCameraSpeed. */
+	float GetCameraSpeed() const { return CameraSpeed; }
+
+	/** Clamped; a non-finite value is refused (returns false). Returns true if the stored value changed. Does not save. */
+	bool SetCameraSpeed(float Speed);
+
+	/** Look speed follows camera speed on a square-root curve (STATE.md #15) instead of the editor's fixed rate. */
+	bool IsLookLinkedToCameraSpeed() const { return bLinkLookToCameraSpeed; }
+
+	/** Returns true if the stored value changed. Does not save. */
+	bool SetLookLinkedToCameraSpeed(bool bLinked);
+
+	/** Whether the viewport toolbar is collapsed to its expand button (UStageViewportComponent is the only writer). */
+	bool IsViewportToolbarCollapsed() const { return bViewportToolbarCollapsed; }
+
+	/** Returns true if the stored value changed. Does not save. */
+	bool SetViewportToolbarCollapsed(bool bCollapsed);
+
 private:
 	void ResetAudioToDefaults();
 	void SanitizeAudio();
@@ -133,6 +151,9 @@ private:
 	UPROPERTY(Config)
 	bool bViewportGridVisible = true;
 
+	UPROPERTY(Config)
+	bool bViewportToolbarCollapsed = false;
+
 	/** Only the commands whose keys differ from the defaults (FStageKeyBindings::ToOverrides). */
 	UPROPERTY(Config)
 	TArray<FStageKeyBindingOverride> KeyBindingOverrides;
@@ -142,6 +163,12 @@ private:
 
 	UPROPERTY(Config)
 	bool bInvertLook = false;
+
+	UPROPERTY(Config)
+	float CameraSpeed = 1.f;
+
+	UPROPERTY(Config)
+	bool bLinkLookToCameraSpeed = false;
 
 	UPROPERTY(Config)
 	int32 InputSettingsVersion = 0;

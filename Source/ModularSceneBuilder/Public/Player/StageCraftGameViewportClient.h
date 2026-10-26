@@ -4,17 +4,22 @@
 
 #include "CoreMinimal.h"
 #include "Engine/GameViewportClient.h"
+#include "Player/StageCameraNavigation.h"
 #include "Viewport/StageViewportTypes.h"
 #include "StageCraftGameViewportClient.generated.h"
 
+/** Will the press of these buttons move the camera? Bound by the local AModularPlayerController. */
+DECLARE_DELEGATE_RetVal_OneParam(bool, FStageCursorCapturePolicy, const FStageCameraButtons&);
+
 /**
- * Gives the game viewport the Unreal Editor's right-mouse capture: while the navigation button is
- * the only mouse button held, Slate hides the cursor, switches to raw high-precision mouse deltas
- * (so the view never stops at the screen edge) and puts the cursor back where it was on release.
+ * Gives the game viewport the Unreal Editor's mouse capture: while a press moves the camera, Slate hides the cursor,
+ * switches to raw high-precision mouse deltas (so the view never stops at the screen edge) and puts the cursor back where it
+ * was on release.
  *
- * The engine decides this inside its mouse-down handler (FSceneViewport::AcquireFocusAndCapture),
- * before gameplay input runs, so it has to be answered here rather than from the player controller.
- * Left-button drags (gizmo) keep a visible, moving cursor.
+ * The engine decides this inside its mouse-down handler (FSceneViewport::AcquireFocusAndCapture), right after InputKey and
+ * before gameplay input runs, so it is answered here: by CursorCapturePolicy when bound (the controller knows whether a left
+ * press grabs a gizmo handle, places an item or may drag the camera), otherwise for the right button alone. Gizmo drags and
+ * placing keep a visible, moving cursor.
  *
  * Registered as GameViewportClientClassName in DefaultEngine.ini (also used by PIE).
  */
@@ -47,7 +52,16 @@ public:
 	EStageViewMode GetStageViewMode() const { return StageViewMode; }
 
 	/** True while the navigation button is held (as seen by the viewport, before gameplay input). */
-	bool IsNavigationButtonDown() const { return bNavigationButtonDown; }
+	bool IsNavigationButtonDown() const { return Buttons.bRight; }
+
+	/** While the left button is held: where it went down, in viewport pixels (the cursor may be hidden and frozen since). */
+	bool GetLeftPressPosition(FVector2D& OutPosition) const;
+
+	/** Asked at each mouse-down whether to hide the cursor and use raw deltas; see the class comment. */
+	FStageCursorCapturePolicy CursorCapturePolicy;
+
+	/** Focus was lost with buttons held: their release will never be delivered (alt-tab mid-drag). */
+	FSimpleMulticastDelegate OnMouseButtonsLost;
 
 	/**
 	 * The cursor moved over this viewport (captured or not), in viewport pixels. Fires from Slate's mouse
@@ -62,6 +76,7 @@ private:
 
 	EStageViewMode StageViewMode = EStageViewMode::Lit;
 
-	bool bNavigationButtonDown = false;
-	bool bOtherMouseButtonDown = false;
+	/** Mouse buttons and Alt as of the last mouse-button event. */
+	FStageCameraButtons Buttons;
+	FVector2D LeftPressPosition = FVector2D::ZeroVector;
 };

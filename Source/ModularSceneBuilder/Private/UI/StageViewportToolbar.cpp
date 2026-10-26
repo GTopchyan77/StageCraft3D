@@ -10,7 +10,9 @@
 #include "Components/Image.h"
 #include "Components/SizeBox.h"
 #include "Components/TextBlock.h"
+#include "Engine/LocalPlayer.h"
 #include "Framework/MultiBox/MultiBoxBuilder.h"
+#include "Input/StageInputPreferencesSubsystem.h"
 #include "Placement/StageSnappingComponent.h"
 #include "Player/ModularPlayerController.h"
 #include "UI/StageCraftUITheme.h"
@@ -31,6 +33,8 @@
 namespace StageViewportToolbar
 {
 	constexpr float BarHeight = 22.f;
+	/** Height of the strip when collapsed: just the expand button. */
+	constexpr float CollapsedBarHeight = 14.f;
 	/** Space on each side of a section divider. */
 	constexpr float SectionGap = 8.f;
 	/** Space between a section's caption (SNAP, ANGLE) and its buttons. */
@@ -197,12 +201,26 @@ void UStageViewportToolbar::BuildTree()
 	Root->SetPadding(FMargin(6.f, 3.f));
 	WidgetTree->RootWidget = Root;
 
-	USizeBox* Height = WidgetTree->ConstructWidget<USizeBox>(USizeBox::StaticClass(), TEXT("BarHeight"));
-	Height->SetHeightOverride(BarHeight);
-	Root->SetContent(Height);
+	BarHeightBox = WidgetTree->ConstructWidget<USizeBox>(USizeBox::StaticClass(), TEXT("BarHeight"));
+	BarHeightBox->SetHeightOverride(BarHeight);
+	Root->SetContent(BarHeightBox);
+
+	UHorizontalBox* Row = WidgetTree->ConstructWidget<UHorizontalBox>(UHorizontalBox::StaticClass(), TEXT("Row"));
+	BarHeightBox->SetContent(Row);
+
+	// 0. The collapse toggle stays when everything else folds away, so the bar can always be brought back with the mouse.
+	if (UHorizontalBoxSlot* ToggleSlot = Row->AddChildToHorizontalBox(MakeSegment({ LOCTEXT("Collapse", "«") }, {}, CollapseButtons, &ThisClass::HandleCollapsePicked)))
+	{
+		ToggleSlot->SetVerticalAlignment(VAlign_Center);
+	}
 
 	UHorizontalBox* Bar = WidgetTree->ConstructWidget<UHorizontalBox>(UHorizontalBox::StaticClass(), TEXT("Bar"));
-	Height->SetContent(Bar);
+	Sections = Bar;
+	if (UHorizontalBoxSlot* SectionsSlot = Row->AddChildToHorizontalBox(Bar))
+	{
+		SectionsSlot->SetPadding(FMargin(SectionGap, 0.f, 0.f, 0.f));
+		SectionsSlot->SetVerticalAlignment(VAlign_Center);
+	}
 
 	const auto Add = [Bar](UWidget* Widget, float LeftGap)
 	{
@@ -284,6 +302,15 @@ void UStageViewportToolbar::BuildTree()
 		{ LOCTEXT("SketchTip", "Sketch to Stage: draw stage shapes, truss lines and fixtures from above and generate them in 3D."),
 		  LOCTEXT("AssistTip", "AI Assistant: ask about the stage, or ask for fixtures, cues, weather and reports in plain language.") },
 		ToolWindowButtons, &ThisClass::HandleToolWindowPicked), SectionGap);
+}
+
+void UStageViewportToolbar::HandleCollapsePicked(int32 Index)
+{
+	// A layout preference of this machine: the viewport component stores it and broadcasts OnViewChanged, which redraws here.
+	if (UStageViewportComponent* Viewport = BoundViewport.Get())
+	{
+		Viewport->SetToolbarCollapsed(!Viewport->IsToolbarCollapsed());
+	}
 }
 
 void UStageViewportToolbar::HandleToolWindowPicked(int32 Index)
@@ -389,6 +416,30 @@ void UStageViewportToolbar::Refresh()
 	StyleGroup(GridSnapButtons, Snapping ? FindPreset(StageViewMath::GetGridSnapPresets(), Snapping->GetGridSnap()) : INDEX_NONE, Snapping != nullptr);
 	StyleGroup(AngleSnapButtons, Snapping ? FindPreset(StageViewMath::GetAngleSnapPresets(), Snapping->GetAngleSnap()) : INDEX_NONE, Snapping != nullptr);
 	StyleGroup(ToolWindowButtons, INDEX_NONE, true);
+
+	// Collapsed: only the toggle remains, on a thinner strip; the sections keep their state and come back as they were.
+	const bool bCollapsed = Viewport && Viewport->IsToolbarCollapsed();
+	StyleGroup(CollapseButtons, INDEX_NONE, Viewport != nullptr);
+	if (Sections)
+	{
+		Sections->SetVisibility(bCollapsed ? ESlateVisibility::Collapsed : ESlateVisibility::SelfHitTestInvisible);
+	}
+	if (BarHeightBox)
+	{
+		BarHeightBox->SetHeightOverride(bCollapsed ? StageViewportToolbar::CollapsedBarHeight : StageViewportToolbar::BarHeight);
+	}
+	if (UStageChoiceButton* Toggle = CollapseButtons.IsEmpty() ? nullptr : CollapseButtons[0].Get())
+	{
+		if (UTextBlock* Label = Cast<UTextBlock>(Toggle->GetContent()))
+		{
+			Label->SetText(bCollapsed ? LOCTEXT("Expand", "»  VIEWPORT TOOLS") : LOCTEXT("Collapse", "«"));
+		}
+		const AModularPlayerController* Controller = GetStageController();
+		const UStageInputPreferencesSubsystem* Preferences = Controller ? ULocalPlayer::GetSubsystem<UStageInputPreferencesSubsystem>(Controller->GetLocalPlayer()) : nullptr;
+		const FText Keys = Preferences ? Preferences->DescribeCommand(EStageInputCommand::ToggleViewportToolbar) : FText::GetEmpty();
+		const FText Tip = bCollapsed ? LOCTEXT("ExpandTip", "Show the viewport toolbar.") : LOCTEXT("CollapseTip", "Hide the viewport toolbar to this button.");
+		Toggle->SetToolTipText(Keys.IsEmpty() ? Tip : FText::Format(LOCTEXT("ToggleTipKeys", "{0} ({1})"), Tip, Keys));
+	}
 
 	// SetSelectedIndex reports ESelectInfo::Direct, which the handlers ignore: only user picks are edits.
 	const auto Select = [](UStageThemedComboBox* Combo, int32 Index, bool bEnabled)

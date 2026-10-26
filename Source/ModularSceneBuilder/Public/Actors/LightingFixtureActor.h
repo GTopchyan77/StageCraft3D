@@ -66,6 +66,15 @@ public:
 	/** Called by UShowControlSubsystem's strobe clock while the fixture strobes: opens or closes the light output. */
 	void SetStrobeOpen(bool bOpen);
 
+	// --- Shadow budget (Docs/ADR/0018 §4) ---
+
+	/** Set by UShowControlSubsystem's shadow budget only; a change rebuilds the light's shadows once. */
+	void SetBeamShadowsEnabled(bool bEnabled);
+	bool AreBeamShadowsEnabled() const;
+
+	/** Luminous flux at the current dimmer, ignoring the strobe gate, so a strobing beam keeps its rank between flashes. */
+	float GetShadowRankingFlux() const;
+
 	// --- Photometrics ---
 
 	/** Approximate beam photometrics for the current attributes and position. Traces for the throw once after a move. */

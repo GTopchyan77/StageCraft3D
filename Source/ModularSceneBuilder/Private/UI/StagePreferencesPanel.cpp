@@ -157,7 +157,9 @@ void UStagePreferencesPanel::BuildTree()
 	Add(BuildSliderRow(LOCTEXT("LookSpeed", "Look speed"), LOCTEXT("LookSpeedTip", "How fast the view turns while the right mouse button is held."),
 		int32(ESlider::LookSensitivity), StageInputPreferences::MinLookSensitivity, StageInputPreferences::MaxLookSensitivity));
 	Add(BuildChoiceRow(LOCTEXT("VerticalLook", "Vertical look"), LOCTEXT("VerticalLookTip", "Inverted: moving the mouse up looks down, like a flight stick."),
-		{ LOCTEXT("LookNormal", "Normal"), LOCTEXT("LookInverted", "Inverted") }, LookInvertButtons, &ThisClass::HandleLookInvertPicked), SectionGap);
+		{ LOCTEXT("LookNormal", "Normal"), LOCTEXT("LookInverted", "Inverted") }, LookInvertButtons, &ThisClass::HandleLookInvertPicked));
+	Add(BuildChoiceRow(LOCTEXT("LookLink", "Look with speed"), LOCTEXT("LookLinkTip", "Fixed: the view turns at the same rate at any camera speed, as in the Unreal Editor.\nLinked: turning gets faster as the camera speed goes up (right button + wheel)."),
+		{ LOCTEXT("LookFixed", "Fixed"), LOCTEXT("LookLinked", "Linked") }, LookLinkButtons, &ThisClass::HandleLookLinkPicked), SectionGap);
 
 	Add(BuildSectionTitle(LOCTEXT("Viewport", "VIEWPORT")));
 	Add(BuildChoiceRow(LOCTEXT("SnapToItems", "Snap to items"), LOCTEXT("SnapToItemsTip", "While placing or moving, lock onto nearby items: side by side, stacked, or aligned."),
@@ -315,24 +317,28 @@ UWidget* UStagePreferencesPanel::BuildShortcutSection()
 
 	BindingButtons.SetNum(static_cast<int32>(EStageInputCommand::Count) * 2);
 	ResetButtons.SetNum(static_cast<int32>(EStageInputCommand::Count));
-	TOptional<EStageInputCategory> Category;
-	for (const FStageInputCommandInfo& Info : StageKeyBindings::GetCommands())
+	// By category, not enum order: commands added later (appended to keep saved maps valid) still sit under their heading.
+	for (EStageInputCategory Category : { EStageInputCategory::Editing, EStageInputCategory::Tools, EStageInputCategory::View, EStageInputCategory::Navigation })
 	{
-		if (!Category.IsSet() || Category.GetValue() != Info.Category)
+		if (Category != EStageInputCategory::Editing)
 		{
-			if (Category.IsSet())
-			{
-				Add(WidgetTree->ConstructWidget<USizeBox>(USizeBox::StaticClass()), RowGap * 2.f);
-			}
-			Category = Info.Category;
-			Add(MakeText(CategoryTitle(Info.Category), 7, TEXT("Bold"), Palette.TextDisabled), RowGap);
+			Add(WidgetTree->ConstructWidget<USizeBox>(USizeBox::StaticClass()), RowGap * 2.f);
 		}
-		Add(BuildCommandRow(Info), RowGap);
+		Add(MakeText(CategoryTitle(Category), 7, TEXT("Bold"), Palette.TextDisabled), RowGap);
+		for (const FStageInputCommandInfo& Info : StageKeyBindings::GetCommands())
+		{
+			if (Info.Category == Category)
+			{
+				Add(BuildCommandRow(Info), RowGap);
+			}
+		}
 	}
 
-	// The mouse is not remappable: the viewport's cursor capture and the gizmo are built around these buttons (ADR 0013 §2.3).
+	// The mouse is not remappable: it follows the Unreal Editor viewport exactly (ADR 0013 §2.3, ADR 0018 §2).
 	UTextBlock* Mouse = MakeText(LOCTEXT("MouseFixed",
-		"Mouse (fixed): left click selects or places   ·   Ctrl+Click adds or removes   ·   hold the right button to look and fly   ·   wheel: fly speed"),
+		"Mouse (fixed, as in the Unreal Editor): left click selects or places   ·   Ctrl+Click adds or removes   ·   left drag: move forward and turn   ·   "
+		"right drag: look (fly with the keys above)   ·   middle drag or left + right: pan   ·   Alt + left: orbit   ·   Alt + right: dolly   ·   Alt + middle: pan the orbit   ·   "
+		"wheel: move forward / back   ·   right button + wheel: camera speed"),
 		8, TEXT("Regular"), Palette.TextSecondary);
 	Mouse->SetAutoWrapText(true);
 	Add(WidgetTree->ConstructWidget<USizeBox>(USizeBox::StaticClass()), RowGap * 2.f);
@@ -533,6 +539,7 @@ void UStagePreferencesPanel::Refresh()
 	OneDecimal.SetMinimumFractionalDigits(1).SetMaximumFractionalDigits(1);
 	ShowSlider(ESlider::LookSensitivity, Look, FText::Format(LOCTEXT("Times", "{0}×"), FText::AsNumber(Look, &OneDecimal)), Preferences != nullptr);
 	StyleRow(LookInvertButtons, Preferences && Preferences->IsLookInverted() ? 1 : 0, Preferences != nullptr);
+	StyleRow(LookLinkButtons, Preferences && Preferences->IsLookLinkedToCameraSpeed() ? 1 : 0, Preferences != nullptr);
 
 	const UStageSnappingComponent* Snapping = BoundSnapping.Get();
 	StyleRow(SnapItemsButtons, Snapping && Snapping->IsSnapToItemsEnabled() ? 1 : 0, Snapping != nullptr);
@@ -590,6 +597,14 @@ void UStagePreferencesPanel::HandleLookInvertPicked(int32 Index)
 	if (UStageInputPreferencesSubsystem* Preferences = BoundPreferences.Get())
 	{
 		Preferences->SetLookInverted(Index == 1);
+	}
+}
+
+void UStagePreferencesPanel::HandleLookLinkPicked(int32 Index)
+{
+	if (UStageInputPreferencesSubsystem* Preferences = BoundPreferences.Get())
+	{
+		Preferences->SetLookLinkedToCameraSpeed(Index == 1);
 	}
 }
 

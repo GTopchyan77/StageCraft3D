@@ -5,6 +5,7 @@
 #include "InputCoreTypes.h"
 #include "ModularSceneBuilder.h"
 #include "ShowFlags.h"
+#include "UnrealClient.h"
 
 #include UE_INLINE_GENERATED_CPP_BY_NAME(StageCraftGameViewportClient)
 
@@ -80,23 +81,49 @@ bool UStageCraftGameViewportClient::InputKey(const FInputKeyEventArgs& EventArgs
 		{
 			if (EventArgs.Key == EKeys::RightMouseButton)
 			{
-				bNavigationButtonDown = bDown;
+				Buttons.bRight = bDown;
 			}
-			else if (EventArgs.Key == EKeys::LeftMouseButton || EventArgs.Key == EKeys::MiddleMouseButton)
+			else if (EventArgs.Key == EKeys::MiddleMouseButton)
 			{
-				bOtherMouseButtonDown = bDown;
+				Buttons.bMiddle = bDown;
 			}
+			else if (EventArgs.Key == EKeys::LeftMouseButton)
+			{
+				Buttons.bLeft = bDown;
+				FIntPoint Position;
+				if (bDown && EventArgs.Viewport)
+				{
+					// Before the capture this press may start: the cursor is still where the user clicked.
+					EventArgs.Viewport->GetMousePos(Position);
+					LeftPressPosition = FVector2D(Position);
+				}
+			}
+			Buttons.bAlt = EventArgs.Viewport && (EventArgs.Viewport->KeyState(EKeys::LeftAlt) || EventArgs.Viewport->KeyState(EKeys::RightAlt));
 		}
 	}
 
 	return Super::InputKey(EventArgs);
 }
 
+bool UStageCraftGameViewportClient::GetLeftPressPosition(FVector2D& OutPosition) const
+{
+	if (!Buttons.bLeft)
+	{
+		return false;
+	}
+	OutPosition = LeftPressPosition;
+	return true;
+}
+
 bool UStageCraftGameViewportClient::HideCursorDuringCapture() const
 {
-	// Queried by the viewport right after InputKey for the same mouse-down. A right press during a
-	// left drag must not hide the cursor the drag is following.
-	if (bNavigationButtonDown && !bOtherMouseButtonDown)
+	// Queried by the viewport right after InputKey for the same mouse-down.
+	if (CursorCapturePolicy.IsBound())
+	{
+		return CursorCapturePolicy.Execute(Buttons);
+	}
+	// Without a controller to ask: the right button alone, so a right press during a left drag keeps the cursor that drag follows.
+	if (Buttons.bRight && !Buttons.bLeft && !Buttons.bMiddle)
 	{
 		return true;
 	}
@@ -106,9 +133,13 @@ bool UStageCraftGameViewportClient::HideCursorDuringCapture() const
 void UStageCraftGameViewportClient::LostFocus(FViewport* InViewport)
 {
 	// Button-up events are not delivered once focus is gone (alt-tab mid-drag).
-	bNavigationButtonDown = false;
-	bOtherMouseButtonDown = false;
+	const bool bHadButtons = Buttons.AnyButton();
+	Buttons = FStageCameraButtons();
 	Super::LostFocus(InViewport);
+	if (bHadButtons)
+	{
+		OnMouseButtonsLost.Broadcast();
+	}
 }
 
 void UStageCraftGameViewportClient::MouseMove(FViewport* InViewport, int32 X, int32 Y)

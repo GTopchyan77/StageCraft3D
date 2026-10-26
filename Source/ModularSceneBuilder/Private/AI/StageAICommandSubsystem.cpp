@@ -76,6 +76,7 @@ void UStageAICommandSubsystem::SetState(EStageAIAssistantState NewState)
 	if (State == EStageAIAssistantState::Idle)
 	{
 		PendingExecutor.Unbind();
+		PromptSelection.Reset();
 	}
 	OnConversationChanged.Broadcast();
 }
@@ -90,7 +91,7 @@ FText UStageAICommandSubsystem::DescribeOffline(const FText& Reason, EStageAILan
 	return FText::Format(StageAILanguage::Pick(Language, LOCTEXT("AnsweredOffline", "answered offline: {0}"), INVTEXT("պատասխանվեց օֆլայն՝ {0}")), Reason);
 }
 
-bool UStageAICommandSubsystem::SubmitPrompt(const FString& Prompt, FStageAICommandExecutor Executor)
+bool UStageAICommandSubsystem::SubmitPrompt(const FString& Prompt, FStageAICommandExecutor Executor, TArray<FString> SelectedItemNames)
 {
 	const FString Trimmed = Prompt.TrimStartAndEnd().Left(StageAICommandParser::MaxPromptLength);
 	if (Trimmed.IsEmpty() || IsBusy())
@@ -108,6 +109,7 @@ bool UStageAICommandSubsystem::SubmitPrompt(const FString& Prompt, FStageAIComma
 
 	AddMessage(EStageAISpeaker::User, EStageAIOutcome::Info, FText::FromString(Trimmed));
 	PendingExecutor = MoveTemp(Executor);
+	PromptSelection = MoveTemp(SelectedItemNames);
 
 	FText Unavailable;
 	if (Backend && Backend->IsAvailable(Unavailable))
@@ -239,10 +241,17 @@ void UStageAICommandSubsystem::FinishPendingAction(const FStageAIActionOutcome& 
 	}
 	State = EStageAIAssistantState::Idle;
 	PendingExecutor.Unbind();
+	PromptSelection.Reset();
 	AddMessage(EStageAISpeaker::Assistant, Outcome.Outcome, Outcome.Message);
 }
 
 bool UStageAICommandSubsystem::RequestItemAssets(const UBaseItemData& Item, FSimpleDelegate OnReady)
+{
+	const UBaseItemData* const One = &Item;
+	return RequestItemAssets(MakeArrayView(&One, 1), MoveTemp(OnReady));
+}
+
+bool UStageAICommandSubsystem::RequestItemAssets(TConstArrayView<const UBaseItemData*> Items, FSimpleDelegate OnReady)
 {
 	if (State != EStageAIAssistantState::Acting || LoadHandle.IsValid() || PendingAssetsCallback.IsBound())
 	{
@@ -250,14 +259,22 @@ bool UStageAICommandSubsystem::RequestItemAssets(const UBaseItemData& Item, FSim
 	}
 	PendingAssetsCallback = MoveTemp(OnReady);
 	UAssetManager& AssetManager = UAssetManager::Get();
-	// Items outside the Asset Manager scan (or built at runtime) are already in memory or load on spawn.
-	if (!Item.RequiresAssetStreaming() || !AssetManager.GetPrimaryAssetPath(Item.GetPrimaryAssetId()).IsValid())
+	TArray<FPrimaryAssetId> AssetIds;
+	for (const UBaseItemData* Item : Items)
+	{
+		// Items outside the Asset Manager scan (or built at runtime) are already in memory or load on spawn.
+		if (Item && Item->RequiresAssetStreaming() && AssetManager.GetPrimaryAssetPath(Item->GetPrimaryAssetId()).IsValid())
+		{
+			AssetIds.AddUnique(Item->GetPrimaryAssetId());
+		}
+	}
+	if (AssetIds.IsEmpty())
 	{
 		HandleItemAssetsLoaded();
 		return true;
 	}
 	// The delegate may run inside this call when everything is loaded already, so the callback is stored first.
-	TSharedPtr<FStreamableHandle> Handle = AssetManager.LoadPrimaryAssets({ Item.GetPrimaryAssetId() }, { UBaseItemData::GameBundle },
+	TSharedPtr<FStreamableHandle> Handle = AssetManager.LoadPrimaryAssets(AssetIds, { UBaseItemData::GameBundle },
 		FStreamableDelegate::CreateUObject(this, &ThisClass::HandleItemAssetsLoaded));
 	if (PendingAssetsCallback.IsBound())
 	{
@@ -300,6 +317,7 @@ FStageAISceneView UStageAICommandSubsystem::CaptureScene() const
 {
 	FStageAISceneView Scene;
 	UWorld* World = GetWorld();
+	Scene.SelectedItemNames = PromptSelection;
 	if (const UStageSessionSubsystem* Session = UWorld::GetSubsystem<UStageSessionSubsystem>(World))
 	{
 		const FStageSessionStats& Stats = Session->GetStats();

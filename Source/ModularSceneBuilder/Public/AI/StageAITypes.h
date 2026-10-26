@@ -39,7 +39,15 @@ enum class EStageAIIntent : uint8
 	Undo,
 	Redo,
 
-	/** A stage operation the assistant deliberately does not run (clear, delete, open, save): it answers where to find it. */
+	// Targeted edits of placed items (Docs/ADR/0018 §6): the selection, or the placed items whose name matches ItemQuery.
+	DeleteItems,
+	MoveItems,
+	/** Each target becomes one Replacement item at its place. */
+	ReplaceItems,
+	/** A procedural stage shape (Shape and its sizes). */
+	BuildShape,
+
+	/** A stage operation the assistant deliberately does not run (clearing the whole stage, open, save): it answers where to find it. */
 	Unsupported,
 
 	Count,
@@ -54,19 +62,79 @@ enum class EStageAIReport : uint8
 	All,
 };
 
+/** Which placed items a targeted edit (DeleteItems, MoveItems, ReplaceItems) applies to. */
+enum class EStageAITarget : uint8
+{
+	/** The asking player's selected items. */
+	Selection,
+	/** Placed items whose catalog name contains every word of ItemQuery (at most Count of them, the latest placed first). */
+	Named,
+};
+
+/** A MoveItems direction, as seen from the camera and snapped to the nearest stage axis (Up and Down are vertical). */
+enum class EStageAIDirection : uint8
+{
+	Left,
+	Right,
+	Forward,
+	Back,
+	Up,
+	Down,
+};
+
+/** A BuildShape shape. */
+enum class EStageAIShape : uint8
+{
+	/** A round deck (Radius, Height). */
+	RoundRiser,
+	/** A curved deck ring in front of the stage (Radius to its outer edge, Width deep, Angle wide, Height). */
+	ArcRiser,
+	/** Stairs (Height = rise, Width). */
+	Stairs,
+	/** Curved truss (Radius, Angle; 360 is a circle; Height = hang height). */
+	ArcTruss,
+};
+
 /**
  * One interpreted request. Only the fields of its intent are meaningful; an unset optional means "the default" (one fixture,
- * the next free cue number, the default fade).
+ * the next free cue number, the default fade, the item's default size).
  */
 struct MODULARSCENEBUILDER_API FStageAICommand
 {
 	EStageAIIntent Intent = EStageAIIntent::Help;
 
-	/** AddFixtures: how many. */
+	/** AddFixtures: how many. DeleteItems, MoveItems, ReplaceItems with a Named target: at most how many (unset: all that match). */
 	TOptional<int32> Count;
 
-	/** AddFixtures: words naming the fixture ("moving head"). CountMatching: words naming the item. Unsupported: the operation. */
+	/**
+	 * AddFixtures: words naming the fixture ("moving head"). CountMatching and a Named target: words naming the placed item.
+	 * Unsupported: the operation.
+	 */
 	FString ItemQuery;
+
+	/** DeleteItems, MoveItems, ReplaceItems. */
+	EStageAITarget Target = EStageAITarget::Selection;
+
+	/** ReplaceItems: words naming the catalog item to put in place ("wash"). */
+	FString Replacement;
+
+	/** MoveItems. */
+	EStageAIDirection Direction = EStageAIDirection::Forward;
+
+	/** MoveItems, in cm (unset: one metre). */
+	TOptional<double> DistanceCm;
+
+	/** BuildShape. */
+	EStageAIShape Shape = EStageAIShape::RoundRiser;
+
+	/** BuildShape sizes in cm and degrees; unset takes the item's default (see EStageAIShape for which apply). */
+	TOptional<double> RadiusCm;
+	TOptional<double> WidthCm;
+	TOptional<double> HeightCm;
+	TOptional<double> AngleDegrees;
+
+	/** BuildShape Stairs. */
+	bool bHandrails = true;
 
 	/** StoreCue (unset: the next whole number after the last cue), GoToCue. */
 	TOptional<float> CueNumber;
@@ -186,6 +254,9 @@ struct FStageAISceneView
 
 	/** Placed item names (the catalog display name), one entry per placed item. */
 	TArray<FString> ItemNames;
+
+	/** The asking player's selected items (catalog display names). */
+	TArray<FString> SelectedItemNames;
 
 	/** Fixture count per fixture name, in first-seen order. */
 	TArray<TPair<FString, int32>> FixturesByName;

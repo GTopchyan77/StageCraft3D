@@ -77,6 +77,20 @@ public:
 	/** Orthographic only: grab-pans by a mouse delta in pixels (X right, Y up). Returns false in Perspective or without a viewport. */
 	bool PanOrtho(const FVector2D& MouseDelta);
 
+	/**
+	 * Orthographic only: centres Bounds in the view and zooms so they fill about 80 % of it (the editor's F in an ortho
+	 * viewport). Returns false in Perspective, for an invalid box, or without a viewport.
+	 */
+	bool FocusOrtho(const FBox& Bounds);
+
+	/** Whether the viewport toolbar is collapsed to its expand button (a per-machine preference, UStageCraftUserSettings). */
+	UFUNCTION(BlueprintPure, Category = "StageCraft|Viewport")
+	bool IsToolbarCollapsed() const;
+
+	/** Stores and saves the preference, then broadcasts OnViewChanged (the toolbar redraws from it). */
+	UFUNCTION(BlueprintCallable, Category = "StageCraft|Viewport")
+	void SetToolbarCollapsed(bool bCollapsed);
+
 	/** The grid actor, for diagnostics. Null before BeginPlay. */
 	const class AStageGridActor* GetGridActor() const { return GridActor; }
 

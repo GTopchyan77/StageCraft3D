@@ -134,13 +134,13 @@ bool FStageSpanHintTest::RunTest(const FString& Parameters)
 	TestTrue(TEXT("Refused path says so"), MakeSpanHint(Status).ToString().Contains(TEXT("not allowed")));
 	Status.bRefused = false;
 
-	// Remapped keys: the finish key moves to F; an unbound Backspace is left out.
+	// Remapped keys: the finish key moves to K (F is Focus Selection); an unbound Backspace is left out.
 	FStageKeyBindings Remapped = FStageKeyBindings::MakeDefaults();
-	Remapped.Assign(EStageInputCommand::FinishPath, EStageKeySlot::Primary, FStageKeyChord(EKeys::F));
+	Remapped.Assign(EStageInputCommand::FinishPath, EStageKeySlot::Primary, FStageKeyChord(EKeys::K));
 	Remapped.Clear(EStageInputCommand::RemovePathPoint, EStageKeySlot::Primary);
 	Status.PointCount = 3;
 	const FString RemappedPath = MakeSpanHint(Status, StageStatusBar::FHintKeys::FromBindings(Remapped)).ToString();
-	TestTrue(TEXT("Remapped: the finish key is named"), RemappedPath.Contains(TEXT("F or double-click: place")));
+	TestTrue(TEXT("Remapped: the finish key is named"), RemappedPath.Contains(TEXT("K or double-click: place")));
 	TestFalse(TEXT("Remapped: Enter is not offered"), RemappedPath.Contains(TEXT("Enter")));
 	TestFalse(TEXT("Remapped: an unbound undo-point key is left out"), RemappedPath.Contains(TEXT("undo point")));
 	return true;

@@ -32,6 +32,7 @@
 #include "InputModifiers.h"
 #include "Misc/Paths.h"
 #include "History/StageEditHistoryComponent.h"
+#include "History/StageItemSnapshot.h"
 #include "Import/StageFileDialog.h"
 #include "Import/StageMeshImportSubsystem.h"
 #include "Input/StageInputPreferencesSubsystem.h"
@@ -40,6 +41,7 @@
 #include "Placement/StagePlacementToolComponent.h"
 #include "Placement/StageSnappingComponent.h"
 #include "Placement/StageSpanToolComponent.h"
+#include "Player/StageCameraNavigationComponent.h"
 #include "Player/StageCameraPawn.h"
 #include "Player/StageCraftGameViewportClient.h"
 #include "Render/StageRenderSubsystem.h"
@@ -97,6 +99,7 @@ AModularPlayerController::AModularPlayerController()
 	SpanTool = CreateDefaultSubobject<UStageSpanToolComponent>(TEXT("SpanTool"));
 	ViewportView = CreateDefaultSubobject<UStageViewportComponent>(TEXT("ViewportView"));
 	VoiceInput = CreateDefaultSubobject<UStageVoiceInputComponent>(TEXT("VoiceInput"));
+	CameraNavigation = CreateDefaultSubobject<UStageCameraNavigationComponent>(TEXT("CameraNavigation"));
 	GizmoClass = AModularTransformGizmo::StaticClass();
 }
 
@@ -189,7 +192,7 @@ void AModularPlayerController::BeginPlay()
 
 void AModularPlayerController::EndPlay(const EEndPlayReason::Type EndPlayReason)
 {
-	bIsNavigatingCamera = false;
+	CameraNavigation->CancelAll();
 
 	UnbindPreviewRefreshSources();
 	GetWorldTimerManager().ClearAllTimersForObject(this);
@@ -280,8 +283,11 @@ void AModularPlayerController::SetupInputComponent()
 	EnhancedInput->BindAction(NavigateAction, ETriggerEvent::Started, this, &ThisClass::HandleNavigateStarted);
 	EnhancedInput->BindAction(NavigateAction, ETriggerEvent::Completed, this, &ThisClass::HandleNavigateCompleted);
 	EnhancedInput->BindAction(NavigateAction, ETriggerEvent::Canceled, this, &ThisClass::HandleNavigateCompleted);
+	EnhancedInput->BindAction(CameraPanAction, ETriggerEvent::Started, this, &ThisClass::HandleCameraPanStarted);
+	EnhancedInput->BindAction(CameraPanAction, ETriggerEvent::Completed, this, &ThisClass::HandleCameraPanCompleted);
+	EnhancedInput->BindAction(CameraPanAction, ETriggerEvent::Canceled, this, &ThisClass::HandleCameraPanCompleted);
 
-	// Always mapped. Look and move act only while NavigateAction is held; speed (wheel) acts any time.
+	// Always mapped; the navigation component decides what each means for the buttons held (ADR 0018 §2).
 	EnhancedInput->BindAction(CameraLookAction, ETriggerEvent::Triggered, this, &ThisClass::HandleCameraLook);
 	EnhancedInput->BindAction(CameraMoveAction, ETriggerEvent::Triggered, this, &ThisClass::HandleCameraMove);
 	EnhancedInput->BindAction(CameraSpeedAction, ETriggerEvent::Triggered, this, &ThisClass::HandleCameraSpeed);
@@ -323,6 +329,10 @@ void AModularPlayerController::EnsureCameraActions()
 		CameraSpeedAction = NewObject<UInputAction>(this, TEXT("IA_CameraSpeed_Default"));
 		CameraSpeedAction->ValueType = EInputActionValueType::Axis1D;
 	}
+	if (!CameraPanAction)
+	{
+		CameraPanAction = NewObject<UInputAction>(this, TEXT("IA_CameraPan_Default"));
+	}
 }
 
 void AModularPlayerController::RebuildCameraMapping()
@@ -337,6 +347,7 @@ void AModularPlayerController::RebuildCameraMapping()
 	UInputMappingContext* Context = NewObject<UInputMappingContext>(this);
 	Context->MapKey(CameraLookAction, EKeys::Mouse2D);
 	Context->MapKey(CameraSpeedAction, EKeys::MouseWheelAxis);
+	Context->MapKey(CameraPanAction, EKeys::MiddleMouseButton);
 
 	// A digital key yields (1,0,0); swizzle routes it onto Y (right) or Z (up), negate flips the direction.
 	struct FFlyAxis
@@ -391,6 +402,7 @@ UStageInputPreferencesSubsystem* AModularPlayerController::GetInputPreferences()
 void AModularPlayerController::HandleInputPreferencesChanged()
 {
 	RebuildCameraMapping();
+	ApplyCameraPreferences();
 }
 
 bool AModularPlayerController::IsModifierDown(const FViewport* Viewport, const FKey& Left, const FKey& Right) const
@@ -411,7 +423,7 @@ bool AModularPlayerController::InputKey(const FInputKeyEventArgs& Params)
 	const bool bHandled = Super::InputKey(Params);
 
 	// One command per press, never on auto-repeat. Commands are suspended while flying, so a fly key can also be a command key.
-	if (Params.Event != IE_Pressed || bIsNavigatingCamera || !StageKeyBindings::IsBindableKey(Params.Key))
+	if (Params.Event != IE_Pressed || IsNavigatingCamera() || !StageKeyBindings::IsBindableKey(Params.Key))
 	{
 		return bHandled;
 	}
@@ -471,6 +483,8 @@ void AModularPlayerController::ExecuteCommand(EStageInputCommand Command)
 	case EStageInputCommand::ViewLeft:				ViewportView->SetProjection(EStageViewProjection::Left); break;
 	case EStageInputCommand::ViewRight:				ViewportView->SetProjection(EStageViewProjection::Right); break;
 	case EStageInputCommand::ToggleGrid:			ViewportView->SetGridVisible(!ViewportView->IsGridVisible()); break;
+	case EStageInputCommand::FocusSelection:		CameraNavigation->FocusSelection(); break;
+	case EStageInputCommand::ToggleViewportToolbar:	ViewportView->SetToolbarCollapsed(!ViewportView->IsToolbarCollapsed()); break;
 	default:
 		// Navigation commands are fly-axis mappings (RebuildCameraMapping); FindCommand never returns them.
 		break;
@@ -482,6 +496,7 @@ void AModularPlayerController::HandleSelectionChanged(AActor* NewSelection, AAct
 	if (Gizmo)
 	{
 		Gizmo->AttachToTarget(NewSelection);
+		RefreshGizmoScreenScale();
 	}
 }
 
@@ -584,6 +599,18 @@ EStageSelectionClick AModularPlayerController::GetSelectionClickFromKeyboard()
 void AModularPlayerController::HandlePrimaryStarted()
 {
 	FVector2D Position;
+	// Where the button went down: a press the viewport hid the cursor for (a possible camera drag) may have moved since.
+	const UStageCraftGameViewportClient* ViewportClient = BoundViewportClient.Get();
+#if !UE_BUILD_SHIPPING
+	const bool bSimulated = SimulatedCursor.IsSet();
+#else
+	const bool bSimulated = false;
+#endif
+	if (!bSimulated && ViewportClient && ViewportClient->GetLeftPressPosition(Position))
+	{
+		HandlePrimaryPressedAt(Position, GetSelectionClickFromKeyboard());
+		return;
+	}
 	if (GetCursorViewportPosition(Position))
 	{
 		HandlePrimaryPressedAt(Position, GetSelectionClickFromKeyboard());
@@ -607,9 +634,15 @@ void AModularPlayerController::HandlePrimaryCompleted()
 
 void AModularPlayerController::HandlePrimaryPressedAt(const FVector2D& ViewportPosition, EStageSelectionClick Click)
 {
-	// The cursor is hidden and frozen while flying; a left click there has no meaningful target.
-	if (bIsNavigatingCamera)
+	// Alt + left orbits, and a left press while the right or middle button navigates joins that drag (LMB + RMB pans):
+	// neither ever places or selects, as in the Unreal Editor.
+	const bool bAlt = FSlateApplication::IsInitialized() && FSlateApplication::Get().GetModifierKeys().IsAltDown();
+	if ((bAlt && !ViewportView->IsOrthographic()) || IsNavigatingCamera())
 	{
+		if (!IsGizmoDragging())
+		{
+			CameraNavigation->BeginButton(EStageCameraButton::Left, /*bCanStartDrag*/ !ViewportView->IsOrthographic());
+		}
 		return;
 	}
 
@@ -638,7 +671,45 @@ void AModularPlayerController::HandlePrimaryPressedAt(const FVector2D& ViewportP
 		return;
 	}
 
-	SelectOrDeselectAt(ViewportPosition, Click);
+	// Ctrl+Click toggles at once; orthographic views have nothing for a left drag to do, so their clicks select at once too.
+	if (!CanLeftPressDragCamera(ViewportPosition) || Click == EStageSelectionClick::Toggle)
+	{
+		SelectOrDeselectAt(ViewportPosition, Click);
+		return;
+	}
+	// A plain press is a click until the mouse moves: selected on release, or a camera drag (and no selection) if it travels.
+	PendingClickPosition = ViewportPosition;
+	CameraNavigation->BeginButton(EStageCameraButton::Left, /*bCanStartDrag*/ true);
+}
+
+bool AModularPlayerController::CanLeftPressDragCamera(const FVector2D& ViewportPosition) const
+{
+	if (ViewportView->IsOrthographic() || PlacementTool->IsPlaceMode() || !GetCameraPawn())
+	{
+		return false;
+	}
+	if (FSlateApplication::IsInitialized())
+	{
+		const FModifierKeysState Modifiers = FSlateApplication::Get().GetModifierKeys();
+		if (Modifiers.IsControlDown() || Modifiers.IsShiftDown())
+		{
+			return false;
+		}
+	}
+	// A press on a gizmo handle is a handle drag (with a visible cursor that follows it).
+	FHitResult GizmoHit;
+	return !(Gizmo && Gizmo->GetTarget() && GetGizmoHitAt(ViewportPosition, GizmoHit));
+}
+
+bool AModularPlayerController::ShouldHideCursorForPress(const FStageCameraButtons& Buttons) const
+{
+	if (IsGizmoDragging())
+	{
+		return false; // A second button mid-drag must not hide the cursor the drag follows.
+	}
+	FVector2D Position;
+	const bool bLeftMayDrag = Buttons.bLeft && GetCursorViewportPosition(Position) && CanLeftPressDragCamera(Position);
+	return CameraNavigation->ShouldHideCursorForPress(Buttons, bLeftMayDrag);
 }
 
 void AModularPlayerController::HandlePrimaryHeldAt(const FVector2D& ViewportPosition)
@@ -657,6 +728,11 @@ void AModularPlayerController::HandlePrimaryReleased()
 	if (Gizmo)
 	{
 		Gizmo->EndDrag();
+	}
+	// A plain press that never moved the camera is a click: select what was under it (or clear the selection on empty space).
+	if (CameraNavigation->EndButton(EStageCameraButton::Left))
+	{
+		SelectOrDeselectAt(PendingClickPosition, EStageSelectionClick::Replace);
 	}
 }
 
@@ -712,6 +788,11 @@ bool AModularPlayerController::TryBeginGizmoDragAt(const FVector2D& ViewportPosi
 
 // --- Keys ---
 
+bool AModularPlayerController::IsNavigatingCamera() const
+{
+	return CameraNavigation && CameraNavigation->IsNavigating();
+}
+
 void AModularPlayerController::HandleNavigateStarted()
 {
 	// Turning the view mid-drag would drag the target along the camera path.
@@ -719,14 +800,27 @@ void AModularPlayerController::HandleNavigateStarted()
 	{
 		return;
 	}
-	bIsNavigatingCamera = true;
+	CameraNavigation->BeginButton(EStageCameraButton::Right);
 }
 
 void AModularPlayerController::HandleNavigateCompleted()
 {
 	// Releasing only stops feeding input; the pawn eases to a stop on its own. Nothing is selected,
 	// placed or deleted here, however short the press was.
-	bIsNavigatingCamera = false;
+	CameraNavigation->EndButton(EStageCameraButton::Right);
+}
+
+void AModularPlayerController::HandleCameraPanStarted()
+{
+	if (!IsGizmoDragging())
+	{
+		CameraNavigation->BeginButton(EStageCameraButton::Middle);
+	}
+}
+
+void AModularPlayerController::HandleCameraPanCompleted()
+{
+	CameraNavigation->EndButton(EStageCameraButton::Middle);
 }
 
 void AModularPlayerController::HandleGizmoDragStarted(AActor* Target)
@@ -755,7 +849,7 @@ void AModularPlayerController::HandleGizmoDragFinished(AActor* Target, const FTr
 
 void AModularPlayerController::HandleCancel()
 {
-	if (bIsNavigatingCamera)
+	if (IsNavigatingCamera())
 	{
 		return;
 	}
@@ -782,7 +876,7 @@ void AModularPlayerController::HandleCancel()
 
 void AModularPlayerController::HandleFinishPath()
 {
-	if (!bIsNavigatingCamera && SpanTool->IsToolActive() && SpanTool->FinishPath())
+	if (!IsNavigatingCamera() && SpanTool->IsToolActive() && SpanTool->FinishPath())
 	{
 		RequestPreviewRefresh();
 	}
@@ -790,7 +884,7 @@ void AModularPlayerController::HandleFinishPath()
 
 void AModularPlayerController::HandleRemovePathPoint()
 {
-	if (!bIsNavigatingCamera && SpanTool->IsToolActive() && SpanTool->RemoveLastPoint())
+	if (!IsNavigatingCamera() && SpanTool->IsToolActive() && SpanTool->RemoveLastPoint())
 	{
 		RequestPreviewRefresh();
 	}
@@ -798,7 +892,7 @@ void AModularPlayerController::HandleRemovePathPoint()
 
 void AModularPlayerController::HandleTogglePlaceMode()
 {
-	if (bIsNavigatingCamera || IsGizmoDragging())
+	if (IsNavigatingCamera() || IsGizmoDragging())
 	{
 		return;
 	}
@@ -809,60 +903,47 @@ void AModularPlayerController::HandleTogglePlaceMode()
 
 void AModularPlayerController::HandleCameraLook(const FInputActionValue& Value)
 {
-	if (bIsNavigatingCamera)
-	{
-		// An orthographic view does not turn: the right-button drag pans it instead, as in the Unreal Editor.
-		if (ViewportView->IsOrthographic())
-		{
-			ViewportView->PanOrtho(Value.Get<FVector2D>());
-		}
-		else if (AStageCameraPawn* CameraPawn = GetCameraPawn())
-		{
-			// The user's preferences scale and flip the look; they are read per event (two settings reads), never cached.
-			FVector2D Look = Value.Get<FVector2D>();
-			if (const UStageInputPreferencesSubsystem* Preferences = GetInputPreferences())
-			{
-				Look *= Preferences->GetLookSensitivity();
-				Look.Y *= Preferences->IsLookInverted() ? -1.0 : 1.0;
-			}
-			CameraPawn->AddLookInput(Look);
-		}
-	}
+	// Every mouse move arrives here; it does something only while a camera drag is held (or a left press may become one).
+	CameraNavigation->HandleMouseDelta(Value.Get<FVector2D>());
 }
 
 void AModularPlayerController::HandleCameraMove(const FInputActionValue& Value)
 {
-	if (bIsNavigatingCamera)
-	{
-		if (AStageCameraPawn* CameraPawn = GetCameraPawn())
-		{
-			CameraPawn->AddFlyInput(Value.Get<FVector>());
-		}
-	}
+	CameraNavigation->HandleFlyInput(Value.Get<FVector>());
 }
 
 void AModularPlayerController::HandleCameraSpeed(const FInputActionValue& Value)
 {
-	// Not gated on RMB: the wheel has no other job in the stage view, so speed can be dialled in
-	// before flying as well as during. Wheel input over a UMG panel never reaches here (UMG consumes it).
-	AStageCameraPawn* CameraPawn = GetCameraPawn();
-	const float Steps = Value.Get<float>();
-	if (!CameraPawn || FMath::IsNearlyZero(Steps))
-	{
-		return;
-	}
-
-	// Orthographic: the wheel zooms around the cursor (there is no depth to fly through).
+	// Wheel input over a UMG panel never reaches here (UMG consumes it).
 	float CursorX = 0.f;
 	float CursorY = 0.f;
-	if (ViewportView->IsOrthographic() && GetMousePosition(CursorX, CursorY))
+	GetMousePosition(CursorX, CursorY);
+	CameraNavigation->HandleWheel(Value.Get<float>(), FVector2D(CursorX, CursorY));
+}
+
+void AModularPlayerController::ApplyCameraPreferences()
+{
+	AStageCameraPawn* CameraPawn = GetCameraPawn();
+	const UStageInputPreferencesSubsystem* Preferences = GetInputPreferences();
+	if (CameraPawn && Preferences)
 	{
-		ViewportView->ZoomOrtho(Steps, FVector2D(CursorX, CursorY));
+		CameraPawn->SetLookLinkedToCameraSpeed(Preferences->IsLookLinkedToCameraSpeed());
+	}
+}
+
+void AModularPlayerController::RefreshGizmoScreenScale()
+{
+	if (!Gizmo || !Gizmo->GetTarget() || !PlayerCameraManager)
+	{
 		return;
 	}
-
-	// The status bar shows the new speed through AStageCameraPawn::OnFlySpeedChanged.
-	CameraPawn->AdjustFlySpeed(Steps);
+	// The pawn's location is current now; the camera manager's cache would still hold last frame's view.
+	FStageGizmoView View;
+	View.bOrthographic = ViewportView->IsOrthographic();
+	View.OrthoWidth = ViewportView->GetOrthoWidth();
+	View.FOVDegrees = PlayerCameraManager->GetFOVAngle();
+	View.Location = GetPawn() ? GetPawn()->GetActorLocation() : PlayerCameraManager->GetCameraLocation();
+	Gizmo->SetView(View);
 }
 
 void AModularPlayerController::ApplySnapSettings()
@@ -878,6 +959,7 @@ void AModularPlayerController::ApplySnapSettings()
 void AModularPlayerController::HandleViewChanged()
 {
 	RequestPreviewRefresh();
+	RefreshGizmoScreenScale();
 }
 
 void AModularPlayerController::SetControlRotation(const FRotator& NewRotation)
@@ -894,6 +976,9 @@ void AModularPlayerController::BindPreviewRefreshSources()
 	{
 		BoundViewportClient = ViewportClient;
 		CursorMovedHandle = ViewportClient->OnCursorMoved.AddUObject(this, &ThisClass::HandleCursorMoved);
+		// The viewport asks, at each mouse-down, whether that press moves the camera (hidden cursor, raw deltas).
+		ViewportClient->CursorCapturePolicy.BindUObject(this, &ThisClass::ShouldHideCursorForPress);
+		ViewportClient->OnMouseButtonsLost.AddUObject(CameraNavigation.Get(), &UStageCameraNavigationComponent::CancelAll);
 	}
 
 	OnPossessedPawnChanged.AddUniqueDynamic(this, &ThisClass::HandlePossessedPawnChanged);
@@ -905,6 +990,8 @@ void AModularPlayerController::UnbindPreviewRefreshSources()
 	if (UStageCraftGameViewportClient* ViewportClient = BoundViewportClient.Get())
 	{
 		ViewportClient->OnCursorMoved.Remove(CursorMovedHandle);
+		ViewportClient->CursorCapturePolicy.Unbind();
+		ViewportClient->OnMouseButtonsLost.RemoveAll(CameraNavigation.Get());
 	}
 	BoundViewportClient.Reset();
 	CursorMovedHandle.Reset();
@@ -932,6 +1019,15 @@ void AModularPlayerController::BindCameraPawn(APawn* NewPawn)
 		BoundCameraRoot = NewRoot;
 		CameraTransformHandle = NewRoot->TransformUpdated.AddUObject(this, &ThisClass::HandleCameraTransformUpdated);
 	}
+
+	// A new camera starts at the speed the user last flew with (saved when a drag or speed change ended).
+	AStageCameraPawn* CameraPawn = Cast<AStageCameraPawn>(NewPawn);
+	if (const UStageInputPreferencesSubsystem* Preferences = CameraPawn ? GetInputPreferences() : nullptr)
+	{
+		CameraPawn->SetCameraSpeed(Preferences->GetCameraSpeed());
+	}
+	ApplyCameraPreferences();
+	RefreshGizmoScreenScale();
 }
 
 void AModularPlayerController::HandleCursorMoved()
@@ -942,6 +1038,12 @@ void AModularPlayerController::HandleCursorMoved()
 void AModularPlayerController::HandleCameraTransformUpdated(USceneComponent* UpdatedComponent, EUpdateTransformFlags UpdateTransformFlags, ETeleportType Teleport)
 {
 	RequestPreviewRefresh();
+	RefreshGizmoScreenScale();
+	// Which beams cast shadows depends on how close they are to the camera (re-ranked at most a few times a second).
+	if (UShowControlSubsystem* ShowControl = GetWorld() ? GetWorld()->GetSubsystem<UShowControlSubsystem>() : nullptr)
+	{
+		ShowControl->MarkShadowBudgetDirty();
+	}
 }
 
 void AModularPlayerController::RequestPreviewRefresh()
@@ -1212,7 +1314,7 @@ void AModularPlayerController::EndEditTransaction()
 
 bool AModularPlayerController::IsBusyWithPointer() const
 {
-	return bIsNavigatingCamera || IsGizmoDragging();
+	return IsNavigatingCamera() || IsGizmoDragging();
 }
 
 int32 AModularPlayerController::RequestDeleteSelection()
@@ -1226,6 +1328,85 @@ int32 AModularPlayerController::RequestDeleteSelection()
 	const int32 Deleted = EditHistory->DeleteItems(Selection->GetSelectedActors());
 	RequestPreviewRefresh();
 	return Deleted;
+}
+
+int32 AModularPlayerController::RequestDeleteItems(const TArray<AModularBaseActor*>& Items)
+{
+	if (IsBusyWithPointer())
+	{
+		ReportRejection(FStageEconomyResultInfo::Fail(EStageEconomyResult::InvalidRequest, LOCTEXT("DeleteBusy", "Finish the drag or camera move first.")));
+		return 0;
+	}
+	const int32 Deleted = EditHistory->DeleteItems(TArray<AActor*>(Items));
+	RequestPreviewRefresh();
+	return Deleted;
+}
+
+FStageEconomyResultInfo AModularPlayerController::RequestMoveItems(const TArray<AModularBaseActor*>& Items, const FVector& Offset)
+{
+	const auto Refuse = [this](const FStageEconomyResultInfo& Refusal)
+	{
+		ReportRejection(Refusal);
+		return Refusal;
+	};
+	const AStageCraftGameModeBase* GameMode = GetStageGameMode();
+	UStageSessionSubsystem* Session = UWorld::GetSubsystem<UStageSessionSubsystem>(GetWorld());
+	if (!GameMode || !Session)
+	{
+		return Refuse(FStageEconomyResultInfo::Fail(EStageEconomyResult::InvalidRequest, LOCTEXT("MoveNoAuthority", "Editing needs the StageCraft game mode.")));
+	}
+	if (IsBusyWithPointer())
+	{
+		return Refuse(FStageEconomyResultInfo::Fail(EStageEconomyResult::InvalidRequest, LOCTEXT("MoveBusy", "Finish the drag or camera move first.")));
+	}
+	TArray<AModularBaseActor*> Targets;
+	for (AModularBaseActor* Item : Items)
+	{
+		if (IsValid(Item) && !Item->IsActorBeingDestroyed())
+		{
+			Targets.AddUnique(Item);
+		}
+	}
+	if (Targets.IsEmpty() || Offset.ContainsNaN() || Offset.IsNearlyZero())
+	{
+		return Refuse(FStageEconomyResultInfo::Fail(EStageEconomyResult::InvalidRequest, LOCTEXT("MoveNothing", "There is nothing to move.")));
+	}
+
+	// Every item must allow its new place before any moves, as for a group drag.
+	for (const AModularBaseActor* Item : Targets)
+	{
+		FTransform Moved = Item->GetActorTransform();
+		Moved.AddToTranslation(Offset);
+		const FStageEconomyResultInfo Verdict = GameMode->EvaluateTransformChange(this, *Item, Moved);
+		if (!Verdict.IsSuccess())
+		{
+			return Refuse(Verdict);
+		}
+	}
+
+	TArray<FStageTransformChange> Changes;
+	Changes.Reserve(Targets.Num());
+	for (AModularBaseActor* Item : Targets)
+	{
+		const FVector Before = Item->GetActorLocation();
+		Changes.Add({ Item, Item->GetActorTransform() });
+		if (!Session->ApplyParameterChange(Item, StageCraftTags::Param_Transform_Location, FStageParameterValue::MakeVector(Before + Offset)))
+		{
+			// Back where they were; nothing is recorded.
+			for (const FStageTransformChange& Change : Changes)
+			{
+				if (AActor* Moved = Change.Item.Get())
+				{
+					Session->ApplyParameterChange(Moved, StageCraftTags::Param_Transform_Location, FStageParameterValue::MakeVector(Change.Before.GetLocation()));
+				}
+			}
+			return Refuse(FStageEconomyResultInfo::Fail(EStageEconomyResult::InvalidRequest,
+				FText::Format(LOCTEXT("MoveNotAccepted", "{0} could not be moved there."), Item->GetItemData() ? Item->GetItemData()->DisplayName : FText::FromString(Item->GetName()))));
+		}
+	}
+	EditHistory->RecordTransformChanges(Changes);
+	RequestPreviewRefresh();
+	return FStageEconomyResultInfo::Ok();
 }
 
 void AModularPlayerController::RequestSelectAll()
@@ -1397,6 +1578,8 @@ FStageSketchGenerateResult AModularPlayerController::RequestBuildPlan(const FSta
 			Result.DeckCount = Outcome.DeckCount;
 			Result.TrussCount = Outcome.TrussCount;
 			Result.FixtureCount = Outcome.FixtureCount;
+			Result.StairsCount = Outcome.StairsCount;
+			Result.ArcTrussCount = Outcome.ArcTrussCount;
 			Result.Message = StageSketchGenerator::DescribePlan(Plan);
 			return Result;
 		}
@@ -1405,6 +1588,111 @@ FStageSketchGenerateResult AModularPlayerController::RequestBuildPlan(const FSta
 	Result.Message = Refusal.Message;
 	ReportRejection(FStageEconomyResultInfo::Fail(Refusal.Code, FText::Format(LOCTEXT("BuildRefused", "Nothing was placed: {0}"), Refusal.Message)));
 	return Result;
+}
+
+TArray<FString> AModularPlayerController::DescribeSelectionForAssistant() const
+{
+	TArray<FString> Names;
+	for (const AActor* Actor : Selection->GetSelectedActors())
+	{
+		const AModularBaseActor* Item = Cast<AModularBaseActor>(Actor);
+		const UBaseItemData* Data = Item ? Item->GetItemData() : nullptr;
+		if (Data)
+		{
+			Names.Add(Data->DisplayName.ToString());
+		}
+	}
+	return Names;
+}
+
+FStageEconomyResultInfo AModularPlayerController::RequestReplaceItems(const TArray<AModularBaseActor*>& Items, UBaseItemData* NewItem, const FText& StepName)
+{
+	const auto Refuse = [this](const FStageEconomyResultInfo& Refusal)
+	{
+		ReportRejection(Refusal);
+		return Refusal;
+	};
+	if (!SpawnSystem || !EditHistory)
+	{
+		return Refuse(FStageEconomyResultInfo::Fail(EStageEconomyResult::InvalidRequest, LOCTEXT("ReplaceNoSpawner", "Placing is not available in this level.")));
+	}
+	if (IsBusyWithPointer())
+	{
+		return Refuse(FStageEconomyResultInfo::Fail(EStageEconomyResult::InvalidRequest, LOCTEXT("ReplaceBusy", "Finish the drag or camera move first.")));
+	}
+	if (!NewItem || Items.IsEmpty())
+	{
+		return Refuse(FStageEconomyResultInfo::Fail(EStageEconomyResult::InvalidRequest, LOCTEXT("ReplaceNothing", "There is nothing to replace.")));
+	}
+	// The new item may be refused outright (locked, not owned): nothing is touched then.
+	const FStageEconomyResultInfo Allowed = CanPlaceItem(NewItem);
+	if (!Allowed.IsSuccess())
+	{
+		return Refuse(Allowed);
+	}
+
+	TArray<FStageItemSnapshot> Removed;
+	TArray<FTransform> Places;
+	TArray<AModularBaseActor*> Placed;
+	FStageEconomyResultInfo Refusal = FStageEconomyResultInfo::Ok();
+	for (AModularBaseActor* Item : Items)
+	{
+		if (!IsValid(Item) || Item->IsActorBeingDestroyed())
+		{
+			continue;
+		}
+		// The new item keeps the old one's place, not its scale: it has its own size.
+		const FTransform Place(Item->GetActorRotation(), Item->GetActorLocation());
+		FStageItemSnapshot Snapshot = Item->CaptureSnapshot();
+		Selection->DeselectActor(Item);
+		if (!SpawnSystem->TryDeleteActor(Item))
+		{
+			Refusal = FStageEconomyResultInfo::Fail(EStageEconomyResult::InvalidRequest,
+				FText::Format(LOCTEXT("ReplaceNotRemoved", "{0} could not be removed."), Snapshot.DisplayName));
+			break;
+		}
+		Removed.Add(MoveTemp(Snapshot));
+		Places.Add(Place);
+	}
+	// Placed after every removal, so the session's limits count the stage without the items being replaced.
+	for (int32 Index = 0; Refusal.IsSuccess() && Index < Places.Num(); ++Index)
+	{
+		const FStageEconomyResultInfo Verdict = EvaluatePlacementPreview(*NewItem, 1);
+		AModularBaseActor* Actor = Verdict.IsSuccess() ? SpawnSystem->SpawnItem(NewItem, Places[Index]) : nullptr;
+		if (!Actor)
+		{
+			Refusal = Verdict.IsSuccess()
+				? FStageEconomyResultInfo::Fail(EStageEconomyResult::SessionRuleViolation, FText::Format(LOCTEXT("ReplaceSpawnFailed", "{0} could not be placed."), NewItem->DisplayName))
+				: Verdict;
+			break;
+		}
+		Placed.Add(Actor);
+	}
+
+	if (!Refusal.IsSuccess() || Removed.IsEmpty())
+	{
+		// Back to the stage as it was: the new items go, the old ones return with their ids and state.
+		for (int32 Index = Placed.Num() - 1; Index >= 0; --Index)
+		{
+			SpawnSystem->TryDeleteActor(Placed[Index]);
+		}
+		for (const FStageItemSnapshot& Snapshot : Removed)
+		{
+			if (!SpawnSystem->RestoreItem(Snapshot))
+			{
+				UE_LOG(LogStageCraft, Error, TEXT("%s: replace rolled back but %s could not be restored."), *GetName(), *Snapshot.DisplayName.ToString());
+			}
+		}
+		UE_LOG(LogStageCraft, Log, TEXT("%s: replace with %s refused after %d of %d items: %s"), *GetName(), *GetNameSafe(NewItem), Placed.Num(), Items.Num(),
+			*Refusal.Message.ToString());
+		return Refuse(Refusal.IsSuccess()
+			? FStageEconomyResultInfo::Fail(EStageEconomyResult::InvalidRequest, LOCTEXT("ReplaceNoneValid", "None of those items can be replaced."))
+			: FStageEconomyResultInfo::Fail(Refusal.Code, FText::Format(LOCTEXT("ReplaceRefused", "Nothing was replaced: {0}"), Refusal.Message)));
+	}
+
+	EditHistory->RecordReplacement(Removed, Placed, StepName);
+	RequestPreviewRefresh();
+	return FStageEconomyResultInfo::Ok();
 }
 
 bool AModularPlayerController::RequestSetEnvironment(const FStageEnvironmentSettings& Settings, const FText& StepName)
@@ -1445,7 +1733,7 @@ bool AModularPlayerController::RequestAssistantPrompt(const FString& Prompt)
 	else if (Assistant->SubmitPrompt(Prompt, FStageAICommandExecutor::CreateWeakLambda(this, [this](const FStageAICommand& Command)
 		{
 			return StageAICommandRunner::Run(*this, Command);
-		})))
+		}), DescribeSelectionForAssistant()))
 	{
 		return true;
 	}

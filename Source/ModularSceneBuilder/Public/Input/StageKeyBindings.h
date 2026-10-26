@@ -38,6 +38,9 @@ enum class EStageInputCommand : uint8
 	FlyRight,
 	FlyUp,
 	FlyDown,
+	// Added in STATE.md #45, after the fly keys so saved key maps keep their meaning.
+	FocusSelection,
+	ToggleViewportToolbar,
 	Count UMETA(Hidden)
 };
 

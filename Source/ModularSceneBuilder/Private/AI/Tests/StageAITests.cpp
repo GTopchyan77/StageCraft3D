@@ -167,11 +167,12 @@ bool FStageAIParserTest::RunTest(const FString& Parameters)
 	TestTrue(TEXT("all"), ParseOrDefault(TEXT("export all reports")).Report == EStageAIReport::All);
 	TestTrue(TEXT("export alone"), ParseOrDefault(TEXT("export")).Report == EStageAIReport::All);
 
-	// Destructive operations are explained, not run.
+	// Clearing the whole stage is explained, not run; deleting named items is a targeted edit (StageCraft.AI.Edits).
 	const FStageAICommand Clear = ParseOrDefault(TEXT("clear the stage"));
 	TestEqual(TEXT("clear stage"), Name(Clear.Intent), Name(EStageAIIntent::Unsupported));
 	TestEqual(TEXT("... operation"), Clear.ItemQuery, FString(TEXT("delete")));
-	TestEqual(TEXT("delete all lights"), IntentOf(TEXT("delete all lights")), Name(EStageAIIntent::Unsupported));
+	TestEqual(TEXT("delete everything"), IntentOf(TEXT("delete everything")), Name(EStageAIIntent::Unsupported));
+	TestEqual(TEXT("delete all lights"), IntentOf(TEXT("delete all lights")), Name(EStageAIIntent::DeleteItems));
 	TestEqual(TEXT("open scene"), ParseOrDefault(TEXT("open my scene")).ItemQuery, FString(TEXT("open")));
 	TestEqual(TEXT("save"), ParseOrDefault(TEXT("save the show")).ItemQuery, FString(TEXT("save")));
 

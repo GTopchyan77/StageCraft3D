@@ -3,8 +3,13 @@
 #include "Subsystems/ShowControlSubsystem.h"
 
 #include "Actors/LightingFixtureActor.h"
+#include "Camera/PlayerCameraManager.h"
+#include "Engine/World.h"
+#include "GameFramework/PlayerController.h"
 #include "ModularSceneBuilder.h"
 #include "Show/StageDMXBridge.h"
+#include "Show/StageShadowBudget.h"
+#include "TimerManager.h"
 
 #include UE_INLINE_GENERATED_CPP_BY_NAME(ShowControlSubsystem)
 
@@ -35,6 +40,10 @@ bool UShowControlSubsystem::DoesSupportWorldType(const EWorldType::Type WorldTyp
 
 void UShowControlSubsystem::Deinitialize()
 {
+	if (UWorld* World = GetWorld())
+	{
+		World->GetTimerManager().ClearTimer(ShadowBudgetTimer);
+	}
 	SetDMXBridge(nullptr);
 	Fixtures.Reset();
 	Fades.Reset();
@@ -146,6 +155,7 @@ void UShowControlSubsystem::RegisterFixture(ALightingFixtureActor* Fixture)
 	Fixtures.Add(Fixture);
 	UE_LOG(LogStageCraft, Log, TEXT("Fixture %d registered (%s), patch %d.%03d."),
 		Fixture->GetFixtureId(), *Fixture->GetName(), Fixture->GetPatch().Universe, Fixture->GetPatch().Address);
+	MarkShadowBudgetDirty();
 	OnFixturesChanged.Broadcast();
 }
 
@@ -155,8 +165,67 @@ void UShowControlSubsystem::UnregisterFixture(ALightingFixtureActor* Fixture)
 	{
 		Fades.RemoveAll([Fixture](const FAttributeFade& Fade) { return Fade.Fixture == Fixture; });
 		Strobes.RemoveAll([Fixture](const FStrobeState& State) { return State.Fixture == Fixture; });
+		MarkShadowBudgetDirty(); // Its place in the budget is free for the next brightest.
 		OnFixturesChanged.Broadcast();
 	}
+}
+
+void UShowControlSubsystem::MarkShadowBudgetDirty()
+{
+	UWorld* World = GetWorld();
+	if (!World || World->GetTimerManager().IsTimerActive(ShadowBudgetTimer))
+	{
+		return; // Already armed: one re-ranking covers every change until it runs.
+	}
+	const float Interval = GetDefault<UStageShowPerformanceSettings>()->GetUpdateSeconds();
+	World->GetTimerManager().SetTimer(ShadowBudgetTimer, FTimerDelegate::CreateUObject(this, &ThisClass::UpdateShadowBudget), Interval, /*bLoop*/ false);
+}
+
+void UShowControlSubsystem::UpdateShadowBudget()
+{
+	const UStageShowPerformanceSettings* Settings = GetDefault<UStageShowPerformanceSettings>();
+	const TArray<ALightingFixtureActor*> Current = GetFixtures();
+
+	// The local viewer: shadows matter most on what the camera is close to. Without one, distance counts as equal.
+	const UWorld* World = GetWorld();
+	const APlayerController* Viewer = World ? World->GetFirstPlayerController() : nullptr;
+	const TOptional<FVector> ViewLocation = Viewer && Viewer->PlayerCameraManager
+		? TOptional<FVector>(Viewer->PlayerCameraManager->GetCameraLocation()) : TOptional<FVector>();
+
+	TArray<FStageShadowCandidate> Candidates;
+	Candidates.Reserve(Current.Num());
+	for (const ALightingFixtureActor* Fixture : Current)
+	{
+		FStageShadowCandidate& Candidate = Candidates.AddDefaulted_GetRef();
+		const double Distance = ViewLocation.IsSet() ? FVector::Dist(ViewLocation.GetValue(), Fixture->GetActorLocation()) : 100.0;
+		Candidate.Importance = StageShadowBudget::GetImportance(Fixture->GetShadowRankingFlux(), Distance);
+		Candidate.bCasting = Fixture->AreBeamShadowsEnabled();
+	}
+
+	const TArray<bool> Casting = StageShadowBudget::SelectCasters(Candidates, Settings->GetShadowBudget(), Settings->GetHysteresis());
+	int32 Switched = 0;
+	for (int32 Index = 0; Index < Current.Num(); ++Index)
+	{
+		if (Current[Index]->AreBeamShadowsEnabled() != Casting[Index])
+		{
+			Current[Index]->SetBeamShadowsEnabled(Casting[Index]);
+			++Switched;
+		}
+	}
+	if (Switched > 0)
+	{
+		UE_LOG(LogStageCraft, Verbose, TEXT("Shadow budget: %d of %d fixtures cast shadows (%d switched)."), GetShadowedFixtureCount(), Current.Num(), Switched);
+	}
+}
+
+int32 UShowControlSubsystem::GetShadowedFixtureCount() const
+{
+	int32 Count = 0;
+	for (const TWeakObjectPtr<ALightingFixtureActor>& Fixture : Fixtures)
+	{
+		Count += Fixture.IsValid() && Fixture->AreBeamShadowsEnabled() ? 1 : 0;
+	}
+	return Count;
 }
 
 TArray<ALightingFixtureActor*> UShowControlSubsystem::GetFixtures() const

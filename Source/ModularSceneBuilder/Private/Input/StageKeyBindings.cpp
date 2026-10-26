@@ -74,6 +74,10 @@ namespace StageKeyBindings
 				Make(C::FlyRight, G::Navigation, LOCTEXT("FlyRight", "Fly Right"), LOCTEXT("FlyTip", "While the right mouse button is held."), Plain(EKeys::D)),
 				Make(C::FlyUp, G::Navigation, LOCTEXT("FlyUp", "Fly Up"), LOCTEXT("FlyTip", "While the right mouse button is held."), Plain(EKeys::E)),
 				Make(C::FlyDown, G::Navigation, LOCTEXT("FlyDown", "Fly Down"), LOCTEXT("FlyTip", "While the right mouse button is held."), Plain(EKeys::Q)),
+
+				// Appended because the order must follow the enum; the Preferences panel still lists them under VIEW.
+				Make(C::FocusSelection, G::View, LOCTEXT("FocusSelection", "Focus Selection"), LOCTEXT("FocusSelectionTip", "Frame the selected items in the view, as F does in the Unreal Editor."), Plain(EKeys::F)),
+				Make(C::ToggleViewportToolbar, G::View, LOCTEXT("ToggleToolbar", "Show / Hide Viewport Toolbar"), LOCTEXT("ToggleToolbarTip", "Collapse the toolbar above the viewport to a small button, or bring it back."), CtrlShift(EKeys::T)),
 			};
 			check(Commands.Num() == Index(C::Count));
 			for (int32 Position = 0; Position < Commands.Num(); ++Position)

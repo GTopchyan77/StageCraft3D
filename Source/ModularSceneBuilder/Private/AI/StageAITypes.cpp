@@ -37,6 +37,10 @@ bool FStageAICommand::IsAction() const
 	case EStageAIIntent::Export:
 	case EStageAIIntent::Undo:
 	case EStageAIIntent::Redo:
+	case EStageAIIntent::DeleteItems:
+	case EStageAIIntent::MoveItems:
+	case EStageAIIntent::ReplaceItems:
+	case EStageAIIntent::BuildShape:
 		return true;
 	default:
 		return false;

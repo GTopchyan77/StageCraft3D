@@ -3820,7 +3820,7 @@ The design is in `Docs/ADR/0013-preferences-key-bindings-and-audit-fixes.md`.
   - **the online services:** no Anthropic or OpenAI key is available on this machine. Armenian through Claude, the photo reading by Claude and a real transcription are covered only by the request and response tests. Recording the microphone and sending it out was deliberately not done without Gevor.
 - Status: **implemented, awaiting manual verification.**
 
-**Commit:** uncommitted (working tree).
+**Commit:** 10d3104.
 
 **Known issues / follow-ups**
 - The offline Armenian lexicon is finite. Unusual wording gets "not understood"; free Armenian needs the online model. The Armenian texts were written by Claude and should be read by a native speaker.
@@ -3832,3 +3832,186 @@ The design is in `Docs/ADR/0013-preferences-key-bindings-and-audit-fixes.md`.
 - Voice: one recording at a time, no level meter; the transcript is checked in the field by default.
 - Observed while testing, not from this change: quitting within about 35 s of start waits for the runtime model import of `AG1.FBX` from the import list (ADR 0006). In Run 5 that pushed the exit past the script's timeout.
 - PDF exports still print Armenian as "?" (WinAnsi only, ADR 0011).
+
+## #45 — Unreal Editor camera controls, collapsible viewport toolbar, fixture shadow budget, stairs and curved truss, assistant delete / move / replace / build shapes (2026-10-23)
+
+**Request (Gevor, 2026-10-22, pasted phase spec, "strictly follow Rules.md").**
+1. Authentic UE5 editor mouse controls, speeds and smooth up/down movement in the viewport; no frame drops during crossfades, with many fixtures, or while editing.
+2. The viewport toolbar (Perspective, Lit, Snap, Angle, Move/Rotate/Scale, Sketch, Assist) collapses and expands.
+3. `UStageAICommandSubsystem`: targeted delete, move and replace of selected or named items (fixtures, decks, truss), in Armenian and English.
+4. The assistant builds circular risers, custom stairs and curved truss arcs from a description.
+5. `TObjectPtr`, encapsulation, no per-frame tick polling, all tests, 0 warnings, STATE.md.
+
+**Gevor's decisions (asked before design, 2026-10-22):**
+- Frame rate through a **fixture shadow budget**: the N most important fixtures cast beam shadows, default 64, set in Project Settings.
+- A **procedural curved truss** item, and a **procedural stairs** item.
+- The **wheel dollies as in UE**; RMB + wheel changes the speed. This supersedes #14.
+- **Fixed look as in UE**: 0.2°/count × the sensitivity. The #15 speed link stays as an option, off by default.
+
+Design: `Docs/ADR/0018-ue-camera-shadow-budget-shapes-and-assistant-edits.md`.
+
+**What changed and why**
+- **Camera as in the Unreal Editor 5.8 (ADR 0018 §2).** The numbers come from the engine source (`EditorViewportClient.cpp`, `CameraController.h`, `EditorViewportSettings.h`).
+  - `StageCameraNavigation` (new, pure) holds the rules:
+    - `ClassifyDrag`: LMB fly-and-turn, RMB look, MMB pan, LMB+RMB vertical pan, Alt+LMB orbit, Alt+RMB dolly, Alt+MMB orbit pan.
+    - Speed: continuous 0.01..32, ±10 % per RMB+wheel notch. Flying at speed S: 2000·S cm/s.
+    - Drags: 1 cm/count × S, 0.2°/count. Wheel dolly: 96 cm/notch.
+    - F framing: the `FocusViewportOnBox` maths, a 0.25 s cubic-out glide.
+  - `UStageCameraNavigationComponent` (new, on the controller) owns the input state:
+    - the buttons held and the active drag;
+    - a pending left click: a click until it travels 3 px, then a drag with the whole travel;
+    - the orbit pivot: F's target, else the surface under the view centre, else 10 m ahead;
+    - whether a press hides the cursor (`FStageCursorCapturePolicy` on the viewport client).
+  - `AStageCameraPawn` was rewritten:
+    - `CameraSpeed` with `OnCameraSpeedChanged` replaces FlySpeed.
+    - It has eased translation, orbit, the F glide and fixed views.
+    - **It ticks only while moving and turns its tick off at rest.**
+  - `UStageCraftGameViewportClient` tracks L / M / R and Alt, and broadcasts `OnMouseButtonsLost` on focus loss.
+  - `UStageCraftUserSettings` stores the camera speed (saved when the buttons are released) and the look link.
+  - New key-map commands:
+    - **Focus Selection (F)**. In the orthographic views it centres and fits (`UStageViewportComponent::FocusOrtho`).
+    - **Show / Hide Viewport Toolbar (Ctrl+Shift+T)**.
+  - The status bar shows "Camera speed S · flying m/s". Preferences has a Fixed / Linked "Look with speed" row and new mouse-controls text.
+- **The gizmo no longer ticks (§2.5).** `AModularTransformGizmo` gets the view through `SetView(FStageGizmoView)` on camera, view and selection changes. It follows its target through the target's transform-updated event.
+- **Collapsible toolbar (§3).** A « segment collapses `UStageViewportToolbar` to a 14 px "» VIEWPORT TOOLS" strip.
+  - The state is `UStageViewportComponent::IsToolbarCollapsed` / `SetToolbarCollapsed`, saved per user and broadcast on `OnViewChanged`.
+- **Fixture shadow budget (§4).**
+  - `StageShadowBudget::SelectCasters` (new, pure):
+    - Importance is the flux at the dimmer ÷ the distance² in metres. The Budget most important fixtures cast.
+    - Dark fixtures never cast.
+    - Current casters get 25 % hysteresis.
+    - Ties keep the registration order.
+  - `UShowControlSubsystem::MarkShadowBudgetDirty` is called on fixture registration, intensity output and camera moves.
+    - A one-shot 0.25 s timer re-ranks. It is cleared in Deinitialize.
+    - Only fixtures whose choice changed get `SetCastShadows`. Nothing runs per frame.
+  - Settings: `UStageShowPerformanceSettings`, in Project Settings › Game › StageCraft Performance (on, 64, 0.25 s, 0.25).
+- **Procedural shapes (§5).** `StageProceduralShapes` (new, pure) holds the geometry:
+  - `MakeCircle` (16..96 corners within 1 cm of the curve) and `MakeArcRing` (≤ 359°) are deck outlines.
+  - `LayoutStairs` / `BuildStairsMesh`: equal steps of at most 20 cm, optional handrails.
+  - `LayoutArcTruss` / `BuildArcTrussMesh` / `BuildArcTrussCollision`:
+    - four chords swept inside the 29 cm outside profile;
+    - rungs and zigzag diagonals per bay, and end caps;
+    - one convex hull per 2 m section.
+  - **`AStageStairsActor` + `UStageStairsData`** (new):
+    - SaveGame rise, width and handrails, sanitized with `ReportStateRepair`.
+    - Undoable shape parameters. Collision is complex as simple.
+  - **`AStageArcTrussActor` + `UStageArcTrussData`** (new):
+    - SaveGame radius and angle, sanitized.
+    - The quantity is the curved sections. `PredictQuantity` answers for radius and angle, which are quantity parameters.
+    - Collision is convex hulls, because item traces are simple-collision queries.
+  - New tags: the Stairs and ArcTruss feature groups, the Stairs.* and Arc.* parameters, and `StageCraft.Category.Truss.Curved`.
+  - The build plan carries the new shapes:
+    - `FStageSketchBuildPlan` gains `Stairs` and `ArcTrusses`.
+    - `StageSketchBuilder::Execute` spawns them all or nothing.
+    - The outcome and `FStageSketchGenerateResult` count them, and `DescribePlan` names them.
+  - Content, from `Scripts/Content/create_procedural_shapes_content.py` (headless):
+
+    | Asset | What it is |
+    |---|---|
+    | `DA_Stairs_Stage` | 20-200 cm rise, 60-400 cm wide, 35 kg |
+    | `DA_Truss_Arc_F34` | 1-20 m radius, 15-360°, 2 m sections, 13 kg per section |
+    | `M_Handrail`, `M_TrussArc` | materials |
+
+    Read back afterwards: the classes, ranges, tags and materials are as set.
+- **Assistant edits and shapes (§6).**
+  - New intents: `delete_items`, `move_items`, `replace_items`, `build_shape`.
+    - New fields: `target` (selection / named), `replacement`, `direction`, `distance_cm`, `shape`, `radius_cm`, `width_cm`, `height_cm`, `angle_degrees`, `handrails`.
+    - All are validated in `StageAICommandSchema::Validate` and in the tool JSON. Unknown enum values are refused, and an item without a target is named.
+  - New controller requests:
+    - `RequestDeleteItems`: one step, like Delete.
+    - `RequestMoveItems`: every new transform is checked by `EvaluateTransformChange` first, then written as Location edits and recorded as one step.
+    - `RequestReplaceItems`: the old items are removed first and each new one is checked and spawned. Any refusal rolls everything back. It is one step, through the new `UStageEditHistoryComponent::RecordReplacement`.
+  - Targets:
+    - The asking player's selection, optionally narrowed by name. It is passed into `SubmitPrompt` and into the model's scene summary as "Selected: …".
+    - Or the placed items whose name contains every word ("lights" means every fixture): latest first, with an optional count, at most 200.
+  - Directions are camera-relative, snapped to the stage axes. Up and down are world Z.
+  - Shapes are clamped to their item's ranges and placed in front of (−X) everything already placed. A curved truss hangs at 6 m unless the request says otherwise.
+  - `UStageAICommandSubsystem::RequestItemAssets` now streams several items.
+  - English grammar:
+    - Sizes and units: m, cm, mm, ft, °, and glued forms such as "3m".
+    - Roles: wide / high / radius / diameter / at. An unlabelled riser or circle size is the diameter.
+    - "remove / clear the fog" still clears the weather.
+    - "clear the selection" never deletes.
+    - Fixtures "in a circle" stay fixtures.
+    - Questions are not edits; polite requests are.
+  - Armenian lexicon:
+    - New words: verbs, selection, directions, shapes, sizes and units.
+    - The instrumental -ով is read as "with" (for replace).
+    - աստիճան after a number in a curved request is read as degrees.
+  - Clearing the whole stage and deleting cues are still explained, with new wording. The system prompt no longer says deleting is impossible. Help lists the new commands in both languages.
+- **Unity-build fix found on the way.**
+  - `StageReportPdfComposer.cpp` had anonymous-namespace globals (`Ink`, `MutedInk`, …).
+  - Once the new files reshuffled the unity blobs, they collided with locals in `StageSketchImageTrace.cpp` (C4459, an error here).
+  - They are now `ReportInk`, `ReportMutedInk`, `ReportHeaderFill`, `ReportStripeFill`, `ReportRuleInk`.
+- **Arc truss width fix found by the tests.** The chord centre lines first sat on the profile width, which made F34 34 cm wide. They now sit one chord radius inside.
+
+**Files**
+- New code:
+  - `Public|Private/Player/StageCameraNavigation`, `Player/StageCameraNavigationComponent`
+  - `Show/StageShadowBudget`, `Placement/StageProceduralShapes`
+  - `Actors/StageStairsActor`, `Actors/StageArcTrussActor`, `Data/StageStairsData`, `Data/StageArcTrussData`
+- New tests:
+  - `Private/Player/Tests/StageCameraNavigationTests.cpp`
+  - `Private/Show/Tests/StageShadowBudgetTests.cpp`
+  - `Private/Placement/Tests/StageShapeTests.cpp`
+  - `Private/Sketch/Tests/StageShapeWorldTests.cpp`
+  - `Private/AI/Tests/StageAIEditTests.cpp`
+- New content and docs:
+  - `Scripts/Content/create_procedural_shapes_content.py`
+  - `Content/StageCraft/Items/DA_Stairs_Stage.uasset`, `DA_Truss_Arc_F34.uasset`
+  - `Content/StageCraft/Shapes/M_Handrail.uasset`, `M_TrussArc.uasset`
+  - `Docs/ADR/0018-ue-camera-shadow-budget-shapes-and-assistant-edits.md`
+- Changed code (Public and Private unless noted):
+  - Player and input: `Player/StageCameraPawn`, `Player/ModularPlayerController`, `Player/StageCraftGameViewportClient`, `Input/StageKeyBindings`, `Input/StageInputPreferencesSubsystem`, `Settings/StageCraftUserSettings`
+  - Actors and show: `Actors/ModularTransformGizmo`, `Actors/LightingFixtureActor`, `Subsystems/ShowControlSubsystem`
+  - Viewport and UI: `Viewport/StageViewportComponent`, `UI/StageViewportToolbar`, `UI/StageStatusBarWidget`, `UI/StagePreferencesPanel`
+  - Data and history: `Data/StageParameterTypes`, `Data/StageItemTypes`, `History/StageEditHistoryComponent`
+  - Sketch: `Sketch/StageSketchTypes` (Public), `Sketch/StageSketchBuilder`, `Private/Sketch/StageSketchGenerator.cpp`
+  - AI: `AI/StageAITypes`, `AI/StageAICommandParser`, `AI/StageAICommandSubsystem`, `Private/AI/StageAICommandSchema.cpp`, `Private/AI/StageAIArmenian.cpp`, `Private/AI/StageAICommandRunner.h/.cpp`
+  - Reports: `Private/Report/StageReportPdfComposer.cpp`
+- Changed tests: `Private/AI/Tests/StageAITests.cpp`, `StageAIArmenianTests.cpp`, `Private/UI/Tests/StageUITests.cpp`
+- Changed docs: `Docs/CURRENT_SYSTEMS.md`, `tasks/todo.md`, `STATE.md`
+
+**Verification**
+- **Builds:** Editor, Game Development and Game Shipping (`-DisableAdaptiveUnity`) all **succeeded with 0 warnings**. They were built with `-NoHotReloadFromIDE` because Gevor's KMidden editor was open.
+- **Automation: 96/96 `StageCraft.*` passed** (exit code 0).
+  - 10 tests are new: Camera.Drags, Camera.Math, Show.ShadowBudget, Shapes.Outlines / Stairs / ArcTruss / World, AI.Edits.Grammar / Armenian / Schema.
+  - Existing tests were changed on purpose:
+    - "delete all lights" is now a targeted delete.
+    - The Armenian help has 32 examples.
+    - `UI.SpanHint` remaps "finish path" to K, because F is now Focus Selection.
+- **Scripted Standalone `-game` run** (`Saved/Logs/R45_Run1.log`). Gevor's workspace session and GameUserSettings were backed up and restored, and compared identical.
+  - Building shapes:
+    - "build a 4 m round riser 60 cm high" → a round deck of 7 panels.
+    - "add stairs 80 cm high" → stairs with handrails.
+    - "add a 6 m circle truss at 7 m" and "make a 180° arc truss radius 5 m" → 18 curved F34 sections in 2 runs on the bill of materials.
+    - Screenshots:
+      - `WindowsEditor/ScreenShot00041.png`: perspective, the riser and the stairs.
+      - `ScreenShot00042.png`: top view, the circular truss with its bracing.
+      - `Saved/Screenshots/Assistant_003418.png`: the conversation.
+  - "move the moving heads 2 m left" moved all 6 moving heads as one undo step.
+  - "replace 2 moving heads with washes" was refused by the shop rule (the wash is locked), as it should be.
+  - Armenian:
+    - "տեղափոխիր ֆերման 1 մ վեր" moved the two curved truss runs and the box truss up 1 m.
+    - "հեռացրու բոլոր վոշերը" answered that no wash is placed.
+    - "ջնջիր ամեն ինչ" was explained in Armenian.
+    - "undo" then undid that truss move ("Transform 3 items").
+- **Not verified:**
+  - **The frame-time gain of the shadow budget is not measured.**
+    - The first benchmark baseline was invalid: Gevor's KMidden editor opened mid-run and the GPU was at 96 %. KMidden stayed open for the rest of the session.
+    - The "zero FPS drops" goal is therefore unproven.
+    - Next step: with KMidden closed, run `Scripts/Bench/RunFixtureBench.ps1 -Counts 50,200,500` with the budget on and with it off (Project Settings), and compare with #39.
+  - By a person: the mouse feel of every drag, F, RMB+wheel speed, the toolbar collapse by mouse, the stairs and curved truss in the inspector, and the assistant edits on a mouse selection.
+  - The online model with the new tool fields: there is no key on this machine.
+- Status: **implemented, awaiting manual verification.**
+
+**Commit:** uncommitted (working tree).
+
+**Known issues / follow-ups**
+- The benchmark is pending (above).
+- "Fewer per-frame broadcasts during fades" was not done. It should follow only if the benchmark shows a CPU cost there.
+- Replacing a fixture does not carry its DMX patch to the new one.
+- Shapes are always placed in front of the stage at yaw 0. Curved risers are limited to 359°.
+- The undo step for an assistant move is named by the transform history ("Transform N items"), not "Assistant: move".
+- A circle or arc can only be placed by the assistant or from the Library (at the default size), not drawn in the Sketch window.
+- The Armenian additions were written by Claude and should be read by a native speaker.

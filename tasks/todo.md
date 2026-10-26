@@ -395,3 +395,15 @@ Decisions (Gevor, 2026-10-22): voice via OpenAI transcription (off by default, O
 - [ ] Manual verification (Gevor): Armenian typing and replies; MIC with a real microphone and key; importing a real photo of a hand drawing
 - [ ] Not verified on this machine: the online model with a real key (Armenian through Claude, photo reading by Claude), a real recording through OpenAI
 - [ ] Follow-ups: EXIF rotation of phone photos, perspective correction, re-scaling an import after the fact, Armenian in PDF exports (WinAnsi only), Armenian names in the catalog
+
+## Phase 22 — UE viewport navigation, frame-time budget, collapsible toolbar, assistant edits (delete / move / replace), procedural shapes (requested by Gevor 2026-10-22; STATE.md #45, ADR 0018)
+Decisions (Gevor, 2026-10-22): close the 500-fixture crossfade gap with a fixture shadow budget (the most important N fixtures cast shadows, set in Project Settings) plus CPU fixes, measured with the benchmark; curved truss as a procedural arc truss item (real curve, chords and bracing generated); stairs as a procedural stairs item.
+- [x] Toolbar: collapse / expand toggle on the viewport toolbar, remembered in the user settings
+- [x] Camera: Unreal Editor mouse controls (LMB drag fly/yaw, LMB+RMB pan/up-down, MMB pan, Alt+LMB orbit, Alt+RMB dolly, Alt+MMB pan, wheel dolly, RMB+wheel speed, F focus; one continuous camera speed as in UE 5.8, not the old 1-8 levels), Q/E down/up; pawn ticks only while moving; gizmo no longer ticks
+- [x] Performance: fixture shadow budget (Project Settings › StageCraft Performance, default 64), event-driven re-ranking
+- [ ] Performance: benchmark 50/200/500 before and after (needs the KMidden editor closed; the first baseline was invalid)
+- [ ] Performance: fewer per-frame broadcasts during fades (not done in #45; only after the benchmark shows it matters)
+- [x] Procedural: circular / arc risers (deck outline), `AStageStairsActor` + `UStageStairsData`, `AStageArcTrussActor` + `UStageArcTrussData`; content assets (`DA_Stairs_Stage`, `DA_Truss_Arc_F34`); tests
+- [x] Assistant: delete / move / replace of selected or named items (fixtures, decks, truss), build shapes (round riser, stairs, truss arc) in English and Armenian, offline and through Claude (tool fields; online path untested live); undoable; tests
+- [x] Builds: Editor, Game Development, Game Shipping (0 warnings); all automation (96/96); scripted run R45_Run1
+- [ ] Manual verification (Gevor): mouse feel of every drag, F, toolbar collapse, stairs / curved truss in the inspector, the assistant edits by mouse selection

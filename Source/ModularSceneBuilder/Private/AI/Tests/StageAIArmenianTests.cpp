@@ -213,7 +213,7 @@ bool FStageAIArmenianTest::RunTest(const FString& Parameters)
 				++Examples;
 			}
 		}
-		TestEqual(TEXT("Help examples counted"), Examples, 23);
+		TestEqual(TEXT("Help examples counted"), Examples, 32);
 	}
 
 	// --- Replies follow the prompt ---
@@ -239,7 +239,7 @@ bool FStageAIArmenianTest::RunTest(const FString& Parameters)
 	}
 	TestTrue(TEXT("Not understood: Armenian"), StageAIAnswers::DescribeNotUnderstood(TEXT("կապույտ փղեր")).ToString().Contains(TEXT("չհասկացա")));
 	TestTrue(TEXT("Not understood: English"), StageAIAnswers::DescribeNotUnderstood(TEXT("blue elephants")).ToString().StartsWith(TEXT("Sorry")));
-	TestTrue(TEXT("Unsupported: Armenian"), StageAIAnswers::DescribeUnsupported(TEXT("delete"), EStageAILanguage::Armenian).ToString().Contains(TEXT("Delete")));
+	TestTrue(TEXT("Unsupported: Armenian"), StageAIAnswers::DescribeUnsupported(TEXT("delete"), EStageAILanguage::Armenian).ToString().Contains(TEXT("Clear Stage")));
 	TestEqual(TEXT("Weather name: Armenian"), StageAIAnswers::DescribeWeather(EStageWeatherPreset::Rain, EStageAILanguage::Armenian).ToString(), FString(TEXT("անձրև")));
 
 	// --- reply_language at the online trust boundary ---

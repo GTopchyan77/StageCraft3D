@@ -55,7 +55,7 @@ namespace StageStatusBar
  *
  * A view only. It is owned by the local AModularPlayerController (CreateWidget) and binds, in NativeConstruct, to the
  * placement tool, the controller's OnRequestRejected, the economy's OnPurchaseCompleted and the camera pawn's
- * OnFlySpeedChanged, the edit history's OnHistoryChanged, the selection's OnSelectionSetChanged, the scene component's
+ * OnCameraSpeedChanged, the edit history's OnHistoryChanged, the selection's OnSelectionSetChanged, the scene component's
  * OnSceneOperationFinished, the render subsystem's state and results, and the input preferences (the hint names the user's
  * keys); everything is unbound in NativeDestruct. No tick: the message
  * clears on a one-shot timer.
@@ -111,7 +111,7 @@ private:
 	void HandlePossessedPawnChanged(class APawn* PreviousPawn, class APawn* NewPawn);
 
 	UFUNCTION()
-	void HandleFlySpeedChanged(float NewFlySpeed);
+	void HandleCameraSpeedChanged(float NewCameraSpeed);
 
 	UFUNCTION()
 	void HandleHistoryChanged(EStageHistoryChange Change, const FText& Description);

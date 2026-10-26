@@ -91,6 +91,8 @@ namespace StageCraftTags
 	UE_DEFINE_GAMEPLAY_TAG_COMMENT(FeatureGroup_Rigging,		"StageCraft.FeatureGroup.Rigging",		"Truss and hoist specs.");
 	UE_DEFINE_GAMEPLAY_TAG_COMMENT(FeatureGroup_Span,			"StageCraft.FeatureGroup.Span",			"Length and segments of a linear run (truss, railing, cable).");
 	UE_DEFINE_GAMEPLAY_TAG_COMMENT(FeatureGroup_Deck,			"StageCraft.FeatureGroup.Deck",			"Height and footprint of a stage deck or riser.");
+	UE_DEFINE_GAMEPLAY_TAG_COMMENT(FeatureGroup_Stairs,		"StageCraft.FeatureGroup.Stairs",		"Rise, width, steps and handrails of stage stairs.");
+	UE_DEFINE_GAMEPLAY_TAG_COMMENT(FeatureGroup_ArcTruss,		"StageCraft.FeatureGroup.ArcTruss",		"Radius, angle and sections of a curved truss.");
 	UE_DEFINE_GAMEPLAY_TAG_COMMENT(FeatureGroup_Shapers,		"StageCraft.FeatureGroup.Shapers",		"Framing shutters (blades) of a profile fixture.");
 	UE_DEFINE_GAMEPLAY_TAG_COMMENT(FeatureGroup_Photometrics,	"StageCraft.FeatureGroup.Photometrics",	"Beam intensity, throw and illuminance (read-only).");
 
@@ -130,6 +132,15 @@ namespace StageCraftTags
 	UE_DEFINE_GAMEPLAY_TAG_COMMENT(Param_Deck_Area,			"StageCraft.Param.Deck.Area",			"Deck top area in square metres (read-only).");
 	UE_DEFINE_GAMEPLAY_TAG_COMMENT(Param_Deck_Panels,			"StageCraft.Param.Deck.Panels",			"Rental deck panels needed to cover the footprint (read-only).");
 	UE_DEFINE_GAMEPLAY_TAG_COMMENT(Param_Deck_Corners,			"StageCraft.Param.Deck.Corners",		"Corners of the deck outline (read-only).");
+	UE_DEFINE_GAMEPLAY_TAG_COMMENT(Param_Stairs_Rise,			"StageCraft.Param.Stairs.Rise",			"Height the stairs climb, in cm (the deck they lead to).");
+	UE_DEFINE_GAMEPLAY_TAG_COMMENT(Param_Stairs_Width,			"StageCraft.Param.Stairs.Width",		"Stair width in cm.");
+	UE_DEFINE_GAMEPLAY_TAG_COMMENT(Param_Stairs_Handrails,		"StageCraft.Param.Stairs.Handrails",	"Handrails on both sides.");
+	UE_DEFINE_GAMEPLAY_TAG_COMMENT(Param_Stairs_Steps,			"StageCraft.Param.Stairs.Steps",		"Number of steps (read-only, from the rise).");
+	UE_DEFINE_GAMEPLAY_TAG_COMMENT(Param_Stairs_StepRise,		"StageCraft.Param.Stairs.StepRise",		"Rise of one step in cm (read-only).");
+	UE_DEFINE_GAMEPLAY_TAG_COMMENT(Param_Arc_Radius,			"StageCraft.Param.Arc.Radius",			"Radius of a curved truss to its centre line, in cm.");
+	UE_DEFINE_GAMEPLAY_TAG_COMMENT(Param_Arc_Angle,				"StageCraft.Param.Arc.Angle",			"Angle a curved truss spans, in degrees (360 = a full circle).");
+	UE_DEFINE_GAMEPLAY_TAG_COMMENT(Param_Arc_Length,			"StageCraft.Param.Arc.Length",			"Length along the curve in cm (read-only).");
+	UE_DEFINE_GAMEPLAY_TAG_COMMENT(Param_Arc_Sections,			"StageCraft.Param.Arc.Sections",		"Rental curved sections in the arc (read-only).");
 	UE_DEFINE_GAMEPLAY_TAG_COMMENT(Param_Photo_BeamAngle,		"StageCraft.Param.Photo.BeamAngle",		"Effective full beam angle after zoom and iris, in degrees (read-only).");
 	UE_DEFINE_GAMEPLAY_TAG_COMMENT(Param_Photo_Intensity,		"StageCraft.Param.Photo.Intensity",		"Approximate peak intensity in candela (read-only).");
 	UE_DEFINE_GAMEPLAY_TAG_COMMENT(Param_Photo_Throw,			"StageCraft.Param.Photo.Throw",			"Distance to the first surface along the beam, as text in metres, or \"No surface\" (read-only).");
@@ -167,12 +178,14 @@ namespace StageCraftTags
 
 	bool IsQuantityParameter(const FGameplayTag& ParameterId)
 	{
-		return ParameterId == Param_Span_Length;
+		// An arc's radius and angle change how many curved sections it takes.
+		return ParameterId == Param_Span_Length || ParameterId == Param_Arc_Radius || ParameterId == Param_Arc_Angle;
 	}
 
 	bool IsShapeParameter(const FGameplayTag& ParameterId)
 	{
-		return IsQuantityParameter(ParameterId) || ParameterId == Param_Span_Sag || ParameterId == Param_Deck_Height;
+		return IsQuantityParameter(ParameterId) || ParameterId == Param_Span_Sag || ParameterId == Param_Deck_Height
+			|| ParameterId == Param_Stairs_Rise || ParameterId == Param_Stairs_Width || ParameterId == Param_Stairs_Handrails;
 	}
 
 	bool IsPhotometricParameter(const FGameplayTag& ParameterId)

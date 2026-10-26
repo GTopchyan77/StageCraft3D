@@ -487,6 +487,11 @@ void ALightingFixtureActor::ApplyOutputs(EFixtureOutputs Outputs)
 	{
 		// The strobe clock closes the output between flashes; the dimmer level is kept for the next flash.
 		BeamLight->SetIntensity(bStrobeOpen ? Fixture->LuminousFlux * GetAttribute(StageCraftTags::Attribute_Dimmer) : 0.f);
+		// A brighter or darker beam may deserve (or lose) a place among the shadowed fixtures; this only arms a re-ranking.
+		if (UShowControlSubsystem* ShowControl = HasActorBegunPlay() ? GetShowControl() : nullptr)
+		{
+			ShowControl->MarkShadowBudgetDirty();
+		}
 	}
 
 	if (EnumHasAnyFlags(Outputs, EFixtureOutputs::Cone))
@@ -607,6 +612,25 @@ void ALightingFixtureActor::SetStrobeOpen(bool bOpen)
 	// Only the output changes; nothing the inspector shows, so no parameter notification.
 	const ULightingFixtureData* Fixture = GetFixtureData();
 	BeamLight->SetIntensity(bStrobeOpen && Fixture ? Fixture->LuminousFlux * GetAttribute(StageCraftTags::Attribute_Dimmer) : 0.f);
+}
+
+void ALightingFixtureActor::SetBeamShadowsEnabled(bool bEnabled)
+{
+	if (BeamLight && BeamLight->CastShadows != bEnabled)
+	{
+		BeamLight->SetCastShadows(bEnabled);
+	}
+}
+
+bool ALightingFixtureActor::AreBeamShadowsEnabled() const
+{
+	return BeamLight && BeamLight->CastShadows;
+}
+
+float ALightingFixtureActor::GetShadowRankingFlux() const
+{
+	const ULightingFixtureData* Fixture = GetFixtureData();
+	return Fixture ? Fixture->LuminousFlux * GetAttribute(StageCraftTags::Attribute_Dimmer) : 0.f;
 }
 
 void ALightingFixtureActor::UpdateStrobeRegistration()

@@ -253,6 +253,26 @@ void UStageEditHistoryComponent::RecordPlacements(TConstArrayView<AModularBaseAc
 	RecordAsOneStep(MoveTemp(Commands), Description);
 }
 
+void UStageEditHistoryComponent::RecordReplacement(TConstArrayView<FStageItemSnapshot> Removed, TConstArrayView<AModularBaseActor*> Placed, const FText& Description)
+{
+	EndTransaction();
+	TArray<TSharedRef<IStageEditCommand>> Commands;
+	Commands.Reserve(Removed.Num() + Placed.Num());
+	// In the order they were applied: removals first, so undo places the old items back only after the new ones are gone.
+	for (const FStageItemSnapshot& Snapshot : Removed)
+	{
+		Commands.Add(MakeShared<FStageDeleteItemCommand>(Snapshot));
+	}
+	for (const AModularBaseActor* Item : Placed)
+	{
+		if (IsValid(Item))
+		{
+			Commands.Add(MakeShared<FStagePlaceItemCommand>(Item->CaptureSnapshot()));
+		}
+	}
+	RecordAsOneStep(MoveTemp(Commands), Description);
+}
+
 void UStageEditHistoryComponent::RecordAsOneStep(TArray<TSharedRef<IStageEditCommand>> Commands, const FText& BatchDescription) const
 {
 	if (Commands.Num() == 1)

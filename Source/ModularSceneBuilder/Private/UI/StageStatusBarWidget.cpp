@@ -417,13 +417,13 @@ void UStageStatusBarWidget::BindCameraPawn(APawn* Pawn)
 {
 	if (AStageCameraPawn* Previous = CameraPawn.Get())
 	{
-		Previous->OnFlySpeedChanged.RemoveDynamic(this, &ThisClass::HandleFlySpeedChanged);
+		Previous->OnCameraSpeedChanged.RemoveDynamic(this, &ThisClass::HandleCameraSpeedChanged);
 	}
 	AStageCameraPawn* NewCamera = Cast<AStageCameraPawn>(Pawn);
 	CameraPawn = NewCamera;
 	if (NewCamera)
 	{
-		NewCamera->OnFlySpeedChanged.AddUniqueDynamic(this, &ThisClass::HandleFlySpeedChanged);
+		NewCamera->OnCameraSpeedChanged.AddUniqueDynamic(this, &ThisClass::HandleCameraSpeedChanged);
 	}
 }
 
@@ -601,14 +601,17 @@ void UStageStatusBarWidget::HandleRenderFinished(const FStageRenderResult& Resul
 		Result.bSucceeded ? EMessageSeverity::Info : EMessageSeverity::Warning);
 }
 
-void UStageStatusBarWidget::HandleFlySpeedChanged(float NewFlySpeed)
+void UStageStatusBarWidget::HandleCameraSpeedChanged(float NewCameraSpeed)
 {
 	const AStageCameraPawn* Camera = CameraPawn.Get();
 	FNumberFormattingOptions TwoDecimals;
 	TwoDecimals.SetMinimumFractionalDigits(2).SetMaximumFractionalDigits(2);
-	ShowMessage(FText::Format(LOCTEXT("FlySpeed", "Camera speed {0} m/s   ·   look x{1}"),
-		FText::AsNumber(NewFlySpeed / 100.f, &TwoDecimals),
-		FText::AsNumber(Camera ? Camera->GetLookSpeedScale() : 1.f, &TwoDecimals)), EMessageSeverity::Info);
+	FNumberFormattingOptions OneDecimal;
+	OneDecimal.SetMinimumFractionalDigits(1).SetMaximumFractionalDigits(1);
+	// The editor's own number first (as on its camera speed slider), then what it means for flight.
+	ShowMessage(FText::Format(LOCTEXT("CameraSpeed", "Camera speed {0}   ·   flying {1} m/s"),
+		FText::AsNumber(NewCameraSpeed, &TwoDecimals),
+		FText::AsNumber(Camera ? Camera->GetFlySpeed() / 100.f : NewCameraSpeed * 20.f, &OneDecimal)), EMessageSeverity::Info);
 }
 
 #undef LOCTEXT_NAMESPACE

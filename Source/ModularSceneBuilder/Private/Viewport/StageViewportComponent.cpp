@@ -341,6 +341,34 @@ bool UStageViewportComponent::PanOrtho(const FVector2D& MouseDelta)
 	return true;
 }
 
+bool UStageViewportComponent::FocusOrtho(const FBox& Bounds)
+{
+	AStageCameraPawn* Pawn = GetCameraPawn();
+	FVector2D Size;
+	if (!IsOrthographic() || !Pawn || !Bounds.IsValid || Bounds.ContainsNaN() || !GetViewportSize(Size) || Size.X <= 0.0 || Size.Y <= 0.0)
+	{
+		return false;
+	}
+	const FRotationMatrix Axes(StageViewMath::GetProjectionRotation(Projection));
+	const FVector Right = Axes.GetUnitAxis(EAxis::Y);
+	const FVector Up = Axes.GetUnitAxis(EAxis::Z);
+	const FVector ToCenter = Bounds.GetCenter() - Pawn->GetActorLocation();
+
+	// The box's size as seen in this view: the projection of its extent onto the screen axes.
+	const FVector Extent = Bounds.GetExtent();
+	const double HalfRight = FMath::Abs(Right.X) * Extent.X + FMath::Abs(Right.Y) * Extent.Y + FMath::Abs(Right.Z) * Extent.Z;
+	const double HalfUp = FMath::Abs(Up.X) * Extent.X + FMath::Abs(Up.Y) * Extent.Y + FMath::Abs(Up.Z) * Extent.Z;
+	// OrthoWidth spans the screen width; the height shows Width / Aspect.
+	const double Aspect = Size.X / Size.Y;
+	constexpr double FillFraction = 0.8;
+	OrthoWidth = StageViewMath::ClampOrthoWidth(FMath::Max(2.0 * HalfRight, 2.0 * HalfUp * Aspect) / FillFraction);
+
+	ShiftOrthoView(FVector2D(FVector::DotProduct(ToCenter, Right), FVector::DotProduct(ToCenter, Up)));
+	ApplyCameraProjection();
+	OnViewChanged.Broadcast();
+	return true;
+}
+
 void UStageViewportComponent::ShiftOrthoView(const FVector2D& Shift)
 {
 	AStageCameraPawn* Pawn = GetCameraPawn();
@@ -448,6 +476,28 @@ void UStageViewportComponent::SetGridVisible(bool bVisible)
 	{
 		Settings->SaveSettings();
 		RefreshGrid();
+		OnViewChanged.Broadcast();
+	}
+}
+
+bool UStageViewportComponent::IsToolbarCollapsed() const
+{
+	const UStageCraftUserSettings* Settings = UStageCraftUserSettings::Get();
+	return Settings && Settings->IsViewportToolbarCollapsed();
+}
+
+void UStageViewportComponent::SetToolbarCollapsed(bool bCollapsed)
+{
+	UStageCraftUserSettings* Settings = UStageCraftUserSettings::Get();
+	if (!Settings)
+	{
+		UE_LOG(LogStageCraft, Warning, TEXT("%s: GameUserSettingsClassName is not StageCraftUserSettings; the toolbar preference cannot be stored."), *GetNameSafe(GetOwner()));
+		return;
+	}
+	if (Settings->SetViewportToolbarCollapsed(bCollapsed))
+	{
+		Settings->SaveSettings();
+		UE_LOG(LogStageCraft, Log, TEXT("Viewport toolbar %s."), bCollapsed ? TEXT("collapsed") : TEXT("expanded"));
 		OnViewChanged.Broadcast();
 	}
 }

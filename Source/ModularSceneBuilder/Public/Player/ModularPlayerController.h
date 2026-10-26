@@ -41,18 +41,22 @@ enum class EStageSelectionClick : uint8
  * A gizmo drag or numeric transform edit is checked by the GameMode for every item it moves (the target and the rest of the
  * selection), so a locked item, or a span being scaled, refuses the whole edit instead of being left behind.
  *
- * Mouse buttons have exclusive jobs, as in the Unreal Editor viewport:
+ * Mouse buttons follow the Unreal Editor viewport (Docs/ADR/0018 §2); this class decides who a press belongs to, and
+ * UStageCameraNavigationComponent moves the camera:
+ *  - Alt + any button: orbit (left), dolly (right), pan with the pivot (middle). Never places or selects.
  *  - Left, Place mode: places exactly one armed item where the ghost shows it; Place mode stays active for the next copy.
  *    Holding the button never places more.
- *  - Left, Select mode: gizmo handle (drag) > placed item (select; it never follows the mouse) > empty
- *    (deselect). Ctrl+Click adds an item to the selection or removes it, and never deselects on empty space.
+ *  - Left, Select mode: gizmo handle (drag) > Ctrl+Click (adds or removes an item, never deselects on empty space) >
+ *    a plain press, which is a click until the mouse moves: released in place it selects the item under it (or deselects
+ *    on empty space); dragged in perspective it moves the camera forward/back and turns it, and selects nothing.
  *    A gizmo drag or numeric transform edit of one selected item moves the whole selection with it
- *    (UStageGroupTransformComponent). Ignored entirely while the right button is held.
- *  - Right: navigation only. While held: mouse = look, W/S = forward/back along the view, A/D =
- *    strafe, E/Q = straight up/down world Z. It never selects, places or deletes, and is ignored
- *    while a left-button drag is in progress. Cursor hide/capture/restore is done by
- *    UStageCraftGameViewportClient, so this class never changes the input mode mid-press.
- *  - Wheel: fly speed, with or without the right button held. It scales every fly axis alike.
+ *    (UStageGroupTransformComponent).
+ *  - Right: look, with the fly keys (W/S along the view, A/D strafe, E/Q straight up/down world Z). With the left button:
+ *    pan sideways and up/down. Never selects, places or deletes.
+ *  - Middle: pan. Wheel: dolly forward/back; with the right button held, camera speed. Orthographic views pan with the right
+ *    or middle button and zoom with the wheel.
+ *  Cursor hide/capture/restore is decided by UStageCraftGameViewportClient through ShouldHideCursorForPress, so this class
+ *  never changes the input mode mid-press.
  *
  * Keys are the user's key map (UStageInputPreferencesSubsystem, Docs/ADR/0013-preferences-key-bindings-and-audit-fixes.md §2.3).
  * InputKey looks up each key press (exact chord: key plus Ctrl/Shift/Alt) and runs that command: undo, redo, delete, select
@@ -117,9 +121,12 @@ public:
 	UFUNCTION(BlueprintPure, Category = "StageCraft|UI")
 	class UUserWidget* GetHUDWidget() const { return HUDWidget; }
 
-	/** True while the right mouse button is held and the camera is in fly navigation. */
+	/** The Unreal Editor's viewport navigation for the camera pawn (Docs/ADR/0018 §2). */
+	class UStageCameraNavigationComponent* GetCameraNavigation() const { return CameraNavigation; }
+
+	/** True while a mouse drag moves the camera (or the right button is held); keyboard commands wait meanwhile. */
 	UFUNCTION(BlueprintPure, Category = "StageCraft|Camera")
-	bool IsNavigatingCamera() const { return bIsNavigatingCamera; }
+	bool IsNavigatingCamera() const;
 
 	/** Cursor trace against surfaces items can be placed on (floor, level geometry, other items). */
 	UFUNCTION(BlueprintCallable, Category = "StageCraft|Trace")
@@ -199,6 +206,19 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "StageCraft|Requests")
 	int32 RequestDeleteSelection();
 
+	/**
+	 * Deletes Items as one undoable step, like the Delete key does for a selection (the AI assistant's targeted delete,
+	 * Docs/ADR/0018 §6). Refused, and reported, during a gizmo drag or camera navigation. Returns how many items were deleted.
+	 */
+	int32 RequestDeleteItems(const TArray<class AModularBaseActor*>& Items);
+
+	/**
+	 * Moves every one of Items by Offset (world cm) as ONE undoable step. All or nothing: each new transform is checked by the
+	 * GameMode's EvaluateTransformChange first (a locked item refuses the whole move), then written through the session like an
+	 * inspector Location edit. Refused, and reported, during a gizmo drag or camera navigation.
+	 */
+	FStageEconomyResultInfo RequestMoveItems(const TArray<class AModularBaseActor*>& Items, const FVector& Offset);
+
 	/** Selects every visible placed item (Edit > Select All). Leaves Place mode first, like any selection. Same guards as delete. */
 	UFUNCTION(BlueprintCallable, Category = "StageCraft|Requests")
 	void RequestSelectAll();
@@ -250,6 +270,14 @@ public:
 	 * OnRequestRejected; the result says what was placed (Message: the plan's description) or why nothing was (Message: the reason).
 	 */
 	FStageSketchGenerateResult RequestBuildPlan(const FStageSketchBuildPlan& Plan, const FText& StepName);
+
+	/**
+	 * Replaces each of Items with one NewItem at its location and rotation, as ONE undo step named StepName (the AI assistant's
+	 * "replace", Docs/ADR/0018 §6). All or nothing: the old items are removed first (as the Delete key does), then every new one is
+	 * checked by the GameMode's placement rules and spawned through the spawn system; on any refusal the new items are removed and
+	 * the old ones restored. NewItem's assets should be in memory already. A refusal is reported on OnRequestRejected and returned.
+	 */
+	FStageEconomyResultInfo RequestReplaceItems(const TArray<class AModularBaseActor*>& Items, class UBaseItemData* NewItem, const FText& StepName);
 
 	/**
 	 * Replaces the outdoor environment (time of day, sun path, weather, sky on/off) and records the change as ONE undo step named
@@ -416,6 +444,9 @@ protected:
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Components")
 	TObjectPtr<class UStageVoiceInputComponent> VoiceInput = nullptr;
 
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Components")
+	TObjectPtr<class UStageCameraNavigationComponent> CameraNavigation = nullptr;
+
 	/** Spawned once for the local player and re-targeted on every selection change. */
 	UPROPERTY(EditDefaultsOnly, Category = "StageCraft|Gizmo")
 	TSubclassOf<class AModularTransformGizmo> GizmoClass;
@@ -437,6 +468,10 @@ protected:
 	/** Hold to navigate (right mouse button). Navigation only: it never selects, places or deletes. */
 	UPROPERTY(EditDefaultsOnly, Category = "StageCraft|Input")
 	TObjectPtr<class UInputAction> NavigateAction = nullptr;
+
+	/** Middle mouse button: pan (Alt: pan with the orbit pivot). Mapped in the camera context, built in code when unset. */
+	UPROPERTY(EditDefaultsOnly, Category = "StageCraft|Input|Camera")
+	TObjectPtr<class UInputAction> CameraPanAction = nullptr;
 
 	UPROPERTY(EditDefaultsOnly, Category = "StageCraft|Input")
 	int32 MappingContextPriority = 0;
@@ -525,6 +560,9 @@ private:
 
 	FStageEconomyResultInfo ValidatePlacement(const class UBaseItemData& Item, int32 Quantity);
 	FStageEconomyResultInfo EvaluatePlacementPreview(const class UBaseItemData& Item, int32 Quantity);
+
+	/** Catalog names of the selected items, the AI assistant's context for "this" and "the selected" (Docs/ADR/0018 §6). */
+	TArray<FString> DescribeSelectionForAssistant() const;
 	FStageEconomyResultInfo EvaluatePlacementRules(const class UBaseItemData* Item, int32 Quantity) const;
 
 	/**
@@ -561,6 +599,22 @@ private:
 	void HandlePrimaryCompleted();
 	void HandleNavigateStarted();
 	void HandleNavigateCompleted();
+	void HandleCameraPanStarted();
+	void HandleCameraPanCompleted();
+
+	/**
+	 * The viewport client's question at the moment a mouse button goes down (UStageCraftGameViewportClient::CursorCapturePolicy):
+	 * will this press move the camera? A plain left press may, unless it places, grabs a gizmo handle, toggles with Ctrl/Shift
+	 * or lands in an orthographic view (CanLeftPressDragCamera).
+	 */
+	bool ShouldHideCursorForPress(const struct FStageCameraButtons& Buttons) const;
+	bool CanLeftPressDragCamera(const FVector2D& ViewportPosition) const;
+
+	/** Keeps the gizmo's on-screen size from the current view; called on camera moves and view changes instead of a tick. */
+	void RefreshGizmoScreenScale();
+
+	/** Applies the user's camera preferences (speed, look link) to the camera pawn. */
+	void ApplyCameraPreferences();
 
 	// Key-map commands (ExecuteCommand).
 	void HandleCancel();
@@ -624,8 +678,10 @@ private:
 	FDelegateHandle CursorMovedHandle;
 	FDelegateHandle CameraTransformHandle;
 
-	bool bIsNavigatingCamera = false;
 	bool bPreviewRefreshQueued = false;
+
+	/** Where a plain left press went down, selected on release if it never became a camera drag. */
+	FVector2D PendingClickPosition = FVector2D::ZeroVector;
 
 	/** While RunCapturingRejections runs: where ReportRejection also copies each refusal. */
 	TArray<FStageEconomyResultInfo>* RejectionSink = nullptr;

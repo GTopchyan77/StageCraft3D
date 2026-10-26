@@ -3,6 +3,7 @@
 #pragma once
 
 #include "CoreMinimal.h"
+#include "Engine/TimerHandle.h"
 #include "Subsystems/WorldSubsystem.h"
 #include "Show/ShowControlTypes.h"
 #include "ShowControlSubsystem.generated.h"
@@ -47,6 +48,15 @@ public:
 
 	UFUNCTION(BlueprintCallable, Category = "StageCraft|Show")
 	TArray<class ALightingFixtureActor*> GetFixtures() const;
+
+	/**
+	 * Something that decides which fixtures cast shadows changed: a fixture's output (ALightingFixtureActor) or the camera
+	 * (the controller). Cheap: it only arms one re-ranking within UStageShowPerformanceSettings' interval (Docs/ADR/0018 §4).
+	 */
+	void MarkShadowBudgetDirty();
+
+	/** Fixtures whose beams cast shadows now, for diagnostics and the benchmark. */
+	int32 GetShadowedFixtureCount() const;
 
 	UFUNCTION(BlueprintPure, Category = "StageCraft|Show")
 	class ALightingFixtureActor* FindFixture(int32 FixtureId) const;
@@ -244,6 +254,8 @@ private:
 	void TickFades(float DeltaTime);
 	void TickDMXOutput(float DeltaTime);
 	void CompleteFade();
+	/** Ranks the fixtures (StageShadowBudget::SelectCasters) and switches only those whose shadows change. */
+	void UpdateShadowBudget();
 	void AssignSanitizedCues(const TArray<FShowCue>& InCues, const TCHAR* Source);
 	int32 FindCueIndex(float CueNumber) const;
 
@@ -263,4 +275,7 @@ private:
 	float DMXOutputAccumulator = 0.f;
 	EStageControlSource ControlSource = EStageControlSource::Internal;
 	FTickCostStats TickCostStats;
+
+	/** One pending re-ranking at most; armed by MarkShadowBudgetDirty, cleared in Deinitialize. */
+	FTimerHandle ShadowBudgetTimer;
 };

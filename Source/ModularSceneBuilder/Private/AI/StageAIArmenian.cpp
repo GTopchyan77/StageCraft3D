@@ -104,8 +104,30 @@ namespace StageAIArmenian
 			{ TEXT("երեկո"), TEXT("evening") }, { TEXT("մայրամուտ"), TEXT("sunset") }, { TEXT("արևամուտ"), TEXT("sunset") }, { TEXT("մթնշաղ"), TEXT("dusk") },
 			{ TEXT("գիշեր"), TEXT("night") }, { TEXT("կեսգիշեր"), TEXT("midnight") },
 
-			// Operations the assistant explains instead of running.
+			// Targeted edits of placed items (Docs/ADR/0018 §6).
 			{ TEXT("ջնջ"), TEXT("delete") }, { TEXT("հեռացր"), TEXT("remove") }, { TEXT("հեռացն"), TEXT("remove") }, { TEXT("մաքր"), TEXT("clear") },
+			{ TEXT("տեղափոխ"), TEXT("move") }, { TEXT("տեղաշարժ"), TEXT("move") }, { TEXT("շարժիր"), TEXT("move"), Exact }, { TEXT("շարժեք"), TEXT("move"), Exact },
+			{ TEXT("բարձրացր"), TEXT("raise") }, { TEXT("բարձրացն"), TEXT("raise") }, { TEXT("իջեցր"), TEXT("lower") }, { TEXT("իջեցն"), TEXT("lower") },
+			{ TEXT("փոխարին"), TEXT("replace") }, { TEXT("փոխիր"), TEXT("change"), Exact }, { TEXT("փոխեք"), TEXT("change"), Exact },
+			{ TEXT("ընտրված"), TEXT("selected") }, { TEXT("ընտրած"), TEXT("selected") }, { TEXT("նշված"), TEXT("selected") },
+			{ TEXT("ձախ"), TEXT("left") }, { TEXT("աջ"), TEXT("right") }, { TEXT("առաջ"), TEXT("forward"), Exact },
+			{ TEXT("վեր"), TEXT("up"), Exact }, { TEXT("վերև"), TEXT("up") }, { TEXT("ներքև"), TEXT("down") }, { TEXT("ցած"), TEXT("down"), Exact },
+			{ TEXT("դեպի"), TEXT(""), Exact }, { TEXT("ուղղությ"), TEXT("") }, { TEXT("չափով"), TEXT(""), Exact },
+
+			// Stage shapes and their sizes.
+			{ TEXT("կառուց"), TEXT("build") }, { TEXT("պատրաստ"), TEXT("make") },
+			{ TEXT("կլոր"), TEXT("round") }, { TEXT("շրջանաձև"), TEXT("circular") }, { TEXT("շրջան"), TEXT("circle") }, { TEXT("օղակ"), TEXT("ring") },
+			{ TEXT("կիսաշրջան"), TEXT("semicircle") }, { TEXT("աղեղ"), TEXT("arc") }, { TEXT("կոր"), TEXT("curved"), Exact }, { TEXT("կորաձև"), TEXT("curved") },
+			{ TEXT("կորացած"), TEXT("curved") },
+			// աստիճան is both a step and a degree; after a number in a curved request it is read as degrees (TranslateToGrammar).
+			{ TEXT("աստիճան"), TEXT("stairs") }, { TEXT("սանդուղք"), TEXT("stairs") }, { TEXT("սանդուխ"), TEXT("stairs") },
+			{ TEXT("բազրիք"), TEXT("handrails") }, { TEXT("ճաղավանդակ"), TEXT("handrails") },
+			{ TEXT("շառավիղ"), TEXT("radius") }, { TEXT("շառավղ"), TEXT("radius") }, { TEXT("տրամագ"), TEXT("diameter") },
+			{ TEXT("լայնությ"), TEXT("wide") }, { TEXT("լայն"), TEXT("wide") }, { TEXT("բարձրությ"), TEXT("high") }, { TEXT("բարձր"), TEXT("high") },
+			{ TEXT("մետր"), TEXT("m") }, { TEXT("մ"), TEXT("m"), Exact }, { TEXT("սանտիմետր"), TEXT("cm") }, { TEXT("սմ"), TEXT("cm"), Exact },
+			{ TEXT("միլիմետր"), TEXT("mm") }, { TEXT("մմ"), TEXT("mm"), Exact },
+
+			// Operations the assistant explains instead of running.
 			{ TEXT("բացիր"), TEXT("open") }, { TEXT("բացեք"), TEXT("open") }, { TEXT("բացել"), TEXT("open") }, { TEXT("բեռն"), TEXT("load") },
 			{ TEXT("նոր"), TEXT("new") }, { TEXT("տեսարան"), TEXT("scene") }, { TEXT("սցենա"), TEXT("scene") },
 
@@ -262,7 +284,8 @@ namespace StageAIArmenian
 		{
 			static const TCHAR* const Actions[] = { TEXT("add"), TEXT("place"), TEXT("put"), TEXT("hang"), TEXT("create"), TEXT("store"), TEXT("record"),
 				TEXT("save"), TEXT("export"), TEXT("go"), TEXT("play"), TEXT("run"), TEXT("undo"), TEXT("redo"), TEXT("delete"), TEXT("remove"),
-				TEXT("clear"), TEXT("open"), TEXT("load"), TEXT("on"), TEXT("off"), TEXT("stop") };
+				TEXT("clear"), TEXT("open"), TEXT("load"), TEXT("on"), TEXT("off"), TEXT("stop"), TEXT("move"), TEXT("raise"), TEXT("lower"),
+				TEXT("replace"), TEXT("change"), TEXT("build"), TEXT("make") };
 			return Algo::FindByPredicate(Actions, [&Word](const TCHAR* Action) { return Word == Action; }) != nullptr;
 		}
 
@@ -313,6 +336,17 @@ namespace StageAIArmenian
 		bool bQuestion = false;
 		const TArray<FToken> Tokens = Tokenize(Prompt, bQuestion);
 		TArray<FString> Words;
+		// Where the first equipment word in the instrumental case (-ով, "with ...") went: the replacement of a replace request.
+		int32 InstrumentalAt = INDEX_NONE;
+		const auto NoteInstrumental = [&InstrumentalAt, &Words](const FToken& Token, const FString& Grammar)
+		{
+			static const TCHAR* const NotEquipment[] = { TEXT("called"), TEXT("seconds"), TEXT("radius"), TEXT("diameter"), TEXT("wide"), TEXT("high") };
+			if (InstrumentalAt == INDEX_NONE && Token.Text.Len() > 2 && Token.Text.EndsWith(TEXT("ով"), ESearchCase::CaseSensitive)
+				&& !Algo::FindByPredicate(NotEquipment, [&Grammar](const TCHAR* Word) { return Grammar == Word; }))
+			{
+				InstrumentalAt = Words.Num();
+			}
+		};
 		for (int32 Index = 0; Index < Tokens.Num(); ++Index)
 		{
 			const FToken& Token = Tokens[Index];
@@ -353,13 +387,35 @@ namespace StageAIArmenian
 			{
 				if (*Entry->Grammar)
 				{
+					NoteInstrumental(Token, Entry->Grammar);
 					Words.Add(Entry->Grammar);
 				}
 			}
 			else
 			{
 				// Unknown words are kept: a fixture the grammar cannot name must not match the first one in the catalog.
+				NoteInstrumental(Token, Token.Text);
 				Words.Add(Token.Text);
+			}
+		}
+
+		// "փոխարինիր փարերը վոշերով" (replace the pars with washes): the grammar finds the replacement after "with".
+		if (InstrumentalAt != INDEX_NONE && (Words.Contains(TEXT("replace")) || Words.Contains(TEXT("change"))) && !Words.Contains(TEXT("with")))
+		{
+			Words.Insert(TEXT("with"), InstrumentalAt);
+		}
+
+		// աստիճան after a number is an angle ("180 աստիճան աղեղ") in a curved request; stairs are counted, not measured in degrees.
+		const bool bCurved = Words.ContainsByPredicate([](const FString& Word)
+		{
+			return Word == TEXT("arc") || Word == TEXT("curved") || Word == TEXT("semicircle") || Word == TEXT("circle") || Word == TEXT("circular")
+				|| Word == TEXT("ring") || Word == TEXT("truss");
+		});
+		for (int32 Index = 1; bCurved && Index < Words.Num(); ++Index)
+		{
+			if (Words[Index] == TEXT("stairs") && IsDigitText(Words[Index - 1]))
+			{
+				Words[Index] = TEXT("deg");
 			}
 		}
 

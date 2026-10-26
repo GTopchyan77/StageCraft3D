@@ -41,6 +41,12 @@ namespace StageAICommandParser
 					{
 						Word.AppendChar(Char);
 					}
+					else if (Char == TEXT('°'))
+					{
+						// "90°" is "90 deg".
+						Flush();
+						Words.Add(TEXT("deg"));
+					}
 					else if (Char != TEXT('\''))
 					{
 						Flush();
@@ -345,18 +351,19 @@ namespace StageAICommandParser
 
 		TOptional<EStageWeatherPreset> FindWeather(const FPrompt& Prompt)
 		{
+			// "stop the rain", "no more rain", "remove the fog", "clear the snow": the weather clears.
+			const bool bStop = Prompt.HasAny({ TEXT("stop"), TEXT("no"), TEXT("without"), TEXT("remove"), TEXT("delete"), TEXT("clear"), TEXT("end") });
 			if (Prompt.HasAny({ TEXT("rain"), TEXT("rainy"), TEXT("raining"), TEXT("drizzle"), TEXT("storm"), TEXT("stormy") }))
 			{
-				// "stop the rain", "no more rain".
-				return Prompt.HasAny({ TEXT("stop"), TEXT("no"), TEXT("without") }) ? EStageWeatherPreset::Clear : EStageWeatherPreset::Rain;
+				return bStop ? EStageWeatherPreset::Clear : EStageWeatherPreset::Rain;
 			}
 			if (Prompt.HasAny({ TEXT("snow"), TEXT("snowy"), TEXT("snowing"), TEXT("blizzard") }))
 			{
-				return Prompt.HasAny({ TEXT("stop"), TEXT("no"), TEXT("without") }) ? EStageWeatherPreset::Clear : EStageWeatherPreset::Snow;
+				return bStop ? EStageWeatherPreset::Clear : EStageWeatherPreset::Snow;
 			}
 			if (Prompt.HasAny({ TEXT("fog"), TEXT("foggy"), TEXT("mist"), TEXT("misty"), TEXT("haze"), TEXT("hazy") }))
 			{
-				return Prompt.HasAny({ TEXT("stop"), TEXT("no"), TEXT("without") }) ? EStageWeatherPreset::Clear : EStageWeatherPreset::Fog;
+				return bStop ? EStageWeatherPreset::Clear : EStageWeatherPreset::Fog;
 			}
 			if (Prompt.HasAny({ TEXT("cloudy"), TEXT("clouds"), TEXT("overcast"), TEXT("grey"), TEXT("gray") }))
 			{
@@ -556,6 +563,511 @@ namespace StageAICommandParser
 			return Command;
 		}
 
+		// --- Targeted edits and stage shapes (Docs/ADR/0018 §6) ---
+
+		/** A size or an angle written in the prompt: "3 m", "60cm", "2.5 metres", "90 degrees", "90°". */
+		struct FMeasure
+		{
+			double Value = 0.0;
+			bool bDegrees = false;
+			/** Written with a unit; a bare number is read as metres up to BareMetresLimit and as centimetres above it. */
+			bool bUnit = false;
+			/** Words the measure spans. */
+			int32 First = 0;
+			int32 Last = 0;
+		};
+
+		/** "a 4 wide riser" is 4 m; "60 high" is 60 cm. Stage sizes in metres are rarely above this. */
+		constexpr double BareMetresLimit = 20.0;
+
+		TOptional<double> UnitToCm(const FString& Unit)
+		{
+			if (IsOneOf(Unit, { TEXT("m"), TEXT("meter"), TEXT("meters"), TEXT("metre"), TEXT("metres"), TEXT("mtr") }))
+			{
+				return 100.0;
+			}
+			if (IsOneOf(Unit, { TEXT("cm"), TEXT("centimeter"), TEXT("centimeters"), TEXT("centimetre"), TEXT("centimetres") }))
+			{
+				return 1.0;
+			}
+			if (IsOneOf(Unit, { TEXT("mm"), TEXT("millimeter"), TEXT("millimeters"), TEXT("millimetre"), TEXT("millimetres") }))
+			{
+				return 0.1;
+			}
+			if (IsOneOf(Unit, { TEXT("ft"), TEXT("foot"), TEXT("feet") }))
+			{
+				return 30.48;
+			}
+			return {};
+		}
+
+		bool IsDegreeWord(const FString& Word)
+		{
+			return IsOneOf(Word, { TEXT("deg"), TEXT("degree"), TEXT("degrees") });
+		}
+
+		/** Every number in the prompt with its unit, in order. A unit glued to the number ("3m", "90deg") counts. */
+		TArray<FMeasure> FindMeasures(const FPrompt& Prompt)
+		{
+			TArray<FMeasure> Measures;
+			for (int32 Index = 0; Index < Prompt.Words.Num(); ++Index)
+			{
+				const FString& Word = Prompt.Words[Index];
+				FString Digits = Word;
+				FString Suffix;
+				int32 Split = 0;
+				while (Split < Word.Len() && (FChar::IsDigit(Word[Split]) || Word[Split] == TEXT('.')))
+				{
+					++Split;
+				}
+				if (Split > 0 && Split < Word.Len())
+				{
+					Digits = Word.Left(Split);
+					Suffix = Word.Mid(Split);
+					if (!UnitToCm(Suffix).IsSet() && !IsDegreeWord(Suffix))
+					{
+						continue;
+					}
+				}
+				const TOptional<double> Number = ParseNumber(Digits);
+				if (!Number.IsSet() || Word.Contains(TEXT(":")))
+				{
+					continue;
+				}
+				FMeasure Measure;
+				Measure.Value = *Number;
+				Measure.First = Measure.Last = Index;
+				const FString Unit = !Suffix.IsEmpty() ? Suffix : (Index + 1 < Prompt.Words.Num() ? Prompt.Words[Index + 1] : FString());
+				if (const TOptional<double> Scale = UnitToCm(Unit))
+				{
+					Measure.Value *= *Scale;
+					Measure.bUnit = true;
+				}
+				else if (IsDegreeWord(Unit))
+				{
+					Measure.bDegrees = true;
+					Measure.bUnit = true;
+				}
+				else
+				{
+					Measure.Value = Measure.Value <= BareMetresLimit ? Measure.Value * 100.0 : Measure.Value;
+				}
+				if (Measure.bUnit && Suffix.IsEmpty())
+				{
+					Measure.Last = ++Index;
+				}
+				Measures.Add(Measure);
+			}
+			return Measures;
+		}
+
+		/** What a measure gives, from the word after it ("4 m wide") or the noun before it ("radius of 5 m"). */
+		enum class EMeasureRole : uint8
+		{
+			None,
+			Width,
+			Height,
+			Radius,
+			Diameter,
+			Distance,
+		};
+
+		EMeasureRole FindMeasureRole(const FPrompt& Prompt, const FMeasure& Measure)
+		{
+			const auto WordAt = [&Prompt](int32 Index) { return Prompt.Words.IsValidIndex(Index) ? Prompt.Words[Index] : FString(); };
+			const FString After = WordAt(Measure.Last + 1);
+			if (IsOneOf(After, { TEXT("wide"), TEXT("width"), TEXT("across"), TEXT("deep") }))
+			{
+				return EMeasureRole::Width;
+			}
+			if (IsOneOf(After, { TEXT("high"), TEXT("tall"), TEXT("height"), TEXT("rise"), TEXT("up") }))
+			{
+				return EMeasureRole::Height;
+			}
+			if (IsOneOf(After, { TEXT("radius") }))
+			{
+				return EMeasureRole::Radius;
+			}
+			if (IsOneOf(After, { TEXT("diameter") }))
+			{
+				return EMeasureRole::Diameter;
+			}
+			// The noun before, skipping "of", "a", "is" and "to".
+			for (int32 Index = Measure.First - 1; Index >= 0 && Index >= Measure.First - 3; --Index)
+			{
+				const FString& Before = Prompt.Words[Index];
+				if (IsOneOf(Before, { TEXT("width"), TEXT("wide") }))
+				{
+					return EMeasureRole::Width;
+				}
+				if (IsOneOf(Before, { TEXT("height"), TEXT("rise"), TEXT("rising"), TEXT("hang"), TEXT("hung"), TEXT("at"), TEXT("elevation") }))
+				{
+					return EMeasureRole::Height;
+				}
+				if (Before == TEXT("radius"))
+				{
+					return EMeasureRole::Radius;
+				}
+				if (Before == TEXT("diameter"))
+				{
+					return EMeasureRole::Diameter;
+				}
+				if (IsOneOf(Before, { TEXT("by"), TEXT("left"), TEXT("right"), TEXT("forward"), TEXT("forwards"), TEXT("back"), TEXT("backward"), TEXT("backwards"),
+					TEXT("up"), TEXT("down"), TEXT("upstage"), TEXT("downstage") }))
+				{
+					return EMeasureRole::Distance;
+				}
+				if (!IsOneOf(Before, { TEXT("of"), TEXT("a"), TEXT("an"), TEXT("is"), TEXT("to"), TEXT("about"), TEXT("around") }))
+				{
+					break;
+				}
+			}
+			return EMeasureRole::None;
+		}
+
+		/** Words naming the selection rather than items by name. */
+		bool IsSelectionWord(const FString& Word)
+		{
+			return IsOneOf(Word, { TEXT("selected"), TEXT("selection"), TEXT("this"), TEXT("these"), TEXT("that"), TEXT("those"), TEXT("it"), TEXT("them"), TEXT("current") });
+		}
+
+		/** Words of a targeted edit that name neither the target nor anything else ("please delete the ..."). */
+		bool IsEditFiller(const FString& Word)
+		{
+			return IsOneOf(Word, { TEXT("please"), TEXT("the"), TEXT("of"), TEXT("on"), TEXT("from"), TEXT("in"), TEXT("stage"), TEXT("can"), TEXT("could"), TEXT("would"),
+				TEXT("you"), TEXT("i"), TEXT("want"), TEXT("like"), TEXT("me"), TEXT("my"), TEXT("our"), TEXT("all"), TEXT("every"), TEXT("each"), TEXT("placed"),
+				TEXT("by"), TEXT("and"), TEXT("get"), TEXT("rid"), TEXT("a"), TEXT("an"), TEXT("one"), TEXT("now"), TEXT("some"), TEXT("item"), TEXT("items"),
+				TEXT("towards"), TEXT("toward"), TEXT("bit"), TEXT("little"), TEXT("more"), TEXT("further"), TEXT("so"), TEXT("then") });
+		}
+
+		/** The target and count of a targeted edit, from the words that are not its verb, its direction or its sizes. */
+		void ReadTarget(const FPrompt& Prompt, const TArray<bool>& Used, FStageAICommand& Command)
+		{
+			TArray<FString> Query;
+			bool bSelection = false;
+			for (int32 Index = 0; Index < Prompt.Words.Num(); ++Index)
+			{
+				const FString& Word = Prompt.Words[Index];
+				if (Used[Index])
+				{
+					continue;
+				}
+				if (IsSelectionWord(Word))
+				{
+					bSelection = true;
+					continue;
+				}
+				if (!Command.Count.IsSet() && Query.IsEmpty())
+				{
+					if (const TOptional<double> Number = ParseNumber(Word))
+					{
+						// Fractions and huge values are left for Validate to refuse.
+						Command.Count = int32(FMath::Clamp(*Number, -1.0, 100000.0));
+						continue;
+					}
+					if (IsOneOf(Word, { TEXT("a"), TEXT("an"), TEXT("one"), TEXT("single") }))
+					{
+						Command.Count = 1;
+						continue;
+					}
+				}
+				if (!IsEditFiller(Word))
+				{
+					Query.Add(Word);
+				}
+			}
+			Command.ItemQuery = FString::Join(Query, TEXT(" "));
+			// "delete" alone, "delete the selected spots": the selection. "delete the spots": every placed spot.
+			Command.Target = bSelection || Query.IsEmpty() ? EStageAITarget::Selection : EStageAITarget::Named;
+			if (Command.Target == EStageAITarget::Selection)
+			{
+				Command.Count.Reset();
+			}
+		}
+
+		/** "delete everything", "clear the stage": the whole stage, which the assistant leaves to Edit › Clear Stage. */
+		bool IsWholeStage(const FPrompt& Prompt, const FStageAICommand& Command)
+		{
+			const bool bAll = Prompt.HasAny({ TEXT("everything"), TEXT("all") }) || Prompt.Has(TEXT("stage")) || Prompt.Has(TEXT("scene"));
+			TArray<FString> Query;
+			Command.ItemQuery.ParseIntoArrayWS(Query);
+			const bool bOnlyGeneric = Algo::AllOf(Query, [](const FString& Word)
+			{
+				return IsOneOf(Singular(Word), { TEXT("everything"), TEXT("thing"), TEXT("scene"), TEXT("object"), TEXT("equipment"), TEXT("gear"), TEXT("whole") });
+			});
+			return bAll && bOnlyGeneric && !Prompt.HasAny({ TEXT("selected"), TEXT("selection") });
+		}
+
+		/** A polite request may end with "?" ("can you delete the spots?"); a real question is not an edit. */
+		bool IsQuestionNotRequest(const FPrompt& Prompt)
+		{
+			return Prompt.bQuestion && !Prompt.Words.IsEmpty() && !IsOneOf(Prompt.Words[0], { TEXT("can"), TEXT("could"), TEXT("would"), TEXT("will"), TEXT("please") });
+		}
+
+		TOptional<FStageAICommand> ParseDelete(const FPrompt& Prompt)
+		{
+			const int32 Verb = Prompt.Words.IndexOfByPredicate([](const FString& Word)
+			{
+				return IsOneOf(Word, { TEXT("delete"), TEXT("remove"), TEXT("erase"), TEXT("wipe"), TEXT("clear"), TEXT("destroy"), TEXT("rid") });
+			});
+			if (Verb == INDEX_NONE || IsQuestionNotRequest(Prompt))
+			{
+				return {};
+			}
+			TArray<bool> Used;
+			Used.Init(false, Prompt.Words.Num());
+			for (int32 Index = 0; Index < Prompt.Words.Num(); ++Index)
+			{
+				Used[Index] = IsOneOf(Prompt.Words[Index], { TEXT("delete"), TEXT("remove"), TEXT("erase"), TEXT("wipe"), TEXT("clear"), TEXT("destroy") });
+			}
+			FStageAICommand Command;
+			Command.Intent = EStageAIIntent::DeleteItems;
+			ReadTarget(Prompt, Used, Command);
+			if (IsWholeStage(Prompt, Command))
+			{
+				FStageAICommand Unsupported;
+				Unsupported.Intent = EStageAIIntent::Unsupported;
+				Unsupported.ItemQuery = TEXT("delete");
+				return Unsupported;
+			}
+			// "clear the selection" deselects; it never deletes.
+			if (Prompt.Has(TEXT("clear")) && Command.Target == EStageAITarget::Selection && !Prompt.HasAny({ TEXT("delete"), TEXT("remove"), TEXT("erase") }))
+			{
+				return {};
+			}
+			return Command;
+		}
+
+		TOptional<EStageAIDirection> FindDirection(const FPrompt& Prompt, TArray<bool>& Used)
+		{
+			struct FDirectionWord { const TCHAR* Word; EStageAIDirection Direction; };
+			static const FDirectionWord Words[] = {
+				{ TEXT("left"), EStageAIDirection::Left }, { TEXT("right"), EStageAIDirection::Right },
+				{ TEXT("forward"), EStageAIDirection::Forward }, { TEXT("forwards"), EStageAIDirection::Forward }, { TEXT("ahead"), EStageAIDirection::Forward },
+				{ TEXT("downstage"), EStageAIDirection::Forward },
+				{ TEXT("back"), EStageAIDirection::Back }, { TEXT("backward"), EStageAIDirection::Back }, { TEXT("backwards"), EStageAIDirection::Back },
+				{ TEXT("upstage"), EStageAIDirection::Back },
+				{ TEXT("up"), EStageAIDirection::Up }, { TEXT("higher"), EStageAIDirection::Up }, { TEXT("raise"), EStageAIDirection::Up }, { TEXT("lift"), EStageAIDirection::Up },
+				{ TEXT("down"), EStageAIDirection::Down }, { TEXT("lower"), EStageAIDirection::Down } };
+			for (int32 Index = 0; Index < Prompt.Words.Num(); ++Index)
+			{
+				const FDirectionWord* Found = Algo::FindByPredicate(Words, [&Prompt, Index](const FDirectionWord& Entry) { return Prompt.Words[Index] == Entry.Word; });
+				if (Found)
+				{
+					Used[Index] = true;
+					return Found->Direction;
+				}
+			}
+			return {};
+		}
+
+		TOptional<FStageAICommand> ParseMove(const FPrompt& Prompt)
+		{
+			const bool bMoveVerb = Prompt.HasAny({ TEXT("move"), TEXT("shift"), TEXT("slide"), TEXT("nudge"), TEXT("push"), TEXT("pull"), TEXT("bring"), TEXT("drag") });
+			const bool bLiftVerb = Prompt.HasAny({ TEXT("raise"), TEXT("lift"), TEXT("lower") });
+			if ((!bMoveVerb && !bLiftVerb) || IsQuestionNotRequest(Prompt))
+			{
+				return {};
+			}
+			TArray<bool> Used;
+			Used.Init(false, Prompt.Words.Num());
+			FStageAICommand Command;
+			Command.Intent = EStageAIIntent::MoveItems;
+			const TOptional<EStageAIDirection> Direction = FindDirection(Prompt, Used);
+			if (!Direction.IsSet())
+			{
+				return {};
+			}
+			Command.Direction = *Direction;
+			for (int32 Index = 0; Index < Prompt.Words.Num(); ++Index)
+			{
+				if (IsOneOf(Prompt.Words[Index], { TEXT("move"), TEXT("shift"), TEXT("slide"), TEXT("nudge"), TEXT("push"), TEXT("pull"), TEXT("bring"), TEXT("drag"),
+					TEXT("raise"), TEXT("lift"), TEXT("lower"), TEXT("to"), TEXT("the") }))
+				{
+					Used[Index] = true;
+				}
+			}
+			// The distance: a size with a unit, or a bare number after the direction or "by" ("move it left 2").
+			for (const FMeasure& Measure : FindMeasures(Prompt))
+			{
+				const bool bDistance = !Measure.bDegrees && (Measure.bUnit || FindMeasureRole(Prompt, Measure) == EMeasureRole::Distance);
+				if (bDistance && !Command.DistanceCm.IsSet())
+				{
+					Command.DistanceCm = Measure.Value;
+					for (int32 Index = Measure.First; Index <= Measure.Last; ++Index)
+					{
+						Used[Index] = true;
+					}
+				}
+			}
+			ReadTarget(Prompt, Used, Command);
+			return Command;
+		}
+
+		TOptional<FStageAICommand> ParseReplace(const FPrompt& Prompt)
+		{
+			const int32 Verb = Prompt.Words.IndexOfByPredicate([](const FString& Word)
+			{
+				return IsOneOf(Word, { TEXT("replace"), TEXT("swap"), TEXT("exchange"), TEXT("substitute"), TEXT("change"), TEXT("turn"), TEXT("switch") });
+			});
+			if (Verb == INDEX_NONE || IsQuestionNotRequest(Prompt))
+			{
+				return {};
+			}
+			// The replacement follows "with", "for", "by", "into" or "to": "replace the pars with washes", "change the spots to beams".
+			int32 Separator = INDEX_NONE;
+			for (int32 Index = Verb + 1; Index < Prompt.Words.Num(); ++Index)
+			{
+				if (IsOneOf(Prompt.Words[Index], { TEXT("with"), TEXT("for"), TEXT("by"), TEXT("into"), TEXT("to") }))
+				{
+					Separator = Index;
+					break;
+				}
+			}
+			const bool bPlainReplace = IsOneOf(Prompt.Words[Verb], { TEXT("replace"), TEXT("swap"), TEXT("exchange"), TEXT("substitute") });
+			if (Separator == INDEX_NONE && !bPlainReplace)
+			{
+				return {};
+			}
+			FStageAICommand Command;
+			Command.Intent = EStageAIIntent::ReplaceItems;
+			TArray<bool> Used;
+			Used.Init(true, Prompt.Words.Num());
+			const int32 TargetEnd = Separator == INDEX_NONE ? Prompt.Words.Num() : Separator;
+			for (int32 Index = 0; Index < TargetEnd; ++Index)
+			{
+				Used[Index] = Index == Verb;
+			}
+			ReadTarget(Prompt, Used, Command);
+			TArray<FString> Replacement;
+			for (int32 Index = Separator == INDEX_NONE ? Prompt.Words.Num() : Separator + 1; Index < Prompt.Words.Num(); ++Index)
+			{
+				const FString& Word = Prompt.Words[Index];
+				if (!IsEditFiller(Word) && !ParseNumber(Word).IsSet() && !IsOneOf(Word, { TEXT("new"), TEXT("other"), TEXT("different") }))
+				{
+					Replacement.Add(Word);
+				}
+			}
+			Command.Replacement = FString::Join(Replacement, TEXT(" "));
+			return Command;
+		}
+
+		TOptional<FStageAICommand> ParseBuildShape(const FPrompt& Prompt)
+		{
+			if (IsQuestionNotRequest(Prompt) || !Prompt.HasAny({ TEXT("add"), TEXT("build"), TEXT("make"), TEXT("create"), TEXT("place"), TEXT("put"), TEXT("give"),
+				TEXT("hang"), TEXT("rig"), TEXT("need"), TEXT("want"), TEXT("insert"), TEXT("spawn") }))
+			{
+				return {};
+			}
+			const bool bRound = Prompt.HasAny({ TEXT("round"), TEXT("circular"), TEXT("circle"), TEXT("ring"), TEXT("cylinder"), TEXT("cylindrical") });
+			const bool bHalf = Prompt.HasAny({ TEXT("semicircle"), TEXT("semicircular"), TEXT("half") });
+			const bool bCurved = bHalf || Prompt.HasAny({ TEXT("arc"), TEXT("arch"), TEXT("curved"), TEXT("curve"), TEXT("bent") });
+			const bool bTruss = Prompt.HasAny({ TEXT("truss"), TEXT("trusses"), TEXT("trussing") });
+			const bool bDeck = Prompt.HasAny({ TEXT("riser"), TEXT("risers"), TEXT("deck"), TEXT("decks"), TEXT("platform"), TEXT("platforms"), TEXT("podium"),
+				TEXT("stage"), TEXT("thrust") });
+			const bool bStairs = Prompt.HasAny({ TEXT("stairs"), TEXT("stair"), TEXT("steps"), TEXT("staircase"), TEXT("stairway") });
+			// "add 8 spots in a circle on the truss" asks for fixtures, not a shape.
+			if (Prompt.Words.ContainsByPredicate([](const FString& Word)
+				{
+					return IsGenericFixtureWord(Word) || IsOneOf(Singular(Word), { TEXT("head"), TEXT("spot"), TEXT("wash"), TEXT("par"), TEXT("beam"), TEXT("strobe"),
+						TEXT("laser"), TEXT("blinder"), TEXT("mover"), TEXT("speaker") });
+				}))
+			{
+				return {};
+			}
+
+			FStageAICommand Command;
+			Command.Intent = EStageAIIntent::BuildShape;
+			if (bStairs)
+			{
+				Command.Shape = EStageAIShape::Stairs;
+				Command.bHandrails = !(Prompt.HasAny({ TEXT("without"), TEXT("no") }) && Prompt.HasAny({ TEXT("handrail"), TEXT("handrails"), TEXT("rail"), TEXT("rails"), TEXT("railing"), TEXT("railings") }));
+			}
+			else if (bTruss && (bRound || bCurved))
+			{
+				Command.Shape = EStageAIShape::ArcTruss;
+			}
+			else if (bDeck && bCurved)
+			{
+				Command.Shape = EStageAIShape::ArcRiser;
+			}
+			else if (bDeck && bRound)
+			{
+				Command.Shape = EStageAIShape::RoundRiser;
+			}
+			else
+			{
+				return {};
+			}
+
+			// Sizes: labelled ones first ("4 m wide", "radius 5 m"), then unlabelled ones in the shape's own order.
+			TArray<double> Unlabelled;
+			for (const FMeasure& Measure : FindMeasures(Prompt))
+			{
+				if (Measure.bDegrees)
+				{
+					Command.AngleDegrees = Measure.Value;
+					continue;
+				}
+				switch (FindMeasureRole(Prompt, Measure))
+				{
+				case EMeasureRole::Width:		Command.WidthCm = Measure.Value; break;
+				case EMeasureRole::Height:		Command.HeightCm = Measure.Value; break;
+				case EMeasureRole::Radius:		Command.RadiusCm = Measure.Value; break;
+				case EMeasureRole::Diameter:	Command.RadiusCm = Measure.Value * 0.5; break;
+				default:
+					// A bare count ("add 2 stairs") is not a size.
+					if (Measure.bUnit)
+					{
+						Unlabelled.Add(Measure.Value);
+					}
+					break;
+				}
+			}
+			const auto TakeNext = [&Unlabelled](TOptional<double>& Field, double Scale = 1.0)
+			{
+				if (!Field.IsSet() && !Unlabelled.IsEmpty())
+				{
+					Field = Unlabelled[0] * Scale;
+					Unlabelled.RemoveAt(0);
+				}
+			};
+			switch (Command.Shape)
+			{
+			case EStageAIShape::Stairs:
+				TakeNext(Command.HeightCm);
+				TakeNext(Command.WidthCm);
+				break;
+			case EStageAIShape::RoundRiser:
+				// "a 4 m round riser" is its diameter, as risers are sold.
+				TakeNext(Command.RadiusCm, 0.5);
+				TakeNext(Command.HeightCm);
+				break;
+			case EStageAIShape::ArcRiser:
+				TakeNext(Command.RadiusCm);
+				TakeNext(Command.WidthCm);
+				TakeNext(Command.HeightCm);
+				break;
+			case EStageAIShape::ArcTruss:
+				// A circle is sized by its diameter, an arc by its radius.
+				TakeNext(Command.RadiusCm, bRound && !bCurved ? 0.5 : 1.0);
+				TakeNext(Command.HeightCm);
+				break;
+			}
+			if (!Command.AngleDegrees.IsSet())
+			{
+				if (bHalf)
+				{
+					Command.AngleDegrees = 180.0;
+				}
+				else if (Command.Shape == EStageAIShape::ArcTruss && bRound && !bCurved)
+				{
+					Command.AngleDegrees = 360.0;
+				}
+			}
+			return Command;
+		}
+
 		/** The English grammar's rules, in order. */
 		TOptional<FStageAICommand> ParseGrammar(const FString& Text)
 		{
@@ -624,6 +1136,27 @@ namespace StageAICommandParser
 				}
 			}
 
+			// Cues are deleted in the Cues panel; ParseUnsupported explains where.
+			const bool bCueWords = Prompt.HasAny({ TEXT("cue"), TEXT("cues") });
+			if (!bCueWords)
+			{
+				if (TOptional<FStageAICommand> Replace = ParseReplace(Prompt))
+				{
+					return Replace;
+				}
+				if (TOptional<FStageAICommand> Delete = ParseDelete(Prompt))
+				{
+					return Delete;
+				}
+				if (TOptional<FStageAICommand> Move = ParseMove(Prompt))
+				{
+					return Move;
+				}
+				if (TOptional<FStageAICommand> Shape = ParseBuildShape(Prompt))
+				{
+					return Shape;
+				}
+			}
 			if (TOptional<FStageAICommand> Unsupported = ParseUnsupported(Prompt))
 			{
 				return Unsupported;
@@ -701,6 +1234,25 @@ namespace StageAICommandParser
 			}
 		}
 		return Best;
+	}
+
+	bool IsGenericFixtureQuery(const FString& Query)
+	{
+		return Algo::AllOf(FPrompt(Query).Words, [](const FString& Word) { return IsGenericFixtureWord(Word); });
+	}
+
+	bool MatchesItemName(const FString& Name, const FString& Query, bool bIsFixture)
+	{
+		const TArray<FString> QueryWords = FPrompt(Query).Words;
+		if (QueryWords.IsEmpty())
+		{
+			return false;
+		}
+		const TArray<FString> Words = NameWords(Name);
+		return Algo::AllOf(QueryWords, [&Words, bIsFixture](const FString& Word)
+		{
+			return Words.Contains(Singular(Word)) || (bIsFixture && IsGenericFixtureWord(Word));
+		});
 	}
 
 	TArray<FVector2D> LayoutFixtureRow(int32 Count, TOptional<double> LowestPlacedX)
@@ -837,6 +1389,8 @@ namespace StageAIAnswers
 			"I can answer questions about the stage and make safe, undoable changes. Try:\n"
 			"• \"status\", \"how many fixtures\", \"total weight\", \"power draw\", \"list cues\", \"how many truss\"\n"
 			"• \"add 6 moving heads\", \"place a led par\"\n"
+			"• \"delete the selected\", \"remove the spots\", \"move the selected 2 m left\", \"raise the truss 50 cm\", \"replace the pars with washes\"\n"
+			"• \"build a 4 m round riser 60 cm high\", \"add stairs 80 cm high\", \"add a 6 m circle truss at 7 m\", \"make a 180° arc truss radius 5 m\"\n"
 			"• \"store cue 5 called Intro fade 3\", \"go\", \"back\", \"go to cue 2\"\n"
 			"• \"make it rain\", \"fog\", \"set time to 18:30\", \"sunset\", \"go outdoors\"\n"
 			"• \"export bill of materials\", \"export patch sheet\", \"export cable schedule\", \"export all reports\"\n"
@@ -846,6 +1400,8 @@ namespace StageAIAnswers
 			"Կարող եմ պատասխանել բեմի մասին հարցերին և կատարել անվտանգ փոփոխություններ, որոնք կարելի է հետարկել։ Փորձեք՝\n"
 			"• վիճակը · քանի՞ սարք կա · ընդհանուր քաշը · հզորությունը · կյուների ցանկը · քանի՞ ֆերմա կա\n"
 			"• ավելացրու 6 շարժական գլուխ · տեղադրիր մեկ LED փար\n"
+			"• ջնջիր ընտրվածը · հեռացրու սփոթերը · տեղափոխիր ընտրվածը 2 մ ձախ · բարձրացրու ֆերման 50 սմ · փոխարինիր փարերը վոշերով\n"
+			"• կառուցիր 4 մ կլոր հարթակ 60 սմ բարձրությամբ · ավելացրու աստիճաններ 80 սմ բարձրությամբ · ավելացրու 6 մ շրջանաձև ֆերմա · ավելացրու 180 աստիճան աղեղաձև ֆերմա 5 մ շառավղով\n"
 			"• պահիր կյու 5 «Ներածություն» 3 վայրկյան · գնա · հետ · գնա կյու 2\n"
 			"• թող անձրև գա · մառախուղ · ժամը 18:30 · մայրամուտ · բացօթյա\n"
 			"• արտահանիր նյութերի ցուցակը · արտահանիր պատչը · արտահանիր մալուխների ցուցակը · արտահանիր բոլոր հաշվետվությունները\n"
@@ -866,8 +1422,8 @@ namespace StageAIAnswers
 			return Pick(Language, LOCTEXT("UnsupportedFile", "I don't open, save or replace scenes from the chat, so nothing is lost by accident. Use the File menu (Save, Save As, Open); it asks before discarding changes."),
 				INVTEXT("Զրույցից չեմ բացում, չեմ պահպանում և չեմ փոխարինում տեսարաններ, որպեսզի ոչինչ պատահաբար չկորչի։ Օգտագործեք File ընտրացանկը (Save, Save As, Open). այն հարցնում է նախքան փոփոխությունները կորցնելը։"));
 		}
-		return Pick(Language, LOCTEXT("UnsupportedDelete", "I don't delete or clear things from the chat. Select items and press Delete, or use Edit › Clear Stage, which asks first. Ctrl+Z brings them back. Cues are deleted in the Cues panel."),
-			INVTEXT("Զրույցից չեմ ջնջում և չեմ մաքրում իրեր։ Ընտրեք դրանք և սեղմեք Delete, կամ օգտագործեք Edit › Clear Stage, որը նախ հարցնում է։ Ctrl+Z-ը դրանք հետ է բերում։ Կյուները ջնջվում են Cues վահանակում։"));
+		return Pick(Language, LOCTEXT("UnsupportedDelete", "I don't clear the whole stage from the chat, so nothing is lost by accident: use Edit › Clear Stage, which asks first. I can delete the selected items (\"delete the selected\") or items by name (\"remove the spots\"), and Ctrl+Z brings them back. Cues are deleted in the Cues panel."),
+			INVTEXT("Զրույցից չեմ մաքրում ամբողջ բեմը, որպեսզի ոչինչ պատահաբար չկորչի. օգտագործեք Edit › Clear Stage, որը նախ հարցնում է։ Կարող եմ ջնջել ընտրված իրերը («ջնջիր ընտրվածը») կամ իրերն ըստ անվան («հեռացրու սփոթերը»), և Ctrl+Z-ը դրանք հետ է բերում։ Կյուները ջնջվում են Cues վահանակում։"));
 	}
 
 	FText AnswerQuestion(const FStageAICommand& Command, const FStageAISceneView& Scene)

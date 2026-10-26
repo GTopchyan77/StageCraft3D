@@ -3,6 +3,7 @@
 #include "Input/StageInputPreferencesSubsystem.h"
 
 #include "ModularSceneBuilder.h"
+#include "Player/StageCameraNavigation.h"
 #include "Settings/StageCraftUserSettings.h"
 
 #include UE_INLINE_GENERATED_CPP_BY_NAME(StageInputPreferencesSubsystem)
@@ -93,6 +94,33 @@ void UStageInputPreferencesSubsystem::SetLookInverted(bool bInverted)
 {
 	UStageCraftUserSettings* Settings = UStageCraftUserSettings::Get();
 	Commit(Settings && Settings->SetLookInverted(bInverted));
+}
+
+bool UStageInputPreferencesSubsystem::IsLookLinkedToCameraSpeed() const
+{
+	const UStageCraftUserSettings* Settings = UStageCraftUserSettings::Get();
+	return Settings && Settings->IsLookLinkedToCameraSpeed();
+}
+
+void UStageInputPreferencesSubsystem::SetLookLinkedToCameraSpeed(bool bLinked)
+{
+	UStageCraftUserSettings* Settings = UStageCraftUserSettings::Get();
+	Commit(Settings && Settings->SetLookLinkedToCameraSpeed(bLinked));
+}
+
+float UStageInputPreferencesSubsystem::GetCameraSpeed() const
+{
+	const UStageCraftUserSettings* Settings = UStageCraftUserSettings::Get();
+	return Settings ? Settings->GetCameraSpeed() : StageCameraNavigation::DefaultCameraSpeed;
+}
+
+void UStageInputPreferencesSubsystem::StoreCameraSpeed(float Speed)
+{
+	UStageCraftUserSettings* Settings = UStageCraftUserSettings::Get();
+	if (Settings && Settings->SetCameraSpeed(Speed))
+	{
+		Settings->SaveSettings();
+	}
 }
 
 void UStageInputPreferencesSubsystem::CommitKeyBindings()

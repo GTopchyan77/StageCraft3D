@@ -33,17 +33,17 @@ namespace
 	constexpr double TableTextSize = 8.5;
 	constexpr double FooterTextSize = 7.5;
 
-	const FStagePdfColor Ink = FStagePdfColor::Grey(0.0);
-	const FStagePdfColor MutedInk = FStagePdfColor::Grey(0.35);
-	const FStagePdfColor HeaderFill = FStagePdfColor::Grey(0.86);
-	const FStagePdfColor StripeFill = FStagePdfColor::Grey(0.95);
-	const FStagePdfColor RuleInk = FStagePdfColor::Grey(0.55);
+	const FStagePdfColor ReportInk = FStagePdfColor::Grey(0.0);
+	const FStagePdfColor ReportMutedInk = FStagePdfColor::Grey(0.35);
+	const FStagePdfColor ReportHeaderFill = FStagePdfColor::Grey(0.86);
+	const FStagePdfColor ReportStripeFill = FStagePdfColor::Grey(0.95);
+	const FStagePdfColor ReportRuleInk = FStagePdfColor::Grey(0.55);
 
 	const TCHAR* const Separator = TEXT(" · ");
 
 	const FStagePdfColor& GetToneColor(EStageReportTone Tone)
 	{
-		return Tone == EStageReportTone::Muted ? MutedInk : Ink;
+		return Tone == EStageReportTone::Muted ? ReportMutedInk : ReportInk;
 	}
 }
 
@@ -93,7 +93,7 @@ void FStageReportPdfComposer::AddHeading(const FString& Text)
 	EndTable();
 	// Keep with next: a heading never ends a page without its table header and first row.
 	EnsureRoom(HeadingHeight + TableHeaderHeight + RowHeight);
-	Doc.Text(ContentLeft, CursorY + 15.0, FStagePdfDocument::FitText(Text, EStagePdfFont::Bold, HeadingTextSize, ContentWidth), EStagePdfFont::Bold, HeadingTextSize, Ink);
+	Doc.Text(ContentLeft, CursorY + 15.0, FStagePdfDocument::FitText(Text, EStagePdfFont::Bold, HeadingTextSize, ContentWidth), EStagePdfFont::Bold, HeadingTextSize, ReportInk);
 	CursorY += HeadingHeight;
 }
 
@@ -141,14 +141,14 @@ void FStageReportPdfComposer::BeginTable(TArray<FStageReportColumn> InColumns)
 
 void FStageReportPdfComposer::DrawTableHeader()
 {
-	Doc.FillRect(ContentLeft, CursorY, ContentWidth, TableHeaderHeight, HeaderFill);
+	Doc.FillRect(ContentLeft, CursorY, ContentWidth, TableHeaderHeight, ReportHeaderFill);
 	const double Baseline = CursorY + 11.0;
 	for (int32 Index = 0; Index < Columns.Num(); ++Index)
 	{
 		DrawCell(Index, Baseline, FStageReportCell(Columns[Index].Title), EStagePdfFont::Bold);
 	}
 	CursorY += TableHeaderHeight;
-	Doc.Line(ContentLeft, CursorY, ContentRight, CursorY, 0.5, Ink);
+	Doc.Line(ContentLeft, CursorY, ContentRight, CursorY, 0.5, ReportInk);
 	BodyRowsSinceHeader = 0;
 }
 
@@ -185,17 +185,17 @@ void FStageReportPdfComposer::AddRow(TConstArrayView<FStageReportCell> Cells, ES
 	case EStageReportRowStyle::Body:
 		if (BodyRowsSinceHeader % 2 == 1)
 		{
-			Doc.FillRect(ContentLeft, CursorY, ContentWidth, RowHeight, StripeFill);
+			Doc.FillRect(ContentLeft, CursorY, ContentWidth, RowHeight, ReportStripeFill);
 		}
 		++BodyRowsSinceHeader;
 		break;
 	case EStageReportRowStyle::Subtotal:
-		Doc.Line(ContentLeft, CursorY, ContentRight, CursorY, 0.5, RuleInk);
+		Doc.Line(ContentLeft, CursorY, ContentRight, CursorY, 0.5, ReportRuleInk);
 		BodyRowsSinceHeader = 0;
 		break;
 	case EStageReportRowStyle::Total:
-		Doc.FillRect(ContentLeft, CursorY, ContentWidth, RowHeight, HeaderFill);
-		Doc.Line(ContentLeft, CursorY, ContentRight, CursorY, 0.75, Ink);
+		Doc.FillRect(ContentLeft, CursorY, ContentWidth, RowHeight, ReportHeaderFill);
+		Doc.Line(ContentLeft, CursorY, ContentRight, CursorY, 0.75, ReportInk);
 		BodyRowsSinceHeader = 0;
 		break;
 	}
@@ -216,7 +216,7 @@ void FStageReportPdfComposer::EndTable()
 		return;
 	}
 	bTableOpen = false;
-	Doc.Line(ContentLeft, CursorY, ContentRight, CursorY, 0.5, RuleInk);
+	Doc.Line(ContentLeft, CursorY, ContentRight, CursorY, 0.5, ReportRuleInk);
 	CursorY += TableGap;
 }
 
@@ -224,23 +224,23 @@ void FStageReportPdfComposer::DrawFrame(int32 PageIndex, int32 PageCount)
 {
 	const FString DisplayScene = GetDisplaySceneName();
 
-	Doc.Text(ContentLeft, TitleBaseline, ReportTitle, EStagePdfFont::Bold, TitleTextSize, Ink);
-	Doc.TextRight(ContentRight, TitleBaseline, TEXT("StageCraft 3D"), EStagePdfFont::Bold, 10.0, MutedInk);
+	Doc.Text(ContentLeft, TitleBaseline, ReportTitle, EStagePdfFont::Bold, TitleTextSize, ReportInk);
+	Doc.TextRight(ContentRight, TitleBaseline, TEXT("StageCraft 3D"), EStagePdfFont::Bold, 10.0, ReportMutedInk);
 
 	const FString Generated = TEXT("Generated: ") + GeneratedAt.ToString(TEXT("%Y-%m-%d %H:%M"));
 	const double GeneratedWidth = FStagePdfDocument::MeasureText(Generated, EStagePdfFont::Regular, InfoTextSize);
 	Doc.Text(ContentLeft, SceneBaseline, FStagePdfDocument::FitText(TEXT("Scene: ") + DisplayScene, EStagePdfFont::Regular, InfoTextSize, ContentWidth - GeneratedWidth - 24.0),
-		EStagePdfFont::Regular, InfoTextSize, Ink);
-	Doc.TextRight(ContentRight, SceneBaseline, Generated, EStagePdfFont::Regular, InfoTextSize, Ink);
-	Doc.Text(ContentLeft, SummaryBaseline, FStagePdfDocument::FitText(Summary, EStagePdfFont::Regular, InfoTextSize, ContentWidth), EStagePdfFont::Regular, InfoTextSize, Ink);
-	Doc.Line(ContentLeft, TitleRuleY, ContentRight, TitleRuleY, 0.75, Ink);
+		EStagePdfFont::Regular, InfoTextSize, ReportInk);
+	Doc.TextRight(ContentRight, SceneBaseline, Generated, EStagePdfFont::Regular, InfoTextSize, ReportInk);
+	Doc.Text(ContentLeft, SummaryBaseline, FStagePdfDocument::FitText(Summary, EStagePdfFont::Regular, InfoTextSize, ContentWidth), EStagePdfFont::Regular, InfoTextSize, ReportInk);
+	Doc.Line(ContentLeft, TitleRuleY, ContentRight, TitleRuleY, 0.75, ReportInk);
 
 	const FString PageLabel = FString::Printf(TEXT("Page %d of %d"), PageIndex + 1, PageCount);
 	const double PageLabelWidth = FStagePdfDocument::MeasureText(PageLabel, EStagePdfFont::Regular, FooterTextSize);
-	Doc.Line(ContentLeft, FooterRuleY, ContentRight, FooterRuleY, 0.5, RuleInk);
+	Doc.Line(ContentLeft, FooterRuleY, ContentRight, FooterRuleY, 0.5, ReportRuleInk);
 	Doc.Text(ContentLeft, FooterBaseline, FStagePdfDocument::FitText(DisplayScene + Separator + FooterName, EStagePdfFont::Regular, FooterTextSize, ContentWidth - PageLabelWidth - 24.0),
-		EStagePdfFont::Regular, FooterTextSize, MutedInk);
-	Doc.TextRight(ContentRight, FooterBaseline, PageLabel, EStagePdfFont::Regular, FooterTextSize, MutedInk);
+		EStagePdfFont::Regular, FooterTextSize, ReportMutedInk);
+	Doc.TextRight(ContentRight, FooterBaseline, PageLabel, EStagePdfFont::Regular, FooterTextSize, ReportMutedInk);
 }
 
 TArray<uint8> FStageReportPdfComposer::Finish()

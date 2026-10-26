@@ -66,17 +66,19 @@ public:
 	/**
 	 * Adds Prompt to the conversation and answers it: interpreted, validated, then answered (questions), explained (help,
 	 * unsupported) or handed to Executor (actions). Called by AModularPlayerController::RequestAssistantPrompt. False, and
-	 * nothing added, for an empty prompt or while busy.
+	 * nothing added, for an empty prompt or while busy. SelectedItemNames are the asking player's
+	 * selected items (catalog names), the context for "the selected ..." requests and the online model.
 	 */
-	bool SubmitPrompt(const FString& Prompt, FStageAICommandExecutor Executor);
+	bool SubmitPrompt(const FString& Prompt, FStageAICommandExecutor Executor, TArray<FString> SelectedItemNames = TArray<FString>());
 
 	/** Ends a Pending action with its result line. Ignored unless an action is pending. */
 	void FinishPendingAction(const FStageAIActionOutcome& Outcome);
 
 	/**
-	 * Streams Item's Game bundle for a pending action; OnReady runs once it is in memory, possibly before this returns. False
+	 * Streams the Game bundles of Items (null entries skipped) for a pending action; OnReady runs once it is in memory, possibly before this returns. False
 	 * unless an action is in progress (called from the executor) and no load is already running.
 	 */
+	bool RequestItemAssets(TConstArrayView<const class UBaseItemData*> Items, FSimpleDelegate OnReady);
 	bool RequestItemAssets(const class UBaseItemData& Item, FSimpleDelegate OnReady);
 
 	/** Empties the conversation. Ignored while busy. */
@@ -118,6 +120,9 @@ private:
 
 	/** The executor of the prompt being answered; unbound when idle. */
 	FStageAICommandExecutor PendingExecutor;
+
+	/** The asking player's selection while a prompt is answered (SubmitPrompt); emptied when idle. */
+	TArray<FString> PromptSelection;
 
 	/** Null when the online model is off in the project settings. */
 	UPROPERTY(Transient)

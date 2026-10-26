@@ -3,11 +3,16 @@
 #include "Sketch/StageSketchBuilder.h"
 
 #include "Actors/ModularBaseActor.h"
+#include "Actors/StageArcTrussActor.h"
 #include "Actors/StageDeckActor.h"
 #include "Actors/StageSpanActor.h"
+#include "Actors/StageStairsActor.h"
+#include "Algo/Find.h"
 #include "Components/SpawnSystemComponent.h"
+#include "Data/StageArcTrussData.h"
 #include "Data/StageDeckData.h"
 #include "Data/StageSpanData.h"
+#include "Data/StageStairsData.h"
 #include "ModularSceneBuilder.h"
 
 #define LOCTEXT_NAMESPACE "StageSketchBuilder"
@@ -54,10 +59,17 @@ namespace StageSketchBuilder
 		UStageDeckData* DeckItem = Plan.DeckItem.Get();
 		UStageSpanData* TrussItem = Plan.TrussItem.Get();
 		UBaseItemData* FixtureItem = Plan.FixtureItem.Get();
-		if ((!Plan.Decks.IsEmpty() && !DeckItem) || (!Plan.Trusses.IsEmpty() && !TrussItem) || (!Plan.Fixtures.IsEmpty() && !FixtureItem))
+		UStageStairsData* StairsItem = Plan.StairsItem.Get();
+		UStageArcTrussData* ArcItem = Plan.ArcTrussItem.Get();
+		const struct FRequiredItem { bool bMissing; FText Name; } Required[] = {
+			{ !Plan.Decks.IsEmpty() && !DeckItem, LOCTEXT("Deck", "deck") },
+			{ !Plan.Trusses.IsEmpty() && !TrussItem, LOCTEXT("Truss", "truss") },
+			{ !Plan.Fixtures.IsEmpty() && !FixtureItem, LOCTEXT("Fixture", "fixture") },
+			{ !Plan.Stairs.IsEmpty() && !StairsItem, LOCTEXT("Stairs", "stairs") },
+			{ !Plan.ArcTrusses.IsEmpty() && !ArcItem, LOCTEXT("ArcTruss", "curved truss") } };
+		if (const FRequiredItem* Missing = Algo::FindByPredicate(Required, [](const FRequiredItem& Entry) { return Entry.bMissing; }))
 		{
-			Outcome.Result = MissingItem(!Plan.Decks.IsEmpty() && !DeckItem ? LOCTEXT("Deck", "deck")
-				: (!Plan.Trusses.IsEmpty() && !TrussItem ? LOCTEXT("Truss", "truss") : LOCTEXT("Fixture", "fixture")));
+			Outcome.Result = MissingItem(Missing->Name);
 			return Outcome;
 		}
 
@@ -99,6 +111,21 @@ namespace StageSketchBuilder
 			});
 			Outcome.DeckCount += bOk ? 1 : 0;
 		}
+		for (int32 Index = 0; bOk && Index < Plan.Stairs.Num(); ++Index)
+		{
+			const FStageSketchStairsPlan& Stairs = Plan.Stairs[Index];
+			bOk = Place(*StairsItem, 1, [&]()
+			{
+				return Spawner.SpawnConfiguredItem(StairsItem, Stairs.Transform, [&Stairs](AModularBaseActor& Actor)
+				{
+					if (AStageStairsActor* StairsActor = Cast<AStageStairsActor>(&Actor))
+					{
+						StairsActor->InitializeStairs(Stairs.Rise, Stairs.Width, Stairs.bHandrails);
+					}
+				});
+			});
+			Outcome.StairsCount += bOk ? 1 : 0;
+		}
 		for (int32 Index = 0; bOk && Index < Plan.Trusses.Num(); ++Index)
 		{
 			const FStageSketchTrussPlan& Truss = Plan.Trusses[Index];
@@ -114,6 +141,21 @@ namespace StageSketchBuilder
 			});
 			Outcome.TrussCount += bOk ? 1 : 0;
 		}
+		for (int32 Index = 0; bOk && Index < Plan.ArcTrusses.Num(); ++Index)
+		{
+			const FStageSketchArcTrussPlan& Arc = Plan.ArcTrusses[Index];
+			bOk = Place(*ArcItem, FMath::Max(1, Arc.Sections), [&]()
+			{
+				return Spawner.SpawnConfiguredItem(ArcItem, Arc.Transform, [&Arc](AModularBaseActor& Actor)
+				{
+					if (AStageArcTrussActor* ArcActor = Cast<AStageArcTrussActor>(&Actor))
+					{
+						ArcActor->InitializeArc(Arc.Radius, Arc.AngleDegrees);
+					}
+				});
+			});
+			Outcome.ArcTrussCount += bOk ? 1 : 0;
+		}
 		for (int32 Index = 0; bOk && Index < Plan.Fixtures.Num(); ++Index)
 		{
 			const FStageSketchFixturePlan& Fixture = Plan.Fixtures[Index];
@@ -126,7 +168,7 @@ namespace StageSketchBuilder
 			UE_LOG(LogStageCraft, Log, TEXT("Sketch build refused after %d of %d items (%s): %s; rolling back."), Placed.Num(), Plan.Num(),
 				*UEnum::GetValueAsString(Outcome.Result.Code), *Outcome.Result.Message.ToString());
 			RollBack(Spawner, Placed);
-			Outcome.DeckCount = Outcome.TrussCount = Outcome.FixtureCount = 0;
+			Outcome.DeckCount = Outcome.TrussCount = Outcome.FixtureCount = Outcome.StairsCount = Outcome.ArcTrussCount = 0;
 			return Outcome;
 		}
 		Outcome.Result = FStageEconomyResultInfo::Ok();

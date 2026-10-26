@@ -6,25 +6,23 @@
 #include "GameFramework/Pawn.h"
 #include "StageCameraPawn.generated.h"
 
-DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FOnStageCameraFlySpeedChanged, float, NewFlySpeed);
+DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FOnStageCameraSpeedChanged, float, NewCameraSpeed);
 
 /**
- * Editor-viewport fly camera. AModularPlayerController routes RMB-held input here; this pawn turns
- * it into motion that matches the Unreal Editor viewport:
- *  - look: yaw/pitch from mouse deltas, pitch clamped short of vertical so the view never flips;
- *  - W/S along the full look vector, A/D along the view's horizontal right vector;
- *  - E/Q strictly along world Z, on their own axis so vertical speed never depends on pitch or on
- *    what else is held;
- *  - the mouse wheel steps fly speed, which scales every axis (forward/back, strafe, up/down) alike, and look
- *    speed follows it on a square-root curve (see GetLookSpeedScale).
+ * Editor-viewport camera. UStageCameraNavigationComponent turns mouse and key input into calls here, with the Unreal Editor's
+ * rules (StageCameraNavigation, Docs/ADR/0018 §2); this pawn turns them into smooth motion:
+ *  - look: yaw/pitch, pitch clamped short of vertical so the view never flips;
+ *  - flying (fly keys while RMB is held): W/S along the full look vector, A/D along the view's horizontal right, E/Q strictly
+ *    along world Z on their own axis, all at the camera speed's fly rate (2000 cm/s per unit, as in the editor);
+ *  - drags and the wheel dolly: world translations, eased in over a few frames so uneven mouse bursts never judder;
+ *  - orbit: the view turns about a pivot and the camera stays on the sphere around it; dolly changes the distance;
+ *  - focus: a 0.25 s cubic-out glide to a framing location (the editor's FocusViewportOnBox transition).
  *
- * Both rotation and velocity are critically damped toward their targets with frame-rate-independent
- * exponential smoothing, so starts and stops are soft and identical at 30 or 240 fps. Raw mouse
- * deltas arrive in uneven per-frame bursts; smoothing the view (not the input) hides that jitter.
+ * Rotation and flight velocity are eased with frame-rate-independent exponential smoothing, identical at 30 or 240 fps.
+ * There is deliberately no movement component and no collision: the camera passes through stage geometry like the editor's.
  *
- * There is deliberately no movement component and no collision: motion is integrated directly,
- * so nothing (speed clamps, input normalisation, sweeps) can distort it. The camera passes through
- * stage geometry like the editor camera.
+ * Tick: on only while something moves. Every input wakes it; it switches itself off again once rotation, velocity, drag
+ * translation and focus have all settled, so an idle camera costs nothing per frame.
  */
 UCLASS()
 class MODULARSCENEBUILDER_API AStageCameraPawn : public APawn
@@ -34,7 +32,7 @@ class MODULARSCENEBUILDER_API AStageCameraPawn : public APawn
 public:
 	AStageCameraPawn();
 
-	/** Mouse delta in raw counts (X = yaw right, Y = pitch up). Scaled by LookSensitivity * GetLookSpeedScale(). */
+	/** Mouse delta in raw counts (X = yaw right, Y = pitch up), already multiplied by the user's look preferences. */
 	UFUNCTION(BlueprintCallable, Category = "StageCraft|Camera")
 	void AddLookInput(const FVector2D& MouseDelta);
 
@@ -42,13 +40,60 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "StageCraft|Camera")
 	void AddFlyInput(const FVector& Input);
 
+	/** A world translation (drag, wheel dolly), applied over the next few frames. Ignored in a fixed view and while orbiting. */
+	void AddTranslation(const FVector& Offset);
+
+	/** Turns the view by YawDegrees (the left-button drag). */
+	void AddYaw(double YawDegrees);
+
 	/**
-	 * Multiplies fly speed by FlySpeedStepFactor^Steps (mouse wheel notches), clamped to
-	 * [MinFlySpeed, MaxFlySpeed]. Geometric steps feel even across the whole range. The change reaches
-	 * the camera through the normal velocity easing, so adjusting mid-flight never jerks. Returns the new speed.
+	 * Starts orbiting Pivot from where the camera is now (Alt + drag). The distance is the camera's distance to the pivot, at
+	 * least StageCameraNavigation::MinOrbitDistance. Stops any flight and focus glide.
 	 */
+	void BeginOrbit(const FVector& Pivot);
+
+	/** Orbit by a mouse delta (Alt + LMB). No effect unless orbiting. */
+	void AddOrbitInput(const FVector2D& MouseDelta);
+
+	/** Dolly toward / away from the pivot (Alt + RMB). No effect unless orbiting. */
+	void AddOrbitDolly(const FVector2D& MouseDelta);
+
+	/** Moves the pivot and the camera together (Alt + MMB). No effect unless orbiting. */
+	void AddOrbitPan(const FVector& Offset);
+
+	/** Back to free flight; the camera keeps where the orbit left it. Idempotent. */
+	void EndOrbit();
+
+	bool IsOrbiting() const { return bOrbiting; }
+	const FVector& GetOrbitPivot() const { return OrbitPivot; }
+
+	/** Glides to NewLocation in StageCameraNavigation::FocusTransitionSeconds, keeping the view direction. */
+	void FocusOn(const FVector& NewLocation);
+
+	/** Camera speed (editor units, 1 = 20 m/s flight), clamped. Broadcasts OnCameraSpeedChanged when it changes. */
 	UFUNCTION(BlueprintCallable, Category = "StageCraft|Camera")
-	float AdjustFlySpeed(float Steps);
+	void SetCameraSpeed(float NewCameraSpeed);
+
+	/** RMB + wheel: StageCameraNavigation::StepCameraSpeed. Returns the new speed. */
+	UFUNCTION(BlueprintCallable, Category = "StageCraft|Camera")
+	float StepCameraSpeed(float Notches);
+
+	UFUNCTION(BlueprintPure, Category = "StageCraft|Camera")
+	float GetCameraSpeed() const { return CameraSpeed; }
+
+	/** Settled flight speed in cm/s at the current camera speed. */
+	UFUNCTION(BlueprintPure, Category = "StageCraft|Camera")
+	float GetFlySpeed() const;
+
+	/**
+	 * Look speed follows camera speed (STATE.md #15): (FlySpeed / LookSpeedReferenceFlySpeed)^LookSpeedScaleExponent, clamped
+	 * to [MinLookSpeedScale, MaxLookSpeedScale]. Off by default, as in the Unreal Editor (a Preferences option).
+	 */
+	void SetLookLinkedToCameraSpeed(bool bLinked) { bLinkLookToCameraSpeed = bLinked; }
+
+	/** 1 unless look is linked to camera speed. */
+	UFUNCTION(BlueprintPure, Category = "StageCraft|Camera")
+	float GetLookSpeedScale() const;
 
 	/** Points the view somewhere new, either instantly or through the normal rotation smoothing. */
 	UFUNCTION(BlueprintCallable, Category = "StageCraft|Camera")
@@ -56,8 +101,8 @@ public:
 
 	/**
 	 * Fixed view for orthographic projections (Docs/ADR/0008 §4.1): the view snaps to ViewRotation exactly (no pitch limit, so
-	 * Top can look straight down), look input is ignored, and fly input moves in the view plane (forward = screen up, right =
-	 * screen right, up/down ignored). Calling it again switches to another fixed rotation.
+	 * Top can look straight down), look and orbit input are ignored, and fly input moves in the view plane (forward = screen up,
+	 * right = screen right, up/down ignored). Calling it again switches to another fixed rotation.
 	 */
 	void EnterFixedView(const FRotator& ViewRotation);
 
@@ -66,23 +111,17 @@ public:
 
 	bool IsFixedView() const { return bFixedView; }
 
-	/** Moves the camera instantly (projection switches, orthographic pan and zoom) and stops any fly glide. */
+	/** Moves the camera instantly (projection switches, orthographic pan and zoom) and stops any glide, orbit or flight. */
 	void TeleportView(const FVector& NewLocation);
 
-	UFUNCTION(BlueprintPure, Category = "StageCraft|Camera")
-	float GetFlySpeed() const { return FlySpeed; }
+	/** The rotation the view is easing toward (what the camera will show once settled). */
+	const FRotator& GetTargetViewRotation() const { return TargetRotation; }
 
-	/**
-	 * Multiplier on LookSensitivity derived from the current fly speed, so looking around speeds up
-	 * with the wheel together with flying: (FlySpeed / LookSpeedReferenceFlySpeed)^LookSpeedScaleExponent,
-	 * clamped to [MinLookSpeedScale, MaxLookSpeedScale]. 1 when bScaleLookWithFlySpeed is off.
-	 */
-	UFUNCTION(BlueprintPure, Category = "StageCraft|Camera")
-	float GetLookSpeedScale() const;
+	/** True while the pawn is integrating motion (its tick is on). */
+	bool IsMoving() const { return IsActorTickEnabled(); }
 
-	/** Fired whenever fly speed actually changes, e.g. for a HUD speed readout. */
 	UPROPERTY(BlueprintAssignable, Category = "StageCraft|Camera")
-	FOnStageCameraFlySpeedChanged OnFlySpeedChanged;
+	FOnStageCameraSpeedChanged OnCameraSpeedChanged;
 
 	//~ Begin AActor Interface
 	virtual void Tick(float DeltaSeconds) override;
@@ -94,77 +133,61 @@ public:
 	//~ End APawn Interface
 
 protected:
-	/** Degrees of rotation per raw mouse count at the reference fly speed (before GetLookSpeedScale). */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "StageCraft|Camera|Look", meta = (ClampMin = "0.001"))
+	/** Degrees of rotation per raw mouse count (the editor's MouseSensitivty), before the user's look sensitivity. */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "StageCraft|Camera|Look", meta = (ClampMin = "0.001"))
 	float LookSensitivity = 0.2f;
 
-	/**
-	 * Ties look speed to fly speed, so a fast flight across the stage also turns fast and a slow
-	 * close-up gets finer aim. (The stock Unreal Editor keeps look speed fixed; turn this off for that.)
-	 */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "StageCraft|Camera|Look")
-	bool bScaleLookWithFlySpeed = true;
-
-	/** Fly speed at which look runs at exactly LookSensitivity (the default FlySpeed). */
-	UPROPERTY(EditAnywhere, Category = "StageCraft|Camera|Look", meta = (EditCondition = "bScaleLookWithFlySpeed", ClampMin = "1.0", Units = "cm/s"))
+	/** Fly speed at which a linked look runs at exactly LookSensitivity. */
+	UPROPERTY(EditAnywhere, Category = "StageCraft|Camera|Look", meta = (ClampMin = "1.0", Units = "cm/s"))
 	float LookSpeedReferenceFlySpeed = 1200.f;
 
-	/**
-	 * How strongly look follows fly speed. 1 would be strictly proportional, which over the 2000x fly
-	 * range is unusable (frozen at 10 cm/s, a full spin per twitch at 200 m/s). 0.5 (square root):
-	 * each doubling of fly speed turns ~1.41x faster, so look clearly tracks the wheel and stays controllable.
-	 */
-	UPROPERTY(EditAnywhere, Category = "StageCraft|Camera|Look", meta = (EditCondition = "bScaleLookWithFlySpeed", ClampMin = "0.0", ClampMax = "1.0"))
+	/** How strongly a linked look follows fly speed; 0.5 (square root) keeps it controllable over the whole range. */
+	UPROPERTY(EditAnywhere, Category = "StageCraft|Camera|Look", meta = (ClampMin = "0.0", ClampMax = "1.0"))
 	float LookSpeedScaleExponent = 0.5f;
 
-	/** Floor for slow close-up work: reached at and below 300 cm/s with the defaults. */
-	UPROPERTY(EditAnywhere, Category = "StageCraft|Camera|Look", meta = (EditCondition = "bScaleLookWithFlySpeed", ClampMin = "0.05"))
+	UPROPERTY(EditAnywhere, Category = "StageCraft|Camera|Look", meta = (ClampMin = "0.05"))
 	float MinLookSpeedScale = 0.5f;
 
-	/** Ceiling so very fast flight never turns faster than a hand can aim: reached at 10,800 cm/s with the defaults. */
-	UPROPERTY(EditAnywhere, Category = "StageCraft|Camera|Look", meta = (EditCondition = "bScaleLookWithFlySpeed", ClampMin = "1.0"))
+	UPROPERTY(EditAnywhere, Category = "StageCraft|Camera|Look", meta = (ClampMin = "1.0"))
 	float MaxLookSpeedScale = 3.f;
 
 	/**
-	 * How quickly the view catches up with the mouse, per second. Around 25 gives ~40 ms of glide:
-	 * enough to hide raw-input bursts while still feeling 1:1. Zero disables smoothing.
+	 * How quickly the view catches up with the mouse, per second. Around 25 gives ~40 ms of glide: enough to hide raw-input
+	 * bursts while still feeling 1:1. Zero disables smoothing.
 	 */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "StageCraft|Camera|Look", meta = (ClampMin = "0.0"))
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "StageCraft|Camera|Look", meta = (ClampMin = "0.0"))
 	float RotationSmoothing = 25.f;
 
 	/** Stops short of straight up/down: at exactly 90 degrees yaw becomes undefined and the view flips. */
 	UPROPERTY(EditAnywhere, Category = "StageCraft|Camera|Look", meta = (ClampMin = "0.0", ClampMax = "89.9", Units = "deg"))
 	float MaxPitch = 89.f;
 
-	/** Applies uniformly to every fly axis. Changed at runtime by the mouse wheel. */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "StageCraft|Camera|Fly", meta = (ClampMin = "1.0", Units = "cm/s"))
-	float FlySpeed = 1200.f;
-
-	/** Slow enough to nudge the view around a single truss clamp. */
-	UPROPERTY(EditAnywhere, Category = "StageCraft|Camera|Fly", meta = (ClampMin = "1.0", Units = "cm/s"))
-	float MinFlySpeed = 10.f;
-
-	/** Fast enough to cross an arena-sized layout in a couple of seconds. */
-	UPROPERTY(EditAnywhere, Category = "StageCraft|Camera|Fly", meta = (ClampMin = "1.0", Units = "cm/s"))
-	float MaxFlySpeed = 20000.f;
-
-	/** Speed multiplier per mouse-wheel notch. At 1.25 the full 10 cm/s to 200 m/s range is about 34 notches. */
-	UPROPERTY(EditAnywhere, Category = "StageCraft|Camera|Fly", meta = (ClampMin = "1.01"))
-	float FlySpeedStepFactor = 1.25f;
-
 	/**
-	 * How quickly velocity reaches its target, per second (acceleration and braking alike). Around 8
-	 * gives a ~0.12 s ease in/out; higher is snappier. Zero means instant start/stop.
+	 * How quickly flight velocity reaches its target, per second (acceleration and braking alike). Around 8 gives a ~0.12 s
+	 * ease in/out, close to the editor's damping of 10. Zero means instant start/stop.
 	 */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "StageCraft|Camera|Fly", meta = (ClampMin = "0.0"))
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "StageCraft|Camera|Fly", meta = (ClampMin = "0.0"))
 	float MovementSmoothing = 8.f;
+
+	/** How quickly drag and wheel translations are taken up, per second; like RotationSmoothing for motion. */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "StageCraft|Camera|Fly", meta = (ClampMin = "0.0"))
+	float TranslationSmoothing = 25.f;
 
 	UPROPERTY(VisibleAnywhere, Category = "Components")
 	TObjectPtr<class USceneComponent> CameraRoot = nullptr;
 
 private:
-	void TickRotation(class AController& ViewController, float DeltaSeconds);
-	void TickMovement(float DeltaSeconds);
+	/** Switches the tick on. When it was off, first adopts a rotation someone else set meanwhile, so input never fights it. */
+	void Wake();
+	void AdoptControlRotation(const class AController& ViewController);
+
+	/** Each returns true while it still has motion to apply. */
+	bool TickRotation(class AController& ViewController, float DeltaSeconds);
+	bool TickMovement(float DeltaSeconds);
+	bool TickFocus(float DeltaSeconds);
+	bool TickOrbit(float DeltaSeconds);
+
+	void CancelGlides();
 
 	/** Where the mouse has asked the view to point; the rendered view eases toward it. */
 	FRotator TargetRotation = FRotator::ZeroRotator;
@@ -174,6 +197,22 @@ private:
 	/** Orthographic axis view: rotation is held exactly and motion is planar (EnterFixedView). */
 	bool bFixedView = false;
 
+	float CameraSpeed = 1.f;
+	bool bLinkLookToCameraSpeed = false;
+
 	FVector PendingFlyInput = FVector::ZeroVector;
 	FVector Velocity = FVector::ZeroVector;
+
+	/** Drag and wheel translation not yet applied (or, while orbiting, pivot movement). */
+	FVector PendingTranslation = FVector::ZeroVector;
+
+	bool bOrbiting = false;
+	FVector OrbitPivot = FVector::ZeroVector;
+	double OrbitDistance = 0.0;
+	double TargetOrbitDistance = 0.0;
+
+	/** Focus glide: from FocusStart to FocusTarget over FocusTransitionSeconds; FocusElapsed < 0 when idle. */
+	FVector FocusStart = FVector::ZeroVector;
+	FVector FocusTarget = FVector::ZeroVector;
+	float FocusElapsed = -1.f;
 };

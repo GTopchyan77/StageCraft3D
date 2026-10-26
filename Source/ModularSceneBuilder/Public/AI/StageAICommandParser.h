@@ -34,6 +34,13 @@ namespace StageAICommandParser
 	/** Longest prompt read; the rest is ignored (the panel also caps what can be typed). */
 	constexpr int32 MaxPromptLength = 500;
 
+	/** Most items one delete, move or replace command changes. */
+	constexpr int32 MaxEditTargets = 200;
+
+	/** A move without a distance goes one metre; no move goes further than MaxMoveDistanceCm. */
+	constexpr double DefaultMoveDistanceCm = 100.0;
+	constexpr double MaxMoveDistanceCm = 5000.0;
+
 	/** The command Text asks for, or unset when the grammar does not understand it. */
 	MODULARSCENEBUILDER_API TOptional<FStageAICommand> Parse(const FString& Text);
 
@@ -42,6 +49,16 @@ namespace StageAICommandParser
 	 * "lights" and "fixtures" ignored). A query of only generic words picks the first candidate. INDEX_NONE when none match.
 	 */
 	MODULARSCENEBUILDER_API int32 MatchFixture(TConstArrayView<FStageAIFixtureCandidate> Candidates, const FString& Query);
+
+	/** Query has no words, or only generic fixture words ("lights", "fixtures"): it names "a light", not a particular item. */
+	MODULARSCENEBUILDER_API bool IsGenericFixtureQuery(const FString& Query);
+
+	/**
+	 * A placed item's catalog name answers Query (a Named target, CountMatching): every word of Query, singular and lowercase, is a
+	 * word of Name, except generic fixture words, which match any item with bIsFixture ("the lights" names every fixture). False
+	 * for an empty query.
+	 */
+	MODULARSCENEBUILDER_API bool MatchesItemName(const FString& Name, const FString& Query, bool bIsFixture = false);
 
 	/**
 	 * Plan positions (X, Y in cm) for Count added fixtures: a row along Y, FixtureRowSpacing apart and centred on Y = 0, at X = 0

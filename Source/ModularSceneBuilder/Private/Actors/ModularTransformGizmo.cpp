@@ -73,8 +73,8 @@ AModularTransformGizmo::AModularTransformGizmo()
 {
 	using namespace ModularTransformGizmo;
 
-	PrimaryActorTick.bCanEverTick = true;
-	PrimaryActorTick.bStartWithTickEnabled = false;
+	// Event-driven: SetView and the target's transform updates keep the on-screen size (STATE.md #45).
+	PrimaryActorTick.bCanEverTick = false;
 
 	static ConstructorHelpers::FObjectFinder<UStaticMesh> CylinderMesh(TEXT("/Engine/BasicShapes/Cylinder.Cylinder"));
 	static ConstructorHelpers::FObjectFinder<UStaticMesh> ConeMesh(TEXT("/Engine/BasicShapes/Cone.Cone"));
@@ -147,6 +147,7 @@ AModularTransformGizmo::AModularTransformGizmo()
 
 void AModularTransformGizmo::EndPlay(const EEndPlayReason::Type EndPlayReason)
 {
+	UnbindTarget();
 	if (UStageRenderSubsystem* Render = UStageRenderSubsystem::Get(this))
 	{
 		Render->UnregisterEditorHelper(this);
@@ -189,18 +190,38 @@ void AModularTransformGizmo::BeginPlay()
 	ApplyModeVisibility();
 }
 
-void AModularTransformGizmo::Tick(float DeltaSeconds)
+void AModularTransformGizmo::SetView(const FStageGizmoView& NewView)
 {
-	Super::Tick(DeltaSeconds);
+	View = NewView;
+	UpdateScreenScale();
+}
 
-	// Defensive: selection normally detaches us before the target dies.
-	if (!IsValid(Target))
+void AModularTransformGizmo::HandleTargetTransformUpdated(USceneComponent* UpdatedComponent, EUpdateTransformFlags UpdateTransformFlags, ETeleportType Teleport)
+{
+	UpdateScreenScale();
+}
+
+void AModularTransformGizmo::HandleTargetDestroyed(AActor* DestroyedActor)
+{
+	// Selection normally detaches the gizmo before its target dies; this covers anything that destroys it directly.
+	if (DestroyedActor == Target)
 	{
 		DetachFromTarget();
-		return;
 	}
+}
 
-	UpdateScreenScale();
+void AModularTransformGizmo::UnbindTarget()
+{
+	if (USceneComponent* Root = BoundTargetRoot.Get())
+	{
+		Root->TransformUpdated.Remove(TargetTransformHandle);
+	}
+	BoundTargetRoot.Reset();
+	TargetTransformHandle.Reset();
+	if (Target)
+	{
+		Target->OnDestroyed.RemoveDynamic(this, &ThisClass::HandleTargetDestroyed);
+	}
 }
 
 void AModularTransformGizmo::AttachToTarget(AActor* NewTarget)
@@ -217,20 +238,25 @@ void AModularTransformGizmo::AttachToTarget(AActor* NewTarget)
 	}
 
 	EndDrag();
+	UnbindTarget();
 	Target = NewTarget;
 
 	AttachToActor(Target, FAttachmentTransformRules(EAttachmentRule::SnapToTarget, EAttachmentRule::KeepWorld, EAttachmentRule::KeepWorld, false));
 	SetActorRotation(FRotator::ZeroRotator);
 
+	BoundTargetRoot = Target->GetRootComponent();
+	TargetTransformHandle = Target->GetRootComponent()->TransformUpdated.AddUObject(this, &ThisClass::HandleTargetTransformUpdated);
+	Target->OnDestroyed.AddUniqueDynamic(this, &ThisClass::HandleTargetDestroyed);
+
 	SetActorHiddenInGame(false);
 	SetActorEnableCollision(true);
-	SetActorTickEnabled(true);
 	UpdateScreenScale();
 }
 
 void AModularTransformGizmo::DetachFromTarget()
 {
 	EndDrag();
+	UnbindTarget();
 
 	if (Target)
 	{
@@ -240,7 +266,6 @@ void AModularTransformGizmo::DetachFromTarget()
 
 	SetActorHiddenInGame(true);
 	SetActorEnableCollision(false);
-	SetActorTickEnabled(false);
 }
 
 void AModularTransformGizmo::SetMode(EGizmoMode NewMode)
@@ -538,7 +563,9 @@ void AModularTransformGizmo::UpdateScreenScale()
 	}
 
 	// Orthographic views use the equivalent distance, so the gizmo keeps its size on screen in every projection.
-	const double Distance = StageViewMath::GetScreenScaleDistance(Viewer->PlayerCameraManager->GetCameraCacheView(), GetActorLocation());
+	const double Distance = View.IsSet()
+		? StageViewMath::GetScreenScaleDistance(View->bOrthographic, View->OrthoWidth, View->FOVDegrees, View->Location, GetActorLocation())
+		: StageViewMath::GetScreenScaleDistance(Viewer->PlayerCameraManager->GetCameraCacheView(), GetActorLocation());
 	GizmoRoot->SetWorldScale3D(FVector(FMath::Max(Distance * ScreenSizeFactor, 0.01)));
 }
 

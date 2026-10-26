@@ -12,6 +12,8 @@
  * above the 3D view, as one horizontal row of six sections separated by thin dividers with equal gaps: the projection dropdown,
  * the View menu button (an Unreal-style popup with the view modes and the Show > Grid toggle), grid snap (Off / 10 / 50 / 100 cm)
  * and angle snap (Off / 5 / 15 / 45 degrees) as toggling segments, Move / Rotate / Scale, and SKETCH / ASSIST (open the Sketch to Stage window, ADR 0015, and the AI Assistant, ADR 0016).
+ * A « toggle at the left collapses the row to a thin strip with only a » expand button (Ctrl+Shift+T by default, as in the
+ * Unreal Editor); the state is a per-machine preference owned by UStageViewportComponent (Docs/ADR/0018 §3).
  *
  * A view in the project's binding pattern:
  *  - It writes only through the owners' setters: UStageViewportComponent (projection, view mode, grid), UStageSnappingComponent
@@ -64,6 +66,7 @@ private:
 	void HandleGridSnapPicked(int32 Index);
 	void HandleAngleSnapPicked(int32 Index);
 	void HandleToolWindowPicked(int32 Index);
+	void HandleCollapsePicked(int32 Index);
 
 	UFUNCTION()
 	void HandleProjectionSelected(FString SelectedItem, ESelectInfo::Type SelectionType);
@@ -94,9 +97,20 @@ private:
 	UPROPERTY(Transient)
 	TArray<TObjectPtr<class UStageChoiceButton>> GizmoModeButtons;
 
-	/** The single SKETCH button (a one-button segment, styled like the others). */
+	/** The SKETCH and ASSIST buttons (one segment, styled like the others). */
 	UPROPERTY(Transient)
 	TArray<TObjectPtr<class UStageChoiceButton>> ToolWindowButtons;
+
+	/** The collapse / expand toggle (a one-button segment). */
+	UPROPERTY(Transient)
+	TArray<TObjectPtr<class UStageChoiceButton>> CollapseButtons;
+
+	/** The six sections, hidden while the toolbar is collapsed. */
+	UPROPERTY(Transient)
+	TObjectPtr<class UHorizontalBox> Sections = nullptr;
+
+	UPROPERTY(Transient)
+	TObjectPtr<class USizeBox> BarHeightBox = nullptr;
 
 	TWeakObjectPtr<class UStageViewportComponent> BoundViewport;
 	TWeakObjectPtr<class UStageSnappingComponent> BoundSnapping;

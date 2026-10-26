@@ -20,6 +20,15 @@ DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FOnGizmoDragStarted, AActor*, Target
 /** StartTransform is the target's transform when the drag began; the target already holds the end transform. */
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_TwoParams(FOnGizmoDragFinished, AActor*, Target, const FTransform&, StartTransform);
 
+/** What the gizmo's on-screen size depends on, pushed by the controller whenever it changes (AModularTransformGizmo::SetView). */
+struct FStageGizmoView
+{
+	bool bOrthographic = false;
+	double OrthoWidth = 0.0;
+	double FOVDegrees = 90.0;
+	FVector Location = FVector::ZeroVector;
+};
+
 /**
  * World-space move/rotate/scale gizmo for one target actor.
  *
@@ -36,7 +45,8 @@ DECLARE_DYNAMIC_MULTICAST_DELEGATE_TwoParams(FOnGizmoDragFinished, AActor*, Targ
  * Scale handles are the axis shafts with cube heads (one axis) plus a centre cube (uniform). Scale results
  * are clamped by StageTransformRules, the same limits the inspector applies.
  *
- * Ticks only while attached, to keep a constant on-screen size.
+ * Keeps a constant on-screen size without a tick: the controller pushes the view whenever the camera moves or the projection
+ * changes (SetView), and the gizmo re-scales when its target moves (the target root's TransformUpdated).
  */
 UCLASS(Blueprintable)
 class MODULARSCENEBUILDER_API AModularTransformGizmo : public AActor
@@ -65,6 +75,9 @@ public:
 
 	UFUNCTION(BlueprintPure, Category = "StageCraft|Gizmo")
 	EGizmoMode GetMode() const { return Mode; }
+
+	/** The current view, for the on-screen size. Called by the controller on camera and view changes. */
+	void SetView(const FStageGizmoView& NewView);
 
 	UPROPERTY(BlueprintAssignable, Category = "StageCraft|Gizmo")
 	FOnGizmoModeChanged OnModeChanged;
@@ -123,7 +136,6 @@ protected:
 	//~ Begin AActor Interface
 	virtual void BeginPlay() override;
 	virtual void EndPlay(const EEndPlayReason::Type EndPlayReason) override;
-	virtual void Tick(float DeltaSeconds) override;
 	//~ End AActor Interface
 
 	/**
@@ -216,8 +228,22 @@ private:
 
 	static FVector AxisVector(int32 AxisIndex);
 
+	/** The target moved (drag, undo, a numeric edit, the assistant): its distance to the camera changed. */
+	void HandleTargetTransformUpdated(class USceneComponent* UpdatedComponent, EUpdateTransformFlags UpdateTransformFlags, ETeleportType Teleport);
+
+	UFUNCTION()
+	void HandleTargetDestroyed(AActor* DestroyedActor);
+
+	void UnbindTarget();
+
 	UPROPERTY(Transient)
 	TObjectPtr<class AActor> Target = nullptr;
+
+	TWeakObjectPtr<class USceneComponent> BoundTargetRoot;
+	FDelegateHandle TargetTransformHandle;
+
+	/** Last view pushed by SetView; until the first one, the camera manager's cached view is used. */
+	TOptional<FStageGizmoView> View;
 
 	/** One per handle index: X, Y, Z, uniform. */
 	UPROPERTY(Transient)
