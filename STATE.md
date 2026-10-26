@@ -4015,3 +4015,168 @@ Design: `Docs/ADR/0018-ue-camera-shadow-budget-shapes-and-assistant-edits.md`.
 - The undo step for an assistant move is named by the transform history ("Transform N items"), not "Assistant: move".
 - A circle or arc can only be placed by the assistant or from the Library (at the default size), not drawn in the Sketch window.
 - The Armenian additions were written by Claude and should be read by a native speaker.
+
+## #46 — DMX patch subsystem, Art-Net / sACN input, Patch panel tools (2026-10-26)
+
+**Request (Gevor, 2026-10-26, pasted phase spec, "strictly follow Rules.md").**
+1. `UStageDMXPatchSubsystem`: DMX universes, channel allocation (start address, footprint per fixture type) and automated conflict-free patching. A DMX Patch table panel to inspect, re-address and assign fixtures.
+2. A light background UDP listener for Art-Net and sACN (E1.31), so external consoles or visualisers drive dimmer, colour (RGBW), pan/tilt and gobo in real time.
+3. `TObjectPtr`, encapsulation, no per-frame Tick (event-driven packets, efficient buffer updates), all tests, 0 warnings, STATE.md.
+
+**Gevor's decisions (asked before design, 2026-10-26):**
+- **Own small receiver** on the engine's sockets, not Epic's DMX Engine plugin. This replaces the #9 plan of a `StageCraftDMX` module on `DMXProtocol`.
+- **StageCraft universe 1 = Art-Net port-address 0 (0:0:0)** and sACN universe 1, with offsets in the settings.
+- **Input off until switched on**, remembered on this PC.
+- **Answer ArtPoll**, so consoles that send only to discovered nodes find StageCraft.
+
+Design: `Docs/ADR/0019-dmx-patch-and-network-input.md`.
+
+**What changed and why**
+- **Pure patch allocation (ADR 0019 §2.1).** `StageDMXPatching` (new) works on slots {key, patch, footprint}:
+  - `Fits` and `GetLastStartAddress`.
+  - `FindFree`: the first gap at or after a universe and address, moving to later universes when the start universe is full. It uses sorted ranges and a binary search.
+  - `FindConflicts`: a sorted sweep, O(n log n). The old pair loop was O(n²). A range past channel 512 is now a conflict too.
+  - `PlanConsecutive` (all or nothing), `PlanConflictRepair` (the first fixture in each overlap stays) and `SummarizeUsage`.
+- **`UStageDMXPatchSubsystem` (new, world, §2.2).**
+  - Fixtures register in BeginPlay, after the show control has given them their ID, and unregister in EndPlay.
+  - Auto-patch of new fixtures (`bAutoPatchNewFixtures`, moved here from the show control).
+  - A per-universe index, derived from the fixtures' own patch (still the source of truth). It is rebuilt lazily after any reported change: `ALightingFixtureActor::SetPatch`, `ApplyItemData` (a new footprint or a restored state), registration. `GetPatchRevision` and `OnPatchChanged` report changes.
+  - It also provides conflicts as fixture IDs, universe usage and the plans `PlanUnpatched`, `PlanConsecutive` and `PlanConflictRepair`.
+  - `UShowControlSubsystem` lost `FindNextFreePatch`, `FindPatchConflicts`, `GetPatchedUniverses` and `bAutoPatchNewFixtures`. It now takes the patch subsystem as an `InitializeDependency` and renders and decodes only the fixtures of the universe in question.
+- **Rules and undo for patching (§2.3).**
+  - The GameMode refuses an address a fixture does not fit: "… uses 21 channels, so its address can be 1 to 492".
+  - `StageCraftTags::IsPatchParameter` covers the fixture ID, universe and address. Single patch edits from the inspector or the Patch panel are now undoable.
+  - New `AModularPlayerController::RequestPatchFixtures(Assignments, EmptyReason)`:
+    - It checks every new universe and address with the GameMode before anything changes.
+    - It applies them through the session in one edit transaction, so the plan is one undo step.
+    - It rolls back if a write fails.
+    - It refuses an empty plan with the planner's reason.
+  - The old PATCH UNPATCHED sent the universe and the address as two separate requests; that is gone.
+- **Art-Net / sACN receiver (§3).**
+  - `StageDMXNetProtocol` (new, pure) parses and validates packets:
+    - Art-Net 4 ArtDmx: protocol 14+, the length present in the datagram, 15-bit port-address.
+    - ArtPoll.
+    - E1.31 data packets: every vector, the PDU flags, priority ≤ 200, universe 1..63999, DMP fields, property count, START code 0, Stream_Terminated.
+    - Builders for ArtDmx, ArtPoll, ArtPollReply (239 bytes, four ports per bind index, grouped by Net/Sub-Net) and sACN data. The ArtPollReply builder is used to answer polls; the others serve the tests and SendTest.
+  - `FStageDMXSourceArbiter` picks one source per universe:
+    - the highest priority wins (Art-Net counts as 100);
+    - a source is gone after 2.5 s of silence, or at once when it sends Stream_Terminated;
+    - sACN frames up to 20 behind in sequence are dropped.
+  - `StageDMXNetworkTypes` (new) holds:
+    - `FStageDMXInputSettings`, saved per PC in `UStageCraftUserSettings` (GameUserSettings.ini), always sanitized;
+    - the states Off / Listening / Failed and the status struct;
+    - wire↔StageCraft universe numbering.
+  - `FStageDMXNetworkReceiver` / `FStageDMXInbox` (new, private):
+    - two sockets, each read by an engine `FUdpSocketReceiver` thread;
+    - parsing, mapping and arbitration on the socket thread, keeping only the newest 512 slots per universe under one lock;
+    - the first frame after a drain queues one game-thread task (`AsyncTask` holding a weak pointer), so there is one hand-off per batch and nothing at all while the wire is quiet;
+    - ArtPoll is answered to the poller, at most 10 reply rounds per second;
+    - the sACN socket joins the multicast group of each patched universe on the chosen card;
+    - Stop joins the threads before it destroys the sockets.
+  - `UStageNetworkDMXBridge` (new, private, a `UStageDMXBridge`):
+    - It owns the receiver. Output is off, so the show does not render frames for it.
+    - It drains on the game thread into `ReceiveUniverse`.
+  - `UStageDMXNetworkSubsystem` (new, world):
+    - It switches the input on and off and remembers the choice.
+    - On `OnWorldBeginPlay` it re-opens a remembered "on" and gives the show to External.
+    - It keeps the multicast groups and ArtPollReply in step with the patch, updating once on the next tick.
+    - Status goes out on `OnInputChanged`: at once for every state change, at most every 0.5 s while frames arrive.
+  - New `AModularPlayerController::RequestSetDMXInput(bool)`. On opens the ports and switches the show to External through the cue rules. Off closes them and switches back to Internal. A port that cannot be opened is reported on OnRequestRejected.
+  - `Sockets` and `Networking` are new private module dependencies. The Build.cs comment about the DMX Engine plugin was updated.
+- **Efficient decode (§4).** `UShowControlSubsystem::ReceiveDMXUniverse` now returns the number of fixtures it updated. It decodes only:
+  - the fixtures of that universe (from the index);
+  - and among them, only those whose own channels differ from the last frame of that universe.
+
+  The last frames are forgotten when the patch or the control source changes. Consoles repeat unchanged frames about 44 times a second, and those now cost nothing.
+- **Patch panel (§5).**
+  - A second header bar with:
+    - **DMX IN: ON / OFF** and the input status: ports, live universes and sources, Art-Net / sACN frames, invalid datagrams, or the error in the warning colour;
+    - **FIX CONFLICTS**;
+    - **PATCH SELECTION AT** with universe and address fields;
+    - the usage of each universe (`U1 63/512`, `!` on conflicts).
+  - PATCH UNPATCHED is now **AUTO PATCH**.
+  - Every tool goes through `RequestPatchFixtures`. The panel rebuilds on `OnPatchChanged` and updates the input line on `OnInputChanged`. There is still no tick.
+- **Console (development builds only).**
+  - `StageCraft.DMX.Input On|Off|Status`
+  - `StageCraft.DMX.Settings [Bind=…] [ArtNetFirst=n] [SACNFirst=n] [ArtNet|SACN|ArtPoll=On|Off]`: the network card and universe offsets. They are saved on this PC, and a running input restarts with them. There is no panel field for them yet.
+  - `StageCraft.DMX.AutoPatch`, `StageCraft.DMX.FixConflicts`, `StageCraft.DMX.PatchSelection <u> <a>`
+  - `StageCraft.DMX.SendTest ArtNet|sACN <wire universe> <channel> <value> [count]`: sends a real frame to this PC.
+
+**Files**
+- New code:
+  - `Public/Show/StageDMXPatching.h`, `Private/Show/StageDMXPatching.cpp`
+  - `Public/Show/StageDMXNetProtocol.h`, `Private/Show/StageDMXNetProtocol.cpp`
+  - `Public/Show/StageDMXNetworkTypes.h`, `Private/Show/StageDMXNetworkTypes.cpp`
+  - `Private/Show/StageDMXNetworkReceiver.h/.cpp`, `Private/Show/StageNetworkDMXBridge.h/.cpp`
+  - `Public/Subsystems/StageDMXPatchSubsystem.h`, `Private/Subsystems/StageDMXPatchSubsystem.cpp`
+  - `Public/Subsystems/StageDMXNetworkSubsystem.h`, `Private/Subsystems/StageDMXNetworkSubsystem.cpp`
+  - `Private/Show/StageDMXConsoleCommands.cpp`
+- New tests:
+  - `Private/Show/Tests/StageDMXPatchingTests.cpp`
+  - `Private/Show/Tests/StageDMXNetProtocolTests.cpp`
+  - `Private/Show/Tests/StageDMXReceiverTests.cpp`
+- Changed code:
+  - `ModularSceneBuilder.Build.cs`
+  - `Public|Private/Subsystems/ShowControlSubsystem`
+  - `Public|Private/Actors/LightingFixtureActor`
+  - `Public|Private/Player/ModularPlayerController`
+  - `Private/Game/StageCraftGameModeBase.cpp`
+  - `Public|Private/Data/StageParameterTypes`
+  - `Public|Private/Settings/StageCraftUserSettings`
+  - `Public|Private/UI/StagePatchPanel`
+  - `Public/Report/StagePatchSheetSubsystem.h`, `Private/Report/StagePatchSheetSubsystem.cpp`
+  - `Private/Show/StageShowConsoleCommands.cpp`
+- New and changed docs: `Docs/ADR/0019-dmx-patch-and-network-input.md` (new), `Docs/CURRENT_SYSTEMS.md`, `tasks/todo.md`, `STATE.md`
+- No content assets changed. The Patch panel is a C++ widget and `DA_Panel_Patch` is unchanged.
+
+**Verification**
+- **Builds:** Editor, Game Development and Game Shipping (`-DisableAdaptiveUnity`) all **succeeded with 0 warnings**. They were built with `-NoHotReloadFromIDE` because Gevor's KMidden editor was open.
+- **Automation: 108/108 `StageCraft.*` passed** (exit code 0). 12 tests are new:
+  - DMX.Patching: Fit, FindFree, Conflicts, Plans, Usage.
+  - DMX.Protocol: ArtNet, ArtPollReply, SACN, Sources, Numbering.
+  - **DMX.Receiver:** real Art-Net and sACN datagrams over loopback, on test ports 16454 / 15568:
+    - mapped onto universes 1 and 2, with the newest frame kept;
+    - hand-offs coalesced;
+    - garbage counted, not shown;
+    - ArtPoll answered with a 239-byte reply naming the node;
+    - a receiver with no protocol refuses to start and leaves nothing open;
+    - Stop is idempotent.
+  - **DMX.PatchWorld:** a game world with real fixtures:
+    - auto-patch packs them 1.001 / 1.022 / 1.043;
+    - the index follows a re-patch;
+    - a conflict is found and repaired with only the later fixture moving;
+    - consecutive plans are in fixture-ID order;
+    - a received universe updates both fixtures the first time, nothing on a repeat, and one fixture for one changed channel, and is ignored while Internal;
+    - after a re-patch the next frame applies in full;
+    - auto-patch off leaves a new fixture unpatched, and AUTO PATCH plans it into the first gap.
+- **Scripted Standalone `-game` runs** (`Saved/Logs/R46_Run1..4.log`). Gevor's workspace session and GameUserSettings were backed up and restored, and compared identical after every run.
+  - **Run 1 (his saved layout):**
+    - DMX IN on listened on Art-Net 6454 and sACN 5568 on every card.
+    - Art-Net frames from `SendTest` arrived on universe 1.
+    - An sACN frame for the same universe sent 0.5 s later was ignored (equal priority, Art-Net still live: "ignored 1").
+    - After 5 s of Art-Net silence, sACN took over ("live universes [1] from 1 sources").
+    - DMX IN off closed the ports.
+  - **Run 3 (default layout, Patch tab docked):**
+    - Address 10 on Spot 102 made a conflict: red "!", "2 conflicts", "U1 30/512 !" (`ScreenShot00049.png`).
+    - Address 500 was refused: "Spot 102 uses 21 channels, so its address can be 1 to 492".
+    - `FixConflicts` moved Spot 102 back to 1.022 as one step.
+    - Undo brought the conflict back; redo fixed it again. Edit.History named the step "Change Address of Spot 102".
+    - DMX IN on plus one Art-Net frame put Spot 101's dimmer at 65535 and every other channel at 0 (pan −270, tilt −135, black). The beam lit.
+    - The status line read "Listening · Art-Net 6454, sACN 5568 on every network card · 1 universe live from 1 source · 1 Art-Net, 0 sACN frames" (`ScreenShot00050.png`, `Saved/Screenshots/WindowsEditor`).
+  - **Run 4:**
+    - `StageCraft.DMX.Settings ArtNetFirst=1 SACNFirst=101 Bind=bogus` restarted the running input with Art-Net 1 = universe 1 and sACN 101 = universe 1. The bogus address fell back to every card.
+    - An Art-Net frame on port-address 1 arrived as universe 1.
+    - The settings were set back to the defaults.
+- **Not verified:**
+  - A real console or visualiser on the LAN (another PC, multicast sACN from another machine), the Windows firewall prompt on first listen, and discovery by a real controller through ArtPollReply.
+  - By a person: the DMX IN button, FIX CONFLICTS / AUTO PATCH / PATCH SELECTION AT and the start fields by mouse; the inspector Ctrl+Z on a patch edit.
+- Status: **implemented, awaiting manual verification.**
+
+**Commit:** uncommitted (working tree). #45 is still staged and uncommitted too. Commit #45 first (its index is unchanged), then stage #46.
+
+**Known issues / follow-ups**
+- The DMX patch is not carried over when the assistant replaces a fixture (from #45; still open).
+- No DMX output (Art-Net / sACN send), no HTP / LTP merge, no RDM, no sACN universe discovery, one DMX mode per fixture.
+- While External, a fixture changed by hand is not overwritten until the console changes one of its channels. This is the price of skipping repeated frames (ADR 0019 §4).
+- ArtPollReply announces the address the OS prefers when listening on every card. A PC with several cards should set `Bind=`.
+- The network card and universe offsets can only be set with the console command; the Patch panel has no fields for them.

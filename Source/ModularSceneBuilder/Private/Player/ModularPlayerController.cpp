@@ -2,6 +2,7 @@
 
 #include "Player/ModularPlayerController.h"
 
+#include "Actors/LightingFixtureActor.h"
 #include "Actors/ModularBaseActor.h"
 #include "Actors/ModularTransformGizmo.h"
 #include "AI/StageAICommandRunner.h"
@@ -49,10 +50,12 @@
 #include "Report/StageCableScheduleSubsystem.h"
 #include "Report/StagePatchSheetSubsystem.h"
 #include "Scene/StageSceneComponent.h"
+#include "Subsystems/StageDMXNetworkSubsystem.h"
 #include "Sketch/StageSketchBuilder.h"
 #include "Sketch/StageSketchGenerator.h"
 #include "Sketch/StageSketchSubsystem.h"
 #include "Subsystems/ShowControlSubsystem.h"
+#include "Subsystems/StageDMXPatchSubsystem.h"
 #include "Subsystems/StageEconomySubsystem.h"
 #include "Subsystems/StageItemSubsystem.h"
 #include "Subsystems/StageSessionSubsystem.h"
@@ -1180,9 +1183,10 @@ FStageEconomyResultInfo AModularPlayerController::RequestParameterChange(UObject
 		}
 	}
 
-	// Edits that reshape the item (a span's length or sag) are undoable steps, like placing or deleting.
+	// Edits that reshape the item (a span's length or sag) or re-address a fixture are undoable steps, like placing or deleting.
 	FStageParameterValue QuantityBefore;
-	const bool bRecordParameter = StageCraftTags::IsShapeParameter(ParameterId) && Target->Implements<UStageParameterInterface>()
+	const bool bRecordParameter = (StageCraftTags::IsShapeParameter(ParameterId) || StageCraftTags::IsPatchParameter(ParameterId))
+		&& Target->Implements<UStageParameterInterface>()
 		&& IStageParameterInterface::Execute_GetParameterValue(Target, ParameterId, QuantityBefore);
 
 	if (bGroupEdit)
@@ -1406,6 +1410,127 @@ FStageEconomyResultInfo AModularPlayerController::RequestMoveItems(const TArray<
 	}
 	EditHistory->RecordTransformChanges(Changes);
 	RequestPreviewRefresh();
+	return FStageEconomyResultInfo::Ok();
+}
+
+FStageEconomyResultInfo AModularPlayerController::RequestPatchFixtures(TConstArrayView<FStageDMXPatchAssignment> Assignments, const FText& EmptyReason)
+{
+	const auto Refuse = [this](const FStageEconomyResultInfo& Refusal)
+	{
+		ReportRejection(Refusal);
+		return Refusal;
+	};
+	const AStageCraftGameModeBase* GameMode = GetStageGameMode();
+	UStageSessionSubsystem* Session = UWorld::GetSubsystem<UStageSessionSubsystem>(GetWorld());
+	if (!GameMode || !Session)
+	{
+		return Refuse(FStageEconomyResultInfo::Fail(EStageEconomyResult::InvalidRequest, LOCTEXT("PatchNoAuthority", "Patching needs the StageCraft game mode.")));
+	}
+
+	struct FPatchChange
+	{
+		TWeakObjectPtr<ALightingFixtureActor> Fixture;
+		FStageDMXPatch Before;
+		FStageDMXPatch After;
+	};
+	TArray<FPatchChange> Changes;
+	for (const FStageDMXPatchAssignment& Assignment : Assignments)
+	{
+		ALightingFixtureActor* Fixture = Assignment.Fixture.Get();
+		if (IsValid(Fixture) && !Fixture->IsActorBeingDestroyed() && !(Fixture->GetPatch() == Assignment.Patch)
+			&& !Changes.ContainsByPredicate([Fixture](const FPatchChange& Change) { return Change.Fixture == Fixture; }))
+		{
+			Changes.Add({ Fixture, Fixture->GetPatch(), Assignment.Patch });
+		}
+	}
+	if (Changes.IsEmpty())
+	{
+		return Refuse(FStageEconomyResultInfo::Fail(EStageEconomyResult::InvalidRequest,
+			EmptyReason.IsEmpty() ? LOCTEXT("PatchNothing", "There is nothing to patch.") : EmptyReason));
+	}
+
+	// Every fixture must accept both halves of its new patch before any changes.
+	for (const FPatchChange& Change : Changes)
+	{
+		for (const TPair<FGameplayTag, int32>& Field : { TPair<FGameplayTag, int32>(StageCraftTags::Param_Patch_Universe, Change.After.Universe),
+			TPair<FGameplayTag, int32>(StageCraftTags::Param_Patch_Address, Change.After.Address) })
+		{
+			const FStageEconomyResultInfo Verdict = GameMode->EvaluateParameterChange(this, Change.Fixture.Get(), Field.Key, FStageParameterValue::MakeInteger(Field.Value));
+			if (!Verdict.IsSuccess())
+			{
+				return Refuse(Verdict);
+			}
+		}
+	}
+
+	// One undo step for the whole plan. An edit transaction someone else opened (none is expected) collects it instead.
+	const bool bOwnTransaction = EditHistory->BeginTransaction();
+	const FText UniverseName = LOCTEXT("PatchUniverse", "Universe");
+	const FText AddressName = LOCTEXT("PatchAddress", "Address");
+	for (int32 Index = 0; Index < Changes.Num(); ++Index)
+	{
+		ALightingFixtureActor* Fixture = Changes[Index].Fixture.Get();
+		EditHistory->RecordParameterChange(Fixture, StageCraftTags::Param_Patch_Universe, UniverseName, FStageParameterValue::MakeInteger(Changes[Index].Before.Universe));
+		EditHistory->RecordParameterChange(Fixture, StageCraftTags::Param_Patch_Address, AddressName, FStageParameterValue::MakeInteger(Changes[Index].Before.Address));
+		if (!Session->ApplyParameterChange(Fixture, StageCraftTags::Param_Patch_Universe, FStageParameterValue::MakeInteger(Changes[Index].After.Universe))
+			|| !Session->ApplyParameterChange(Fixture, StageCraftTags::Param_Patch_Address, FStageParameterValue::MakeInteger(Changes[Index].After.Address)))
+		{
+			// Back where they were, so the transaction records nothing.
+			for (int32 Applied = 0; Applied <= Index; ++Applied)
+			{
+				if (ALightingFixtureActor* Restored = Changes[Applied].Fixture.Get())
+				{
+					Session->ApplyParameterChange(Restored, StageCraftTags::Param_Patch_Universe, FStageParameterValue::MakeInteger(Changes[Applied].Before.Universe));
+					Session->ApplyParameterChange(Restored, StageCraftTags::Param_Patch_Address, FStageParameterValue::MakeInteger(Changes[Applied].Before.Address));
+				}
+			}
+			if (bOwnTransaction)
+			{
+				EditHistory->EndTransaction();
+			}
+			return Refuse(FStageEconomyResultInfo::Fail(EStageEconomyResult::InvalidRequest,
+				FText::Format(LOCTEXT("PatchNotAccepted", "{0} could not be patched to {1}."), Fixture->GetInstanceLabel(),
+					FText::FromString(FString::Printf(TEXT("%d.%03d"), Changes[Index].After.Universe, Changes[Index].After.Address)))));
+		}
+	}
+	if (bOwnTransaction)
+	{
+		EditHistory->EndTransaction();
+	}
+	UE_LOG(LogStageCraft, Log, TEXT("DMX patch: %d fixtures re-patched in one step."), Changes.Num());
+	return FStageEconomyResultInfo::Ok();
+}
+
+FStageEconomyResultInfo AModularPlayerController::RequestSetDMXInput(bool bEnabled)
+{
+	UStageDMXNetworkSubsystem* Network = UWorld::GetSubsystem<UStageDMXNetworkSubsystem>(GetWorld());
+	if (!Network)
+	{
+		return FStageEconomyResultInfo::Fail(EStageEconomyResult::InvalidRequest, LOCTEXT("NoDMXInput", "DMX input is not available here."));
+	}
+
+	// Input without External would be received and ignored; External without input would freeze the show. They go together.
+	if (bEnabled)
+	{
+		FText Error;
+		if (!Network->SetInputEnabled(true, Error))
+		{
+			const FStageEconomyResultInfo Refusal = FStageEconomyResultInfo::Fail(EStageEconomyResult::InvalidRequest, Error);
+			ReportRejection(Refusal);
+			return Refusal;
+		}
+		if (!RequestSetControlSource(EStageControlSource::External))
+		{
+			FText Ignored;
+			Network->SetInputEnabled(false, Ignored);
+			return FStageEconomyResultInfo::Fail(EStageEconomyResult::InvalidRequest, LOCTEXT("NoExternal", "The show cannot switch to external DMX now."));
+		}
+		return FStageEconomyResultInfo::Ok();
+	}
+
+	FText Ignored;
+	Network->SetInputEnabled(false, Ignored);
+	RequestSetControlSource(EStageControlSource::Internal);
 	return FStageEconomyResultInfo::Ok();
 }
 

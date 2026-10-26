@@ -11,7 +11,7 @@
  * Exports the stage's DMX patch sheet as a print-ready PDF and a CSV beside it, to Saved/StageCraft/Reports
  * (Docs/ADR/0011-cue-list-and-patch-sheet-export.md §3.2).
  *
- * Holds no patch state: the rows are read on the game thread from UShowControlSubsystem (fixtures, patch, conflicts) when an
+ * Holds no patch state: the rows are read on the game thread from UShowControlSubsystem (fixtures) and UStageDMXPatchSubsystem (conflicts) when an
  * export starts; both documents are rendered and written atomically on a worker (UE::Tasks), and the result returns on the
  * game thread to a weakly held subsystem. One export at a time; a result that arrives after the world went away is dropped.
  * Requested through AModularPlayerController::RequestExportPatchSheet. No tick.

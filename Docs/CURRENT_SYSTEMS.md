@@ -1,6 +1,6 @@
 # StageCraft 3D: current systems
 
-Updated 2026-10-23 after STATE.md #45. This is a quick reference to what exists, how well it works, and where it lives. It was audited on 2026-10-20 at commit `960f5da`. Evidence, file:line references and the risk list are in `Docs/PROJECT_AUDIT.md`.
+Updated 2026-10-26 after STATE.md #46. This is a quick reference to what exists, how well it works, and where it lives. It was audited on 2026-10-20 at commit `960f5da`. Evidence, file:line references and the risk list are in `Docs/PROJECT_AUDIT.md`.
 
 **Legend**
 
@@ -71,9 +71,10 @@ Paths are relative to `Source/ModularSceneBuilder/` (`Public/` and `Private/` sh
 |---|---|---|
 | Cue list: store / re-record, update, delete, Go, Back, Go To, crossfade (writes only the attributes that change, #39), Internal/External; GameMode rules, undo, saved in scenes (v3) | ✅ rules, history, file, fade / 🟢 panel (mouse check pending, #38) | `Subsystems/ShowControlSubsystem`, `UI/StageCuePanel`, `History/StageCueCommands`, `Game/StageCraftGameModeBase` (EvaluateCueRequest) |
 | Timeline / Sequencer | ⚪ | — |
-| Patch: auto-ID, auto-patch, conflict detection, Patch panel | 🟢 no tests | `ShowControlSubsystem`, `UI/StagePatchPanel` |
+| Patch: auto-ID, auto-patch, per-universe index, conflicts (sweep, past 512), AUTO PATCH / FIX CONFLICTS / PATCH SELECTION AT as one undo step, address must fit the footprint, universe usage (#46, ADR 0019) | ✅ allocation, index, decode / 🟢 panel (mouse check pending) | `Show/StageDMXPatching`, `Subsystems/StageDMXPatchSubsystem`, `Player/ModularPlayerController` (RequestPatchFixtures), `UI/StagePatchPanel` |
 | DMX encode/decode, simulated live values | ✅ data / 🟢 actor | `LightingFixtureActor::WriteDMX/ReadDMX` |
-| DMX output or input to hardware | ⚪ `UStageDMXBridge` is abstract and empty | `Show/StageDMXBridge` |
+| DMX input over the network: Art-Net 4 (ArtDmx, ArtPollReply) and sACN E1.31 (multicast joins, priority, timeout, sequence, termination), socket threads with a coalesced game-thread hand-off, only changed fixtures decoded; DMX IN in the Patch panel, remembered per PC (#46, ADR 0019) | ✅ parser, sources, loopback receiver / 🟢 real console on the LAN (not tried) | `Show/StageDMXNetProtocol`, `Show/StageDMXNetworkReceiver`, `Show/StageNetworkDMXBridge`, `Subsystems/StageDMXNetworkSubsystem` |
+| DMX output to hardware | ⚪ (the bridge boundary exists; no sender) | `Show/StageDMXBridge` |
 
 ## Data, persistence, reports
 | System | Status | Where |

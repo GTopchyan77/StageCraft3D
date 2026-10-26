@@ -242,6 +242,9 @@ namespace StageCraftTags
 	/** Parameters that reshape an item (a span's length or sag, a deck's height): undoable steps, refused while the item is locked. Includes the quantity parameters. */
 	MODULARSCENEBUILDER_API bool IsShapeParameter(const FGameplayTag& ParameterId);
 
+	/** A fixture's writable patch: fixture ID, universe and address. Undoable steps (Docs/ADR/0019 §2.3). */
+	MODULARSCENEBUILDER_API bool IsPatchParameter(const FGameplayTag& ParameterId);
+
 	/** Parameters that change how an item is listed (outliner, bill of materials): label, visibility, lock and quantity. */
 	MODULARSCENEBUILDER_API bool IsListingParameter(const FGameplayTag& ParameterId);
 

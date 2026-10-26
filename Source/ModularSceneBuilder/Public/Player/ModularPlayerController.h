@@ -331,6 +331,23 @@ public:
 	bool RequestSetControlSource(EStageControlSource Source);
 
 	/**
+	 * Re-patches fixtures as ONE undoable step (the Patch panel's AUTO PATCH, FIX CONFLICTS and PATCH SELECTION, planned by
+	 * UStageDMXPatchSubsystem; Docs/ADR/0019 §2.3). All or nothing: every new universe and address is checked by the GameMode's
+	 * EvaluateParameterChange first (an address the fixture does not fit refuses the whole plan), then written through the
+	 * session. Dead fixtures and ones already at their patch are left out. A refusal is reported on OnRequestRejected; an empty
+	 * plan is refused with EmptyReason (the planner's "why not"), or a generic reason when that is empty.
+	 */
+	FStageEconomyResultInfo RequestPatchFixtures(TConstArrayView<struct FStageDMXPatchAssignment> Assignments, const FText& EmptyReason);
+
+	/**
+	 * Switches the Art-Net / sACN input on or off (Patch panel DMX IN, Docs/ADR/0019 §3). On opens the ports and switches the
+	 * show to External; off closes them and switches back to Internal. The choice is remembered on this PC. A port that
+	 * cannot be opened (another program holds it) is reported on OnRequestRejected and nothing changes.
+	 */
+	UFUNCTION(BlueprintCallable, Category = "StageCraft|Requests")
+	FStageEconomyResultInfo RequestSetDMXInput(bool bEnabled);
+
+	/**
 	 * Imports model files into the Library (files dropped on a panel, Import Model...). The GameMode decides whether imports are
 	 * allowed; files that cannot be imported are reported on OnRequestRejected. Accepted files import in the background and report
 	 * through UStageMeshImportSubsystem::OnImportFinished. Returns how many files were queued.

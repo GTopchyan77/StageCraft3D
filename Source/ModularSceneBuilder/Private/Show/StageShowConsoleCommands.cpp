@@ -21,6 +21,7 @@
 #include "ModularSceneBuilder.h"
 #include "Player/ModularPlayerController.h"
 #include "Subsystems/ShowControlSubsystem.h"
+#include "Subsystems/StageDMXPatchSubsystem.h"
 #include "UI/StagePatchPanel.h"
 
 namespace StageShowCommands
@@ -127,11 +128,12 @@ namespace StageShowCommands
 	void Patch(const TArray<FString>& Args, UWorld* World)
 	{
 		const UShowControlSubsystem* ShowControl = World ? World->GetSubsystem<UShowControlSubsystem>() : nullptr;
-		if (!ShowControl)
+		const UStageDMXPatchSubsystem* Patching = World ? World->GetSubsystem<UStageDMXPatchSubsystem>() : nullptr;
+		if (!ShowControl || !Patching)
 		{
 			return;
 		}
-		const TArray<int32> Conflicts = ShowControl->FindPatchConflicts();
+		const TArray<int32> Conflicts = Patching->FindPatchConflicts();
 		for (const ALightingFixtureActor* Fixture : ShowControl->GetFixtures())
 		{
 			const FStageDMXPatch FixturePatch = Fixture->GetPatch();

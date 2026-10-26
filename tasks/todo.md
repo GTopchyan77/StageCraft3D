@@ -48,7 +48,7 @@ See `STATE.md` for detailed history of completed work.
 - [ ] Show panel WBP: cue list, Store / Go / Back / Delete, fade time, control source switch, patch conflict warning
 - [ ] Strobe clock in `UShowControlSubsystem` (one tick for all strobing fixtures)
 - [ ] Beam visual: cone mesh/material driven by Zoom and Dimmer; laser fixture actor (Niagara)
-- [ ] `StageCraftDMX` module: bridge over the DMX Engine plugin (`DMXProtocol`, Art-Net + sACN ports), enabled via the uproject
+- [x] ~~`StageCraftDMX` module over the DMX Engine plugin~~ replaced by our own Art-Net / sACN input (STATE.md #46, ADR 0019); DMX output still open
 - [~] Show file save/load: stage scenes done (STATE.md #26, JSON scene files with items, transforms, ids, SaveGame state); cue list not saved yet
 - [ ] Rigging: snap fixtures to truss `RiggingPoints`, truss-to-truss `Connectors`, load per point against the safe working load
 - [ ] Audio: coverage cone visualisation, line array hang builder (splay chaining)
@@ -239,7 +239,7 @@ See `STATE.md` for detailed history of completed work.
 - [ ] Manual verification (Gevor): STATE.md #30 "Not verified" list
 - [ ] Re-enable plugins one by one once they compile with StageCraft (`PlacementGizmo` enum rename; UnrealNGGMCP pick one version)
 - [ ] Haze render banding in Off/FXAA: force temporal AA or finer fog Z for haze renders (measure first)
-- [ ] Undo for attribute and patch edits; cue list saved with scenes
+- [ ] Undo for attribute and patch edits; cue list saved with scenes (patch edits undoable since STATE.md #46; attribute edits still open)
 
 ## Milestone audit (STATE.md #31, 2026-10-19)
 - [x] Audit every Tick / timer / polling path; gobo, iris and shutter MID updates only on attribute writes; patch sheet and faders push-only
@@ -407,3 +407,16 @@ Decisions (Gevor, 2026-10-22): close the 500-fixture crossfade gap with a fixtur
 - [x] Assistant: delete / move / replace of selected or named items (fixtures, decks, truss), build shapes (round riser, stairs, truss arc) in English and Armenian, offline and through Claude (tool fields; online path untested live); undoable; tests
 - [x] Builds: Editor, Game Development, Game Shipping (0 warnings); all automation (96/96); scripted run R45_Run1
 - [ ] Manual verification (Gevor): mouse feel of every drag, F, toolbar collapse, stairs / curved truss in the inspector, the assistant edits by mouse selection
+
+## Phase 23 — DMX patch subsystem, Art-Net / sACN input (requested by Gevor 2026-10-26; STATE.md #46, ADR 0019)
+Decisions (Gevor, 2026-10-26): our own small Art-Net + sACN receiver on the engine's sockets (no DMX Engine plugin); StageCraft universe 1 = Art-Net port-address 0 (0:0:0) and sACN universe 1, offsets in the settings; network input off until switched on, remembered per PC; answer ArtPoll so consoles discover StageCraft.
+- [x] Pure patch math `StageDMXPatching` (fit, first free range, conflict sweep, consecutive plan, conflict repair plan); tests
+- [x] `UStageDMXPatchSubsystem` (world): patch registry and per-universe index, auto-patch of new fixtures, conflicts, universe usage, patch plans; patch functions moved out of `UShowControlSubsystem`
+- [x] Controller `RequestPatchFixtures` (all-or-nothing through the rules, one undo step); single patch edits undoable; GameMode refuses an address the fixture does not fit
+- [x] Pure protocol `StageDMXNet` (ArtDmx / ArtPoll / ArtPollReply, E1.31 data packets, multicast groups) + source arbitration (sACN priority, 2.5 s timeout, sequence, stream terminated); tests
+- [x] Receiver: `FStageDMXNetworkReceiver` (FUdpSocketReceiver threads, coalesced hand-off to the game thread, no tick), `UStageNetworkDMXBridge`, `UStageDMXNetworkSubsystem` (state, status, sACN multicast joins follow the patch); settings in the user settings; loopback test
+- [x] `UShowControlSubsystem::ReceiveDMXUniverse` decodes only fixtures of that universe whose channels changed
+- [x] Patch panel: DMX IN switch + status, universe usage, AUTO PATCH, FIX CONFLICTS, PATCH SELECTION AT U.AAA
+- [x] Console: `StageCraft.DMX.Input`, `StageCraft.DMX.Settings`, `StageCraft.DMX.AutoPatch`, `StageCraft.DMX.FixConflicts`, `StageCraft.DMX.SendTest` (dev only)
+- [x] Builds: Editor, Game Development, Game Shipping (0 warnings); all automation (108/108); scripted runs R46_Run1-4 with loopback Art-Net and sACN
+- [ ] Manual verification (Gevor): a real console or a visualiser sending Art-Net / sACN on the LAN, the Windows firewall prompt, ArtPoll discovery

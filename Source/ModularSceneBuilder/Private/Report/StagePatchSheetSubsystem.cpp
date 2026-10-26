@@ -12,6 +12,7 @@
 #include "Report/StagePatchSheet.h"
 #include "Report/StageReportFiles.h"
 #include "Subsystems/ShowControlSubsystem.h"
+#include "Subsystems/StageDMXPatchSubsystem.h"
 #include "Subsystems/StageSessionSubsystem.h"
 #include "Tasks/Task.h"
 
@@ -37,7 +38,8 @@ void UStagePatchSheetSubsystem::Deinitialize()
 TArray<FStagePatchSheetRow> UStagePatchSheetSubsystem::GatherRows(const UShowControlSubsystem& ShowControl) const
 {
 	const TArray<ALightingFixtureActor*> Fixtures = ShowControl.GetFixtures();
-	const TArray<int32> Conflicts = ShowControl.FindPatchConflicts();
+	const UStageDMXPatchSubsystem* Patching = UWorld::GetSubsystem<UStageDMXPatchSubsystem>(ShowControl.GetWorld());
+	const TArray<int32> Conflicts = Patching ? Patching->FindPatchConflicts() : TArray<int32>();
 
 	TArray<FStagePatchSheetRow> Rows;
 	Rows.Reserve(Fixtures.Num());

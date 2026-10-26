@@ -188,6 +188,11 @@ namespace StageCraftTags
 			|| ParameterId == Param_Stairs_Rise || ParameterId == Param_Stairs_Width || ParameterId == Param_Stairs_Handrails;
 	}
 
+	bool IsPatchParameter(const FGameplayTag& ParameterId)
+	{
+		return ParameterId == Param_Patch_FixtureId || ParameterId == Param_Patch_Universe || ParameterId == Param_Patch_Address;
+	}
+
 	bool IsPhotometricParameter(const FGameplayTag& ParameterId)
 	{
 		return ParameterId == Param_Photo_BeamAngle || ParameterId == Param_Photo_Intensity || ParameterId == Param_Photo_Throw

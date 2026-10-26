@@ -6,6 +6,7 @@
 #include "GameFramework/GameUserSettings.h"
 #include "Input/StageKeyBindings.h"
 #include "Render/StageRenderTypes.h"
+#include "Show/StageDMXNetworkTypes.h"
 #include "StageCraftUserSettings.generated.h"
 
 /**
@@ -112,6 +113,12 @@ public:
 	/** Returns true if the stored value changed. Does not save. */
 	bool SetViewportToolbarCollapsed(bool bCollapsed);
 
+	/** Art-Net / sACN input of this PC (UStageDMXNetworkSubsystem is the only writer), always sanitized. */
+	const FStageDMXInputSettings& GetDMXInputSettings() const { return DMXInput; }
+
+	/** Sanitized (StageDMXInput::Sanitize). Returns true if the stored value changed. Does not save. */
+	bool SetDMXInputSettings(const FStageDMXInputSettings& Settings);
+
 private:
 	void ResetAudioToDefaults();
 	void SanitizeAudio();
@@ -153,6 +160,9 @@ private:
 
 	UPROPERTY(Config)
 	bool bViewportToolbarCollapsed = false;
+
+	UPROPERTY(Config)
+	FStageDMXInputSettings DMXInput;
 
 	/** Only the commands whose keys differ from the defaults (FStageKeyBindings::ToOverrides). */
 	UPROPERTY(Config)

@@ -25,8 +25,8 @@
  * beam diameter) are read-only parameters derived from the attributes and one line trace for the
  * throw, made lazily after pan, tilt or the transform changed (StagePhotometry).
  *
- * Registers with UShowControlSubsystem on BeginPlay, which assigns a free fixture ID and
- * auto-patches it if needed. Like every stage item it never ticks.
+ * Registers on BeginPlay with UShowControlSubsystem, which assigns a free fixture ID, then with UStageDMXPatchSubsystem,
+ * which auto-patches it if needed and is told of every later patch change. Like every stage item it never ticks.
  */
 UCLASS(Blueprintable, Config = Game)
 class MODULARSCENEBUILDER_API ALightingFixtureActor : public AModularBaseActor
@@ -213,6 +213,10 @@ private:
 	double TraceThrow() const;
 
 	class UShowControlSubsystem* GetShowControl() const;
+	class UStageDMXPatchSubsystem* GetPatchSubsystem() const;
+
+	/** Tells the patch subsystem the addressing changed (patch or footprint). No-op before BeginPlay. */
+	void NotifyPatchSubsystem();
 
 	UPROPERTY(Transient)
 	TObjectPtr<class UMaterialInstanceDynamic> BeamShapingInstance = nullptr;

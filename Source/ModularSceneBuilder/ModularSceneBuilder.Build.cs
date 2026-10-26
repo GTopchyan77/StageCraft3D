@@ -21,6 +21,9 @@ public class ModularSceneBuilder : ModuleRules
 		// ImageWrapper decodes the PNG / JPEG drawings imported into Sketch to Stage.
 		PrivateDependencyModuleNames.AddRange(new string[] { "AudioCaptureCore", "ImageWrapper" });
 
+		// ADR 0019: the Art-Net / sACN input is a small receiver of our own on the engine's UDP sockets (FUdpSocketReceiver, FIPv4Address).
+		PrivateDependencyModuleNames.AddRange(new string[] { "Sockets", "Networking" });
+
 		// The UI font's Armenian sub-font (Noto Sans Armenian, SIL OFL 1.1) is read from these files at runtime, so they ship with the module.
 		RuntimeDependencies.Add(Path.Combine(ModuleDirectory, "Resources", "Fonts", "NotoSansArmenian-Regular.ttf"), StagedFileType.UFS);
 		RuntimeDependencies.Add(Path.Combine(ModuleDirectory, "Resources", "Fonts", "NotoSansArmenian-Bold.ttf"), StagedFileType.UFS);
@@ -51,8 +54,7 @@ public class ModularSceneBuilder : ModuleRules
 			}
 		}
 
-		// DMX Engine (Art-Net/sACN) is deliberately not a dependency of this module. A separate
-		// module that depends on "DMXProtocol" implements UStageDMXBridge (see STATE.md #9).
+		// The DMX Engine plugin is deliberately not a dependency: StageCraft reads Art-Net and sACN itself (ADR 0019 section 3).
 
 		// Uncomment if you are using online features
 		// PrivateDependencyModuleNames.Add("OnlineSubsystem");

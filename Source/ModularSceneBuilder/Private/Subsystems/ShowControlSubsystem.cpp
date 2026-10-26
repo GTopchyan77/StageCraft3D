@@ -8,27 +8,23 @@
 #include "GameFramework/PlayerController.h"
 #include "ModularSceneBuilder.h"
 #include "Show/StageDMXBridge.h"
+#include "Show/StageDMXPatching.h"
 #include "Show/StageShadowBudget.h"
+#include "Subsystems/StageDMXPatchSubsystem.h"
 #include "TimerManager.h"
 
 #include UE_INLINE_GENERATED_CPP_BY_NAME(ShowControlSubsystem)
 
 namespace
 {
-	constexpr int32 DMXUniverseSize = 512;
+	constexpr int32 DMXUniverseSize = StageDMXPatching::UniverseSize;
 
-	/** Inclusive, 1-based range a patched fixture occupies. */
-	bool GetOccupiedRange(const ALightingFixtureActor& Fixture, int32& OutFirst, int32& OutLast)
+	/** Whether Fixture's channels hold the same values in Previous as in Current (both full 512-slot frames). */
+	bool AreFixtureChannelsUnchanged(const ALightingFixtureActor& Fixture, TConstArrayView<uint8> Previous, TConstArrayView<uint8> Current)
 	{
-		const FStageDMXPatch Patch = Fixture.GetPatch();
-		const int32 Footprint = Fixture.GetDMXFootprint();
-		if (!Patch.IsPatched() || Footprint <= 0)
-		{
-			return false;
-		}
-		OutFirst = Patch.Address;
-		OutLast = Patch.Address + Footprint - 1;
-		return true;
+		const int32 First = Fixture.GetPatch().Address - 1;
+		const int32 Count = FMath::Min(Fixture.GetDMXFootprint(), DMXUniverseSize - First);
+		return First >= 0 && Count > 0 && FMemory::Memcmp(Previous.GetData() + First, Current.GetData() + First, Count) == 0;
 	}
 }
 
@@ -36,6 +32,12 @@ bool UShowControlSubsystem::DoesSupportWorldType(const EWorldType::Type WorldTyp
 {
 	// Shows run in play sessions only; editor worlds have no fixtures registering.
 	return WorldType == EWorldType::Game || WorldType == EWorldType::PIE;
+}
+
+void UShowControlSubsystem::Initialize(FSubsystemCollectionBase& Collection)
+{
+	Super::Initialize(Collection);
+	Patch = Collection.InitializeDependency<UStageDMXPatchSubsystem>();
 }
 
 void UShowControlSubsystem::Deinitialize()
@@ -48,6 +50,8 @@ void UShowControlSubsystem::Deinitialize()
 	Fixtures.Reset();
 	Fades.Reset();
 	Strobes.Reset();
+	LastInputFrames.Reset();
+	Patch = nullptr;
 
 	Super::Deinitialize();
 }
@@ -147,14 +151,8 @@ void UShowControlSubsystem::RegisterFixture(ALightingFixtureActor* Fixture)
 		Fixture->SetFixtureId(GetNextFreeFixtureId());
 	}
 
-	if (bAutoPatchNewFixtures && !Fixture->GetPatch().IsPatched() && Fixture->GetDMXFootprint() > 0)
-	{
-		Fixture->SetPatch(FindNextFreePatch(Fixture->GetDMXFootprint()));
-	}
-
 	Fixtures.Add(Fixture);
-	UE_LOG(LogStageCraft, Log, TEXT("Fixture %d registered (%s), patch %d.%03d."),
-		Fixture->GetFixtureId(), *Fixture->GetName(), Fixture->GetPatch().Universe, Fixture->GetPatch().Address);
+	UE_LOG(LogStageCraft, Log, TEXT("Fixture %d registered (%s)."), Fixture->GetFixtureId(), *Fixture->GetName());
 	MarkShadowBudgetDirty();
 	OnFixturesChanged.Broadcast();
 }
@@ -272,89 +270,6 @@ int32 UShowControlSubsystem::GetNextFreeFixtureId() const
 		}
 	}
 	return Highest + 1;
-}
-
-FStageDMXPatch UShowControlSubsystem::FindNextFreePatch(int32 Footprint, int32 StartUniverse) const
-{
-	FStageDMXPatch Result;
-	if (Footprint <= 0 || Footprint > DMXUniverseSize)
-	{
-		return Result;
-	}
-
-	for (int32 Universe = FMath::Max(1, StartUniverse); Universe <= 63999; ++Universe)
-	{
-		TBitArray<> Used(false, DMXUniverseSize + 1);
-		bool bUniverseEmpty = true;
-		for (const TWeakObjectPtr<ALightingFixtureActor>& Fixture : Fixtures)
-		{
-			int32 First = 0;
-			int32 Last = 0;
-			if (Fixture.IsValid() && Fixture->GetPatch().Universe == Universe && GetOccupiedRange(*Fixture, First, Last))
-			{
-				bUniverseEmpty = false;
-				for (int32 Slot = First; Slot <= FMath::Min(Last, DMXUniverseSize); ++Slot)
-				{
-					Used[Slot] = true;
-				}
-			}
-		}
-
-		if (bUniverseEmpty)
-		{
-			Result.Universe = Universe;
-			Result.Address = 1;
-			return Result;
-		}
-
-		int32 RunStart = 1;
-		for (int32 Slot = 1; Slot <= DMXUniverseSize; ++Slot)
-		{
-			if (Used[Slot])
-			{
-				RunStart = Slot + 1;
-			}
-			else if (Slot - RunStart + 1 >= Footprint)
-			{
-				Result.Universe = Universe;
-				Result.Address = RunStart;
-				return Result;
-			}
-		}
-	}
-	return Result;
-}
-
-TArray<int32> UShowControlSubsystem::FindPatchConflicts() const
-{
-	TArray<ALightingFixtureActor*> Sorted = GetFixtures();
-	TSet<int32> Conflicts;
-
-	for (int32 IndexA = 0; IndexA < Sorted.Num(); ++IndexA)
-	{
-		int32 FirstA = 0;
-		int32 LastA = 0;
-		if (!GetOccupiedRange(*Sorted[IndexA], FirstA, LastA))
-		{
-			continue;
-		}
-		for (int32 IndexB = IndexA + 1; IndexB < Sorted.Num(); ++IndexB)
-		{
-			int32 FirstB = 0;
-			int32 LastB = 0;
-			if (Sorted[IndexB]->GetPatch().Universe == Sorted[IndexA]->GetPatch().Universe
-				&& GetOccupiedRange(*Sorted[IndexB], FirstB, LastB)
-				&& FirstA <= LastB && FirstB <= LastA)
-			{
-				Conflicts.Add(Sorted[IndexA]->GetFixtureId());
-				Conflicts.Add(Sorted[IndexB]->GetFixtureId());
-			}
-		}
-	}
-
-	TArray<int32> Result = Conflicts.Array();
-	Result.Sort();
-	return Result;
 }
 
 // --- Cues ---
@@ -639,6 +554,8 @@ void UShowControlSubsystem::SetControlSource(EStageControlSource NewSource)
 		Fades.Reset();
 	}
 	ControlSource = NewSource;
+	// Frames received under the other source were never applied, so none may count as "unchanged".
+	LastInputFrames.Reset();
 	OnControlSourceChanged.Broadcast(ControlSource);
 }
 
@@ -647,49 +564,57 @@ bool UShowControlSubsystem::IsDMXOutputActive() const
 	return DMXBridge && DMXBridge->IsOutputEnabled() && ControlSource == EStageControlSource::Internal;
 }
 
-void UShowControlSubsystem::ReceiveDMXUniverse(int32 Universe, const TArray<uint8>& Channels)
+int32 UShowControlSubsystem::ReceiveDMXUniverse(int32 Universe, const TArray<uint8>& Channels)
 {
-	if (ControlSource != EStageControlSource::External || Channels.Num() < DMXUniverseSize)
+	if (ControlSource != EStageControlSource::External || Channels.Num() < DMXUniverseSize || !Patch)
 	{
-		return;
+		return 0;
 	}
 
-	for (const TWeakObjectPtr<ALightingFixtureActor>& Fixture : Fixtures)
+	// A re-patched fixture's channels hold no comparable "last value", so a patch change forgets every frame.
+	if (LastInputPatchRevision != Patch->GetPatchRevision())
 	{
-		if (Fixture.IsValid() && Fixture->GetPatch().Universe == Universe)
+		LastInputPatchRevision = Patch->GetPatchRevision();
+		LastInputFrames.Reset();
+	}
+
+	TArray<uint8>* Previous = LastInputFrames.Find(Universe);
+	int32 Updated = 0;
+	for (const TWeakObjectPtr<ALightingFixtureActor>& Fixture : Patch->GetFixturesInUniverse(Universe))
+	{
+		if (Fixture.IsValid() && !(Previous && AreFixtureChannelsUnchanged(*Fixture, *Previous, Channels)))
 		{
 			Fixture->ReadDMX(Channels);
+			++Updated;
 		}
 	}
+
+	if (Previous)
+	{
+		FMemory::Memcpy(Previous->GetData(), Channels.GetData(), DMXUniverseSize);
+	}
+	else
+	{
+		LastInputFrames.Add(Universe, TArray<uint8>(Channels.GetData(), DMXUniverseSize));
+	}
+	return Updated;
 }
 
 TArray<uint8> UShowControlSubsystem::RenderDMXUniverse(int32 Universe) const
 {
 	TArray<uint8> Data;
 	Data.SetNumZeroed(DMXUniverseSize);
-	for (const TWeakObjectPtr<ALightingFixtureActor>& Fixture : Fixtures)
+	if (Patch)
 	{
-		if (Fixture.IsValid() && Fixture->GetPatch().Universe == Universe)
+		for (const TWeakObjectPtr<ALightingFixtureActor>& Fixture : Patch->GetFixturesInUniverse(Universe))
 		{
-			Fixture->WriteDMX(Data);
+			if (Fixture.IsValid())
+			{
+				Fixture->WriteDMX(Data);
+			}
 		}
 	}
 	return Data;
-}
-
-TArray<int32> UShowControlSubsystem::GetPatchedUniverses() const
-{
-	TSet<int32> Universes;
-	for (const TWeakObjectPtr<ALightingFixtureActor>& Fixture : Fixtures)
-	{
-		if (Fixture.IsValid() && Fixture->GetPatch().IsPatched())
-		{
-			Universes.Add(Fixture->GetPatch().Universe);
-		}
-	}
-	TArray<int32> Result = Universes.Array();
-	Result.Sort();
-	return Result;
 }
 
 void UShowControlSubsystem::TickDMXOutput(float DeltaTime)
@@ -708,7 +633,11 @@ void UShowControlSubsystem::TickDMXOutput(float DeltaTime)
 	// Drop missed frames instead of bursting: DMX is a stream of states, not events.
 	DMXOutputAccumulator = FMath::Fmod(DMXOutputAccumulator, Interval);
 
-	for (const int32 Universe : GetPatchedUniverses())
+	if (!Patch)
+	{
+		return;
+	}
+	for (const int32 Universe : Patch->GetPatchedUniverses())
 	{
 		DMXBridge->SendUniverse(Universe, RenderDMXUniverse(Universe));
 	}

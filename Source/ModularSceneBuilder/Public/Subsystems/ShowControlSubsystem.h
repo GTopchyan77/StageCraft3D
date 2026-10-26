@@ -14,7 +14,7 @@ DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FOnShowCueEvent, float, CueNumber);
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FOnShowControlSourceChanged, EStageControlSource, NewSource);
 
 /**
- * Show control for one world: fixture registry and patch, cue list with crossfade playback,
+ * Show control for one world: fixture registry (IDs; addresses are UStageDMXPatchSubsystem's), cue list with crossfade playback,
  * and the DMX in/out boundary.
  *
  * A world subsystem because fixtures are world actors and a show belongs to a venue (level).
@@ -31,6 +31,7 @@ class MODULARSCENEBUILDER_API UShowControlSubsystem : public UTickableWorldSubsy
 
 public:
 	//~ Begin USubsystem / UWorldSubsystem Interface
+	virtual void Initialize(FSubsystemCollectionBase& Collection) override;
 	virtual void Deinitialize() override;
 	//~ End USubsystem / UWorldSubsystem Interface
 
@@ -67,17 +68,7 @@ public:
 	UFUNCTION(BlueprintPure, Category = "StageCraft|Show")
 	int32 GetNextFreeFixtureId() const;
 
-	/** First address range of Footprint channels, from StartUniverse upwards, that no patched fixture occupies. */
-	UFUNCTION(BlueprintPure, Category = "StageCraft|Show")
-	FStageDMXPatch FindNextFreePatch(int32 Footprint, int32 StartUniverse = 1) const;
-
-	/** Fixture IDs whose DMX ranges overlap another fixture's. */
-	UFUNCTION(BlueprintCallable, Category = "StageCraft|Show")
-	TArray<int32> FindPatchConflicts() const;
-
-	/** New fixtures without a patch get the next free address. Off = they stay unpatched until the user patches them. */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "StageCraft|Show")
-	bool bAutoPatchNewFixtures = true;
+	// DMX addresses (free ranges, conflicts, auto-patch, universes) are UStageDMXPatchSubsystem's (Docs/ADR/0019 §2).
 
 	UPROPERTY(BlueprintAssignable, Category = "StageCraft|Show")
 	FOnShowFixturesChanged OnFixturesChanged;
@@ -182,17 +173,17 @@ public:
 	UFUNCTION(BlueprintPure, Category = "StageCraft|DMX")
 	EStageControlSource GetControlSource() const { return ControlSource; }
 
-	/** Inbound DMX frame (from the bridge). Applied to fixtures only in External control mode. */
+	/**
+	 * Inbound DMX frame (from the bridge). Applied only in External control mode, and only to the fixtures patched in Universe
+	 * whose own channels differ from the last frame of that universe: consoles repeat unchanged frames ~44 times a second, and
+	 * those cost nothing (Docs/ADR/0019 §4). Returns the number of fixtures updated.
+	 */
 	UFUNCTION(BlueprintCallable, Category = "StageCraft|DMX")
-	void ReceiveDMXUniverse(int32 Universe, const TArray<uint8>& Channels);
+	int32 ReceiveDMXUniverse(int32 Universe, const TArray<uint8>& Channels);
 
 	/** Encodes every fixture patched in Universe into a 512-slot buffer. Also useful for debugging patches. */
 	UFUNCTION(BlueprintCallable, Category = "StageCraft|DMX")
 	TArray<uint8> RenderDMXUniverse(int32 Universe) const;
-
-	/** Universes that have at least one patched fixture, ascending. */
-	UFUNCTION(BlueprintCallable, Category = "StageCraft|DMX")
-	TArray<int32> GetPatchedUniverses() const;
 
 	/** DMX refresh rate for output. 44 Hz is the practical maximum of a full 512-slot DMX512 line. */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "StageCraft|DMX", meta = (ClampMin = "1.0", ClampMax = "60.0", Units = "Hz"))
@@ -260,6 +251,17 @@ private:
 	int32 FindCueIndex(float CueNumber) const;
 
 	TArray<TWeakObjectPtr<class ALightingFixtureActor>> Fixtures;
+
+	/** The addressing this show reads and writes DMX by. Resolved in Initialize; same world, so it outlives every use. */
+	UPROPERTY(Transient)
+	TObjectPtr<class UStageDMXPatchSubsystem> Patch = nullptr;
+
+	/**
+	 * The last frame received per universe, to find which fixtures' channels changed. Forgotten when the patch changes
+	 * (PatchRevision) or the control source does, so the next frame is applied in full.
+	 */
+	TMap<int32, TArray<uint8>> LastInputFrames;
+	uint32 LastInputPatchRevision = 0;
 
 	UPROPERTY(Transient)
 	TArray<FShowCue> Cues;

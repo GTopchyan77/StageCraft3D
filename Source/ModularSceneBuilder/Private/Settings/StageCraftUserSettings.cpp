@@ -31,6 +31,7 @@ void UStageCraftUserSettings::SetToDefaults()
 	AngleSnapDegrees = StageViewMath::DefaultAngleSnapDegrees;
 	bViewportGridVisible = true;
 	bViewportToolbarCollapsed = false;
+	DMXInput = FStageDMXInputSettings();
 	ResetInputToDefaults();
 }
 
@@ -44,6 +45,7 @@ void UStageCraftUserSettings::LoadSettings(bool bForceReload)
 	}
 	SanitizeAudio();
 	RenderSettings = StageRender::Sanitize(RenderSettings);
+	DMXInput = StageDMXInput::Sanitize(DMXInput);
 	// A hand-edited ini can only select a toolbar preset; anything else falls back to the default.
 	GridSnapCm = StageViewMath::SanitizeGridSnap(GridSnapCm);
 	AngleSnapDegrees = StageViewMath::SanitizeAngleSnap(AngleSnapDegrees);
@@ -215,4 +217,12 @@ void UStageCraftUserSettings::SanitizeInput()
 		? FMath::Clamp(LookSensitivity, StageInputPreferences::MinLookSensitivity, StageInputPreferences::MaxLookSensitivity)
 		: StageInputPreferences::DefaultLookSensitivity;
 	CameraSpeed = StageCameraNavigation::SanitizeCameraSpeed(CameraSpeed);
+}
+
+bool UStageCraftUserSettings::SetDMXInputSettings(const FStageDMXInputSettings& Settings)
+{
+	const FStageDMXInputSettings Sanitized = StageDMXInput::Sanitize(Settings);
+	const bool bChanged = !(DMXInput == Sanitized);
+	DMXInput = Sanitized;
+	return bChanged;
 }

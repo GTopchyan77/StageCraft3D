@@ -13,6 +13,7 @@
 #include "Materials/MaterialInstanceDynamic.h"
 #include "ModularSceneBuilder.h"
 #include "Subsystems/ShowControlSubsystem.h"
+#include "Subsystems/StageDMXPatchSubsystem.h"
 
 #include UE_INLINE_GENERATED_CPP_BY_NAME(LightingFixtureActor)
 
@@ -155,6 +156,21 @@ UShowControlSubsystem* ALightingFixtureActor::GetShowControl() const
 	return World ? World->GetSubsystem<UShowControlSubsystem>() : nullptr;
 }
 
+UStageDMXPatchSubsystem* ALightingFixtureActor::GetPatchSubsystem() const
+{
+	const UWorld* World = GetWorld();
+	return World ? World->GetSubsystem<UStageDMXPatchSubsystem>() : nullptr;
+}
+
+void ALightingFixtureActor::NotifyPatchSubsystem()
+{
+	// Before BeginPlay the fixture is not registered; registering reads its patch then.
+	if (UStageDMXPatchSubsystem* Patching = HasActorBegunPlay() ? GetPatchSubsystem() : nullptr)
+	{
+		Patching->NotifyPatchChanged(*this);
+	}
+}
+
 void ALightingFixtureActor::BeginPlay()
 {
 	Super::BeginPlay();
@@ -162,6 +178,11 @@ void ALightingFixtureActor::BeginPlay()
 	if (UShowControlSubsystem* ShowControl = GetShowControl())
 	{
 		ShowControl->RegisterFixture(this);
+	}
+	// After the show control: a fixture is patched once it has its fixture ID, so the log and the patch sheet name it.
+	if (UStageDMXPatchSubsystem* Patching = GetPatchSubsystem())
+	{
+		Patching->RegisterFixture(this);
 	}
 	// Item data (and a restored Shutter) was applied before play, when there was no strobe clock to join yet.
 	UpdateStrobeRegistration();
@@ -173,6 +194,10 @@ void ALightingFixtureActor::EndPlay(const EEndPlayReason::Type EndPlayReason)
 	{
 		// Unregistering also leaves the strobe clock.
 		ShowControl->UnregisterFixture(this);
+	}
+	if (UStageDMXPatchSubsystem* Patching = GetPatchSubsystem())
+	{
+		Patching->UnregisterFixture(this);
 	}
 
 	Super::EndPlay(EndPlayReason);
@@ -224,6 +249,8 @@ void ALightingFixtureActor::ApplyItemData(const UBaseItemData& Data)
 		}
 	}
 	SanitizeRestoredState(*Fixture);
+	// A swapped model has another footprint, and a restored state another patch: either changes the addressing.
+	NotifyPatchSubsystem();
 
 	ApplyAttributesToComponents();
 	UpdateStrobeRegistration();
@@ -727,6 +754,7 @@ void ALightingFixtureActor::SetPatch(const FStageDMXPatch& NewPatch)
 	const bool bUniverseChanged = Clamped.Universe != Patch.Universe;
 	const bool bAddressChanged = Clamped.Address != Patch.Address;
 	Patch = Clamped;
+	NotifyPatchSubsystem();
 	if (bUniverseChanged)
 	{
 		NotifyParameterChanged(StageCraftTags::Param_Patch_Universe);

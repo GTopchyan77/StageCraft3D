@@ -2,12 +2,14 @@
 
 #include "Game/StageCraftGameModeBase.h"
 
+#include "Actors/LightingFixtureActor.h"
 #include "Actors/ModularBaseActor.h"
 #include "Engine/GameInstance.h"
 #include "Engine/World.h"
 #include "Interaction/StageTransformRules.h"
 #include "Player/ModularPlayerController.h"
 #include "Player/StageCameraPawn.h"
+#include "Show/StageDMXPatching.h"
 #include "Subsystems/ShowControlSubsystem.h"
 #include "Subsystems/StageEconomySubsystem.h"
 #include "Subsystems/StageSessionSubsystem.h"
@@ -193,6 +195,19 @@ FStageEconomyResultInfo AStageCraftGameModeBase::EvaluateItemEdit(const AModular
 	{
 		return FStageEconomyResultInfo::Fail(EStageEconomyResult::InvalidRequest,
 			FText::Format(LOCTEXT("NoScale", "{0} is sized by its Length, not by scale."), Item.GetInstanceLabel()));
+	}
+
+	if (ParameterId == StageCraftTags::Param_Patch_Address && Value.Type == EStageParameterType::Integer && Value.Integer > 0)
+	{
+		// Channels past 512 would never be sent or read: refuse the address instead of patching a fixture that cannot work.
+		const ALightingFixtureActor* Fixture = Cast<ALightingFixtureActor>(&Item);
+		const int32 Footprint = Fixture ? Fixture->GetDMXFootprint() : 0;
+		if (Footprint > 0 && !StageDMXPatching::Fits(Value.Integer, Footprint))
+		{
+			return FStageEconomyResultInfo::Fail(EStageEconomyResult::InvalidRequest,
+				FText::Format(LOCTEXT("AddressDoesNotFit", "{0} uses {1} channels, so its address can be 1 to {2}."),
+					Item.GetInstanceLabel(), FText::AsNumber(Footprint), FText::AsNumber(StageDMXPatching::GetLastStartAddress(Footprint))));
+		}
 	}
 
 	if (StageCraftTags::IsQuantityParameter(ParameterId))

@@ -22,6 +22,8 @@
 #include "Interaction/StageParameterInterface.h"
 #include "Player/ModularPlayerController.h"
 #include "Subsystems/ShowControlSubsystem.h"
+#include "Subsystems/StageDMXNetworkSubsystem.h"
+#include "Subsystems/StageDMXPatchSubsystem.h"
 #include "TimerManager.h"
 #include "UI/StageCraftUITheme.h"
 #include "UI/StageCraftWidgetStyle.h"
@@ -139,6 +141,18 @@ void UStagePatchPanel::NativeOnInitialized()
 	{
 		ExportButton->OnClicked.AddUniqueDynamic(this, &ThisClass::HandleExportClicked);
 	}
+	if (FixConflictsButton)
+	{
+		FixConflictsButton->OnClicked.AddUniqueDynamic(this, &ThisClass::HandleFixConflictsClicked);
+	}
+	if (PatchSelectionButton)
+	{
+		PatchSelectionButton->OnClicked.AddUniqueDynamic(this, &ThisClass::HandlePatchSelectionClicked);
+	}
+	if (InputButton)
+	{
+		InputButton->OnClicked.AddUniqueDynamic(this, &ThisClass::HandleInputClicked);
+	}
 }
 
 void UStagePatchPanel::BuildTree()
@@ -154,6 +168,7 @@ void UStagePatchPanel::BuildTree()
 	UVerticalBox* Column = WidgetTree->ConstructWidget<UVerticalBox>(UVerticalBox::StaticClass(), TEXT("Column"));
 	Root->SetContent(Column);
 	Column->AddChildToVerticalBox(BuildHeader());
+	Column->AddChildToVerticalBox(BuildToolsBar());
 
 	// The patch usually docks low and wide (next to the faders), so the fixture table and the selected fixture's channels
 	// sit side by side, like a console's patch window with its fixture sheet.
@@ -247,21 +262,15 @@ UWidget* UStagePatchPanel::BuildHeader()
 		SubtitleSlot->SetVerticalAlignment(VAlign_Center);
 		SubtitleSlot->SetPadding(FMargin(10.f, 0.f));
 	}
-	if (UHorizontalBoxSlot* ButtonSlot = Line->AddChildToHorizontalBox(BuildPatchButton()))
+	PatchUnpatchedButton = MakeHeaderButton(TEXT("PatchUnpatchedButton"), LOCTEXT("PatchUnpatched", "AUTO PATCH"),
+		LOCTEXT("PatchUnpatchedTip", "Patch every unpatched fixture into the first free addresses that fit it, in fixture ID order. One undo step."));
+	if (UHorizontalBoxSlot* ButtonSlot = Line->AddChildToHorizontalBox(PatchUnpatchedButton))
 	{
 		ButtonSlot->SetVerticalAlignment(VAlign_Center);
 	}
 
-	ExportButton = WidgetTree->ConstructWidget<UButton>(UStageToolButton::StaticClass(), TEXT("ExportButton"));
-	FButtonStyle ExportStyle = MakeFlatButton(FLinearColor::Transparent, Palette.RowHover, Palette.Divider);
-	ExportStyle.SetNormal(MakeBox(FLinearColor::Transparent, CornerRadius, Palette.Divider, 1.f));
-	ExportButton->SetStyle(ExportStyle);
-	ExportButton->SetToolTipText(LOCTEXT("ExportTip", "Export the patch sheet as a print-ready PDF and a CSV to the Reports folder (File > Production > Open Reports Folder)."));
-	if (UButtonSlot* LabelSlot = Cast<UButtonSlot>(ExportButton->AddChild(MakeText(LOCTEXT("Export", "EXPORT PDF"), 7, TEXT("Bold"), Palette.TextSecondary))))
-	{
-		LabelSlot->SetPadding(FMargin(8.f, 6.f));
-		LabelSlot->SetHorizontalAlignment(HAlign_Center);
-	}
+	ExportButton = MakeHeaderButton(TEXT("ExportButton"), LOCTEXT("Export", "EXPORT PDF"),
+		LOCTEXT("ExportTip", "Export the patch sheet as a print-ready PDF and a CSV to the Reports folder (File > Production > Open Reports Folder)."));
 	if (UHorizontalBoxSlot* ExportSlot = Line->AddChildToHorizontalBox(ExportButton))
 	{
 		ExportSlot->SetVerticalAlignment(VAlign_Center);
@@ -419,22 +428,117 @@ UWidget* UStagePatchPanel::MakeFixtureRow(ALightingFixtureActor& Fixture, bool b
 	return RowButton;
 }
 
-UWidget* UStagePatchPanel::BuildPatchButton()
+UButton* UStagePatchPanel::MakeHeaderButton(FName Name, const FText& Label, const FText& ToolTip, UTextBlock** OutLabel)
 {
 	using namespace StageCraftWidgetStyle;
 	const UStageCraftUITheme& Palette = GetTheme();
 
-	PatchUnpatchedButton = WidgetTree->ConstructWidget<UButton>(UStageToolButton::StaticClass(), TEXT("PatchUnpatchedButton"));
+	UButton* Button = WidgetTree->ConstructWidget<UButton>(UStageToolButton::StaticClass(), Name);
 	FButtonStyle Style = MakeFlatButton(FLinearColor::Transparent, Palette.RowHover, Palette.Divider);
 	Style.SetNormal(MakeBox(FLinearColor::Transparent, CornerRadius, Palette.Divider, 1.f));
-	PatchUnpatchedButton->SetStyle(Style);
-	PatchUnpatchedButton->SetToolTipText(LOCTEXT("PatchUnpatchedTip", "Give every unpatched fixture the next free DMX address, in fixture ID order."));
-	if (UButtonSlot* LabelSlot = Cast<UButtonSlot>(PatchUnpatchedButton->AddChild(MakeText(LOCTEXT("PatchUnpatched", "PATCH UNPATCHED"), 7, TEXT("Bold"), Palette.TextSecondary))))
+	Button->SetStyle(Style);
+	Button->SetToolTipText(ToolTip);
+	UTextBlock* LabelText = MakeText(Label, 7, TEXT("Bold"), Palette.TextSecondary);
+	if (UButtonSlot* LabelSlot = Cast<UButtonSlot>(Button->AddChild(LabelText)))
 	{
 		LabelSlot->SetPadding(FMargin(8.f, 6.f));
 		LabelSlot->SetHorizontalAlignment(HAlign_Center);
 	}
-	return PatchUnpatchedButton;
+	if (OutLabel)
+	{
+		*OutLabel = LabelText;
+	}
+	return Button;
+}
+
+USpinBox* UStagePatchPanel::MakeNumberField(int32 Value, int32 Min, int32 Max, float Width, const FText& ToolTip)
+{
+	const UStageCraftUITheme& Palette = GetTheme();
+	USpinBox* Field = WidgetTree->ConstructWidget<USpinBox>(USpinBox::StaticClass());
+	Field->SetWidgetStyle(StageCraftWidgetStyle::MakeNumericField(Palette));
+	Field->SetFont(StageCraftWidgetStyle::MakeFont(8));
+	Field->SetForegroundColor(Palette.TextPrimary);
+	Field->SetMinDesiredWidth(Width);
+	Field->SetMinFractionalDigits(0);
+	Field->SetMaxFractionalDigits(0);
+	Field->SetDelta(1.f);
+	Field->SetAlwaysUsesDeltaSnap(true);
+	Field->SetMinValue(static_cast<float>(Min));
+	Field->SetMaxValue(static_cast<float>(Max));
+	Field->SetValue(static_cast<float>(Value));
+	Field->SetToolTipText(ToolTip);
+	return Field;
+}
+
+UWidget* UStagePatchPanel::BuildToolsBar()
+{
+	using namespace StageCraftWidgetStyle;
+	using namespace StagePatchPanel;
+	const UStageCraftUITheme& Palette = GetTheme();
+
+	UBorder* Bar = WidgetTree->ConstructWidget<UBorder>(UBorder::StaticClass(), TEXT("ToolsBar"));
+	Bar->SetBrush(MakeBox(Palette.PanelHeader));
+	Bar->SetPadding(FMargin(10.f, 0.f, 10.f, 6.f));
+	UVerticalBox* Lines = WidgetTree->ConstructWidget<UVerticalBox>(UVerticalBox::StaticClass());
+	Bar->SetContent(Lines);
+
+	const auto AddToLine = [](UHorizontalBox* Line, UWidget* Widget, float LeftGap, bool bFill)
+	{
+		if (UHorizontalBoxSlot* WidgetSlot = Line->AddChildToHorizontalBox(Widget))
+		{
+			WidgetSlot->SetVerticalAlignment(VAlign_Center);
+			WidgetSlot->SetPadding(FMargin(LeftGap, 0.f, 0.f, 0.f));
+			if (bFill)
+			{
+				WidgetSlot->SetSize(FSlateChildSize(ESlateSizeRule::Fill));
+			}
+		}
+	};
+
+	// Network input: the switch and what it is doing.
+	UHorizontalBox* InputLine = WidgetTree->ConstructWidget<UHorizontalBox>(UHorizontalBox::StaticClass(), TEXT("InputLine"));
+	Lines->AddChildToVerticalBox(InputLine);
+	UTextBlock* InputLabel = nullptr;
+	InputButton = MakeHeaderButton(TEXT("InputButton"), LOCTEXT("InputOff", "DMX IN: OFF"),
+		LOCTEXT("InputTip", "Receive Art-Net (port 6454) and sACN (port 5568) from a console or visualiser on the network, and let it drive the fixtures (the show switches to External). Remembered on this PC. Windows may ask to allow StageCraft through the firewall."),
+		&InputLabel);
+	InputButtonLabel = InputLabel;
+	AddToLine(InputLine, InputButton, 0.f, false);
+	InputStatusText = MakeText(FText::GetEmpty(), 7, TEXT("Regular"), Palette.TextSecondary);
+	InputStatusText->SetTextOverflowPolicy(ETextOverflowPolicy::Ellipsis);
+	AddToLine(InputLine, InputStatusText, 10.f, true);
+
+	// Patch tools: repair conflicts, patch the selection from an address; how full each universe is.
+	UHorizontalBox* ToolsLine = WidgetTree->ConstructWidget<UHorizontalBox>(UHorizontalBox::StaticClass(), TEXT("ToolsLine"));
+	if (UVerticalBoxSlot* ToolsSlot = Lines->AddChildToVerticalBox(ToolsLine))
+	{
+		ToolsSlot->SetPadding(FMargin(0.f, 4.f, 0.f, 0.f));
+	}
+	FixConflictsButton = MakeHeaderButton(TEXT("FixConflictsButton"), LOCTEXT("FixConflicts", "FIX CONFLICTS"),
+		LOCTEXT("FixConflictsTip", "Move every fixture that overlaps another (or runs past channel 512) to the first free addresses. In each overlap the fixture that starts first stays. One undo step."));
+	AddToLine(ToolsLine, FixConflictsButton, 0.f, false);
+	PatchSelectionButton = MakeHeaderButton(TEXT("PatchSelectionButton"), LOCTEXT("PatchSelection", "PATCH SELECTION AT"),
+		LOCTEXT("PatchSelectionTip", "Patch the selected fixtures one after another, in fixture ID order, from the universe and address on the right, around the fixtures already there. One undo step."));
+	AddToLine(ToolsLine, PatchSelectionButton, 4.f, false);
+
+	const auto AddField = [this, ToolsLine, &AddToLine](USpinBox* Field, float Width)
+	{
+		USizeBox* Box = WidgetTree->ConstructWidget<USizeBox>(USizeBox::StaticClass());
+		Box->SetWidthOverride(Width);
+		Box->SetHeightOverride(FieldHeight);
+		Box->SetContent(Field);
+		AddToLine(ToolsLine, Box, 4.f, false);
+	};
+	StartUniverseField = MakeNumberField(1, 1, MaxUniverse, UniverseWidth, LOCTEXT("StartUniverseTip", "Universe to patch the selection into."));
+	AddField(StartUniverseField, UniverseWidth);
+	StartAddressField = MakeNumberField(1, 1, MaxAddress, AddressWidth, LOCTEXT("StartAddressTip", "First address for the selection; occupied channels are skipped."));
+	AddField(StartAddressField, AddressWidth);
+
+	UsageText = MakeText(FText::GetEmpty(), 7, TEXT("Regular"), Palette.TextSecondary);
+	UsageText->SetTextOverflowPolicy(ETextOverflowPolicy::Ellipsis);
+	UsageText->SetToolTipText(LOCTEXT("UsageTip", "Channels used per universe (overlapping channels count once)."));
+	AddToLine(ToolsLine, UsageText, 10.f, true);
+	return Bar;
 }
 
 void UStagePatchPanel::NativeConstruct()
@@ -447,6 +551,18 @@ void UStagePatchPanel::NativeConstruct()
 	{
 		Subsystem->OnFixturesChanged.AddUniqueDynamic(this, &ThisClass::HandleFixturesChanged);
 	}
+	UStageDMXPatchSubsystem* PatchSubsystem = UWorld::GetSubsystem<UStageDMXPatchSubsystem>(GetWorld());
+	Patching = PatchSubsystem;
+	if (PatchSubsystem)
+	{
+		PatchSubsystem->OnPatchChanged.AddUniqueDynamic(this, &ThisClass::HandlePatchChanged);
+	}
+	UStageDMXNetworkSubsystem* NetworkSubsystem = UWorld::GetSubsystem<UStageDMXNetworkSubsystem>(GetWorld());
+	Network = NetworkSubsystem;
+	if (NetworkSubsystem && !InputChangedHandle.IsValid())
+	{
+		InputChangedHandle = NetworkSubsystem->OnInputChanged.AddUObject(this, &ThisClass::RefreshInputStatus);
+	}
 
 	const AModularPlayerController* Controller = GetStageController();
 	USelectionComponent* SelectionComponent = Controller ? Controller->GetSelection() : nullptr;
@@ -456,6 +572,7 @@ void UStagePatchPanel::NativeConstruct()
 		SelectionComponent->OnSelectionSetChanged.AddUniqueDynamic(this, &ThisClass::HandleSelectionSetChanged);
 	}
 	Rebuild();
+	RefreshInputStatus();
 }
 
 void UStagePatchPanel::NativeDestruct()
@@ -464,6 +581,17 @@ void UStagePatchPanel::NativeDestruct()
 	{
 		Subsystem->OnFixturesChanged.RemoveDynamic(this, &ThisClass::HandleFixturesChanged);
 	}
+	if (UStageDMXPatchSubsystem* PatchSubsystem = Patching.Get())
+	{
+		PatchSubsystem->OnPatchChanged.RemoveDynamic(this, &ThisClass::HandlePatchChanged);
+	}
+	if (UStageDMXNetworkSubsystem* NetworkSubsystem = Network.Get())
+	{
+		NetworkSubsystem->OnInputChanged.Remove(InputChangedHandle);
+	}
+	InputChangedHandle.Reset();
+	Patching.Reset();
+	Network.Reset();
 	if (USelectionComponent* SelectionComponent = Selection.Get())
 	{
 		SelectionComponent->OnSelectionSetChanged.RemoveDynamic(this, &ThisClass::HandleSelectionSetChanged);
@@ -526,7 +654,8 @@ void UStagePatchPanel::Rebuild()
 		return A.GetFixtureId() != B.GetFixtureId() ? A.GetFixtureId() < B.GetFixtureId() : A.GetName() < B.GetName();
 	});
 
-	const TArray<int32> Conflicts = Subsystem ? Subsystem->FindPatchConflicts() : TArray<int32>();
+	const UStageDMXPatchSubsystem* PatchSubsystem = Patching.Get();
+	const TArray<int32> Conflicts = PatchSubsystem ? PatchSubsystem->FindPatchConflicts() : TArray<int32>();
 	const ALightingFixtureActor* Selected = GetSelectedFixture();
 	int32 Unpatched = 0;
 	for (ALightingFixtureActor* Fixture : Fixtures)
@@ -542,7 +671,63 @@ void UStagePatchPanel::Rebuild()
 	SubtitleText->SetText(FText::Format(LOCTEXT("Subtitle", "{0} {0}|plural(one=fixture,other=fixtures)   ·   {1} unpatched   ·   {2} {2}|plural(one=conflict,other=conflicts)"),
 		Fixtures.Num(), Unpatched, Conflicts.Num()));
 	SubtitleText->SetColorAndOpacity(FSlateColor(Conflicts.IsEmpty() ? GetTheme().TextSecondary : GetTheme().WarningColor));
+
+	FixConflictsButton->SetIsEnabled(!Conflicts.IsEmpty());
+	const USelectionComponent* SelectionComponent = Selection.Get();
+	PatchSelectionButton->SetIsEnabled(SelectionComponent && SelectionComponent->GetSelectedActors().ContainsByPredicate(
+		[](const AActor* Actor) { return Actor && Actor->IsA<ALightingFixtureActor>(); }));
+
+	TArray<FString> Usage;
+	for (const FStageDMXUniverseUsage& Universe : PatchSubsystem ? PatchSubsystem->GetUniverseUsage() : TArray<FStageDMXUniverseUsage>())
+	{
+		Usage.Add(FString::Printf(TEXT("U%d %d/%d%s"), Universe.Universe, Universe.UsedChannels, StagePatchPanel::UniverseSize,
+			Universe.Conflicts > 0 ? TEXT(" !") : TEXT("")));
+	}
+	UsageText->SetText(Usage.IsEmpty() ? LOCTEXT("NoUniverses", "No universe in use") : FText::FromString(FString::Join(Usage, TEXT("   "))));
 	RebuildChannelMap();
+}
+
+void UStagePatchPanel::RefreshInputStatus()
+{
+	if (!InputStatusText || !InputButtonLabel)
+	{
+		return;
+	}
+	const UStageCraftUITheme& Palette = GetTheme();
+	const UStageDMXNetworkSubsystem* NetworkSubsystem = Network.Get();
+	const FStageDMXInputStatus Status = NetworkSubsystem ? NetworkSubsystem->GetStatus() : FStageDMXInputStatus();
+	InputButton->SetIsEnabled(NetworkSubsystem != nullptr);
+
+	switch (Status.State)
+	{
+	case EStageDMXInputState::Listening:
+	{
+		InputButtonLabel->SetText(LOCTEXT("InputOn", "DMX IN: ON"));
+		InputButtonLabel->SetColorAndOpacity(FSlateColor(Palette.AccentColor));
+		const int64 Frames = Status.ArtNetPackets + Status.SACNPackets;
+		InputStatusText->SetText(Frames == 0
+			? FText::Format(LOCTEXT("InputWaiting", "Listening · {0} · no DMX received yet"), FText::FromString(Status.Endpoint))
+			: FText::Format(LOCTEXT("InputLive", "Listening · {0} · {1} {1}|plural(one=universe,other=universes) live from {2} {2}|plural(one=source,other=sources) · {3} Art-Net, {4} sACN frames{5}"),
+				FText::FromString(Status.Endpoint), Status.LiveUniverses.Num(), Status.LiveSources,
+				FText::AsNumber(Status.ArtNetPackets), FText::AsNumber(Status.SACNPackets),
+				Status.InvalidPackets > 0 ? FText::Format(LOCTEXT("InputInvalid", " · {0} invalid"), FText::AsNumber(Status.InvalidPackets)) : FText::GetEmpty()));
+		InputStatusText->SetColorAndOpacity(FSlateColor(Palette.TextSecondary));
+		break;
+	}
+	case EStageDMXInputState::Failed:
+		InputButtonLabel->SetText(LOCTEXT("InputOffAgain", "DMX IN: OFF"));
+		InputButtonLabel->SetColorAndOpacity(FSlateColor(Palette.TextSecondary));
+		InputStatusText->SetText(Status.Error);
+		InputStatusText->SetColorAndOpacity(FSlateColor(Palette.WarningColor));
+		break;
+	default:
+		InputButtonLabel->SetText(LOCTEXT("InputOffIdle", "DMX IN: OFF"));
+		InputButtonLabel->SetColorAndOpacity(FSlateColor(Palette.TextSecondary));
+		InputStatusText->SetText(LOCTEXT("InputIdle", "Network input off: the cue list drives the fixtures. Switch on to follow a console over Art-Net or sACN."));
+		InputStatusText->SetColorAndOpacity(FSlateColor(Palette.TextSecondary));
+		break;
+	}
+	InputStatusText->SetToolTipText(InputStatusText->GetText());
 }
 
 void UStagePatchPanel::RebuildChannelMap()
@@ -699,31 +884,71 @@ void UStagePatchPanel::HandleRowPicked(int32 RowIndex)
 	}
 }
 
+void UStagePatchPanel::ApplyPlan(TConstArrayView<FStageDMXPatchAssignment> Plan, const FText& Empty)
+{
+	// One undo step; a refusal (an empty plan included, with Empty as its reason) reaches the status bar through the
+	// controller. The table follows through OnPatchChanged.
+	if (AModularPlayerController* Controller = GetStageController())
+	{
+		Controller->RequestPatchFixtures(Plan, Empty);
+	}
+}
+
 void UStagePatchPanel::HandlePatchUnpatchedClicked()
 {
-	const UShowControlSubsystem* Subsystem = ShowControl.Get();
-	AModularPlayerController* Controller = GetStageController();
-	if (!Subsystem || !Controller)
+	if (const UStageDMXPatchSubsystem* PatchSubsystem = Patching.Get())
+	{
+		ApplyPlan(PatchSubsystem->PlanUnpatched(), LOCTEXT("NothingToPatch", "Every fixture is patched, or there is no room left for the unpatched ones."));
+	}
+}
+
+void UStagePatchPanel::HandleFixConflictsClicked()
+{
+	if (const UStageDMXPatchSubsystem* PatchSubsystem = Patching.Get())
+	{
+		ApplyPlan(PatchSubsystem->PlanConflictRepair(), LOCTEXT("NoConflictsToFix", "There are no conflicts to fix, or no room to move the overlapping fixtures to."));
+	}
+}
+
+void UStagePatchPanel::HandlePatchSelectionClicked()
+{
+	const UStageDMXPatchSubsystem* PatchSubsystem = Patching.Get();
+	const USelectionComponent* SelectionComponent = Selection.Get();
+	if (!PatchSubsystem || !SelectionComponent)
 	{
 		return;
 	}
 
-	TArray<ALightingFixtureActor*> Fixtures = Subsystem->GetFixtures();
-	Fixtures.Sort([](const ALightingFixtureActor& A, const ALightingFixtureActor& B) { return A.GetFixtureId() < B.GetFixtureId(); });
-	for (ALightingFixtureActor* Fixture : Fixtures)
+	TArray<ALightingFixtureActor*> Selected;
+	for (AActor* Actor : SelectionComponent->GetSelectedActors())
 	{
-		if (Fixture->GetPatch().IsPatched())
+		if (ALightingFixtureActor* Fixture = Cast<ALightingFixtureActor>(Actor))
 		{
-			continue;
-		}
-		// Asked again per fixture: the previous fixture's new patch is already occupied.
-		const FStageDMXPatch Free = Subsystem->FindNextFreePatch(Fixture->GetDMXFootprint());
-		if (Free.IsPatched())
-		{
-			Controller->RequestParameterChange(Fixture, StageCraftTags::Param_Patch_Universe, FStageParameterValue::MakeInteger(Free.Universe));
-			Controller->RequestParameterChange(Fixture, StageCraftTags::Param_Patch_Address, FStageParameterValue::MakeInteger(Free.Address));
+			Selected.Add(Fixture);
 		}
 	}
+
+	FStageDMXPatch Start;
+	Start.Universe = FMath::RoundToInt32(StartUniverseField->GetValue());
+	Start.Address = FMath::RoundToInt32(StartAddressField->GetValue());
+	ApplyPlan(PatchSubsystem->PlanConsecutive(Selected, Start),
+		FText::Format(LOCTEXT("SelectionDoesNotFit", "The selected fixtures do not fit from {0}."), StagePatchFormat::FormatPatch(Start.Universe, Start.Address)));
+}
+
+void UStagePatchPanel::HandleInputClicked()
+{
+	AModularPlayerController* Controller = GetStageController();
+	const UStageDMXNetworkSubsystem* NetworkSubsystem = Network.Get();
+	if (Controller && NetworkSubsystem)
+	{
+		// The label follows through OnInputChanged; a port that cannot be opened is reported on OnRequestRejected.
+		Controller->RequestSetDMXInput(NetworkSubsystem->GetStatus().State != EStageDMXInputState::Listening);
+	}
+}
+
+void UStagePatchPanel::HandlePatchChanged()
+{
+	RequestRebuild();
 }
 
 void UStagePatchPanel::HandleExportClicked()
