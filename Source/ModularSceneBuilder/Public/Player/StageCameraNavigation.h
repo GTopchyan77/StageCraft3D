@@ -42,11 +42,16 @@ struct FStageCameraButtons
  * The Unreal Editor's camera rules, as pure functions so they are testable without a viewport. Numbers are the editor's:
  *  - camera speed: one continuous value (UE 5.8 FEditorViewportCameraSpeedSettings; 1 by default), stepped by 10 % per
  *    wheel notch while the right button is held (OnChangeCameraSpeed);
- *  - flying at speed S settles at 2000·S cm/s (FCameraControllerConfig: acceleration 20000·S, damping 10 per second);
- *  - mouse drags move 1 cm per mouse count times S, and turn 0.2° per count (ULevelEditorViewportSettings::MouseSensitivty);
+ *  - flying at speed S uses the editor's own integrator (FEditorCameraController::UpdatePosition: acceleration 20000·S,
+ *    damping 10 per second, at most 0.75 per step), settling near 2000·S cm/s; the key impulses are not normalised, so a
+ *    diagonal is faster, as in the editor;
+ *  - mouse drags move 1 cm per mouse count times S, and turn 0.2° per count (ULevelEditorViewportSettings::MouseSensitivty),
+ *    applied at once with no smoothing (the editor's bUsePhysicsBasedRotation is off);
  *  - the wheel alone dollies 96 cm per notch, whatever the speed (MouseScrollCameraSpeed 5 → 3 × 32 in OnDollyPerspectiveCamera);
  *  - F frames the bounds' sphere in the view (FocusViewportOnBox, minimum radius 10 cm) and glides there in 0.25 s, cubic out.
- * Mouse deltas are in raw counts with +Y = mouse moved up (Enhanced Input's Mouse2D).
+ * Mouse deltas are in raw counts with +Y = mouse moved up (Enhanced Input's Mouse2D). They are raw only while the project's
+ * Mouse2D axis sensitivity is 1 (Config/DefaultInput.ini; the engine's default of 0.07 made every drag 14 times too slow);
+ * StageCraft.Camera.InputConfig guards it.
  */
 namespace StageCameraNavigation
 {
@@ -56,7 +61,13 @@ namespace StageCameraNavigation
 	/** The editor's slider maximum. */
 	inline constexpr float MaxCameraSpeed = 32.f;
 	inline constexpr float SpeedStepFraction = 0.1f;
-	inline constexpr float FlyCmPerSecondPerSpeed = 2000.f;
+	inline constexpr float FlyAccelerationPerSpeed = 20000.f;
+	inline constexpr float FlyDampingPerSecond = 10.f;
+	inline constexpr float MaxFlyDampingPerStep = 0.75f;
+	/** The editor never integrates a longer step (EditorMovementDeltaUpperBound), so a hitch cannot fling the camera. */
+	inline constexpr float MaxFlightStepSeconds = 1.f;
+	/** Where acceleration and damping balance. */
+	inline constexpr float FlyCmPerSecondPerSpeed = FlyAccelerationPerSpeed / FlyDampingPerSecond;
 	inline constexpr float DragCmPerCount = 1.f;
 	inline constexpr float DegreesPerCount = 0.2f;
 	inline constexpr float WheelDollyCm = 96.f;
@@ -78,8 +89,15 @@ namespace StageCameraNavigation
 	/** Speed after Notches wheel notches (+ faster): each notch adds or removes 10 % of the current speed. */
 	MODULARSCENEBUILDER_API float StepCameraSpeed(float Speed, float Notches);
 
-	/** Settled flight speed in cm/s. */
+	/** Nominal flight speed in cm/s (acceleration / damping); the discrete step settles a little below it at low frame rates. */
 	MODULARSCENEBUILDER_API float GetFlySpeed(float CameraSpeed);
+
+	/**
+	 * One flight step, exactly as FEditorCameraController::UpdatePosition: Velocity += Impulse · 20000 · S · dt, then
+	 * Velocity −= Velocity · min(10 · dt, 0.75). Impulse is the held keys in world space (each axis −1..1, not normalised).
+	 * DeltaSeconds is clamped to 0..MaxFlightStepSeconds; a non-finite input returns zero velocity.
+	 */
+	MODULARSCENEBUILDER_API FVector StepFlightVelocity(const FVector& Velocity, const FVector& WorldImpulse, float CameraSpeed, float DeltaSeconds);
 
 	/** LMB drag: world translation (horizontal, along the view's yaw). */
 	MODULARSCENEBUILDER_API FVector GetFlyAndTurnTranslation(const FVector2D& Delta, double YawDegrees, float CameraSpeed);
@@ -99,7 +117,10 @@ namespace StageCameraNavigation
 	/** Where the camera sits for an orbit about Pivot at Distance, looking along View. */
 	MODULARSCENEBUILDER_API FVector GetOrbitLocation(const FVector& Pivot, const FRotator& View, double Distance);
 
-	/** Alt + RMB drag: the new distance to the pivot (right or up moves closer), never under MinOrbitDistance. */
+	/**
+	 * Alt + RMB drag: the new distance to the pivot, never under MinOrbitDistance. Right or down moves closer, left or up
+	 * further away (the editor's IsOrbitZoomMode: X − Y with bInvertRightMouseDollyYAxis off).
+	 */
 	MODULARSCENEBUILDER_API double GetDollyDistance(double Distance, const FVector2D& Delta, float CameraSpeed);
 
 	/** Wheel without RMB: translation along the full view direction (+ notches move forward). */

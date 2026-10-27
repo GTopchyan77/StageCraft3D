@@ -175,8 +175,8 @@ void UStageCameraNavigationComponent::UpdateDrag()
 		}
 		else if (!bOrbitMode && NewDrag != EStageCameraDrag::None)
 		{
-			// Leaving the orbit only when another kind of motion starts: on release it stays, so the eased turn still circles
-			// the pivot and the next Alt-drag continues around the same point.
+			// Leaving the orbit only when another kind of motion starts: on release it stays, so the next Alt-drag continues
+			// around the same point.
 			Pawn->EndOrbit();
 		}
 	}
@@ -193,7 +193,7 @@ FVector UStageCameraNavigationComponent::FindOrbitPivot(const AStageCameraPawn& 
 	}
 
 	// Whatever the view centre is looking at, as the editor's look-at point usually is.
-	const FVector Forward = Pawn.GetTargetViewRotation().Vector();
+	const FVector Forward = Pawn.GetViewRotation().Vector();
 	if (const UWorld* World = GetWorld())
 	{
 		FCollisionQueryParams Params(SCENE_QUERY_STAT(StageCameraOrbitPivot), /*bTraceComplex*/ false, &Pawn);
@@ -245,7 +245,7 @@ void UStageCameraNavigationComponent::HandleMouseDelta(const FVector2D& Delta)
 		return;
 	}
 
-	const FRotator View = Pawn->GetTargetViewRotation();
+	const FRotator View = Pawn->GetViewRotation();
 	const float Speed = Pawn->GetCameraSpeed();
 	switch (ActiveDrag)
 	{
@@ -310,7 +310,7 @@ void UStageCameraNavigationComponent::HandleWheel(float Notches, const FVector2D
 	{
 		Pawn->EndOrbit();
 	}
-	Pawn->AddTranslation(StageCameraNavigation::GetWheelDolly(Pawn->GetTargetViewRotation(), Notches));
+	Pawn->AddTranslation(StageCameraNavigation::GetWheelDolly(Pawn->GetViewRotation(), Notches));
 }
 
 void UStageCameraNavigationComponent::HandleFlyInput(const FVector& Input)
@@ -368,7 +368,7 @@ bool UStageCameraNavigationComponent::FocusBounds(const FBox& Bounds)
 	Controller->GetViewportSize(SizeX, SizeY);
 	const float Aspect = SizeY > 0 ? static_cast<float>(SizeX) / static_cast<float>(SizeY) : 16.f / 9.f;
 	const float FOV = Controller->PlayerCameraManager ? Controller->PlayerCameraManager->GetFOVAngle() : 90.f;
-	const FVector Target = StageCameraNavigation::GetFocusLocation(Bounds, Pawn->GetTargetViewRotation(), FOV, Aspect, Pawn->GetActorLocation());
+	const FVector Target = StageCameraNavigation::GetFocusLocation(Bounds, Pawn->GetViewRotation(), FOV, Aspect, Pawn->GetActorLocation());
 	Pawn->FocusOn(Target);
 
 	// The next Alt-drag orbits the framed items, as in the editor.

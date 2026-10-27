@@ -420,3 +420,11 @@ Decisions (Gevor, 2026-10-26): our own small Art-Net + sACN receiver on the engi
 - [x] Console: `StageCraft.DMX.Input`, `StageCraft.DMX.Settings`, `StageCraft.DMX.AutoPatch`, `StageCraft.DMX.FixConflicts`, `StageCraft.DMX.SendTest` (dev only)
 - [x] Builds: Editor, Game Development, Game Shipping (0 warnings); all automation (108/108); scripted runs R46_Run1-4 with loopback Art-Net and sACN
 - [ ] Manual verification (Gevor): a real console or a visualiser sending Art-Net / sACN on the LAN, the Windows firewall prompt, ArtPoll discovery
+
+## Phase 24 — Viewport camera parity with the UE editor (requested by Gevor 2026-10-27; STATE.md #47, ADR 0018 §2.6)
+- [x] Measure with a real Slate drag (`StageCraft.View.MouseDrag`): every drag ran at 7 % (Mouse2D sensitivity 0.07); Y direction already the editor default
+- [x] Mouse2D / MouseX / MouseY sensitivity 1 in `Config/DefaultInput.ini` + guard test `StageCraft.Camera.InputConfig`
+- [x] Alt+RMB dolly as in the editor (X − Y: up = away)
+- [x] Pawn: look, drags, wheel and orbit applied at once (no easing); control rotation the single source; the editor's flight integrator; tick only while flying or gliding
+- [x] Builds: Editor, Game Development, Game Shipping (0 warnings); all automation (109/109); scripted runs R47_Drag1-3, R47_Fly
+- [ ] Manual verification (Gevor): mouse feel of every drag and of WASDQE flight; name any gesture that still feels inverted

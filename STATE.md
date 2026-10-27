@@ -4005,7 +4005,7 @@ Design: `Docs/ADR/0018-ue-camera-shadow-budget-shapes-and-assistant-edits.md`.
   - The online model with the new tool fields: there is no key on this machine.
 - Status: **implemented, awaiting manual verification.**
 
-**Commit:** uncommitted (working tree).
+**Commit:** `872efc2`.
 
 **Known issues / follow-ups**
 - The benchmark is pending (above).
@@ -4172,7 +4172,7 @@ Design: `Docs/ADR/0019-dmx-patch-and-network-input.md`.
   - By a person: the DMX IN button, FIX CONFLICTS / AUTO PATCH / PATCH SELECTION AT and the start fields by mouse; the inspector Ctrl+Z on a patch edit.
 - Status: **implemented, awaiting manual verification.**
 
-**Commit:** uncommitted (working tree). #45 is still staged and uncommitted too. Commit #45 first (its index is unchanged), then stage #46.
+**Commit:** `0cbaaa7`.
 
 **Known issues / follow-ups**
 - The DMX patch is not carried over when the assistant replaces a fixture (from #45; still open).
@@ -4180,3 +4180,93 @@ Design: `Docs/ADR/0019-dmx-patch-and-network-input.md`.
 - While External, a fixture changed by hand is not overwritten until the console changes one of its channels. This is the price of skipping repeated frames (ADR 0019 §4).
 - ArtPollReply announces the address the OS prefers when listening on every card. A PC with several cards should set `Bind=`.
 - The network card and universe offsets can only be set with the console command; the Patch panel has no fields for them.
+
+---
+
+## #47 — Viewport camera fixed to match the Unreal Editor exactly: raw mouse counts, Alt+RMB dolly direction, no easing, the editor's flight (2026-10-27)
+
+**Request (Gevor, 2026-10-27, pasted, "strictly follow Rules.md").**
+1. Invert the Y axis: moving the mouse up must look / move up.
+2. Camera speed, acceleration, deceleration and mouse sensitivity must mirror the UE5 editor viewport exactly, with no sluggishness or lag.
+3. No per-frame Tick at rest, `TObjectPtr`, 0 warnings, STATE.md.
+
+**Housekeeping first.** #45 and #46 said "uncommitted"; they now carry `872efc2` and `0cbaaa7`.
+
+**What was measured.**
+- A new dev command, `StageCraft.View.MouseDrag <Left|Right|Middle> <dx> <dy> [Frames] [Alt|Key]`, presses a mouse button over the viewport and feeds raw motion through `FSlateApplication::OnRawMouseMove`, the path Windows raw input takes. It then logs how the camera turned and moved. Sign and scale are therefore what a real mouse produces.
+- **Before the fix:**
+  - **Scale was the real fault.** A 100-count right-drag turned the view 1.40°; the editor turns 20° (0.2°/count). Every drag moved 7 cm per 100 counts instead of 100 cm.
+    - Cause: `Config/DefaultInput.ini` kept the engine's axis sensitivity of **0.07** for `MouseX`, `MouseY` and `Mouse2D`. Enhanced Input applies it to `Mouse2D` (`UPlayerInput::MassageVectorAxisInput`).
+    - The camera rules expect raw counts, so every drag was 14 times too slow. The orthographic pan also lagged the cursor, since it maps counts to pixels.
+  - **The vertical direction already matched the editor's defaults** (measured, and checked against `FEditorViewportClient::ConvertMovementToDragRot` in the UE 5.8 source):
+    - RMB, mouse up: pitch up.
+    - LMB, mouse up: forward.
+    - MMB and LMB+RMB, mouse up: the camera moves up.
+    - Alt+LMB, mouse up: pitch up.
+    - Gevor's own editor settings have no invert options set (`bInvertMouseLookYAxis`, `bInvertOrbitYAxis`, `bInvertMiddleMousePan` and `bInvertRightMouseDollyYAxis` are all off).
+  - **One gesture was reversed: Alt+RMB dolly.** The editor moves closer by X − Y (`IsOrbitZoomMode`: right or down closer, up away); #45 used X + Y.
+  - **Easing the editor does not have:**
+    - The pawn eased look (`RotationSmoothing` 25/s, about 40 ms behind the mouse), drags and the wheel (`TranslationSmoothing` 25/s), and flight (`MovementSmoothing` 8/s).
+    - The editor applies mouse rotation and drags at once (`bUsePhysicsBasedRotation` is off by default).
+    - The editor flies with its own discrete integrator (`FEditorCameraController::UpdatePosition`).
+
+**What changed.**
+- **Input config:** the `MouseX` / `MouseY` / `Mouse2D` sensitivity in `Config/DefaultInput.ini` is now **1.0**. A new test, `StageCraft.Camera.InputConfig`, fails if their sensitivity, exponent, dead zone or invert flag changes again.
+- **`StageCameraNavigation`:**
+  - `StepFlightVelocity` is the editor's flight step: `v += impulse · 20000 · S · dt`, then `v −= v · min(10 · dt, 0.75)`, with dt at most 1 s.
+  - Impulses are not normalised (a diagonal is faster, as in the editor), one impulse per held direction.
+  - `GetDollyDistance` uses X − Y.
+  - New constants `FlyAccelerationPerSpeed`, `FlyDampingPerSecond`, `MaxFlyDampingPerStep` and `MaxFlightStepSeconds`.
+- **`AStageCameraPawn` reworked:**
+  - Look, LMB yaw, drags, the wheel dolly and orbit / dolly / orbit-pan are applied the moment the input arrives. `RotationSmoothing`, `TranslationSmoothing`, `MovementSmoothing` and their target / pending state are gone.
+  - The view rotation's single source of truth is the controller's control rotation: read, change, clamp pitch to ±89°, write back.
+    - This replaces the old Target / Current rotation pair and `AdoptControlRotation`.
+    - Rotations set by others (spawn, projection switch) are simply where the next input starts.
+  - **Tick:** the pawn starts with tick off and ticks only during a key flight or the F glide, switching off when both have settled. It no longer ticks while the mouse turns or drags it.
+  - `SetViewRotation(FRotator)` lost its `bSnap` flag, since every rotation is now immediate. No Blueprint calls it; `BP_StageCameraPawn` has no overrides of the removed properties.
+  - Flight input cancels a running focus glide, as a drag already did.
+- **`UStageCameraNavigationComponent`:** uses `APawn::GetViewRotation()` (the control rotation) where it used `GetTargetViewRotation()`.
+- **`StageCraft.View.MouseDrag`** (dev only, compiled out of Shipping) was added to `StageViewportConsoleCommands.cpp`, as described above.
+
+**Files changed**
+- `Config/DefaultInput.ini`
+- `Source/ModularSceneBuilder/Public/Player/StageCameraNavigation.h`, `Private/Player/StageCameraNavigation.cpp`
+- `Source/ModularSceneBuilder/Public/Player/StageCameraPawn.h`, `Private/Player/StageCameraPawn.cpp`
+- `Source/ModularSceneBuilder/Private/Player/StageCameraNavigationComponent.cpp`
+- `Source/ModularSceneBuilder/Private/Player/Tests/StageCameraNavigationTests.cpp`
+- `Source/ModularSceneBuilder/Private/Viewport/StageViewportConsoleCommands.cpp`
+- `Docs/ADR/0018-ue-camera-shadow-budget-shapes-and-assistant-edits.md` (new §2.6, §2.2 pawn line), `Docs/CURRENT_SYSTEMS.md`, `tasks/todo.md`, `STATE.md`
+- No content assets changed.
+
+**Verification**
+- **Builds:** Editor, Game Development and Game Shipping (`-DisableAdaptiveUnity`) all **succeeded with 0 warnings**.
+- **Automation: 109/109 `StageCraft.*` passed** (exit code 0).
+  - New test `Camera.InputConfig`.
+  - `Camera.Math` gained:
+    - the dolly direction cases (right/down closer, up away, right+up cancel);
+    - the flight step (first step 277.8 cm/s at 60 fps, settles at 1666.7, ×2 speed doubles the acceleration, brakes below 0.5 cm/s within a second, diagonal √2, damping cap 0.75, a 5 s hitch integrates 1 s, NaN stops).
+- **Scripted Standalone `-game` runs** (`Saved/Logs/R47_Drag1..3.log`, `R47_Fly.log`). Gevor's workspace session and GameUserSettings were backed up and compared identical afterwards.
+
+  | Drag (100 raw counts) | Before | After (R47_Drag3) |
+  |---|---|---|
+  | RMB up | pitch +1.40° | pitch **+20.00°** |
+  | RMB right | yaw +1.40° | yaw **+20.00°** |
+  | LMB up | 7.0 cm forward | **100.0 cm** forward along the yaw, no pitch |
+  | MMB up | 7.0 cm up the view | **100.0 cm** up the view |
+  | Alt+LMB up | pitch +1.40° | pitch **+20.00°** (orbit) |
+  | Alt+RMB up / down | 7 cm closer / away | **100 cm away / 100 cm closer**, as in the editor |
+  | Top view RMB right | lagged the cursor | 466–593 cm (the cursor's world distance at that zoom) |
+
+  - **R47_Fly** (about 120 fps):
+    - RMB + W for 60 frames flew along the full view vector (pitch −35°) and coasted 168 cm after release. That is the editor's coast at 120 fps (1833 cm/s · (11/12) / 120 / (1/12)).
+    - RMB + E climbed straight up 742 cm.
+    - Top and back to Perspective restored the camera.
+    - A 50-count look down after that turned exactly −10°, and the pawn's tick was off at rest.
+- **Not verified:** the feel by hand with a real mouse, and a touchpad. Status: **implemented, awaiting manual verification.**
+
+**Commit:** uncommitted (working tree).
+
+**Known issues / follow-ups**
+- **Y direction:** the code matches the UE editor's default directions (measured). If Gevor still sees one gesture inverted, it needs naming (RMB look, LMB, MMB, Alt+LMB orbit or Alt+RMB dolly). Making it differ from the editor would be an option in Preferences (like the existing Invert look), not a change of default.
+- **Flight:** like the editor's, it depends on the frame rate: 1667 cm/s at 60 fps, 1833 at 120. This is deliberate, for parity.
+- **Pitch limit:** ±89° here; the editor allows ±(90 − ε). Unchanged.

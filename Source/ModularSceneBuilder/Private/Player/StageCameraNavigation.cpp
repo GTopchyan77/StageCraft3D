@@ -63,6 +63,17 @@ namespace StageCameraNavigation
 		return SanitizeCameraSpeed(CameraSpeed) * FlyCmPerSecondPerSpeed;
 	}
 
+	FVector StepFlightVelocity(const FVector& Velocity, const FVector& WorldImpulse, float CameraSpeed, float DeltaSeconds)
+	{
+		if (Velocity.ContainsNaN() || WorldImpulse.ContainsNaN() || !FMath::IsFinite(DeltaSeconds))
+		{
+			return FVector::ZeroVector;
+		}
+		const double Step = FMath::Clamp(DeltaSeconds, 0.f, MaxFlightStepSeconds);
+		const FVector Accelerated = Velocity + WorldImpulse * (FlyAccelerationPerSpeed * SanitizeCameraSpeed(CameraSpeed) * Step);
+		return Accelerated - Accelerated * FMath::Min(FlyDampingPerSecond * Step, static_cast<double>(MaxFlyDampingPerStep));
+	}
+
 	FVector GetFlyAndTurnTranslation(const FVector2D& Delta, double YawDegrees, float CameraSpeed)
 	{
 		const double Yaw = FMath::DegreesToRadians(YawDegrees);
@@ -101,7 +112,7 @@ namespace StageCameraNavigation
 
 	double GetDollyDistance(double Distance, const FVector2D& Delta, float CameraSpeed)
 	{
-		const double Closer = (Delta.X + Delta.Y) * DragCmPerCount * SanitizeCameraSpeed(CameraSpeed);
+		const double Closer = (Delta.X - Delta.Y) * DragCmPerCount * SanitizeCameraSpeed(CameraSpeed);
 		return FMath::Max(Distance - Closer, MinOrbitDistance);
 	}
 

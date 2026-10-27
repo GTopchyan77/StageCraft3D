@@ -8,6 +8,7 @@
 
 #if WITH_DEV_AUTOMATION_TESTS
 
+#include "GameFramework/InputSettings.h"
 #include "Misc/AutomationTest.h"
 #include "Player/StageCameraNavigation.h"
 
@@ -80,8 +81,35 @@ bool FStageCameraMathTest::RunTest(const FString& Parameters)
 	TestTrue(TEXT("orbit yaw"), FMath::IsNearlyEqual(Orbited.Yaw, -2.0, 1e-5) && FMath::IsNearlyEqual(Orbited.Pitch, -19.0, 1e-5));
 	const FVector Pivot(100.0, 0.0, 0.0);
 	TestTrue(TEXT("orbit distance"), FMath::IsNearlyEqual(FVector::Dist(GetOrbitLocation(Pivot, Orbited, 500.0), Pivot), 500.0, 1e-6));
-	TestTrue(TEXT("dolly closer"), FMath::IsNearlyEqual(GetDollyDistance(500.0, FVector2D(10.0, 10.0), 1.f), 480.0));
+	// Alt + RMB as in the editor (X − Y): right or down comes closer, up goes away.
+	TestTrue(TEXT("dolly right and down closer"), FMath::IsNearlyEqual(GetDollyDistance(500.0, FVector2D(10.0, -10.0), 1.f), 480.0));
+	TestTrue(TEXT("dolly up away"), FMath::IsNearlyEqual(GetDollyDistance(500.0, FVector2D(0.0, 10.0), 1.f), 510.0));
+	TestTrue(TEXT("dolly right and up cancel"), FMath::IsNearlyEqual(GetDollyDistance(500.0, FVector2D(10.0, 10.0), 1.f), 500.0));
 	TestTrue(TEXT("dolly floor"), GetDollyDistance(20.0, FVector2D(1000.0, 0.0), 1.f) == MinOrbitDistance);
+
+	// Flight: FEditorCameraController::UpdatePosition, step by step.
+	const FVector Ahead(1.0, 0.0, 0.0);
+	const FVector FirstStep = StepFlightVelocity(FVector::ZeroVector, Ahead, 1.f, 1.f / 60.f);
+	TestTrue(TEXT("first step accelerates then damps"), FMath::IsNearlyEqual(FirstStep.X, 20000.0 / 60.0 * (1.0 - 10.0 / 60.0), 1e-3));
+	FVector Cruise = FVector::ZeroVector;
+	for (int32 Frame = 0; Frame < 600; ++Frame)
+	{
+		Cruise = StepFlightVelocity(Cruise, Ahead, 1.f, 1.f / 60.f);
+	}
+	TestTrue(TEXT("settles where the editor settles at 60 fps"), FMath::IsNearlyEqual(Cruise.X, 2000.0 * (1.0 - 10.0 / 60.0), 0.1));
+	TestTrue(TEXT("speed scales the acceleration"), FMath::IsNearlyEqual(StepFlightVelocity(FVector::ZeroVector, Ahead, 2.f, 1.f / 60.f).X, 2.0 * FirstStep.X, 1e-3));
+	FVector Coast = Cruise;
+	for (int32 Frame = 0; Frame < 60; ++Frame)
+	{
+		Coast = StepFlightVelocity(Coast, FVector::ZeroVector, 1.f, 1.f / 60.f);
+	}
+	TestTrue(TEXT("released keys brake to a stop within a second"), Coast.Size() < 0.5);
+	const FVector Diagonal = StepFlightVelocity(FVector::ZeroVector, FVector(1.0, 1.0, 0.0), 1.f, 1.f / 60.f);
+	TestTrue(TEXT("diagonals are not normalised"), FMath::IsNearlyEqual(Diagonal.Size(), FirstStep.X * UE_DOUBLE_SQRT_2, 1e-3));
+	TestTrue(TEXT("damping capped at 0.75 per step"), FMath::IsNearlyEqual(StepFlightVelocity(FVector(100.0, 0.0, 0.0), FVector::ZeroVector, 1.f, 0.5f).X, 25.0, 1e-6));
+	TestTrue(TEXT("a hitch integrates at most one second"), FMath::IsNearlyEqual(StepFlightVelocity(FVector::ZeroVector, Ahead, 1.f, 5.f).X, 20000.0 * 0.25, 1e-3));
+	TestTrue(TEXT("NaN stops"), StepFlightVelocity(FVector(std::numeric_limits<double>::quiet_NaN()), Ahead, 1.f, 0.1f).IsZero());
+	TestTrue(TEXT("nominal speed"), FMath::IsNearlyEqual(GetFlySpeed(1.f), 2000.f));
 
 	// Wheel: 96 cm per notch along the view, whatever the speed.
 	TestTrue(TEXT("wheel dolly"), GetWheelDolly(FRotator::ZeroRotator, 2.f).Equals(FVector(192.0, 0.0, 0.0), 1e-6));
@@ -101,6 +129,35 @@ bool FStageCameraMathTest::RunTest(const FString& Parameters)
 	TestEqual(TEXT("ease end"), EaseFocus(1.f), 1.f);
 	TestTrue(TEXT("ease is front-loaded"), EaseFocus(0.5f) > 0.5f);
 	TestEqual(TEXT("ease clamped"), EaseFocus(2.f), 1.f);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FStageCameraInputConfigTest, "StageCraft.Camera.InputConfig", StageCameraNavigationTests::Flags)
+
+bool FStageCameraInputConfigTest::RunTest(const FString& Parameters)
+{
+	// The camera rules take raw mouse counts (0.2 degrees, 1 cm per count). The engine's default axis config scales the mouse
+	// by 0.07, which made every drag and the orthographic pan 14 times too slow; Config/DefaultInput.ini must keep it at 1.
+	const UInputSettings* Settings = UInputSettings::GetInputSettings();
+	if (!TestNotNull(TEXT("input settings"), Settings))
+	{
+		return false;
+	}
+	for (const FName AxisName : { FName(TEXT("Mouse2D")), FName(TEXT("MouseX")), FName(TEXT("MouseY")) })
+	{
+		const FInputAxisConfigEntry* Entry = Settings->AxisConfig.FindByPredicate([AxisName](const FInputAxisConfigEntry& Candidate)
+		{
+			return Candidate.AxisKeyName == AxisName;
+		});
+		if (!Entry)
+		{
+			continue; // No entry: the axis is not massaged at all, which is raw too.
+		}
+		TestEqual(*FString::Printf(TEXT("%s sensitivity"), *AxisName.ToString()), Entry->AxisProperties.Sensitivity, 1.f);
+		TestEqual(*FString::Printf(TEXT("%s exponent"), *AxisName.ToString()), Entry->AxisProperties.Exponent, 1.f);
+		TestEqual(*FString::Printf(TEXT("%s dead zone"), *AxisName.ToString()), Entry->AxisProperties.DeadZone, 0.f);
+		TestFalse(*FString::Printf(TEXT("%s inverted"), *AxisName.ToString()), Entry->AxisProperties.bInvert);
+	}
 	return true;
 }
 

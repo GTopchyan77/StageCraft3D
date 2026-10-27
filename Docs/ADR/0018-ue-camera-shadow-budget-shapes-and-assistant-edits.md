@@ -67,7 +67,7 @@ Facts found first:
   - It turns mouse deltas and the wheel into pawn calls.
   - It finds the orbit pivot: where F last framed, else what is under the view centre (a visibility trace of 1 km), else 10 m ahead.
   - It tells the viewport client whether a press hides the cursor (`FStageCursorCapturePolicy`).
-- **`AStageCameraPawn`** owns the camera's motion: speed, eased translation, orbit, the F glide and the fixed views. Its tick runs only while something moves, then turns itself off (`Wake`), so a still camera costs nothing per frame.
+- **`AStageCameraPawn`** owns the camera's motion: speed, translation, orbit, flight, the F glide and the fixed views. Its tick runs only during a flight or the F glide, then turns itself off, so a still camera costs nothing per frame (§2.6).
 - **`UStageCraftGameViewportClient`** tracks L / M / R and Alt as the viewport saw them, and broadcasts `OnMouseButtonsLost` when focus goes, so no drag sticks.
 
 ### 2.3 A left press is a click until it moves
@@ -89,6 +89,21 @@ The camera speed (saved when the buttons are released, not per notch) and the lo
 ### 2.5 No gizmo tick
 
 `AModularTransformGizmo` no longer ticks. Its on-screen size follows the view through `SetView(FStageGizmoView)` on camera, view and selection changes, and it follows its target through the target's transform-updated event.
+
+### 2.6 Amendment (STATE.md #47): raw mouse counts, no easing, the editor's flight
+
+Measured with `StageCraft.View.MouseDrag` (a real drag through Slate's raw-mouse path), the camera after #45 differed from the editor in three ways. This amendment replaces the parts of §1 and §2.2 that say otherwise.
+
+- **Every drag ran at 7 %.**
+  - The project's `Config/DefaultInput.ini` kept the engine's mouse axis sensitivity of 0.07 for `MouseX`, `MouseY` and `Mouse2D`. Enhanced Input applies it to `Mouse2D`, so a 100-count drag turned the view 1.4° instead of 20°, and the orthographic pan lagged the cursor.
+  - The sensitivity is now 1. `StageCraft.Camera.InputConfig` fails if it changes again.
+- **Alt + RMB dolly was reversed vertically.** The editor's `IsOrbitZoomMode` moves closer by X − Y (right or down closer, up away); #45 used X + Y.
+- **The pawn eased what the editor applies at once.**
+  - Look, drags, the wheel dolly and orbit now change the view the moment the input arrives. The editor's rotation physics are off by default (`bUsePhysicsBasedRotation`).
+  - The view rotation's only source is the controller's control rotation.
+  - Flight runs the editor's own step: `v += impulse · 20000 · S · dt`, then `v −= v · min(10 · dt, 0.75)`, with dt at most 1 s. Impulses are not normalised. Like the editor's, it depends on the frame rate: at 60 fps it settles at 1667 · S cm/s and coasts 139 · S cm after release, and at 120 fps 1833 · S cm/s and 168 · S cm, which is what the scripted run measured.
+  - The pawn ticks only during a flight or the F glide.
+- **The mouse direction matches the editor's defaults and is unchanged.** Mouse up looks up, LMB up flies forward, MMB and LMB+RMB up move up, and Alt+LMB up raises the pitch (`bInvertMouseLookYAxis`, `bInvertOrbitYAxis`, `bInvertMiddleMousePan` and `bInvertRightMouseDollyYAxis` are all off). This is measured.
 
 ## 3. Collapsible viewport toolbar
 
