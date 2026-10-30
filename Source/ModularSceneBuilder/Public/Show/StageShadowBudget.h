@@ -13,6 +13,17 @@ struct FStageShadowCandidate
 	float Importance = 0.f;
 	/** Whether its beam casts shadows now (it keeps its place against a slightly brighter newcomer, so beams do not flicker). */
 	bool bCasting = false;
+	/** Seconds since bCasting last changed; a lit candidate keeps its state until this reaches the hold time. */
+	double SecondsSinceSwitch = TNumericLimits<double>::Max();
+};
+
+/** The outcome of one ranking. */
+struct FStageShadowSelection
+{
+	/** Casting[i]: whether candidate i casts. */
+	TArray<bool> Casting;
+	/** When positive: a held candidate's state differs from what its rank asks for, so rank again after this many seconds. */
+	double RetryAfterSeconds = 0.0;
 };
 
 /**
@@ -28,6 +39,14 @@ namespace StageShadowBudget
 	 * every lit candidate casts.
 	 */
 	MODULARSCENEBUILDER_API TArray<bool> SelectCasters(TConstArrayView<FStageShadowCandidate> Candidates, int32 Budget, float Hysteresis);
+
+	/**
+	 * SelectCasters with a minimum hold: a lit candidate whose state changed less than MinHoldSeconds ago keeps it, so a
+	 * fixture near the cut-off cannot switch its shadows on and off while the camera moves or a fade runs. Held casters
+	 * count against the budget first (the lowest ranked of them drop if the budget shrank below them); the rest of the
+	 * budget goes by rank. A dark candidate never casts, held or not. MinHoldSeconds <= 0 is plain SelectCasters.
+	 */
+	MODULARSCENEBUILDER_API FStageShadowSelection SelectCastersWithHold(TConstArrayView<FStageShadowCandidate> Candidates, int32 Budget, float Hysteresis, double MinHoldSeconds);
 
 	/** Importance of a beam of Flux lumens seen from DistanceCm away (closer than 1 m counts as 1 m). */
 	MODULARSCENEBUILDER_API float GetImportance(float Flux, double DistanceCm);
@@ -56,6 +75,9 @@ public:
 	/** 0..2: how much brighter a newcomer must be to take a caster's place. */
 	float GetHysteresis() const;
 
+	/** 0..10 s: how long a fixture keeps its shadows on or off after a switch. */
+	float GetMinHoldSeconds() const;
+
 private:
 	/** Off: every fixture casts shadows (the look before STATE.md #45, and its cost). */
 	UPROPERTY(Config, EditAnywhere, Category = "Fixture Shadows", meta = (DisplayName = "Limit Fixture Shadows"))
@@ -71,4 +93,8 @@ private:
 
 	UPROPERTY(Config, EditAnywhere, Category = "Fixture Shadows", meta = (EditCondition = "bLimitFixtureShadows", ClampMin = "0.0", ClampMax = "2.0"))
 	float Hysteresis = 0.25f;
+
+	/** A fixture keeps its shadows on (or off) at least this long after a switch, so beams near the cut-off do not pop. */
+	UPROPERTY(Config, EditAnywhere, Category = "Fixture Shadows", meta = (EditCondition = "bLimitFixtureShadows", ClampMin = "0.0", ClampMax = "10.0", Units = "s"))
+	float MinCasterHoldSeconds = 1.f;
 };

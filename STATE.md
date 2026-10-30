@@ -4270,3 +4270,133 @@ Design: `Docs/ADR/0019-dmx-patch-and-network-input.md`.
 - **Y direction:** the code matches the UE editor's default directions (measured). If Gevor still sees one gesture inverted, it needs naming (RMB look, LMB, MMB, Alt+LMB orbit or Alt+RMB dolly). Making it differ from the editor would be an option in Preferences (like the existing Invert look), not a change of default.
 - **Flight:** like the editor's, it depends on the frame rate: 1667 cm/s at 60 fps, 1833 at 120. This is deliberate, for parity.
 - **Pitch limit:** ±89° here; the editor allows ±(90 − ε). Unchanged.
+
+---
+
+## #48 — Viewport crawl fixed at its cause: the reference grid redrawn as an anti-aliased material; shadow budget minimum hold; in-engine stability measurement (2026-10-30)
+
+**Request (Gevor, 2026-10-30, pasted, "strictly follow Rules.md").** Part 1 of two, with the assistant upgrade (#49) to follow:
+- Eliminate flickering and shimmering: tune VSM and Lumen, make `StageShadowBudget` switch shadows without jitter, and tune TSR/TAA so thin meshes (truss, stairs, cables) do not crawl during camera moves.
+- Zero per-frame Tick, `TObjectPtr`, 0 warnings, STATE.md.
+
+**Gevor's choices (2026-10-30, asked before planning):**
+- The symptom he sees is **thin geometry crawling**. Shadow popping and Lumen noise were not reported.
+- Fix the causes at a **measured** cost; no blind quality increase.
+- Rendering first as #48, the assistant as #49.
+
+The plan was approved in plan mode.
+
+**How it was measured.**
+- **New dev command `StageCraft.View.MeasureStability [Frames] [TimingFrames]`** in `StageViewportConsoleCommands.cpp`, compiled out of Shipping. It logs:
+  - the resolution the scene is really rendered at (the engine's own `FStaticResolutionFractionHeuristic`, so an automatic screen percentage is resolved);
+  - the AA method and quality, the TSR history size and thin-geometry flag, and the shadow and GI quality;
+  - the mean GPU frame time over TimingFrames (`RHIGetGPUFrameCycles`);
+  - over Frames frames with the camera still, the per-pixel temporal standard deviation of luma (0–255), as mean, p99, p99.9, max, and the share of pixels above 1 and above 4. It also saves a heat map to `Saved/Screenshots/WindowsEditor/Stability_*.png`.
+- With a still camera, every bit of that deviation is TSR jitter not being resolved, which is the crawl. No Python is installed on this PC, so the measurement runs in the engine rather than in the planned `MeasureCrawl.py`.
+- **Setup:** scripted Standalone `-game` runs on the default stage (`L_StageTest`) with an arc truss and stairs added by the assistant. The viewport was 1184×674 (docked), on an RTX 3060 Ti with 1920×1080 monitors. Logs are `Saved/Logs/R48_Base.log`, `R48_Matrix.log`, `R48_Grid1..3.log` and `R48_SP.log`.
+- **Gevor's state:** his workspace session and GameUserSettings were backed up first and restored after every run.
+
+**What the measurements showed (root cause).**
+
+| Still camera, Lit perspective | Mean | p99 | Pixels > 4 | GPU |
+|---|---|---|---|---|
+| Baseline (1-pixel line grid) | 2.22 | 35.0 | 7.02 % | 6.34 ms |
+| Same, grid hidden | 0.39 | 2.15 | 0.24 % | — |
+| Same, `r.TSR.ThinGeometryDetection 1` | 2.23 | 35.1 | 7.03 % | 6.16 ms |
+| Unlit view (no TSR) | 0.01 | 0.06 | 0.00 % | 1.33 ms |
+
+- **The reference grid caused nearly all of the crawl.** `AStageGridActor` drew 1-pixel `ULineBatchComponent` lines, hard primitives that cover a pixel fully or not at all.
+  - Under TSR's sub-pixel jitter every line pixel toggled on and off from frame to frame. TSR rejects that as flicker, so the whole grid crawled, near lines as much as far ones, with moiré toward the horizon.
+  - The heat map shows every grid line; the truss, stairs and fixtures barely register.
+- **Not the cause, so not changed:**
+  - **Screen percentage.** At this viewport size the engine already renders at 100 %.
+  - **AA quality.** Gevor's settings are already at quality 3 (TSR history 200 %).
+  - **`r.TSR.ThinGeometryDetection`:** no effect.
+  - **Lumen and VSM:** they did not show in the heat map.
+
+**What changed.**
+1. **The grid is now one translucent unlit quad with a new material, `/Game/StageCraft/Viewport/M_StageGrid`.** The material is built headless by the new `Scripts/Content/create_grid_content.py` (idempotent; it reads back and checks blend mode, shading, opacity channel and emissive path). The material:
+   - computes each line's coverage per pixel from the screen-space derivative of the plane coordinate (`fwidth`). A line is therefore a 1-pixel anti-aliased ramp at any distance and zoom, which TSR resolves. This is the method of the Unreal Editor's own grid;
+   - fades each line family out once its cells get smaller than about 8 px (gone at about 3 px), per direction, so the minor lines leave before they alias toward the horizon;
+   - sends its colour through `EyeAdaptationInverse`, so the lines keep the old grey at any exposure. Without it, the dark default stage's auto exposure made them glow white;
+   - pulls the quad toward the camera by 2 mm per metre plus 0.5 cm (world position offset), so it stays in front of a floor it lies on;
+   - reads the plane's axes (`AxisU`, `AxisV`) and the axis colours (`ColorU`, `ColorV`) as parameters, so one material serves the floor and the vertical front and side grids.
+   - A pitfall the script now guards against: a new `ComponentMask` starts with R and G on, so the first version's opacity read red and drew a grey sheet. All four channels are now set explicitly and read back.
+2. **`AStageGridActor`** (Config = Game):
+   - The `ULineBatchComponent` is replaced by a `UProceduralMeshComponent` quad (±50 m, built once in BeginPlay) and a `UMaterialInstanceDynamic` (a `TObjectPtr` UPROPERTY).
+   - The material is a `Config` soft reference, `GridMaterial` in `DefaultGame.ini`. `/Game/StageCraft/Viewport` is already always cooked.
+   - A change of plane, offset or cell size only moves the quad and sets parameters. It still never ticks and is still hidden from renders.
+   - If the material is missing, the grid stays hidden and a warning is logged once.
+   - `GetLineCount()` became `GetCellSize()`, used by `StageCraft.View.Status`.
+3. **`StageViewMath`:**
+   - `BuildGridLines`, `FGridLine` and `MaxGridLinesPerDirection` were removed, since they would be dead code.
+   - New pure `GetGridSurface(Plane, Offset, Out)` gives the plane's origin, its two in-plane axes and which world axis runs along each.
+   - `StageCraft.Viewport.Grid` now tests that function: every plane, unit perpendicular axes, the origin projecting to (0, 0), and a NaN offset refused.
+4. **Shadow budget minimum hold** (from the original brief; ADR 0018 §4).
+   - Hysteresis alone did not stop popping. With more than 64 lit fixtures, a camera move changes distances by more than 25 % within one 0.25 s re-ranking, so a fixture at the cut-off could switch every time.
+   - **New pure `StageShadowBudget::SelectCastersWithHold`:**
+     - A lit fixture keeps its shadow state for at least `MinCasterHoldSeconds` (new setting, default 1 s, 0–10) after a switch, and held casters fill the budget first.
+     - Going dark still drops shadows at once, and the budget stays a hard limit (the dimmest held casters drop if it shrank).
+     - It returns `RetryAfterSeconds` when a held fixture is ranked the other way.
+   - **`UShowControlSubsystem`:**
+     - It records each switch time in `TMap<TWeakObjectPtr<ALightingFixtureActor>, double> ShadowSwitchTimes`, pruned on unregister.
+     - When the selection asks for a retry, it arms the existing one-shot timer for that moment (new `ArmShadowBudgetTimer`). Still event-driven, no tick.
+   - **New test `StageCraft.Show.ShadowBudgetHold`:**
+     - Two fixtures trading places every 0.25 s for 10 s: no state shorter than the hold, never over budget.
+     - Dark drops at once.
+     - A held non-caster is not picked, and the retry time is right.
+     - A shrunken budget keeps the brightest held caster.
+     - Unheld equals `SelectCasters`; a hold of 0 or NaN turns it off.
+   - The name is deliberately not `ShadowBudget.Hold`. That would make `ShadowBudget` a group node and hide the existing `StageCraft.Show.ShadowBudget` test, which happened in the first run (109 found instead of 110) and was caught. A scan of all test names found no other such collision.
+
+**Results after the change** (same setup):
+
+| Still camera | Mean | p99 | Pixels > 4 | GPU |
+|---|---|---|---|---|
+| Lit perspective, new grid (R48_Grid3) | 0.41 | 1.53 | 0.14 % | 6.29 ms |
+| Lit perspective, new grid (R48_SP, two runs) | 0.47–0.52 | 2.4–2.6 | 0.20–0.31 % | 5.8–6.0 ms |
+| Same at `r.ScreenPercentage 75` | 0.51 | 2.11 | 0.28 % | 4.79 ms |
+| Top view, new grid | 0.30 | 0.52 | 0.11 % | 7.19 ms |
+
+- **Unstable pixels:** from 7.0 % down to the level of no grid at all, at the same GPU cost.
+- **Internal resolution:** 75 % is now about as stable as 100 %. The planned default of native resolution and its "Viewport resolution" preference were therefore **not** added: no measured benefit, and about 25 % more GPU. A maximised 1920×1080 viewport will render at about 75 % (engine default). If Gevor still sees crawl there, that is the next thing to try.
+- **Screenshots:** Perspective Lit, Top, Front (vertical grid behind the stairs) and CAD Lines were checked. Lines are grey, 1 px, anti-aliased, with the red, green and blue axes; Lines mode still shows the grid. They are `Saved/Screenshots/WindowsEditor/ScreenShot00056..62.png`.
+- **During R48_Grid3, two Sketch-to-Stage generations and a camera move happened that the script did not issue.** That was most likely real input reaching the focused game window. The measurement ran with the camera still and agrees with the other runs. No scene or autosave file was written by any run.
+
+**Files changed**
+- `Source/ModularSceneBuilder/Public/Viewport/StageGridActor.h`, `Private/Viewport/StageGridActor.cpp`
+- `Source/ModularSceneBuilder/Public/Viewport/StageViewMath.h`, `Private/Viewport/StageViewMath.cpp`
+- `Source/ModularSceneBuilder/Private/Viewport/Tests/StageViewportTests.cpp`
+- `Source/ModularSceneBuilder/Private/Viewport/StageViewportConsoleCommands.cpp` (`MeasureStability`, Status shows the cell size)
+- `Source/ModularSceneBuilder/Public/Show/StageShadowBudget.h`, `Private/Show/StageShadowBudget.cpp`, `Private/Show/Tests/StageShadowBudgetTests.cpp`
+- `Source/ModularSceneBuilder/Public/Subsystems/ShowControlSubsystem.h`, `Private/Subsystems/ShowControlSubsystem.cpp`
+- `Content/StageCraft/Viewport/M_StageGrid.uasset` (new), `Scripts/Content/create_grid_content.py` (new)
+- `Config/DefaultGame.ini` (`[/Script/ModularSceneBuilder.StageGridActor] GridMaterial`)
+- `Docs/ADR/0008-viewport-toolbar-projections-and-view-modes.md`: §4.4 amended with the measurements; §5 now notes that the rejected "grid as a material" was revisited, and why the objections no longer hold; F6 note.
+- `Docs/ADR/0018-ue-camera-shadow-budget-shapes-and-assistant-edits.md` §4 (minimum hold), `Docs/CURRENT_SYSTEMS.md`, `tasks/todo.md` (Phase 25), `STATE.md`
+- `Config/DefaultEngine.ini` is unchanged: none of the planned cvars earned their place.
+
+**Verification**
+- **Builds:** Editor, Game Development and Game Shipping (`-DisableAdaptiveUnity`) all **succeeded with 0 warnings**. They ran through UBT with `-NoHotReloadFromIDE`, because Gevor's Kmidden2 editor was open.
+- **Automation: 110/110 `StageCraft.*` passed** (exit code 0). That is 109 plus `Show.ShadowBudgetHold`, with `Viewport.Grid` rewritten.
+- **The stability runs above.**
+- **Fixture bench** (`Scripts/Bench/RunFixtureBench.ps1 -Counts 50,200,500`, CSV `Saved/StageCraft/Benchmarks/FixtureBench_20261030-124756.csv`):
+
+  | Fixtures | Idle frame (mean / p95) | Crossfade frame (mean / p95) | GPU in crossfade | Dropped in crossfade |
+  |---|---|---|---|---|
+  | 50 | 7.3 / 9.3 ms | 7.9 / 10.0 ms | 6.7 ms | 0 |
+  | 200 | 8.1 / 10.1 ms | 10.2 / 11.8 ms | 8.0 ms | 1 |
+  | 500 | 9.5 / 11.3 ms | 15.9 / 18.6 ms | 10.1 ms | 100 of 631 |
+
+  - Kmidden2 was open on the same GPU, so this is a regression check (it runs, nothing new in the log), not a clean before/after.
+  - #39 measured 27–33 ms per frame at 500 crossfading fixtures, before the #45 budget.
+  - The known VSM "One Pass Projection max lights overflow" warning (#39) appeared once.
+- **Not verified by hand:** the crawl while orbiting and flying with a real mouse. The metric is for a still camera; motion is the same mechanism, but Gevor's eye is the final check. Status: **implemented, awaiting manual verification.**
+
+**Commit:** uncommitted (working tree).
+
+**Known issues / follow-ups**
+- **Remaining unstable pixels (0.1–0.3 %):** these are the moving-head beams (volumetric) and the arc truss lattice, as the heat map shows. The truss lattice is a procedural mesh with no Nanite or distance field. It only matters if Gevor sees it crawl.
+- **Maximised viewport:** it renders at about 75 % by the engine's automatic rule (see the table). Not changed, since there is no measured benefit at 100 %.
+- **Shadow budget frame-time gain:** still not measured cleanly. The #45 follow-up stands: bench with Kmidden closed, budget on vs off.
+- **Lumen and VSM** were not tuned: no measured symptom. This is the honest outcome of "no blind quality cranking".

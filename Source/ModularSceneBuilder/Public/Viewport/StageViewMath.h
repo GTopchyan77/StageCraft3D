@@ -45,15 +45,21 @@ namespace StageViewMath
 		AxisZ,
 	};
 
-	struct FGridLine
+	/**
+	 * Where a grid lies and how the grid material reads it: the lines are drawn in the plane's own (U, V) coordinates, which
+	 * are the world position projected on AxisU and AxisV, so the lines through the world origin are the axis lines.
+	 */
+	struct FGridSurface
 	{
-		FVector Start = FVector::ZeroVector;
-		FVector End = FVector::ZeroVector;
-		EGridLineKind Kind = EGridLineKind::Minor;
+		/** The plane's point nearest the world origin. */
+		FVector Origin = FVector::ZeroVector;
+		/** Unit world directions of the plane's two in-plane axes. */
+		FVector AxisU = FVector::XAxisVector;
+		FVector AxisV = FVector::YAxisVector;
+		/** The world axis drawn along U (where V = 0) and along V (where U = 0). */
+		EGridLineKind AlongU = EGridLineKind::AxisX;
+		EGridLineKind AlongV = EGridLineKind::AxisY;
 	};
-
-	/** At most this many lines per direction, so a fine grid over a large extent stays bounded (it shrinks the extent instead). */
-	constexpr int32 MaxGridLinesPerDirection = 1001;
 
 	MODULARSCENEBUILDER_API bool IsOrthographic(EStageViewProjection Projection);
 
@@ -100,12 +106,8 @@ namespace StageViewMath
 	/** The same for a camera's view (APlayerCameraManager::GetCameraCacheView). */
 	MODULARSCENEBUILDER_API double GetScreenScaleDistance(const struct FMinimalViewInfo& View, const FVector& At);
 
-	/**
-	 * Grid lines in Plane at PlaneOffset, with cells of CellCm, out to HalfExtentCm on both sides of the origin (fewer when
-	 * MaxGridLinesPerDirection would be exceeded). The origin lines are axis lines. MajorEvery <= 0 means no major lines.
-	 * OutLines is reset; it stays empty for a non-positive or non-finite cell or extent.
-	 */
-	MODULARSCENEBUILDER_API void BuildGridLines(EGridPlane Plane, double PlaneOffset, double CellCm, double HalfExtentCm, int32 MajorEvery, TArray<FGridLine>& OutLines);
+	/** The surface of a grid in Plane at PlaneOffset along its normal. False (OutSurface untouched) for a non-finite offset. */
+	MODULARSCENEBUILDER_API bool GetGridSurface(EGridPlane Plane, double PlaneOffset, FGridSurface& OutSurface);
 
 	/** Toolbar choices: Off (0), 10, 50, 100 cm. */
 	MODULARSCENEBUILDER_API TConstArrayView<float> GetGridSnapPresets();

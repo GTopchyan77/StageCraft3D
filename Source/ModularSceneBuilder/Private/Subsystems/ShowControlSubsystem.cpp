@@ -163,6 +163,7 @@ void UShowControlSubsystem::UnregisterFixture(ALightingFixtureActor* Fixture)
 	{
 		Fades.RemoveAll([Fixture](const FAttributeFade& Fade) { return Fade.Fixture == Fixture; });
 		Strobes.RemoveAll([Fixture](const FStrobeState& State) { return State.Fixture == Fixture; });
+		ShadowSwitchTimes.Remove(Fixture);
 		MarkShadowBudgetDirty(); // Its place in the budget is free for the next brightest.
 		OnFixturesChanged.Broadcast();
 	}
@@ -170,13 +171,17 @@ void UShowControlSubsystem::UnregisterFixture(ALightingFixtureActor* Fixture)
 
 void UShowControlSubsystem::MarkShadowBudgetDirty()
 {
+	ArmShadowBudgetTimer(GetDefault<UStageShowPerformanceSettings>()->GetUpdateSeconds());
+}
+
+void UShowControlSubsystem::ArmShadowBudgetTimer(float DelaySeconds)
+{
 	UWorld* World = GetWorld();
 	if (!World || World->GetTimerManager().IsTimerActive(ShadowBudgetTimer))
 	{
 		return; // Already armed: one re-ranking covers every change until it runs.
 	}
-	const float Interval = GetDefault<UStageShowPerformanceSettings>()->GetUpdateSeconds();
-	World->GetTimerManager().SetTimer(ShadowBudgetTimer, FTimerDelegate::CreateUObject(this, &ThisClass::UpdateShadowBudget), Interval, /*bLoop*/ false);
+	World->GetTimerManager().SetTimer(ShadowBudgetTimer, FTimerDelegate::CreateUObject(this, &ThisClass::UpdateShadowBudget), DelaySeconds, /*bLoop*/ false);
 }
 
 void UShowControlSubsystem::UpdateShadowBudget()
@@ -190,29 +195,40 @@ void UShowControlSubsystem::UpdateShadowBudget()
 	const TOptional<FVector> ViewLocation = Viewer && Viewer->PlayerCameraManager
 		? TOptional<FVector>(Viewer->PlayerCameraManager->GetCameraLocation()) : TOptional<FVector>();
 
+	const double Now = World ? World->GetTimeSeconds() : 0.0;
 	TArray<FStageShadowCandidate> Candidates;
 	Candidates.Reserve(Current.Num());
-	for (const ALightingFixtureActor* Fixture : Current)
+	for (ALightingFixtureActor* Fixture : Current)
 	{
 		FStageShadowCandidate& Candidate = Candidates.AddDefaulted_GetRef();
 		const double Distance = ViewLocation.IsSet() ? FVector::Dist(ViewLocation.GetValue(), Fixture->GetActorLocation()) : 100.0;
 		Candidate.Importance = StageShadowBudget::GetImportance(Fixture->GetShadowRankingFlux(), Distance);
 		Candidate.bCasting = Fixture->AreBeamShadowsEnabled();
+		if (const double* SwitchedAt = ShadowSwitchTimes.Find(Fixture))
+		{
+			Candidate.SecondsSinceSwitch = FMath::Max(0.0, Now - *SwitchedAt);
+		}
 	}
 
-	const TArray<bool> Casting = StageShadowBudget::SelectCasters(Candidates, Settings->GetShadowBudget(), Settings->GetHysteresis());
+	const FStageShadowSelection Selection = StageShadowBudget::SelectCastersWithHold(Candidates, Settings->GetShadowBudget(), Settings->GetHysteresis(), Settings->GetMinHoldSeconds());
 	int32 Switched = 0;
 	for (int32 Index = 0; Index < Current.Num(); ++Index)
 	{
-		if (Current[Index]->AreBeamShadowsEnabled() != Casting[Index])
+		if (Current[Index]->AreBeamShadowsEnabled() != Selection.Casting[Index])
 		{
-			Current[Index]->SetBeamShadowsEnabled(Casting[Index]);
+			Current[Index]->SetBeamShadowsEnabled(Selection.Casting[Index]);
+			ShadowSwitchTimes.Add(Current[Index], Now);
 			++Switched;
 		}
 	}
 	if (Switched > 0)
 	{
 		UE_LOG(LogStageCraft, Verbose, TEXT("Shadow budget: %d of %d fixtures cast shadows (%d switched)."), GetShadowedFixtureCount(), Current.Num(), Switched);
+	}
+	// A held fixture still has to follow its rank once its hold ends, even if nothing else changes by then.
+	if (Selection.RetryAfterSeconds > 0.0)
+	{
+		ArmShadowBudgetTimer(static_cast<float>(Selection.RetryAfterSeconds) + 0.01f);
 	}
 }
 

@@ -42,6 +42,74 @@ namespace StageShadowBudget
 		return Casting;
 	}
 
+	FStageShadowSelection SelectCastersWithHold(TConstArrayView<FStageShadowCandidate> Candidates, int32 Budget, float Hysteresis, double MinHoldSeconds)
+	{
+		FStageShadowSelection Selection;
+		const TArray<bool> Ranked = SelectCasters(Candidates, Budget, Hysteresis);
+		if (!FMath::IsFinite(MinHoldSeconds) || MinHoldSeconds <= 0.0)
+		{
+			Selection.Casting = Ranked;
+			return Selection;
+		}
+
+		auto IsLit = [](const FStageShadowCandidate& Candidate) { return FMath::IsFinite(Candidate.Importance) && Candidate.Importance > 0.f; };
+		auto IsHeld = [MinHoldSeconds, &IsLit](const FStageShadowCandidate& Candidate)
+		{
+			return IsLit(Candidate) && FMath::IsFinite(Candidate.SecondsSinceSwitch) && Candidate.SecondsSinceSwitch < MinHoldSeconds;
+		};
+
+		// Held candidates keep their state; the free ones are ranked for whatever budget the held casters leave.
+		TArray<FStageShadowCandidate> Free(Candidates.GetData(), Candidates.Num());
+		int32 HeldCasters = 0;
+		for (int32 Index = 0; Index < Candidates.Num(); ++Index)
+		{
+			if (IsHeld(Candidates[Index]))
+			{
+				HeldCasters += Candidates[Index].bCasting ? 1 : 0;
+				Free[Index].Importance = 0.f; // Out of the free ranking.
+			}
+		}
+		const int32 FreeBudget = Budget < 0 ? Budget : FMath::Max(0, Budget - HeldCasters);
+		Selection.Casting = SelectCasters(Free, FreeBudget, Hysteresis);
+
+		for (int32 Index = 0; Index < Candidates.Num(); ++Index)
+		{
+			const FStageShadowCandidate& Candidate = Candidates[Index];
+			if (!IsHeld(Candidate))
+			{
+				continue;
+			}
+			Selection.Casting[Index] = Candidate.bCasting;
+			if (Candidate.bCasting != Ranked[Index])
+			{
+				const double Remaining = MinHoldSeconds - Candidate.SecondsSinceSwitch;
+				Selection.RetryAfterSeconds = Selection.RetryAfterSeconds > 0.0 ? FMath::Min(Selection.RetryAfterSeconds, Remaining) : Remaining;
+			}
+		}
+
+		// The budget is a hard limit: when it shrank below the held casters, the lowest ranked of them drop now.
+		if (Budget >= 0 && HeldCasters > Budget)
+		{
+			TArray<int32> Casters;
+			for (int32 Index = 0; Index < Candidates.Num(); ++Index)
+			{
+				if (Selection.Casting[Index])
+				{
+					Casters.Add(Index);
+				}
+			}
+			Casters.Sort([&Candidates](int32 A, int32 B)
+			{
+				return Candidates[A].Importance != Candidates[B].Importance ? Candidates[A].Importance > Candidates[B].Importance : A < B;
+			});
+			for (int32 Rank = Budget; Rank < Casters.Num(); ++Rank)
+			{
+				Selection.Casting[Casters[Rank]] = false;
+			}
+		}
+		return Selection;
+	}
+
 	float GetImportance(float Flux, double DistanceCm)
 	{
 		if (!FMath::IsFinite(Flux) || Flux <= 0.f || !FMath::IsFinite(DistanceCm))
@@ -66,4 +134,9 @@ float UStageShowPerformanceSettings::GetUpdateSeconds() const
 float UStageShowPerformanceSettings::GetHysteresis() const
 {
 	return FMath::IsFinite(Hysteresis) ? FMath::Clamp(Hysteresis, 0.f, 2.f) : 0.25f;
+}
+
+float UStageShowPerformanceSettings::GetMinHoldSeconds() const
+{
+	return FMath::IsFinite(MinCasterHoldSeconds) ? FMath::Clamp(MinCasterHoldSeconds, 0.f, 10.f) : 1.f;
 }

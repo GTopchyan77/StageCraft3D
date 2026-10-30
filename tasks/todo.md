@@ -428,3 +428,24 @@ Decisions (Gevor, 2026-10-26): our own small Art-Net + sACN receiver on the engi
 - [x] Pawn: look, drags, wheel and orbit applied at once (no easing); control rotation the single source; the editor's flight integrator; tick only while flying or gliding
 - [x] Builds: Editor, Game Development, Game Shipping (0 warnings); all automation (109/109); scripted runs R47_Drag1-3, R47_Fly
 - [ ] Manual verification (Gevor): mouse feel of every drag and of WASDQE flight; name any gesture that still feels inverted
+
+## Phase 25 — Thin-geometry crawl and shadow budget stability (requested by Gevor 2026-10-30; STATE.md #48)
+Decisions (Gevor, 2026-10-30): the symptom is thin geometry crawling during camera moves; fix the causes at a measured cost; rendering first, assistant second (#49).
+- [x] Baseline in-engine: `StageCraft.View.MeasureStability` (rendered resolution, AA settings, GPU ms, per-pixel luma deviation + heat map); no Python on this PC, so no `MeasureCrawl.py`
+- [x] Root cause found: the 1-pixel line-batch reference grid toggled under TSR jitter (7.0 % unstable pixels; 0.24 % without it)
+- [x] Grid rebuilt as one translucent quad with `M_StageGrid` (analytic anti-aliased lines, density fade, exposure-independent colour): 0.14-0.30 %
+- [x] Dropped after measuring: `r.TSR.ThinGeometryDetection` (no effect), native screen percentage and its preference (no stability gain, +25 % GPU), AA pin (already 3)
+- [x] Shadow budget minimum hold (1 s) + `StageCraft.Show.ShadowBudgetHold` test
+- [x] Fixture bench 50/200/500 (Kmidden open: regression check only); builds Editor/Game/Shipping 0 warnings; automation 110/110
+- [ ] Manual verification (Gevor): truss / stairs / cables while orbiting and flying
+
+## Phase 26 — Offline-first assistant: knowledge base, multi-step, memory (requested by Gevor 2026-10-30; STATE.md #49, ADR 0020)
+Decisions (Gevor, 2026-10-30): the free offline engine is the full default; Claude (ANTHROPIC_API_KEY) only extends it.
+- [ ] Feature knowledge base (DataTable + CSV, English and Armenian), `StageAIFeatureSearch`, `how_to` / `where_is` / `open_panel`
+- [ ] Reply action buttons; open and flash panels
+- [ ] Multi-step prompts (splitter, queued plan, stop on first refusal)
+- [ ] Conversation memory (last affected items, repeat with replaced slots)
+- [ ] New actions: fixture parameters, selection, cue update/delete, BOM answers, export completion in chat
+- [ ] Claude schema: new intents + steps; knowledge base in the system prompt
+- [ ] Tests (corpus EN/HY); builds 0 warnings; scripted runs
+- [ ] Manual verification (Gevor)

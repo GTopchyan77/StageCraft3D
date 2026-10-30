@@ -118,64 +118,38 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(FStageViewGridTest, "StageCraft.Viewport.Grid",
 bool FStageViewGridTest::RunTest(const FString& Parameters)
 {
 	using namespace StageViewMath;
-	TArray<FGridLine> Lines;
+	FGridSurface Surface;
 
-	// 1 m cells out to 5 m: 11 lines each way.
-	BuildGridLines(EGridPlane::XY, 0.0, 100.0, 500.0, 10, Lines);
-	TestEqual(TEXT("11 + 11 lines"), Lines.Num(), 22);
-	int32 AxisX = 0, AxisY = 0, Majors = 0;
-	for (const FGridLine& Line : Lines)
+	// The floor: X and Y in the plane, the X axis drawn along U and Y along V.
+	TestTrue(TEXT("Floor surface"), GetGridSurface(EGridPlane::XY, 1.0, Surface));
+	TestTrue(TEXT("Floor sits at Z = offset"), Surface.Origin.Equals(FVector(0, 0, 1)));
+	TestTrue(TEXT("Floor axes"), Surface.AxisU.Equals(FVector::XAxisVector) && Surface.AxisV.Equals(FVector::YAxisVector));
+	TestTrue(TEXT("Floor axis colours"), Surface.AlongU == EGridLineKind::AxisX && Surface.AlongV == EGridLineKind::AxisY);
+
+	// A front view's grid stands at Y = offset with the X and Z axes.
+	TestTrue(TEXT("Front surface"), GetGridSurface(EGridPlane::XZ, -5000.0, Surface));
+	TestTrue(TEXT("XZ sits at Y = offset"), Surface.Origin.Equals(FVector(0, -5000, 0)));
+	TestTrue(TEXT("XZ axes"), Surface.AxisU.Equals(FVector::XAxisVector) && Surface.AxisV.Equals(FVector::ZAxisVector));
+	TestTrue(TEXT("XZ axis colours"), Surface.AlongU == EGridLineKind::AxisX && Surface.AlongV == EGridLineKind::AxisZ);
+
+	TestTrue(TEXT("Side surface"), GetGridSurface(EGridPlane::YZ, 2000.0, Surface));
+	TestTrue(TEXT("YZ sits at X = offset"), Surface.Origin.Equals(FVector(2000, 0, 0)));
+	TestTrue(TEXT("YZ axes"), Surface.AxisU.Equals(FVector::YAxisVector) && Surface.AxisV.Equals(FVector::ZAxisVector));
+	TestTrue(TEXT("YZ axis colours"), Surface.AlongU == EGridLineKind::AxisY && Surface.AlongV == EGridLineKind::AxisZ);
+
+	// Every plane: unit, perpendicular axes, both perpendicular to the offset direction, so the world origin projects to (0, 0).
+	for (const EGridPlane Plane : { EGridPlane::XY, EGridPlane::XZ, EGridPlane::YZ })
 	{
-		AxisX += Line.Kind == EGridLineKind::AxisX;
-		AxisY += Line.Kind == EGridLineKind::AxisY;
-		Majors += Line.Kind == EGridLineKind::Major;
-		TestEqual(TEXT("Floor lines lie at Z = 0"), Line.Start.Z, 0.0);
+		GetGridSurface(Plane, 300.0, Surface);
+		TestTrue(TEXT("Unit perpendicular axes"), FMath::IsNearlyEqual(Surface.AxisU.Size(), 1.0) && FMath::IsNearlyEqual(Surface.AxisV.Size(), 1.0)
+			&& FMath::IsNearlyZero(Surface.AxisU | Surface.AxisV));
+		TestTrue(TEXT("Origin projects to (0, 0)"), FMath::IsNearlyZero(Surface.Origin | Surface.AxisU) && FMath::IsNearlyZero(Surface.Origin | Surface.AxisV));
 	}
-	TestEqual(TEXT("One X axis line"), AxisX, 1);
-	TestEqual(TEXT("One Y axis line"), AxisY, 1);
-	TestEqual(TEXT("No major lines inside 5 cells (index 0 is the axis)"), Majors, 0);
-	const FGridLine* XAxis = Lines.FindByPredicate([](const FGridLine& Line) { return Line.Kind == EGridLineKind::AxisX; });
-	TestTrue(TEXT("The X axis line runs along X through the origin"), XAxis && XAxis->Start.Equals(FVector(-500, 0, 0)) && XAxis->End.Equals(FVector(500, 0, 0)));
 
-	// Majors every 10 cells.
-	BuildGridLines(EGridPlane::XY, 0.0, 10.0, 250.0, 10, Lines);
-	Majors = 0;
-	for (const FGridLine& Line : Lines)
-	{
-		Majors += Line.Kind == EGridLineKind::Major;
-	}
-	TestEqual(TEXT("Major lines at +-100 and +-200 cm, both directions"), Majors, 8);
-
-	// A front view's grid stands in its plane, with the X and Z axes.
-	BuildGridLines(EGridPlane::XZ, -5000.0, 100.0, 300.0, 10, Lines);
-	bool bAllInPlane = true;
-	int32 AxisZ = 0;
-	AxisX = 0;
-	for (const FGridLine& Line : Lines)
-	{
-		bAllInPlane &= Line.Start.Y == -5000.0 && Line.End.Y == -5000.0;
-		AxisX += Line.Kind == EGridLineKind::AxisX;
-		AxisZ += Line.Kind == EGridLineKind::AxisZ;
-	}
-	TestTrue(TEXT("XZ lines lie in Y = offset"), bAllInPlane);
-	TestTrue(TEXT("XZ grid has X and Z axes"), AxisX == 1 && AxisZ == 1);
-
-	BuildGridLines(EGridPlane::YZ, 2000.0, 100.0, 300.0, 10, Lines);
-	TestTrue(TEXT("YZ lines lie in X = offset"), Lines.Num() > 0 && Lines[0].Start.X == 2000.0);
-
-	// The line cap shrinks the extent instead of exploding.
-	BuildGridLines(EGridPlane::XY, 0.0, 1.0, 5000.0, 10, Lines);
-	TestEqual(TEXT("Capped at 1001 lines per direction"), Lines.Num(), 2 * MaxGridLinesPerDirection);
-
-	// Invalid input draws nothing.
-	BuildGridLines(EGridPlane::XY, 0.0, 0.0, 500.0, 10, Lines);
-	TestEqual(TEXT("Zero cell"), Lines.Num(), 0);
-	BuildGridLines(EGridPlane::XY, 0.0, -10.0, 500.0, 10, Lines);
-	TestEqual(TEXT("Negative cell"), Lines.Num(), 0);
-	BuildGridLines(EGridPlane::XY, 0.0, std::numeric_limits<double>::quiet_NaN(), 500.0, 10, Lines);
-	TestEqual(TEXT("NaN cell"), Lines.Num(), 0);
-	BuildGridLines(EGridPlane::XY, 0.0, 100.0, 50.0, 10, Lines);
-	TestEqual(TEXT("Extent smaller than a cell"), Lines.Num(), 0);
+	// Invalid input leaves the surface as it was.
+	const FGridSurface Before = Surface;
+	TestFalse(TEXT("NaN offset refused"), GetGridSurface(EGridPlane::XY, std::numeric_limits<double>::quiet_NaN(), Surface));
+	TestTrue(TEXT("NaN offset leaves the surface untouched"), Surface.Origin.Equals(Before.Origin) && Surface.AxisU.Equals(Before.AxisU));
 	return true;
 }
 

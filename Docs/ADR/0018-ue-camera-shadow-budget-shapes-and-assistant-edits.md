@@ -118,13 +118,14 @@ A « segment at the left of `UStageViewportToolbar` collapses it to a 14 px stri
 - **Importance** is the flux at the dimmer over the squared distance to the viewer, in metres, with anything closer than 1 m counted as 1 m.
 - The **Budget** most important cast. Dark fixtures never do.
 - **Hysteresis:** a current caster counts 25 % brighter, so beams do not flicker in and out as a fade crosses another.
+- **Minimum hold (STATE.md #48):** a fixture keeps its shadows on or off for at least `MinCasterHoldSeconds` (default 1 s) after a switch. Hysteresis alone did not stop it: with more than 64 lit fixtures a camera move changes distances by more than 25 % within a quarter second, so a fixture at the cut-off could switch every re-ranking. Held casters fill the budget first; going dark still drops shadows at once; the budget stays a hard limit; when a held fixture is ranked the other way, one more re-ranking is armed for the moment its hold ends (`FStageShadowSelection::RetryAfterSeconds`), so the result settles without a tick.
 - Ties keep the registration order.
 
 `UShowControlSubsystem` re-ranks event-driven, never per frame.
 
 - These **mark the ranking dirty:** a fixture registering or unregistering, an intensity output change, and a camera move (through the controller's camera-transform event).
 - A one-shot timer (0.25 s, coalescing) re-ranks, and only fixtures whose choice changed get `SetCastShadows`.
-- The settings are in **Project Settings › Game › StageCraft Performance** (`UStageShowPerformanceSettings`): on / off, the budget (0..2000, default 64), the interval and the hysteresis. Off is the previous look and cost.
+- The settings are in **Project Settings › Game › StageCraft Performance** (`UStageShowPerformanceSettings`): on / off, the budget (0..2000, default 64), the interval, the hysteresis and the minimum hold. Off is the previous look and cost.
 
 ## 5. Procedural stage shapes
 

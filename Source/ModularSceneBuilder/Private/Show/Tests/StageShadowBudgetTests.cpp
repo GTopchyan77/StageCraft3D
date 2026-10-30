@@ -68,6 +68,75 @@ bool FStageShadowBudgetTest::RunTest(const FString& Parameters)
 	TestTrue(TEXT("budget in range"), Settings->GetShadowBudget() >= -1 && Settings->GetShadowBudget() <= 2000);
 	TestTrue(TEXT("interval in range"), Settings->GetUpdateSeconds() >= 0.05f && Settings->GetUpdateSeconds() <= 2.f);
 	TestTrue(TEXT("hysteresis in range"), Settings->GetHysteresis() >= 0.f && Settings->GetHysteresis() <= 2.f);
+	TestTrue(TEXT("hold in range"), Settings->GetMinHoldSeconds() >= 0.f && Settings->GetMinHoldSeconds() <= 10.f);
+	return true;
+}
+
+// The minimum hold (STATE.md #48): a fixture at the cut-off cannot switch its shadows on and off while the camera moves.
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FStageShadowBudgetHoldTest, "StageCraft.Show.ShadowBudgetHold",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::ClientContext | EAutomationTestFlags::EngineFilter)
+
+bool FStageShadowBudgetHoldTest::RunTest(const FString& Parameters)
+{
+	using StageShadowBudget::SelectCastersWithHold;
+	constexpr double Hold = 1.0;
+	constexpr int32 Budget = 1;
+
+	// Two fixtures trade places as the camera moves between them, re-ranked every 0.25 s like UShowControlSubsystem does.
+	// Without the hold they would swap on every ranking; with it, each state lasts at least Hold seconds.
+	TArray<FStageShadowCandidate> Candidates = { { 1.f, true }, { 1.f, false } };
+	TArray<double> SwitchedAt = { -100.0, -100.0 };
+	int32 Switches = 0;
+	double ShortestState = TNumericLimits<double>::Max();
+	for (int32 Step = 0; Step < 40; ++Step)
+	{
+		const double Now = Step * 0.25;
+		const bool bFirstNearer = Step % 2 == 0;
+		Candidates[0].Importance = bFirstNearer ? 3.f : 1.f;
+		Candidates[1].Importance = bFirstNearer ? 1.f : 3.f;
+		for (int32 Index = 0; Index < 2; ++Index)
+		{
+			Candidates[Index].SecondsSinceSwitch = Now - SwitchedAt[Index];
+		}
+		const FStageShadowSelection Selection = SelectCastersWithHold(Candidates, Budget, 0.25f, Hold);
+		TestTrue(TEXT("never over the budget"), Selection.Casting.FilterByPredicate([](bool bCasting) { return bCasting; }).Num() <= Budget);
+		for (int32 Index = 0; Index < 2; ++Index)
+		{
+			if (Selection.Casting[Index] != Candidates[Index].bCasting)
+			{
+				ShortestState = FMath::Min(ShortestState, Now - SwitchedAt[Index]);
+				SwitchedAt[Index] = Now;
+				Candidates[Index].bCasting = Selection.Casting[Index];
+				++Switches;
+			}
+		}
+	}
+	TestTrue(*FString::Printf(TEXT("no state shorter than the hold (shortest %.2f s)"), ShortestState), ShortestState >= Hold);
+	TestTrue(*FString::Printf(TEXT("far fewer switches than rankings (%d)"), Switches), Switches <= 20);
+
+	// A held caster that goes dark stops casting at once.
+	Candidates = { { 0.f, true, 0.1 } };
+	TestFalse(TEXT("dark drops despite the hold"), SelectCastersWithHold(Candidates, 4, 0.25f, Hold).Casting[0]);
+
+	// A held non-caster is not picked even when it outranks everyone, and the free budget goes to the next one.
+	Candidates = { { 9.f, false, 0.2 }, { 1.f, false } };
+	FStageShadowSelection Selection = SelectCastersWithHold(Candidates, 1, 0.25f, Hold);
+	TestTrue(TEXT("held non-caster stays off, the free one casts"), !Selection.Casting[0] && Selection.Casting[1]);
+	TestTrue(TEXT("retry when the hold ends (0.8 s)"), FMath::IsNearlyEqual(Selection.RetryAfterSeconds, 0.8, 1e-6));
+
+	// Held casters fill the budget first; a shrunken budget drops the dimmest of them.
+	Candidates = { { 2.f, true, 0.1 }, { 5.f, true, 0.1 }, { 9.f, false } };
+	Selection = SelectCastersWithHold(Candidates, 1, 0.25f, Hold);
+	TestTrue(TEXT("budget 1 keeps the brightest held caster only"), !Selection.Casting[0] && Selection.Casting[1] && !Selection.Casting[2]);
+
+	// Nothing held: identical to the plain ranking, no retry. Hold 0 turns the rule off.
+	Candidates = { { 1.f, false }, { 3.f, true }, { 2.f, false } };
+	Selection = SelectCastersWithHold(Candidates, 2, 0.25f, Hold);
+	TestTrue(TEXT("unheld = SelectCasters"), Selection.Casting == StageShadowBudget::SelectCasters(Candidates, 2, 0.25f));
+	TestEqual(TEXT("no retry"), Selection.RetryAfterSeconds, 0.0);
+	Candidates = { { 9.f, false, 0.1 } };
+	TestTrue(TEXT("hold 0 is off"), SelectCastersWithHold(Candidates, 1, 0.25f, 0.0).Casting[0]);
+	TestTrue(TEXT("NaN hold is off"), SelectCastersWithHold(Candidates, 1, 0.25f, std::numeric_limits<double>::quiet_NaN()).Casting[0]);
 	return true;
 }
 

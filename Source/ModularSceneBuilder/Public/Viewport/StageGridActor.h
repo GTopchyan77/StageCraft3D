@@ -8,15 +8,17 @@
 #include "StageGridActor.generated.h"
 
 /**
- * The viewport's reference grid (Docs/ADR/0008 §4.4): 1-pixel lines in the floor plane or, in front and side views, in a
- * vertical plane behind the layout. Minor lines at the grid-snap size, major lines every MajorEvery cells, and the world axes
- * in red / green / blue. Lines are drawn into scene colour, so the grid reads in Lit, Unlit and the line view alike.
+ * The viewport's reference grid (Docs/ADR/0008 §4.4): lines in the floor plane or, in front and side views, in a vertical
+ * plane behind the layout. Minor lines at the grid-snap size, major lines every MajorEvery cells, and the world axes in
+ * red / green / blue. Drawn as one translucent unlit quad, so the grid reads in Lit, Unlit and the line view alike.
  *
- * Spawned and driven by UStageViewportComponent. It rebuilds its lines only when the plane, the offset or the cell size
- * changes (no tick: the line batch's own tick is switched off, as these lines never expire). Registered as a render
- * helper, so it never appears in a render.
+ * The lines are computed per pixel by GridMaterial (Scripts/Content/create_grid_content.py) with analytic anti-aliasing and
+ * a fade once cells shrink below a few pixels (STATE.md #48). One-pixel line primitives crawled under TSR's jitter; this does not.
+ *
+ * Spawned and driven by UStageViewportComponent. It moves the quad and sets material parameters only when the plane, the
+ * offset or the cell size changes; it never ticks. Registered as a render helper, so it never appears in a render.
  */
-UCLASS(NotPlaceable, Transient)
+UCLASS(NotPlaceable, Transient, Config = Game)
 class MODULARSCENEBUILDER_API AStageGridActor : public AActor
 {
 	GENERATED_BODY()
@@ -24,16 +26,16 @@ class MODULARSCENEBUILDER_API AStageGridActor : public AActor
 public:
 	AStageGridActor();
 
-	/** Shows the grid with these lines; rebuilds only when something changed. A non-positive cell size hides it. */
+	/** Shows the grid; changes it only when something changed. A non-positive cell size hides it. */
 	void ShowGrid(StageViewMath::EGridPlane Plane, double PlaneOffset, double CellCm);
 
-	/** Hides the grid and drops its lines. Idempotent. */
+	/** Hides the grid. Idempotent. */
 	void HideGrid();
 
 	bool IsGridShown() const { return LastBuild.IsSet(); }
 
-	/** Lines currently drawn, for diagnostics. */
-	int32 GetLineCount() const;
+	/** The cell size shown, 0 while hidden; for diagnostics. */
+	double GetCellSize() const { return LastBuild.IsSet() ? LastBuild->CellCm : 0.0; }
 
 protected:
 	//~ Begin AActor Interface
@@ -41,7 +43,11 @@ protected:
 	virtual void EndPlay(const EEndPlayReason::Type EndPlayReason) override;
 	//~ End AActor Interface
 
-	/** How far the grid reaches from the origin on each side, in cm (fewer cells when the line cap would be exceeded). */
+	/** The grid material (DefaultGame.ini). Without it the grid stays hidden and a warning says why. */
+	UPROPERTY(Config, EditDefaultsOnly, Category = "StageCraft|Grid")
+	TSoftObjectPtr<class UMaterialInterface> GridMaterial;
+
+	/** How far the grid reaches from the origin on each side, in cm. */
 	UPROPERTY(EditDefaultsOnly, Category = "StageCraft|Grid", meta = (ClampMin = "100.0", Units = "cm"))
 	double HalfExtentCm = 5000.0;
 
@@ -65,9 +71,19 @@ protected:
 	FLinearColor AxisZColor = FLinearColor(0.12f, 0.25f, 0.65f);
 
 	UPROPERTY(VisibleAnywhere, Category = "Components")
-	TObjectPtr<class ULineBatchComponent> Lines = nullptr;
+	TObjectPtr<class UProceduralMeshComponent> Surface = nullptr;
 
 private:
+	/** The material instance on Surface; created on the first ShowGrid. Null when GridMaterial did not load. */
+	UPROPERTY(Transient)
+	TObjectPtr<class UMaterialInstanceDynamic> GridMaterialInstance = nullptr;
+
+	/** Creates GridMaterialInstance once. False, with a warning the first time, when the material is unavailable. */
+	bool EnsureMaterial();
+
+	/** Whether the missing-material warning was logged, so it is said once rather than on every snap change. */
+	bool bWarnedMissingMaterial = false;
+
 	struct FGridBuild
 	{
 		StageViewMath::EGridPlane Plane = StageViewMath::EGridPlane::XY;
@@ -82,9 +98,6 @@ private:
 
 	FLinearColor GetLineColor(StageViewMath::EGridLineKind Kind) const;
 
-	/** What the lines show; unset while hidden. */
+	/** What the grid shows; unset while hidden. */
 	TOptional<FGridBuild> LastBuild;
-
-	/** Reused between rebuilds. */
-	TArray<StageViewMath::FGridLine> ScratchLines;
 };

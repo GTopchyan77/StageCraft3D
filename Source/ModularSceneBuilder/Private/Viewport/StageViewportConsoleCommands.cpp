@@ -16,7 +16,12 @@
 #include "Framework/Application/SlateApplication.h"
 #include "GameFramework/Pawn.h"
 #include "GenericPlatform/GenericPlatformInputDeviceMapper.h"
+#include "DynamicRHI.h"
 #include "HAL/IConsoleManager.h"
+#include "ImageUtils.h"
+#include "LegacyScreenPercentageDriver.h"
+#include "Misc/Paths.h"
+#include "UnrealClient.h"
 #include "Widgets/SViewport.h"
 #include "ModularSceneBuilder.h"
 #include "Placement/StagePlacementToolComponent.h"
@@ -81,8 +86,8 @@ namespace StageViewportCommands
 			*GetNameSafe(Controller->GetPawn()), Controller->GetPawn() ? *Controller->GetPawn()->GetActorLocation().ToCompactString() : TEXT("-"),
 			*Controller->GetControlRotation().ToCompactString(),
 			Camera.ProjectionMode == ECameraProjectionMode::Orthographic ? TEXT("orthographic") : TEXT("perspective"), Camera.OrthoWidth);
-		UE_LOG(LogStageCraft, Display, TEXT("StageCraft.View.Status: grid %s (%d lines); snap grid %.0f cm, angle %.0f deg; gizmo snap %.0f cm / %.0f deg; placement grid %.0f cm."),
-			Grid && Grid->IsGridShown() ? TEXT("shown") : TEXT("hidden"), Grid ? Grid->GetLineCount() : 0,
+		UE_LOG(LogStageCraft, Display, TEXT("StageCraft.View.Status: grid %s (%.0f cm cells); snap grid %.0f cm, angle %.0f deg; gizmo snap %.0f cm / %.0f deg; placement grid %.0f cm."),
+			Grid && Grid->IsGridShown() ? TEXT("shown") : TEXT("hidden"), Grid ? Grid->GetCellSize() : 0.0,
 			Snapping ? Snapping->GetGridSnap() : -1.f, Snapping ? Snapping->GetAngleSnap() : -1.f,
 			Gizmo ? Gizmo->GetTranslationSnap() : -1.f, Gizmo ? Gizmo->GetRotationSnapDegrees() : -1.f,
 			Controller->GetPlacementTool() ? Controller->GetPlacementTool()->GetGridSnap() : -1.0);
@@ -259,6 +264,132 @@ namespace StageViewportCommands
 		}));
 	}
 
+	int32 GetCVarInt(const TCHAR* Name)
+	{
+		const IConsoleVariable* Variable = IConsoleManager::Get().FindConsoleVariable(Name);
+		return Variable ? Variable->GetInt() : INDEX_NONE;
+	}
+
+	/**
+	 * StageCraft.View.MeasureStability [Frames=60] [TimingFrames=60]: measures how much the still image shimmers (STATE.md #48).
+	 * Logs the resolution the scene is actually rendered at (the engine's own heuristic, so an automatic screen percentage
+	 * is resolved) and the AA settings, then averages the GPU frame time over TimingFrames with nothing else running, then
+	 * reads the viewport back for Frames frames and reports the per-pixel temporal standard deviation of luma (0-255).
+	 * With the camera at rest every bit of that deviation is TSR jitter not being resolved: the crawl on thin geometry.
+	 * Readback stalls the GPU, which is why the timing pass runs first. Keep the mouse still while it runs.
+	 */
+	void MeasureStability(const TArray<FString>& Args, UWorld* World)
+	{
+		const UGameViewportClient* ViewportClient = World ? World->GetGameViewport() : nullptr;
+		FViewport* Viewport = ViewportClient ? ViewportClient->Viewport : nullptr;
+		if (!Viewport || Viewport->GetSizeXY().GetMin() <= 0)
+		{
+			UE_LOG(LogStageCraft, Display, TEXT("StageCraft.View.MeasureStability: no game viewport."));
+			return;
+		}
+		const int32 Frames = Args.IsValidIndex(0) ? FMath::Clamp(FCString::Atoi(*Args[0]), 8, 600) : 60;
+		const int32 TimingFrames = Args.IsValidIndex(1) ? FMath::Clamp(FCString::Atoi(*Args[1]), 1, 600) : 60;
+		const FIntPoint Size = Viewport->GetSizeXY();
+
+		FStaticResolutionFractionHeuristic Heuristic;
+		Heuristic.Settings.PullRunTimeRenderingSettings(EViewStatusForScreenPercentage::Desktop);
+		Heuristic.TotalDisplayedPixelCount = Size.X * Size.Y;
+		const float Fraction = Heuristic.ResolveResolutionFraction();
+		UE_LOG(LogStageCraft, Display, TEXT("StageCraft.View.MeasureStability: viewport %dx%d rendered at %.1f %% (%dx%d), screen percentage mode %s; r.ScreenPercentage %d, AA method %d, sg.AntiAliasingQuality %d, r.TSR.History.ScreenPercentage %d, r.TSR.ThinGeometryDetection %d, sg.ShadowQuality %d, sg.GlobalIlluminationQuality %d."),
+			Size.X, Size.Y, Fraction * 100.f, FMath::RoundToInt(Size.X * Fraction), FMath::RoundToInt(Size.Y * Fraction),
+			*UEnum::GetValueAsString(Heuristic.Settings.Mode), GetCVarInt(TEXT("r.ScreenPercentage")), GetCVarInt(TEXT("r.AntiAliasingMethod")),
+			GetCVarInt(TEXT("sg.AntiAliasingQuality")), GetCVarInt(TEXT("r.TSR.History.ScreenPercentage")), GetCVarInt(TEXT("r.TSR.ThinGeometryDetection")),
+			GetCVarInt(TEXT("sg.ShadowQuality")), GetCVarInt(TEXT("sg.GlobalIlluminationQuality")));
+
+		struct FAccumulator
+		{
+			TArray<float> Sum;
+			TArray<float> SumSquares;
+			TArray<FColor> Pixels;
+			double GpuMilliseconds = 0.0;
+			int32 Frame = 0;
+			int32 Captured = 0;
+		};
+		const TSharedRef<FAccumulator> Accumulator = MakeShared<FAccumulator>();
+		Accumulator->Sum.SetNumZeroed(Size.X * Size.Y);
+		Accumulator->SumSquares.SetNumZeroed(Size.X * Size.Y);
+		const TWeakObjectPtr<const UGameViewportClient> WeakClient(ViewportClient);
+
+		FTSTicker::GetCoreTicker().AddTicker(FTickerDelegate::CreateLambda([WeakClient, Accumulator, Frames, TimingFrames, Size](float)
+		{
+			const UGameViewportClient* Client = WeakClient.Get();
+			FViewport* Viewport = Client ? Client->Viewport : nullptr;
+			if (!Viewport || Viewport->GetSizeXY() != Size)
+			{
+				UE_LOG(LogStageCraft, Display, TEXT("StageCraft.View.MeasureStability: the viewport closed or resized; cancelled."));
+				return false;
+			}
+			FAccumulator& Data = *Accumulator;
+			++Data.Frame;
+			// The first frames are skipped so the frame that ran the console command is not counted.
+			constexpr int32 SkippedFrames = 4;
+			if (Data.Frame <= SkippedFrames)
+			{
+				return true;
+			}
+			if (Data.Frame <= SkippedFrames + TimingFrames)
+			{
+				Data.GpuMilliseconds += FPlatformTime::ToMilliseconds(RHIGetGPUFrameCycles());
+				return true;
+			}
+			if (!Viewport->ReadPixels(Data.Pixels) || Data.Pixels.Num() != Data.Sum.Num())
+			{
+				UE_LOG(LogStageCraft, Display, TEXT("StageCraft.View.MeasureStability: viewport readback failed; cancelled."));
+				return false;
+			}
+			for (int32 Index = 0; Index < Data.Pixels.Num(); ++Index)
+			{
+				const FColor& Pixel = Data.Pixels[Index];
+				const float Luma = 0.2126f * Pixel.R + 0.7152f * Pixel.G + 0.0722f * Pixel.B;
+				Data.Sum[Index] += Luma;
+				Data.SumSquares[Index] += Luma * Luma;
+			}
+			if (++Data.Captured < Frames)
+			{
+				return true;
+			}
+
+			TArray<float> Deviations;
+			Deviations.SetNumUninitialized(Data.Sum.Num());
+			double Total = 0.0;
+			int32 AboveOne = 0;
+			int32 AboveFour = 0;
+			for (int32 Index = 0; Index < Data.Sum.Num(); ++Index)
+			{
+				const float Mean = Data.Sum[Index] / Frames;
+				const float Deviation = FMath::Sqrt(FMath::Max(0.f, Data.SumSquares[Index] / Frames - Mean * Mean));
+				Deviations[Index] = Deviation;
+				Total += Deviation;
+				AboveOne += Deviation > 1.f ? 1 : 0;
+				AboveFour += Deviation > 4.f ? 1 : 0;
+			}
+			// A heat map of where the image is unstable (white = a deviation of 16 or more), next to the screenshots.
+			TArray<FColor> HeatMap;
+			HeatMap.SetNumUninitialized(Deviations.Num());
+			for (int32 Index = 0; Index < Deviations.Num(); ++Index)
+			{
+				const uint8 Level = uint8(FMath::Clamp(Deviations[Index] * 16.f, 0.f, 255.f));
+				HeatMap[Index] = FColor(Level, Level, Level, 255);
+			}
+			const FString HeatMapPath = FPaths::ScreenShotDir() / FString::Printf(TEXT("Stability_%s.png"), *FDateTime::Now().ToString());
+			const bool bSaved = FImageUtils::SaveImageByExtension(*HeatMapPath, FImageView(HeatMap.GetData(), Size.X, Size.Y));
+			UE_LOG(LogStageCraft, Display, TEXT("StageCraft.View.MeasureStability: heat map %s %s."), bSaved ? TEXT("saved to") : TEXT("could not be saved to"), *HeatMapPath);
+
+			Deviations.Sort();
+			const double PixelCount = Deviations.Num();
+			UE_LOG(LogStageCraft, Display, TEXT("StageCraft.View.MeasureStability: GPU %.2f ms (mean of %d frames); over %d still frames luma deviation mean %.3f, p99 %.2f, p99.9 %.2f, max %.2f; pixels above 1: %.2f %%, above 4: %.3f %%."),
+				Data.GpuMilliseconds / TimingFrames, TimingFrames, Frames, Total / PixelCount,
+				Deviations[FMath::Min(Deviations.Num() - 1, int32(PixelCount * 0.99))], Deviations[FMath::Min(Deviations.Num() - 1, int32(PixelCount * 0.999))],
+				Deviations.Last(), 100.0 * AboveOne / PixelCount, 100.0 * AboveFour / PixelCount);
+			return false;
+		}));
+	}
+
 	void SnapGrid(const TArray<FString>& Args, UWorld* World)
 	{
 		AModularPlayerController* Controller = GetController(World);
@@ -295,6 +426,8 @@ namespace StageViewportCommands
 		FConsoleCommandWithWorldAndArgsDelegate::CreateStatic(&Pan));
 	FAutoConsoleCommandWithWorldAndArgs MouseDragCommand(TEXT("StageCraft.View.MouseDrag"), TEXT("<Left|Right|Middle> <dx> <dy> [Frames] [Alt|Key] A real mouse drag through Slate over the viewport (raw counts, +dy = down); logs the camera's motion."),
 		FConsoleCommandWithWorldAndArgsDelegate::CreateStatic(&MouseDrag));
+	FAutoConsoleCommandWithWorldAndArgs MeasureStabilityCommand(TEXT("StageCraft.View.MeasureStability"), TEXT("[Frames=60] [TimingFrames=60] Logs the rendered resolution, AA settings, GPU ms and how much the still image shimmers (per-pixel luma deviation)."),
+		FConsoleCommandWithWorldAndArgsDelegate::CreateStatic(&MeasureStability));
 	FAutoConsoleCommandWithWorldAndArgs SnapGridCommand(TEXT("StageCraft.Snap.Grid"), TEXT("<cm> Sets the toolbar's grid snap (a preset)."),
 		FConsoleCommandWithWorldAndArgsDelegate::CreateStatic(&SnapGrid));
 	FAutoConsoleCommandWithWorldAndArgs SnapAngleCommand(TEXT("StageCraft.Snap.Angle"), TEXT("<degrees> Sets the toolbar's angle snap (a preset)."),

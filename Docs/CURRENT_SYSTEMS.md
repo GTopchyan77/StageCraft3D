@@ -40,7 +40,7 @@ Paths are relative to `Source/ModularSceneBuilder/` (`Public/` and `Private/` sh
 | Grid and angle snap, object snap, guides | ✅ | `Placement/StageSnappingComponent`, `StageSnapMath`, `Viewport/StageViewMath` |
 | Projections (Perspective, Top, Front, Back, Left, Right), ortho pan and zoom | ✅ | `Viewport/StageViewportComponent` |
 | View modes: Lit, Unlit, CAD Lines, Lighting Only, Detail Lighting, Reflections | 🟢 | `Player/StageCraftGameViewportClient`, `Viewport/StageLineViewCameraModifier` |
-| Reference grid | ✅ | `Viewport/StageGridActor` |
+| Reference grid: one translucent quad with `M_StageGrid`, analytic anti-aliased lines that fade with density, stable under TSR (#48, ADR 0008 §4.4) | ✅ surface math (StageCraft.Viewport.Grid) / 🟢 measured: 7.0 % → 0.14–0.30 % unstable pixels (`StageCraft.View.MeasureStability`, R48) | `Viewport/StageGridActor`, `/Game/StageCraft/Viewport/M_StageGrid` |
 | Outliner: discipline groups, hide, lock. No user groups. | ✅ model | `Outliner/StageOutlinerModel`, `UI/StageOutlinerPanel` |
 | Spans: path, closed loop, sag. Points cannot be edited after placement. | ✅ math | `Actors/StageSpanActor`, `Placement/StageSpanMath`, `StageSpanToolComponent` |
 | Decks / risers of any simple outline (procedural prism, Height parameter, panels as quantity; saved through SaveGame, sanitized on restore) (#42). Outline not editable after placing. | ✅ geometry, restore repair / 🟢 visuals | `Actors/StageDeckActor`, `Data/StageDeckData`, `Placement/StageDeckMath` |
@@ -60,7 +60,7 @@ Paths are relative to `Source/ModularSceneBuilder/` (`Public/` and `Private/` sh
 | Fixture data and DMX layout | ✅ | `Data/LightingFixtureData` |
 | Photometrics (display only) | ✅ | `Show/StagePhotometry` |
 | Beam visualisation | 🟡 relies on the level's volumetric fog; no cone mesh | `Content/StageCraft/Maps/L_StageTest` |
-| Fixture shadow budget (#45, ADR 0018 §4): the 64 most important fixtures (flux at dimmer ÷ distance²) cast beam shadows, re-ranked on change (0.25 s, hysteresis 25 %), Project Settings › StageCraft Performance | ✅ selection rules / ⚪ frame-time gain not measured yet | `Show/StageShadowBudget`, `Subsystems/ShowControlSubsystem` |
+| Fixture shadow budget (#45, ADR 0018 §4): the 64 most important fixtures (flux at dimmer ÷ distance²) cast beam shadows, re-ranked on change (0.25 s, hysteresis 25 %), a fixture keeps its shadow state at least 1 s after a switch (#48), Project Settings › StageCraft Performance | ✅ selection and hold rules / ⚪ frame-time gain not measured yet | `Show/StageShadowBudget`, `Subsystems/ShowControlSubsystem` |
 | `FixtureKind` (wash, spot, laser, strobe), IES, pan/tilt speed, DMX modes | ⚪ | — |
 | Still renders | ✅ rules and framing / 🟢 capture | `Render/StageRenderSubsystem`, `UI/StageRenderPanel` |
 | Render cancel, view-mode match, path tracing, scalability | ⚪ | — |
@@ -114,6 +114,6 @@ Paths are relative to `Source/ModularSceneBuilder/` (`Public/` and `Private/` sh
 | Engine | UE 5.8 |
 | Plugins enabled | Interchange, SkyCreatorPlugin, AudioCapture (plus Python and ModelingTools in the editor only) |
 | Plugins tracked but disabled | 19 |
-| Tests | 109 `StageCraft.*` automation tests (#47): pure logic (camera rules and the mouse input config, DMX patching and protocol, shadow budget, stage shape geometry, assistant edits and shapes, assistant grammar in English and Armenian, command schema, voice audio and upload format, photo tracing and the online photo reading, sketch strokes, deck geometry, sketch plans, reports, PDF composer, cable schedule, shopping list, frame statistics, key bindings, crash-safe files, import list file, kept scene items) plus world tests for Sky Creator, sketch generation (all or nothing, one undo step), stairs / curved truss / round riser placement and a replacement step (#45), undo/redo rules and transactions, cues, the fixture output path and restored-state sanitizing |
+| Tests | 110 `StageCraft.*` automation tests (#48): pure logic (camera rules and the mouse input config, DMX patching and protocol, shadow budget, stage shape geometry, assistant edits and shapes, assistant grammar in English and Armenian, command schema, voice audio and upload format, photo tracing and the online photo reading, sketch strokes, deck geometry, sketch plans, reports, PDF composer, cable schedule, shopping list, frame statistics, key bindings, crash-safe files, import list file, kept scene items) plus world tests for Sky Creator, sketch generation (all or nothing, one undo step), stairs / curved truss / round riser placement and a replacement step (#45), undo/redo rules and transactions, cues, the fixture output path and restored-state sanitizing |
 | Areas with no tests | Request bridge, selection, session, economy/profile, patch conflicts, fixture playback (scripted runs only) |
 | Console commands | About 88, all inside `#if !UE_BUILD_SHIPPING` |

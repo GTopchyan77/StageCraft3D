@@ -25,7 +25,7 @@ Decisions by Gevor (2026-10-19):
 | F3 | `Lighting`, `UnlitViewmode`, `PostProcessing`, `Fog`, `EyeAdaptation` and `Bloom` are `SHOWFLAG_ALWAYS_ACCESSIBLE`. `EngineShowFlagOverride` turns lighting, atmosphere and fog off for `VMI_Unlit` (and back on for `VMI_Lit`) every frame. | `ShowFlagsValues.inl`, `ShowFlags.cpp` 560-620 | Unlit works in every configuration through `ViewModeIndex = VMI_Unlit`. |
 | F4 | Unlit colour (base colour written as emissive) is `USE_DEVELOPMENT_SHADERS` code, gated by `View.UnlitViewmodeMask`, which `SceneView.cpp` sets from show flags with no Shipping guard. Development shaders are compiled when `r.CompileShadersForDevelopment` is 1 (engine default; this project does not override it). | `BasePassPixelShader.usf` 1623-1628, `SceneView.cpp` 2873, `ShaderCompiler.cpp` 3887 | Unlit in a cooked build depends on development shaders being cooked. The project pins `r.CompileShadersForDevelopment=1` explicitly, so the dependency is visible and cannot be lost silently. |
 | F5 | Without a camera component, `APlayerCameraManager::UpdateViewTarget` builds the view from `bIsOrthographic` and `DefaultOrthoWidth` (public), plus the auto ortho-plane flags. | `PlayerCameraManager.cpp` 370-382, 468 | Orthographic projection needs no camera component; the viewport component sets those members. Auto planes are turned off and the camera stands far back, so near/far are explicit (0 / world max). |
-| F6 | `ApplyViewMode(VMI_Unlit)` turns `PostProcessing` off. Batched lines (`ULineBatchComponent`) draw into scene colour, not the GBuffer. | `ShowFlags.cpp` 304, line batcher scene proxy | The line view re-enables post-processing after `ApplyViewMode`, and its material adds scene colour back, so the grid survives (§4.3). |
+| F6 | `ApplyViewMode(VMI_Unlit)` turns `PostProcessing` off. Batched lines (`ULineBatchComponent`) draw into scene colour, not the GBuffer. | `ShowFlags.cpp` 304, line batcher scene proxy | The line view re-enables post-processing after `ApplyViewMode`, and its material adds scene colour back, so the grid survives (§4.3). Since #48 the grid is a translucent quad, which is also scene colour only, so this still holds. |
 | F7 | Camera modifiers' `ModifyPostProcess` blends go to the camera manager's post-process blend cache. That cache is applied to the player's view, not to `GetCameraCacheView().PostProcessSettings`, which renders copy. | `PlayerCameraManager.cpp` (`ApplyCameraModifiers`, `AddCachedPPBlend`), `LocalPlayer.cpp` | The line-view material reaches the viewport through a camera modifier and never leaks into renders. |
 | F8 | UE5 ortho viewports: Top = pitch −90 (+X up, +Y right); Front (`LVT_OrthoXZ`) = yaw −90; Back = yaw 90; Left (`LVT_OrthoYZ`) = yaw 0; Right = yaw 180. | `EditorViewportClient.cpp` 5024-5052 | StageCraft uses the same orientations and names as the Unreal Editor. |
 | F9 | The engine default `AspectRatioAxisConstraint` is `AspectRatio_MaintainYFOV`. In that case the ortho width spans the viewport's **height** (no aspect compensation). The perspective FOV stays horizontal at the camera's own `AspectRatio`, which defaults to **4:3** in `APlayerCameraManager`, and the viewport keeps the resulting vertical angle. A scene capture reads both horizontally at its own aspect. | `BaseEngine.ini` 2900, `CameraStackTypes.cpp` 284-335, `PlayerCameraManager.cpp` 47 | Orthographic pan and zoom measure the pixel size by deprojection, so they do not assume an axis. Renders convert FOV and ortho width (`StageRender::GetCaptureFOV`, `GetCaptureOrthoWidth`), so a render frames like the viewport. This also fixes perspective renders, which since #26 had been cropped by 4:3 → 16:9 (verified by measurement, STATE.md #32). |
@@ -78,10 +78,21 @@ Persisted per machine: grid snap, angle snap and grid visibility. Projection and
 - **Content:** made headless by `Scripts/Content/create_viewport_content.py`, and cooked through `DirectoriesToAlwaysCook` `/Game/StageCraft/Viewport`.
 
 ### 4.4 Grid
-- `AStageGridActor` draws 1-pixel lines (thickness 0) with a `ULineBatchComponent` whose tick is disabled. Lines are rebuilt only when the plane, cell size or visibility changes.
-- **Plane:** the floor (XY, 1 cm above Z=0, so it does not z-fight with a floor whose top is at 0) in Perspective and Top. Front/Back and Left/Right use a vertical plane behind the layout, as seen from the camera.
-- **Lines:** minor lines at the grid-snap size (100 cm when snap is Off), major lines every 10 cells, and X/Y axis lines tinted red/green. The extent is ±50 m, with a cap of 1 001 lines per direction.
-- **Visibility:** the Grid toggle on the toolbar. It is drawn in every mode and hidden from renders (`RegisterEditorHelper`).
+- **Amended by STATE.md #48 (2026-10-30).** The grid is now one translucent, unlit quad (`UProceduralMeshComponent`) with `M_StageGrid` (`Scripts/Content/create_grid_content.py`). The lines are computed per pixel:
+  - Each line's coverage comes from the screen-space derivative of the plane coordinate (`fwidth`), so it is a 1-pixel anti-aliased ramp at any distance and zoom.
+  - A line family fades out once its cells are smaller than about 8 pixels (gone at about 3), so the minor lines leave before they can alias toward the horizon.
+  - The colour goes through `EyeAdaptationInverse`, so lines keep their colour at any exposure.
+  - A camera-facing world-position offset (2 mm per metre plus 0.5 cm) keeps the quad in front of a floor it lies on.
+  - The plane's in-plane axes and axis colours come from `StageViewMath::GetGridSurface`. A cell-size change only sets material parameters.
+- **Why it changed (measured).** The `ULineBatchComponent` lines were hard 1-pixel primitives. Under TSR's sub-pixel jitter every line pixel toggled on and off from frame to frame, and TSR rejects that as flicker, so the whole grid crawled. Still camera, 60 frames, 1184×674:
+  - **Old grid:** 7.0 % of the viewport above a luma deviation of 4, with p99 35.
+  - **Grid hidden:** 0.24 %.
+  - **New grid:** 0.14–0.30 %, with p99 1.5–2.5.
+  - **GPU:** unchanged (6.0–6.4 ms).
+  - Neither `r.TSR.ThinGeometryDetection` nor a higher internal resolution changed the old figure.
+- **Plane:** the floor (XY, 1 cm above Z=0) in Perspective and Top. Front/Back and Left/Right use a vertical plane behind the layout, as seen from the camera.
+- **Lines:** minor lines at the grid-snap size (100 cm when snap is Off), major lines every 10 cells, and the world axes in the plane tinted red/green/blue. The extent is ±50 m. There is no line cap any more: density is handled by the fade.
+- **Visibility:** the Grid toggle on the toolbar. It is drawn in every mode (Lit, Unlit and Lines, since translucency stays in scene colour) and hidden from renders (`RegisterEditorHelper`).
 
 ### 4.5 Global grid and angle snap
 - **Presets:** grid Off / 10 / 50 / 100 cm, angle Off / 5° / 15° / 45°. The defaults are 50 cm (the old truss/span grid) and 15°. Values loaded from disk that are not presets fall back to the defaults.
@@ -113,7 +124,7 @@ Persisted per machine: grid snap, angle snap and grid visibility. Projection and
 - **Engine wireframe:** impossible in Shipping (F2). Rejected by Gevor in favour of the line view.
 - **Unlit as a post-process of the GBuffer base colour:** works without development shaders. However, it runs after TAA (jittered, aliased) or before the tonemapper (subject to the level's exposure). The engine's own Unlit is anti-aliased and matches the editor. Kept the engine path and pinned F4's dependency.
 - **A camera component on the pawn for ortho:** more invasive (FOV and rotation would move to the component, and every existing camera assumption changes). F5 makes it unnecessary.
-- **A grid as a world-aligned material on the floor:** invisible in Lines mode (no lighting, outlines only), tied to one floor mesh, and blind in front/side views. Rejected for line primitives.
+- **A grid as a world-aligned material on the floor:** invisible in Lines mode (no lighting, outlines only), tied to one floor mesh, and blind in front/side views. Rejected for line primitives. **Revisited in #48:** the line primitives crawled under TSR (§4.4). The current grid is a material on its *own* translucent quad, which avoids all three objections: it is unlit scene colour, so it shows in Lines mode; it is not the floor mesh; and it turns into the vertical planes of the front and side views.
 - **Per-item grids kept for placement:** Gevor chose the global grid.
 
 ## 6. Consequences

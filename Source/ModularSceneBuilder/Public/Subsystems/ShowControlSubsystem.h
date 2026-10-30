@@ -280,4 +280,10 @@ private:
 
 	/** One pending re-ranking at most; armed by MarkShadowBudgetDirty, cleared in Deinitialize. */
 	FTimerHandle ShadowBudgetTimer;
+
+	/** World time (s) at which the budget last switched each fixture's shadows, for the minimum hold. Pruned on unregister. */
+	TMap<TWeakObjectPtr<class ALightingFixtureActor>, double> ShadowSwitchTimes;
+
+	/** Arms the re-ranking timer DelaySeconds from now unless one is already armed. */
+	void ArmShadowBudgetTimer(float DelaySeconds);
 };

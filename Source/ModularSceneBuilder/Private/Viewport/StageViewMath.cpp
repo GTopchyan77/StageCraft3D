@@ -143,36 +143,17 @@ namespace StageViewMath
 		return GetScreenScaleDistance(View.ProjectionMode == ECameraProjectionMode::Orthographic, View.OrthoWidth, View.FOV, View.Location, At);
 	}
 
-	void BuildGridLines(EGridPlane Plane, double PlaneOffset, double CellCm, double HalfExtentCm, int32 MajorEvery, TArray<FGridLine>& OutLines)
+	bool GetGridSurface(EGridPlane Plane, double PlaneOffset, FGridSurface& OutSurface)
 	{
-		OutLines.Reset();
-		if (!FMath::IsFinite(CellCm) || !FMath::IsFinite(HalfExtentCm) || !FMath::IsFinite(PlaneOffset) || CellCm <= 0.0 || HalfExtentCm <= 0.0)
+		if (!FMath::IsFinite(PlaneOffset))
 		{
-			return;
+			return false;
 		}
-
-		const int32 MaxHalfCount = (MaxGridLinesPerDirection - 1) / 2;
-		const int32 HalfCount = static_cast<int32>(FMath::Min<double>(FMath::FloorToDouble(HalfExtentCm / CellCm), MaxHalfCount));
-		const double Extent = HalfCount * CellCm;
-		if (HalfCount <= 0)
-		{
-			return;
-		}
-
-		EGridLineKind AlongFirst;
-		EGridLineKind AlongSecond;
-		GetPlaneAxes(Plane, AlongFirst, AlongSecond);
-
-		OutLines.Reserve(2 * (2 * HalfCount + 1));
-		for (int32 Index = -HalfCount; Index <= HalfCount; ++Index)
-		{
-			const double At = Index * CellCm;
-			const EGridLineKind Regular = MajorEvery > 0 && Index % MajorEvery == 0 ? EGridLineKind::Major : EGridLineKind::Minor;
-
-			// A line along the first axis at Second == At, and one along the second axis at First == At.
-			OutLines.Add({ PlanePoint(Plane, PlaneOffset, -Extent, At), PlanePoint(Plane, PlaneOffset, Extent, At), Index == 0 ? AlongFirst : Regular });
-			OutLines.Add({ PlanePoint(Plane, PlaneOffset, At, -Extent), PlanePoint(Plane, PlaneOffset, At, Extent), Index == 0 ? AlongSecond : Regular });
-		}
+		OutSurface.Origin = PlanePoint(Plane, PlaneOffset, 0.0, 0.0);
+		OutSurface.AxisU = PlanePoint(Plane, 0.0, 1.0, 0.0);
+		OutSurface.AxisV = PlanePoint(Plane, 0.0, 0.0, 1.0);
+		GetPlaneAxes(Plane, OutSurface.AlongU, OutSurface.AlongV);
+		return true;
 	}
 
 	TConstArrayView<float> GetGridSnapPresets()
