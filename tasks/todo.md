@@ -439,13 +439,26 @@ Decisions (Gevor, 2026-10-30): the symptom is thin geometry crawling during came
 - [x] Fixture bench 50/200/500 (Kmidden open: regression check only); builds Editor/Game/Shipping 0 warnings; automation 110/110
 - [ ] Manual verification (Gevor): truss / stairs / cables while orbiting and flying
 
-## Phase 26 — Offline-first assistant: knowledge base, multi-step, memory (requested by Gevor 2026-10-30; STATE.md #49, ADR 0020)
+## Phase 26 — Offline-first assistant: knowledge base, multi-step, memory (requested by Gevor 2026-10-30; moved to STATE.md #50, ADR 0021)
 Decisions (Gevor, 2026-10-30): the free offline engine is the full default; Claude (ANTHROPIC_API_KEY) only extends it.
+Gevor's fixture-suite request took #49 (Phase 27); this phase follows it unchanged.
 - [ ] Feature knowledge base (DataTable + CSV, English and Armenian), `StageAIFeatureSearch`, `how_to` / `where_is` / `open_panel`
 - [ ] Reply action buttons; open and flash panels
 - [ ] Multi-step prompts (splitter, queued plan, stop on first refusal)
 - [ ] Conversation memory (last affected items, repeat with replaced slots)
-- [ ] New actions: fixture parameters, selection, cue update/delete, BOM answers, export completion in chat
+- [ ] New actions: selection, cue update/delete, BOM answers, export completion in chat (fixture parameters: done in #49 as set_fixture)
 - [ ] Claude schema: new intents + steps; knowledge base in the system prompt
 - [ ] Tests (corpus EN/HY); builds 0 warnings; scripted runs
 - [ ] Manual verification (Gevor)
+
+## Phase 27 — Professional fixture suite (requested by Gevor 2026-10-30; STATE.md #49, ADR 0020)
+Decisions (Gevor, 2026-10-30): per-cell pixel bars (cues and DMX); catalog dimensions per model (per-placement: beam and accessories); assistant fixture commands now.
+- [x] Data model: new kinds, RGBA/RGBWA, emitters, CTO, colour wheel, static gobo wheel, gobo spin, prisms, frost, field angle, barndoors (`EStageBeamShaper`, migrated), cells, body, dimensions
+- [x] Cell attributes as registered tags (`StageFixtureCells`), DMX blocks per cell
+- [x] `StageColorScience` (additive, subtractive, CTO, filters, brightest match) and photometric field angle / frost / prism
+- [x] Gel library: CSV → `DT_StageGels`, `FStageGelLibrary` lookup, `UStageLightingSettings`
+- [x] Actor: beam mix and intensity, cones, frost, prism, spin clocks, lens / cell glow, body sizes, gel picker, cell rows, Fixture section
+- [x] Light function v2, emitter material, eleven library fixtures (`Scripts/Content/create_fixture_library_content.py`)
+- [x] Assistant `set_fixture` (EN/HY, Claude schema), runner through RequestParameterChange
+- [x] Tests (117/117); Editor / Game / Shipping builds; scripted visual run; fixture bench
+- [ ] Manual verification (Gevor): library, inspector rows, gel picker, cells, prism/gobo spin, assistant fixture commands

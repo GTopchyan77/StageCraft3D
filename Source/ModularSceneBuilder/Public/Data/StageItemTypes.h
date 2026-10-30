@@ -62,6 +62,12 @@ struct MODULARSCENEBUILDER_API FStageEquipmentSpecs
 	/** Maximum power draw. Zero for passive gear (truss, passive speakers). */
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Specs", meta = (ClampMin = "0.0", DisplayName = "Power Draw (W)"))
 	float PowerDrawWatts = 0.f;
+
+	/** Overall size as the manufacturer states it: width (X) x depth (Y) x height (Z). Zero when unknown. */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Specs", meta = (ClampMin = "0.0", Units = "cm"))
+	FVector DimensionsCm = FVector::ZeroVector;
+
+	bool HasDimensions() const { return DimensionsCm.X > 0.0 && DimensionsCm.Y > 0.0 && DimensionsCm.Z > 0.0; }
 };
 
 /** Native tags so C++ can reference categories without string literals. Designers may add more in Project Settings. */
@@ -92,6 +98,8 @@ namespace StageCraftTags
 	MODULARSCENEBUILDER_API UE_DECLARE_GAMEPLAY_TAG_EXTERN(Category_Lighting_Par);
 	MODULARSCENEBUILDER_API UE_DECLARE_GAMEPLAY_TAG_EXTERN(Category_Lighting_Strobe);
 	MODULARSCENEBUILDER_API UE_DECLARE_GAMEPLAY_TAG_EXTERN(Category_Lighting_Laser);
+	MODULARSCENEBUILDER_API UE_DECLARE_GAMEPLAY_TAG_EXTERN(Category_Lighting_Conventional);
+	MODULARSCENEBUILDER_API UE_DECLARE_GAMEPLAY_TAG_EXTERN(Category_Lighting_Pixel);
 	MODULARSCENEBUILDER_API UE_DECLARE_GAMEPLAY_TAG_EXTERN(Category_Audio_LineArray);
 	MODULARSCENEBUILDER_API UE_DECLARE_GAMEPLAY_TAG_EXTERN(Category_Audio_Subwoofer);
 	MODULARSCENEBUILDER_API UE_DECLARE_GAMEPLAY_TAG_EXTERN(Category_Audio_Monitor);

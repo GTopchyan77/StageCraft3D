@@ -14,6 +14,7 @@
     powershell -ExecutionPolicy Bypass -File Scripts\Bench\RunFixtureBench.ps1
     powershell -ExecutionPolicy Bypass -File Scripts\Bench\RunFixtureBench.ps1 -Counts 50,200,500 -Seconds 15 -Fade 2
     powershell -ExecutionPolicy Bypass -File Scripts\Bench\RunFixtureBench.ps1 -Zoom 0
+    powershell -ExecutionPolicy Bypass -File Scripts\Bench\RunFixtureBench.ps1 -Item DA_Fixture_Spot470
 #>
 param(
     [int[]]$Counts = @(50, 200, 500),
@@ -21,6 +22,8 @@ param(
     [double]$Fade = 2,
     # 1 = the looks differ in zoom too (worst case: every cone change rebuilds the light); 0 = zoom fixed.
     [ValidateSet(0, 1)][int]$Zoom = 1,
+    # Fixture data asset to bench (e.g. DA_MovingHead_Test, DA_Fixture_Spot470); empty takes the catalog's first fixture.
+    [string]$Item = '',
     [int]$ResX = 1600,
     [int]$ResY = 900,
     [int]$StartDelaySeconds = 10,
@@ -44,6 +47,7 @@ if (Get-Process -Name 'UnrealEditor*' -ErrorAction SilentlyContinue) {
 
 $Log = Join-Path $ProjectRoot "Saved\Logs\$($Project.BaseName).log"
 $BenchCommand = "StageCraft.Bench.Fixtures $($Counts -join ' ') Seconds=$Seconds Fade=$Fade Zoom=$Zoom"
+if ($Item) { $BenchCommand += " Item=$Item" }
 $ExecCmds = "StageCraft.Workspace.Delay $StartDelaySeconds $BenchCommand"
 
 Write-Host "Running: $BenchCommand"

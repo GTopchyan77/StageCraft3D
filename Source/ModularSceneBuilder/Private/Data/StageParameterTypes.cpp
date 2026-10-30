@@ -170,6 +170,23 @@ namespace StageCraftTags
 	UE_DEFINE_GAMEPLAY_TAG_COMMENT(Attribute_BladeC,			"StageCraft.Attribute.BladeC",			"Bottom framing blade insertion 0..1.");
 	UE_DEFINE_GAMEPLAY_TAG_COMMENT(Attribute_BladeD,			"StageCraft.Attribute.BladeD",			"Left framing blade insertion 0..1.");
 	UE_DEFINE_GAMEPLAY_TAG_COMMENT(Attribute_BladeRotation,	"StageCraft.Attribute.BladeRotation",	"Framing shutter assembly rotation in degrees.");
+	UE_DEFINE_GAMEPLAY_TAG_COMMENT(Attribute_ColorA,			"StageCraft.Attribute.ColorA",			"Amber 0..1.");
+	UE_DEFINE_GAMEPLAY_TAG_COMMENT(Attribute_CTO,				"StageCraft.Attribute.CTO",				"Colour temperature orange filter 0..1 (1 = full CTO).");
+	UE_DEFINE_GAMEPLAY_TAG_COMMENT(Attribute_ColorWheel,		"StageCraft.Attribute.ColorWheel",		"Colour wheel slot, 0 = open (stepped).");
+	UE_DEFINE_GAMEPLAY_TAG_COMMENT(Attribute_Gobo2,			"StageCraft.Attribute.Gobo2",			"Static gobo wheel slot, 0 = open (stepped).");
+	UE_DEFINE_GAMEPLAY_TAG_COMMENT(Attribute_GoboSpin,			"StageCraft.Attribute.GoboSpin",		"Rotating gobo speed in rpm, signed.");
+	UE_DEFINE_GAMEPLAY_TAG_COMMENT(Attribute_Prism,			"StageCraft.Attribute.Prism",			"Prism slot, 0 = out (stepped).");
+	UE_DEFINE_GAMEPLAY_TAG_COMMENT(Attribute_PrismRotation,	"StageCraft.Attribute.PrismRotation",	"Prism rotation speed in rpm, signed.");
+	UE_DEFINE_GAMEPLAY_TAG_COMMENT(Attribute_Frost,			"StageCraft.Attribute.Frost",			"Frost 0 = clear .. 1 = full.");
+
+	UE_DEFINE_GAMEPLAY_TAG_COMMENT(FeatureGroup_Cells,			"StageCraft.FeatureGroup.Cells",		"Per-cell colour of pixel bars and blinders.");
+	UE_DEFINE_GAMEPLAY_TAG_COMMENT(FeatureGroup_Fixture,		"StageCraft.FeatureGroup.Fixture",		"Catalog specs of a fixture model (read-only).");
+	UE_DEFINE_GAMEPLAY_TAG_COMMENT(Param_Fixture_Gel,			"StageCraft.Param.Fixture.Gel",			"Gel picker over the gel library (sets the colour attributes).");
+	UE_DEFINE_GAMEPLAY_TAG_COMMENT(Param_Fixture_AllCells,		"StageCraft.Param.Fixture.AllCells",	"Sets every cell's colour at once.");
+	UE_DEFINE_GAMEPLAY_TAG_COMMENT(Param_Fixture_Kind,			"StageCraft.Param.Fixture.Kind",		"Fixture type (read-only).");
+	UE_DEFINE_GAMEPLAY_TAG_COMMENT(Param_Fixture_Dimensions,	"StageCraft.Param.Fixture.Dimensions",	"Width x depth x height in cm (read-only).");
+	UE_DEFINE_GAMEPLAY_TAG_COMMENT(Param_Fixture_Flux,			"StageCraft.Param.Fixture.Flux",		"Rated luminous flux in lumens (read-only).");
+	UE_DEFINE_GAMEPLAY_TAG_COMMENT(Param_Photo_FieldAngle,		"StageCraft.Param.Photo.FieldAngle",	"Full field angle (10 % of peak) after zoom, frost and prism, in degrees (read-only).");
 
 	bool IsTransformParameter(const FGameplayTag& ParameterId)
 	{
@@ -196,7 +213,7 @@ namespace StageCraftTags
 	bool IsPhotometricParameter(const FGameplayTag& ParameterId)
 	{
 		return ParameterId == Param_Photo_BeamAngle || ParameterId == Param_Photo_Intensity || ParameterId == Param_Photo_Throw
-			|| ParameterId == Param_Photo_Illuminance || ParameterId == Param_Photo_BeamDiameter;
+			|| ParameterId == Param_Photo_Illuminance || ParameterId == Param_Photo_BeamDiameter || ParameterId == Param_Photo_FieldAngle;
 	}
 
 	bool IsListingParameter(const FGameplayTag& ParameterId)

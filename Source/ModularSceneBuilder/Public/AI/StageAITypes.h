@@ -46,6 +46,8 @@ enum class EStageAIIntent : uint8
 	ReplaceItems,
 	/** A procedural stage shape (Shape and its sizes). */
 	BuildShape,
+	/** Fixture controls (FixtureSettings) on the targeted fixtures (Docs/ADR/0020 §7). */
+	SetFixture,
 
 	/** A stage operation the assistant deliberately does not run (clearing the whole stage, open, save): it answers where to find it. */
 	Unsupported,
@@ -95,6 +97,44 @@ enum class EStageAIShape : uint8
 	ArcTruss,
 };
 
+/** A control a SetFixture command sets on fixtures. */
+enum class EStageAIFixtureControl : uint8
+{
+	Dimmer,
+	Color,
+	Gel,
+	Zoom,
+	Frost,
+	Iris,
+	CTO,
+	Prism,
+	PrismSpin,
+	Gobo,
+	GoboSpin,
+	Strobe,
+	Pan,
+	Tilt,
+	Count,
+};
+
+/** One control of a SetFixture command. */
+struct MODULARSCENEBUILDER_API FStageAIFixtureSetting
+{
+	EStageAIFixtureControl Control = EStageAIFixtureControl::Dimmer;
+
+	/**
+	 * Dimmer, Frost, Iris, CTO: 0..1. Zoom, Pan, Tilt: degrees. GoboSpin, PrismSpin: rpm. Strobe: flashes per second (0 = off).
+	 * Prism, Gobo: a slot (0 = out / open). Unset for a Gel, a Color, a named Gobo and a Zoom given as "narrow" / "wide".
+	 */
+	TOptional<double> Value;
+
+	/** Gel: the gel ("lee 106", "primary red"). Gobo: a gobo name ("star"). Zoom: "narrow" or "wide". Color: the colour's name. */
+	FString Name;
+
+	/** Color: the target colour, linear. */
+	FLinearColor Color = FLinearColor::White;
+};
+
 /**
  * One interpreted request. Only the fields of its intent are meaningful; an unset optional means "the default" (one fixture,
  * the next free cue number, the default fade, the item's default size).
@@ -135,6 +175,9 @@ struct MODULARSCENEBUILDER_API FStageAICommand
 
 	/** BuildShape Stairs. */
 	bool bHandrails = true;
+
+	/** SetFixture: what to set, in the order asked (at most StageAICommandParser::MaxFixtureSettings). */
+	TArray<FStageAIFixtureSetting> FixtureSettings;
 
 	/** StoreCue (unset: the next whole number after the last cue), GoToCue. */
 	TOptional<float> CueNumber;

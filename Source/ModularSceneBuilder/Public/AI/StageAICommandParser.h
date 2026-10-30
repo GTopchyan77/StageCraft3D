@@ -41,6 +41,21 @@ namespace StageAICommandParser
 	constexpr double DefaultMoveDistanceCm = 100.0;
 	constexpr double MaxMoveDistanceCm = 5000.0;
 
+	/** A SetFixture command sets at most this many controls. */
+	constexpr int32 MaxFixtureSettings = 12;
+
+	/** Strobe without a rate ("strobe the blinders") flashes this many times a second. */
+	constexpr double DefaultStrobeHz = 10.0;
+
+	/** Spin without a speed ("spin the gobo") turns this many times a minute. */
+	constexpr double DefaultSpinRpm = 10.0;
+
+	/**
+	 * The linear colour a colour name stands for ("red", "deep blue", "warm white", "uv"), or unset. Saturated named colours are
+	 * targets for colour mixing; the fixture reaches them as closely as its emitters or filters allow.
+	 */
+	MODULARSCENEBUILDER_API TOptional<FLinearColor> FindColorName(const FString& Name);
+
 	/** The command Text asks for, or unset when the grammar does not understand it. */
 	MODULARSCENEBUILDER_API TOptional<FStageAICommand> Parse(const FString& Text);
 

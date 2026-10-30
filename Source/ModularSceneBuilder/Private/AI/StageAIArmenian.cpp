@@ -114,6 +114,24 @@ namespace StageAIArmenian
 			{ TEXT("վեր"), TEXT("up"), Exact }, { TEXT("վերև"), TEXT("up") }, { TEXT("ներքև"), TEXT("down") }, { TEXT("ցած"), TEXT("down"), Exact },
 			{ TEXT("դեպի"), TEXT(""), Exact }, { TEXT("ուղղությ"), TEXT("") }, { TEXT("չափով"), TEXT(""), Exact },
 
+			// Fixture controls (Docs/ADR/0020 §7).
+			{ TEXT("կարմիր"), TEXT("red") }, { TEXT("կանաչ"), TEXT("green") }, { TEXT("կապույտ"), TEXT("blue") }, { TEXT("երկնագույն"), TEXT("light blue") },
+			{ TEXT("սպիտակ"), TEXT("white") }, { TEXT("դեղին"), TEXT("yellow") }, { TEXT("նարնջագույն"), TEXT("orange") }, { TEXT("նարնջ"), TEXT("orange") },
+			{ TEXT("մանուշակագույն"), TEXT("purple") }, { TEXT("մանուշակ"), TEXT("violet") }, { TEXT("վարդագույն"), TEXT("pink") }, { TEXT("վարդ"), TEXT("pink") },
+			{ TEXT("ամբեր"), TEXT("amber") }, { TEXT("սաթագույն"), TEXT("amber") }, { TEXT("փիրուզագույն"), TEXT("turquoise") }, { TEXT("ոսկեգույն"), TEXT("gold") },
+			{ TEXT("մագենտա"), TEXT("magenta") }, { TEXT("ցիան"), TEXT("cyan") }, { TEXT("տաք"), TEXT("warm"), Exact }, { TEXT("սառը"), TEXT("cool"), Exact },
+			{ TEXT("գույն"), TEXT("color") },
+			{ TEXT("պայծառությ"), TEXT("brightness") }, { TEXT("ինտենսիվությ"), TEXT("intensity") }, { TEXT("դիմեր"), TEXT("dimmer") },
+			{ TEXT("զում"), TEXT("zoom") }, { TEXT("խոշորաց"), TEXT("zoom") }, { TEXT("նեղ"), TEXT("narrow") }, { TEXT("ֆրոստ"), TEXT("frost") },
+			{ TEXT("ցրիչ"), TEXT("frost") }, { TEXT("իրիս"), TEXT("iris") }, { TEXT("պրիզմ"), TEXT("prism") }, { TEXT("գոբո"), TEXT("gobo") },
+			{ TEXT("աստղ"), TEXT("star") }, { TEXT("ժել"), TEXT("gel") }, { TEXT("գել"), TEXT("gel"), Exact }, { TEXT("գելը"), TEXT("gel"), Exact },
+			{ TEXT("լի"), TEXT("lee"), Exact }, { TEXT("ռոսկո"), TEXT("rosco") }, { TEXT("պան"), TEXT("pan"), Exact }, { TEXT("թիլթ"), TEXT("tilt") },
+			{ TEXT("տիլտ"), TEXT("tilt") }, { TEXT("պտտ"), TEXT("spin") }, { TEXT("պտույտ"), TEXT("rpm") }, { TEXT("տոկոս"), TEXT("percent") },
+			{ TEXT("լրիվ"), TEXT("full") }, { TEXT("կես"), TEXT("half"), Exact }, { TEXT("կեսը"), TEXT("half"), Exact }, { TEXT("քառորդ"), TEXT("quarter") },
+			{ TEXT("հերց"), TEXT("hz") }, { TEXT("սահման"), TEXT("set") }, { TEXT("փակիր"), TEXT("close"), Exact }, { TEXT("փակեք"), TEXT("close"), Exact },
+			{ TEXT("ստրոբոսկոպ"), TEXT("strobe") }, { TEXT("թրթռ"), TEXT("strobe") }, { TEXT("պիքսել"), TEXT("pixel") }, { TEXT("բար"), TEXT("bar") }, { TEXT("բլայնդեր"), TEXT("blinder") },
+			{ TEXT("ֆրենել"), TEXT("fresnel") }, { TEXT("պրոֆիլ"), TEXT("profile") }, { TEXT("հիբրիդ"), TEXT("hybrid") },
+
 			// Stage shapes and their sizes.
 			{ TEXT("կառուց"), TEXT("build") }, { TEXT("պատրաստ"), TEXT("make") },
 			{ TEXT("կլոր"), TEXT("round") }, { TEXT("շրջանաձև"), TEXT("circular") }, { TEXT("շրջան"), TEXT("circle") }, { TEXT("օղակ"), TEXT("ring") },
@@ -155,7 +173,7 @@ namespace StageAIArmenian
 			{ TEXT("ինձ"), TEXT(""), Exact }, { TEXT("մեզ"), TEXT(""), Exact }, { TEXT("համար"), TEXT(""), Exact }, { TEXT("խնդր"), TEXT("") },
 			{ TEXT("եմ"), TEXT(""), Exact }, { TEXT("ենք"), TEXT(""), Exact }, { TEXT("եք"), TEXT(""), Exact }, { TEXT("ուզում"), TEXT(""), Exact },
 			{ TEXT("կուզեի"), TEXT(""), Exact }, { TEXT("թող"), TEXT(""), Exact }, { TEXT("գա"), TEXT(""), Exact }, { TEXT("գան"), TEXT(""), Exact },
-			{ TEXT("լինի"), TEXT(""), Exact }, { TEXT("լինեն"), TEXT(""), Exact }, { TEXT("դառնա"), TEXT(""), Exact }, { TEXT("դարձր"), TEXT("") },
+			{ TEXT("լինի"), TEXT(""), Exact }, { TEXT("լինեն"), TEXT(""), Exact }, { TEXT("դառնա"), TEXT(""), Exact }, { TEXT("դարձր"), TEXT("make") },
 			{ TEXT("այն"), TEXT(""), Exact }, { TEXT("այս"), TEXT(""), Exact }, { TEXT("այդ"), TEXT(""), Exact }, { TEXT("հիմա"), TEXT(""), Exact },
 			{ TEXT("արդեն"), TEXT(""), Exact }, { TEXT("մոտ"), TEXT(""), Exact }, { TEXT("վրա"), TEXT(""), Exact }, { TEXT("մեջ"), TEXT(""), Exact },
 			{ TEXT("շարք"), TEXT("") }, { TEXT("հատ"), TEXT("") }, { TEXT("ևս"), TEXT(""), Exact }, { TEXT("էլի"), TEXT(""), Exact },

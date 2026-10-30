@@ -4,6 +4,7 @@
 
 #include "AI/StageAIArmenian.h"
 #include "Algo/AllOf.h"
+#include "Algo/AnyOf.h"
 #include "Algo/Find.h"
 
 #define LOCTEXT_NAMESPACE "StageAICommandParser"
@@ -952,6 +953,398 @@ namespace StageAICommandParser
 			return Command;
 		}
 
+		// --- Fixture controls (Docs/ADR/0020 §7) ---
+
+		/** Named colours as linear targets. Two-word names come first, so "light blue" is not read as "blue" and a "light". */
+		struct FColorName { const TCHAR* Name; FLinearColor Color; };
+		const FColorName ColorNames[] = {
+			{ TEXT("warm white"), FLinearColor(1.f, 0.72f, 0.42f) }, { TEXT("cool white"), FLinearColor(0.82f, 0.9f, 1.f) },
+			{ TEXT("light blue"), FLinearColor(0.25f, 0.6f, 1.f) }, { TEXT("deep blue"), FLinearColor(0.f, 0.05f, 1.f) },
+			{ TEXT("dark blue"), FLinearColor(0.f, 0.05f, 1.f) }, { TEXT("congo blue"), FLinearColor(0.12f, 0.f, 1.f) },
+			{ TEXT("light green"), FLinearColor(0.5f, 1.f, 0.3f) }, { TEXT("dark green"), FLinearColor(0.f, 0.6f, 0.1f) },
+			{ TEXT("hot pink"), FLinearColor(1.f, 0.f, 0.4f) },
+			{ TEXT("red"), FLinearColor(1.f, 0.f, 0.f) }, { TEXT("green"), FLinearColor(0.f, 1.f, 0.f) }, { TEXT("blue"), FLinearColor(0.f, 0.f, 1.f) },
+			{ TEXT("white"), FLinearColor(1.f, 1.f, 1.f) }, { TEXT("yellow"), FLinearColor(1.f, 0.85f, 0.f) }, { TEXT("orange"), FLinearColor(1.f, 0.35f, 0.f) },
+			{ TEXT("amber"), FLinearColor(1.f, 0.5f, 0.f) }, { TEXT("gold"), FLinearColor(1.f, 0.7f, 0.1f) }, { TEXT("cyan"), FLinearColor(0.f, 1.f, 1.f) },
+			{ TEXT("turquoise"), FLinearColor(0.f, 0.85f, 0.7f) }, { TEXT("teal"), FLinearColor(0.f, 0.6f, 0.55f) },
+			{ TEXT("magenta"), FLinearColor(1.f, 0.f, 1.f) }, { TEXT("pink"), FLinearColor(1.f, 0.35f, 0.6f) },
+			{ TEXT("purple"), FLinearColor(0.5f, 0.f, 1.f) }, { TEXT("violet"), FLinearColor(0.6f, 0.f, 1.f) },
+			{ TEXT("lavender"), FLinearColor(0.65f, 0.5f, 1.f) }, { TEXT("lime"), FLinearColor(0.55f, 1.f, 0.f) }, { TEXT("uv"), FLinearColor(0.3f, 0.f, 1.f) },
+		};
+
+		/** Words naming a fixture control, and the words that only carry a control's value or unit. */
+		bool IsControlWord(const FString& Word)
+		{
+			return IsOneOf(Word, { TEXT("dimmer"), TEXT("dim"), TEXT("intensity"), TEXT("brightness"), TEXT("level"), TEXT("zoom"), TEXT("frost"),
+				TEXT("iris"), TEXT("cto"), TEXT("prism"), TEXT("gobo"), TEXT("strobe"), TEXT("strobing"), TEXT("pan"), TEXT("tilt"), TEXT("gel") });
+		}
+
+		bool IsControlFiller(const FString& Word)
+		{
+			return IsOneOf(Word, { TEXT("set"), TEXT("make"), TEXT("turn"), TEXT("switch"), TEXT("change"), TEXT("give"), TEXT("put"), TEXT("to"), TEXT("at"),
+				TEXT("with"), TEXT("of"), TEXT("deg"), TEXT("degree"), TEXT("degrees"), TEXT("percent"), TEXT("pct"), TEXT("rpm"), TEXT("hz"), TEXT("color"),
+				TEXT("colour"), TEXT("colored"), TEXT("coloured"), TEXT("and"), TEXT("also"), TEXT("then"), TEXT("their"), TEXT("its"), TEXT("in"), TEXT("on"),
+				TEXT("per"), TEXT("second"), TEXT("minute"), TEXT("times"), TEXT("angle"), TEXT("filter"), TEXT("wheel") });
+		}
+
+		/** A number within a few words after Index (skipping fillers), or right before it ("50 percent dimmer"); its word is marked used. */
+		TOptional<double> ControlNumber(const FPrompt& Prompt, int32 Index, TArray<bool>& Used)
+		{
+			for (int32 Next = Index + 1; Next < Prompt.Words.Num() && Next <= Index + 3; ++Next)
+			{
+				if (Used[Next])
+				{
+					break;
+				}
+				if (const TOptional<double> Number = ParseNumber(Prompt.Words[Next]))
+				{
+					Used[Next] = true;
+					return Number;
+				}
+				if (!IsControlFiller(Prompt.Words[Next]))
+				{
+					break;
+				}
+			}
+			for (int32 Previous = Index - 1; Previous >= 0 && Previous >= Index - 2; --Previous)
+			{
+				if (Used[Previous])
+				{
+					break;
+				}
+				if (const TOptional<double> Number = ParseNumber(Prompt.Words[Previous]))
+				{
+					Used[Previous] = true;
+					return Number;
+				}
+				if (!IsOneOf(Prompt.Words[Previous], { TEXT("percent"), TEXT("pct"), TEXT("deg"), TEXT("degrees"), TEXT("rpm"), TEXT("hz") }))
+				{
+					break;
+				}
+			}
+			return {};
+		}
+
+		/** A word within two of Index ("stop the strobe", "frost off") that is one of Candidates. */
+		bool HasNear(const FPrompt& Prompt, int32 Index, std::initializer_list<const TCHAR*> Candidates)
+		{
+			for (int32 Other = FMath::Max(0, Index - 2); Other < Prompt.Words.Num() && Other <= Index + 2; ++Other)
+			{
+				if (Other != Index && IsOneOf(Prompt.Words[Other], Candidates))
+				{
+					return true;
+				}
+			}
+			return false;
+		}
+
+		/** 0..1 from a percentage ("50" -> 0.5); values up to 1 are already fractions ("dimmer 0.5"). */
+		double AsFraction(double Value)
+		{
+			return Value > 1.0 ? Value / 100.0 : Value;
+		}
+
+		/** "lee 106", "rosco 27", "l106", "r27": a gel by catalogue number. Marks its words used. */
+		bool ReadGelByNumber(const FPrompt& Prompt, TArray<bool>& Used, FString& OutName)
+		{
+			for (int32 Index = 0; Index < Prompt.Words.Num(); ++Index)
+			{
+				const FString& Word = Prompt.Words[Index];
+				const bool bCode = Word.Len() > 1 && (Word[0] == TEXT('l') || Word[0] == TEXT('r')) && Word.Mid(1).IsNumeric() && FChar::IsDigit(Word[1]);
+				if (bCode)
+				{
+					Used[Index] = true;
+					OutName = Word;
+					return true;
+				}
+				if (IsOneOf(Word, { TEXT("lee"), TEXT("rosco"), TEXT("roscolux") }) && Index + 1 < Prompt.Words.Num() && ParseNumber(Prompt.Words[Index + 1]).IsSet())
+				{
+					Used[Index] = Used[Index + 1] = true;
+					OutName = Word + TEXT(" ") + Prompt.Words[Index + 1];
+					return true;
+				}
+			}
+			return false;
+		}
+
+		/** "primary red gel", "gel congo blue": the gel's name words next to "gel". Marks them used. */
+		bool ReadGelByName(const FPrompt& Prompt, TArray<bool>& Used, FString& OutName)
+		{
+			const int32 Gel = Prompt.Find(TEXT("gel"));
+			if (Gel == INDEX_NONE)
+			{
+				return false;
+			}
+			Used[Gel] = true;
+			const auto IsNameWord = [&Prompt, &Used](int32 Index)
+			{
+				const FString& Word = Prompt.Words[Index];
+				return !Used[Index] && !IsEditFiller(Word) && !IsControlFiller(Word) && !IsSelectionWord(Word) && !IsControlWord(Word) && !IsGenericFixtureWord(Word);
+			};
+			TArray<FString> Name;
+			for (int32 Index = Gel - 1; Index >= 0 && Index >= Gel - 3 && IsNameWord(Index); --Index)
+			{
+				Name.Insert(Prompt.Words[Index], 0);
+				Used[Index] = true;
+			}
+			for (int32 Index = Gel + 1; Name.IsEmpty() && Index < Prompt.Words.Num() && Index <= Gel + 3 && IsNameWord(Index); ++Index)
+			{
+				Name.Add(Prompt.Words[Index]);
+				Used[Index] = true;
+			}
+			OutName = FString::Join(Name, TEXT(" "));
+			return true;
+		}
+
+		TOptional<FStageAICommand> ParseSetFixture(const FPrompt& Prompt)
+		{
+			if (IsQuestionNotRequest(Prompt))
+			{
+				return {};
+			}
+			// Other edits own their verbs: "add 4 red pars", "move the red spots". "Remove" deletes, unless it removes a control
+			// ("remove the frost"); a colour alone is a name there ("remove the red pars").
+			if (Prompt.HasAny({ TEXT("add"), TEXT("place"), TEXT("hang"), TEXT("build"), TEXT("create"), TEXT("insert"), TEXT("spawn"), TEXT("store"),
+				TEXT("record"), TEXT("move"), TEXT("shift"), TEXT("nudge"), TEXT("raise"), TEXT("lower"), TEXT("replace"), TEXT("swap") }))
+			{
+				return {};
+			}
+			if (Prompt.HasAny({ TEXT("delete"), TEXT("remove"), TEXT("erase") }) && !Algo::AnyOf(Prompt.Words, [](const FString& Word) { return IsControlWord(Word); }))
+			{
+				return {};
+			}
+			TArray<bool> Used;
+			Used.Init(false, Prompt.Words.Num());
+			TArray<FStageAIFixtureSetting> Settings;
+			const auto Add = [&Settings](EStageAIFixtureControl Control, TOptional<double> Value, const FString& Name = FString())
+			{
+				FStageAIFixtureSetting& Setting = Settings.AddDefaulted_GetRef();
+				Setting.Control = Control;
+				Setting.Value = Value;
+				Setting.Name = Name;
+			};
+
+			// Gels first: their names hold colour words ("primary red").
+			FString GelName;
+			if (ReadGelByNumber(Prompt, Used, GelName) || ReadGelByName(Prompt, Used, GelName))
+			{
+				Add(EStageAIFixtureControl::Gel, {}, GelName);
+				if (const int32 GelWord = Prompt.Find(TEXT("gel")); GelWord != INDEX_NONE)
+				{
+					Used[GelWord] = true;
+				}
+			}
+
+			const bool bOffWords = Prompt.HasAny({ TEXT("off"), TEXT("out"), TEXT("no"), TEXT("remove"), TEXT("without"), TEXT("stop") });
+			for (int32 Index = 0; Index < Prompt.Words.Num(); ++Index)
+			{
+				const FString& Word = Prompt.Words[Index];
+				if (Used[Index])
+				{
+					continue;
+				}
+				const bool bOff = HasNear(Prompt, Index, { TEXT("off"), TEXT("out"), TEXT("no"), TEXT("remove"), TEXT("without"), TEXT("stop") });
+				if (IsOneOf(Word, { TEXT("dimmer"), TEXT("dim"), TEXT("intensity"), TEXT("brightness"), TEXT("level") }))
+				{
+					Used[Index] = true;
+					const TOptional<double> Number = ControlNumber(Prompt, Index, Used);
+					Add(EStageAIFixtureControl::Dimmer, Number.IsSet() ? AsFraction(*Number) : HasNear(Prompt, Index, { TEXT("full") }) ? 1.0 : bOff ? 0.0 : TOptional<double>());
+				}
+				else if (Word == TEXT("zoom"))
+				{
+					Used[Index] = true;
+					const TOptional<double> Number = ControlNumber(Prompt, Index, Used);
+					const bool bNarrow = HasNear(Prompt, Index, { TEXT("narrow"), TEXT("narrowest"), TEXT("tight"), TEXT("tightest"), TEXT("in") });
+					const bool bWide = HasNear(Prompt, Index, { TEXT("wide"), TEXT("widest"), TEXT("out"), TEXT("flood") });
+					Add(EStageAIFixtureControl::Zoom, Number, Number.IsSet() ? FString() : bNarrow ? TEXT("narrow") : bWide ? TEXT("wide") : FString());
+				}
+				else if (Word == TEXT("frost"))
+				{
+					Used[Index] = true;
+					const TOptional<double> Number = ControlNumber(Prompt, Index, Used);
+					Add(EStageAIFixtureControl::Frost, Number.IsSet() ? AsFraction(*Number) : bOff ? 0.0 : HasNear(Prompt, Index, { TEXT("half") }) ? 0.5 : 1.0);
+				}
+				else if (Word == TEXT("iris"))
+				{
+					Used[Index] = true;
+					const TOptional<double> Number = ControlNumber(Prompt, Index, Used);
+					const bool bClose = HasNear(Prompt, Index, { TEXT("close"), TEXT("closed"), TEXT("shut") });
+					const bool bOpen = HasNear(Prompt, Index, { TEXT("open") });
+					Add(EStageAIFixtureControl::Iris, Number.IsSet() ? AsFraction(*Number) : bClose ? 1.0 : bOpen || bOff ? 0.0 : 0.5);
+				}
+				else if (Word == TEXT("cto"))
+				{
+					Used[Index] = true;
+					const TOptional<double> Number = ControlNumber(Prompt, Index, Used);
+					Add(EStageAIFixtureControl::CTO, Number.IsSet() ? AsFraction(*Number) : bOff ? 0.0 : HasNear(Prompt, Index, { TEXT("half") }) ? 0.5
+						: HasNear(Prompt, Index, { TEXT("quarter") }) ? 0.25 : 1.0);
+				}
+				else if (Word == TEXT("prism"))
+				{
+					Used[Index] = true;
+					if (HasNear(Prompt, Index, { TEXT("spin"), TEXT("rotate"), TEXT("rotating"), TEXT("turn") }))
+					{
+						const TOptional<double> Number = ControlNumber(Prompt, Index, Used);
+						Add(EStageAIFixtureControl::PrismSpin, Number.IsSet() ? *Number : bOff ? 0.0 : StageAICommandParser::DefaultSpinRpm);
+					}
+					else
+					{
+						const TOptional<double> Number = ControlNumber(Prompt, Index, Used);
+						Add(EStageAIFixtureControl::Prism, Number.IsSet() ? *Number : bOff ? 0.0 : 1.0);
+					}
+				}
+				else if (Word == TEXT("gobo"))
+				{
+					Used[Index] = true;
+					if (HasNear(Prompt, Index, { TEXT("spin"), TEXT("rotate"), TEXT("rotating"), TEXT("turn") }) && !HasNear(Prompt, Index, { TEXT("open") }))
+					{
+						const TOptional<double> Number = ControlNumber(Prompt, Index, Used);
+						Add(EStageAIFixtureControl::GoboSpin, Number.IsSet() ? *Number : bOff ? 0.0 : StageAICommandParser::DefaultSpinRpm);
+						continue;
+					}
+					const TOptional<double> Number = ControlNumber(Prompt, Index, Used);
+					FString Name;
+					if (!Number.IsSet() && !bOff && !HasNear(Prompt, Index, { TEXT("open") }))
+					{
+						// "gobo star", "the star gobo": the word next to it that is not a filler.
+						for (const int32 Other : { Index + 1, Index - 1 })
+						{
+							if (Prompt.Words.IsValidIndex(Other) && !Used[Other] && !IsEditFiller(Prompt.Words[Other]) && !IsControlFiller(Prompt.Words[Other])
+								&& !IsSelectionWord(Prompt.Words[Other]) && !IsControlWord(Prompt.Words[Other]))
+							{
+								Name = Prompt.Words[Other];
+								Used[Other] = true;
+								break;
+							}
+						}
+					}
+					Add(EStageAIFixtureControl::Gobo, Number.IsSet() || !Name.IsEmpty() ? Number : TOptional<double>(0.0), Name);
+				}
+				else if (IsOneOf(Word, { TEXT("strobe"), TEXT("strobing"), TEXT("flash"), TEXT("flashing") }))
+				{
+					Used[Index] = true;
+					const TOptional<double> Number = ControlNumber(Prompt, Index, Used);
+					const double Rate = HasNear(Prompt, Index, { TEXT("fast") }) ? 20.0 : HasNear(Prompt, Index, { TEXT("slow") }) ? 3.0 : StageAICommandParser::DefaultStrobeHz;
+					Add(EStageAIFixtureControl::Strobe, Number.IsSet() ? *Number : bOff ? 0.0 : Rate);
+				}
+				else if (Word == TEXT("pan") || Word == TEXT("tilt"))
+				{
+					Used[Index] = true;
+					const TOptional<double> Number = ControlNumber(Prompt, Index, Used);
+					if (Number.IsSet())
+					{
+						Add(Word == TEXT("pan") ? EStageAIFixtureControl::Pan : EStageAIFixtureControl::Tilt, Number);
+					}
+				}
+			}
+
+			// Colours: two-word names before single words.
+			for (int32 Index = 0; Index < Prompt.Words.Num(); ++Index)
+			{
+				if (Used[Index])
+				{
+					continue;
+				}
+				const bool bPair = Index + 1 < Prompt.Words.Num() && !Used[Index + 1]
+					&& FindColorName(Prompt.Words[Index] + TEXT(" ") + Prompt.Words[Index + 1]).IsSet();
+				const FString Name = bPair ? Prompt.Words[Index] + TEXT(" ") + Prompt.Words[Index + 1] : Prompt.Words[Index];
+				if (const TOptional<FLinearColor> Color = FindColorName(Name))
+				{
+					FStageAIFixtureSetting& Setting = Settings.AddDefaulted_GetRef();
+					Setting.Control = EStageAIFixtureControl::Color;
+					Setting.Color = *Color;
+					Setting.Name = Name;
+					Used[Index] = true;
+					if (bPair)
+					{
+						Used[Index + 1] = true;
+					}
+				}
+			}
+
+			// A colour word among other words with nothing that asks for a change is a name or nonsense ("purple elephant"); a
+			// colour alone ("red") or asked for ("make them red", "blue on the spots") is a request.
+			const bool bOnlyColors = !Settings.IsEmpty()
+				&& Algo::AllOf(Settings, [](const FStageAIFixtureSetting& Setting) { return Setting.Control == EStageAIFixtureControl::Color; });
+			if (bOnlyColors && !Prompt.HasAny({ TEXT("make"), TEXT("turn"), TEXT("set"), TEXT("change"), TEXT("paint"), TEXT("color"), TEXT("colour"),
+				TEXT("switch"), TEXT("give"), TEXT("put"), TEXT("on"), TEXT("to"), TEXT("in") }))
+			{
+				for (int32 Index = 0; Index < Prompt.Words.Num(); ++Index)
+				{
+					if (!Used[Index] && !IsEditFiller(Prompt.Words[Index]) && !IsControlFiller(Prompt.Words[Index]) && !IsSelectionWord(Prompt.Words[Index]))
+					{
+						return {};
+					}
+				}
+			}
+
+			// "set them to 50%", "at full", "blackout the washes", "switch off the pars": the dimmer.
+			const bool bAnyControl = !Settings.IsEmpty();
+			if (!bAnyControl)
+			{
+				for (int32 Index = 0; Index < Prompt.Words.Num() && Settings.IsEmpty(); ++Index)
+				{
+					const FString& Word = Prompt.Words[Index];
+					const TOptional<double> Number = ParseNumber(Word);
+					const bool bPercent = Number.IsSet() && (Prompt.Raw.Contains(Word + TEXT("%")) || Prompt.Raw.Contains(Word + TEXT(" %"))
+						|| (Index + 1 < Prompt.Words.Num() && IsOneOf(Prompt.Words[Index + 1], { TEXT("percent"), TEXT("pct") })));
+					if (bPercent)
+					{
+						Used[Index] = true;
+						Add(EStageAIFixtureControl::Dimmer, AsFraction(*Number));
+					}
+					else if (Word == TEXT("full") || Word == TEXT("blackout"))
+					{
+						Used[Index] = true;
+						Add(EStageAIFixtureControl::Dimmer, Word == TEXT("full") ? 1.0 : 0.0);
+					}
+				}
+				const bool bSwitch = Prompt.HasAny({ TEXT("turn"), TEXT("switch") });
+				if (Settings.IsEmpty() && bSwitch && (Prompt.Has(TEXT("on")) || bOffWords))
+				{
+					Add(EStageAIFixtureControl::Dimmer, Prompt.Has(TEXT("on")) ? 1.0 : 0.0);
+					for (int32 Index = 0; Index < Prompt.Words.Num(); ++Index)
+					{
+						Used[Index] |= IsOneOf(Prompt.Words[Index], { TEXT("on"), TEXT("off"), TEXT("out") });
+					}
+				}
+				// Only with something to act on: "switch off" alone is too vague to guess (the sky's own words were read before).
+				if (Settings.Num() == 1 && bSwitch && !Prompt.Has(TEXT("full")) && !Algo::AnyOf(Prompt.Words, [](const FString& Word) { return IsGenericFixtureWord(Word); })
+					&& !Prompt.HasAny({ TEXT("selected"), TEXT("selection"), TEXT("them"), TEXT("it"), TEXT("these"), TEXT("those") }))
+				{
+					bool bNamesFixture = false;
+					for (int32 Index = 0; Index < Prompt.Words.Num(); ++Index)
+					{
+						bNamesFixture |= !Used[Index] && !IsEditFiller(Prompt.Words[Index]) && !IsControlFiller(Prompt.Words[Index]) && !IsOneOf(Prompt.Words[Index], { TEXT("off"), TEXT("out") });
+					}
+					if (!bNamesFixture)
+					{
+						return {};
+					}
+				}
+			}
+			if (Settings.IsEmpty())
+			{
+				return {};
+			}
+
+			for (int32 Index = 0; Index < Prompt.Words.Num(); ++Index)
+			{
+				const FString& Word = Prompt.Words[Index];
+				// A number with "stairs" after it is an Armenian "degrees" (աստիճան is both).
+				Used[Index] |= IsControlFiller(Word) || (IsOneOf(Word, { TEXT("off"), TEXT("out"), TEXT("no"), TEXT("remove"), TEXT("without"), TEXT("stop"), TEXT("full"),
+					TEXT("half"), TEXT("quarter"), TEXT("open"), TEXT("close"), TEXT("closed"), TEXT("shut"), TEXT("narrow"), TEXT("narrowest"), TEXT("tight"),
+					TEXT("tightest"), TEXT("wide"), TEXT("widest"), TEXT("flood"), TEXT("spin"), TEXT("rotate"), TEXT("rotating"), TEXT("fast"), TEXT("slow"),
+					TEXT("blackout") }))
+					|| (Word == TEXT("stairs") && Index > 0 && ParseNumber(Prompt.Words[Index - 1]).IsSet());
+			}
+			FStageAICommand Command;
+			Command.Intent = EStageAIIntent::SetFixture;
+			Command.FixtureSettings = MoveTemp(Settings);
+			ReadTarget(Prompt, Used, Command);
+			return Command;
+		}
+
 		TOptional<FStageAICommand> ParseBuildShape(const FPrompt& Prompt)
 		{
 			if (IsQuestionNotRequest(Prompt) || !Prompt.HasAny({ TEXT("add"), TEXT("build"), TEXT("make"), TEXT("create"), TEXT("place"), TEXT("put"), TEXT("give"),
@@ -1140,6 +1533,11 @@ namespace StageAICommandParser
 			const bool bCueWords = Prompt.HasAny({ TEXT("cue"), TEXT("cues") });
 			if (!bCueWords)
 			{
+				// Before Replace, which also reads "change ... to" and "turn ... into": "change the spots to red" is a colour.
+				if (TOptional<FStageAICommand> Fixture = ParseSetFixture(Prompt))
+				{
+					return Fixture;
+				}
 				if (TOptional<FStageAICommand> Replace = ParseReplace(Prompt))
 				{
 					return Replace;
@@ -1167,6 +1565,13 @@ namespace StageAICommandParser
 			}
 			return ParseQuestion(Prompt);
 		}
+	}
+
+	TOptional<FLinearColor> FindColorName(const FString& Name)
+	{
+		const FString Normalized = FString::Join(FPrompt(Name).Words, TEXT(" "));
+		const FColorName* Found = Algo::FindByPredicate(ColorNames, [&Normalized](const FColorName& Entry) { return Normalized == Entry.Name; });
+		return Found ? Found->Color : TOptional<FLinearColor>();
 	}
 
 	TOptional<FStageAICommand> Parse(const FString& Text)
@@ -1391,6 +1796,7 @@ namespace StageAIAnswers
 			"• \"add 6 moving heads\", \"place a led par\"\n"
 			"• \"delete the selected\", \"remove the spots\", \"move the selected 2 m left\", \"raise the truss 50 cm\", \"replace the pars with washes\"\n"
 			"• \"build a 4 m round riser 60 cm high\", \"add stairs 80 cm high\", \"add a 6 m circle truss at 7 m\", \"make a 180° arc truss radius 5 m\"\n"
+			"• \"make the washes red\", \"dimmer 50%\", \"lee 106 gel on the selected\", \"zoom 20 degrees\", \"frost on\", \"prism in\", \"gobo star\", \"half cto\", \"strobe the blinders\"\n"
 			"• \"store cue 5 called Intro fade 3\", \"go\", \"back\", \"go to cue 2\"\n"
 			"• \"make it rain\", \"fog\", \"set time to 18:30\", \"sunset\", \"go outdoors\"\n"
 			"• \"export bill of materials\", \"export patch sheet\", \"export cable schedule\", \"export all reports\"\n"
@@ -1401,6 +1807,7 @@ namespace StageAIAnswers
 			"• վիճակը · քանի՞ սարք կա · ընդհանուր քաշը · հզորությունը · կյուների ցանկը · քանի՞ ֆերմա կա\n"
 			"• ավելացրու 6 շարժական գլուխ · տեղադրիր մեկ LED փար\n"
 			"• ջնջիր ընտրվածը · հեռացրու սփոթերը · տեղափոխիր ընտրվածը 2 մ ձախ · բարձրացրու ֆերման 50 սմ · փոխարինիր փարերը վոշերով\n"
+			"• վոշերը դարձրու կարմիր · դիմեր 50 տոկոս · լի 106 ժել ընտրվածին · զում 20 աստիճան · միացրու ֆրոստը · պրիզմա · գոբո աստղ · ստրոբ\n"
 			"• կառուցիր 4 մ կլոր հարթակ 60 սմ բարձրությամբ · ավելացրու աստիճաններ 80 սմ բարձրությամբ · ավելացրու 6 մ շրջանաձև ֆերմա · ավելացրու 180 աստիճան աղեղաձև ֆերմա 5 մ շառավղով\n"
 			"• պահիր կյու 5 «Ներածություն» 3 վայրկյան · գնա · հետ · գնա կյու 2\n"
 			"• թող անձրև գա · մառախուղ · ժամը 18:30 · մայրամուտ · բացօթյա\n"

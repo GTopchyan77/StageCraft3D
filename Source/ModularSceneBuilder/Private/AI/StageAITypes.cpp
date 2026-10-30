@@ -41,6 +41,7 @@ bool FStageAICommand::IsAction() const
 	case EStageAIIntent::MoveItems:
 	case EStageAIIntent::ReplaceItems:
 	case EStageAIIntent::BuildShape:
+	case EStageAIIntent::SetFixture:
 		return true;
 	default:
 		return false;

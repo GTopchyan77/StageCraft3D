@@ -19,6 +19,7 @@
 #include "History/StageEditHistorySubsystem.h"
 #include "Placement/StageDeckMath.h"
 #include "Placement/StageProceduralShapes.h"
+#include "Show/StageGelLibrary.h"
 #include "Sketch/StageSketchGenerator.h"
 #include "Subsystems/ShowControlSubsystem.h"
 #include "Subsystems/StageItemSubsystem.h"
@@ -819,6 +820,196 @@ namespace StageAICommandRunner
 				: Refused(Pick(Language, LOCTEXT("ShapeLoadNotStarted", "The item could not be loaded."), INVTEXT("Իրը հնարավոր չեղավ բեռնել։")));
 		}
 
+		FText DescribeControl(const FStageAIFixtureSetting& Setting, EStageAILanguage Language)
+		{
+			FNumberFormattingOptions Format;
+			Format.SetMaximumFractionalDigits(1);
+			const FText Value = Setting.Value.IsSet() ? FText::AsNumber(*Setting.Value, &Format) : FText::FromString(Setting.Name);
+			const FText Percent = Setting.Value.IsSet() ? FText::AsNumber(*Setting.Value * 100.0, &Format) : Value;
+			switch (Setting.Control)
+			{
+			case EStageAIFixtureControl::Dimmer:	return FText::Format(Pick(Language, LOCTEXT("CtlDimmer", "dimmer {0} %"), INVTEXT("դիմեր {0} %")), Percent);
+			case EStageAIFixtureControl::Color:		return FText::Format(Pick(Language, LOCTEXT("CtlColor", "colour {0}"), INVTEXT("գույն՝ {0}")), FText::FromString(Setting.Name));
+			case EStageAIFixtureControl::Gel:		return FText::Format(Pick(Language, LOCTEXT("CtlGel", "gel {0}"), INVTEXT("ժել՝ {0}")), FText::FromString(Setting.Name));
+			case EStageAIFixtureControl::Zoom:		return FText::Format(Pick(Language, LOCTEXT("CtlZoom", "zoom {0}°"), INVTEXT("զում {0}°")), Value);
+			case EStageAIFixtureControl::Frost:		return FText::Format(Pick(Language, LOCTEXT("CtlFrost", "frost {0} %"), INVTEXT("ֆրոստ {0} %")), Percent);
+			case EStageAIFixtureControl::Iris:		return FText::Format(Pick(Language, LOCTEXT("CtlIris", "iris {0} % closed"), INVTEXT("իրիս {0} % փակ")), Percent);
+			case EStageAIFixtureControl::CTO:		return FText::Format(Pick(Language, LOCTEXT("CtlCto", "CTO {0} %"), INVTEXT("CTO {0} %")), Percent);
+			case EStageAIFixtureControl::Prism:		return FText::Format(Pick(Language, LOCTEXT("CtlPrism", "prism {0}"), INVTEXT("պրիզմա {0}")), Value);
+			case EStageAIFixtureControl::PrismSpin:	return FText::Format(Pick(Language, LOCTEXT("CtlPrismSpin", "prism spin {0} rpm"), INVTEXT("պրիզմայի պտույտ {0} պտ/ր")), Value);
+			case EStageAIFixtureControl::Gobo:		return FText::Format(Pick(Language, LOCTEXT("CtlGobo", "gobo {0}"), INVTEXT("գոբո {0}")), Value);
+			case EStageAIFixtureControl::GoboSpin:	return FText::Format(Pick(Language, LOCTEXT("CtlGoboSpin", "gobo spin {0} rpm"), INVTEXT("գոբոյի պտույտ {0} պտ/ր")), Value);
+			case EStageAIFixtureControl::Strobe:	return FText::Format(Pick(Language, LOCTEXT("CtlStrobe", "strobe {0} Hz"), INVTEXT("ստրոբ {0} Հց")), Value);
+			case EStageAIFixtureControl::Pan:		return FText::Format(Pick(Language, LOCTEXT("CtlPan", "pan {0}°"), INVTEXT("պան {0}°")), Value);
+			default:								return FText::Format(Pick(Language, LOCTEXT("CtlTilt", "tilt {0}°"), INVTEXT("թիլթ {0}°")), Value);
+			}
+		}
+
+		/** Slot of a gobo named Name on one of the fixture's wheels (rotating first), as the attribute that selects it. */
+		bool FindGoboSlot(const ULightingFixtureData& Fixture, const FString& Name, FGameplayTag& OutAttribute, int32& OutSlot)
+		{
+			for (const EStageGoboWheel Wheel : { EStageGoboWheel::Rotating, EStageGoboWheel::Static })
+			{
+				for (int32 Slot = 1; Slot < Fixture.GetGoboSlotCount(Wheel); ++Slot)
+				{
+					if (Fixture.GetGoboSlotName(Slot, Wheel).ToString().Contains(Name, ESearchCase::IgnoreCase))
+					{
+						OutAttribute = Wheel == EStageGoboWheel::Rotating ? StageCraftTags::Attribute_Gobo : StageCraftTags::Attribute_Gobo2;
+						OutSlot = Slot;
+						return true;
+					}
+				}
+			}
+			return false;
+		}
+
+		/**
+		 * The parameter writes one setting asks of one fixture; empty when the fixture lacks the control. Every write is an
+		 * ordinary RequestParameterChange, so the rules (locks, entitlements) judge each one as they judge an inspector edit.
+		 */
+		TArray<TPair<FGameplayTag, FStageParameterValue>> GetSettingWrites(const ALightingFixtureActor& Fixture, const ULightingFixtureData& Data,
+			const FStageAIFixtureSetting& Setting, int32 GelIndex)
+		{
+			TArray<TPair<FGameplayTag, FStageParameterValue>> Writes;
+			const auto Float = [&Writes, &Data](const FGameplayTag& Attribute, double Value)
+			{
+				if (Data.SupportsAttribute(Attribute))
+				{
+					Writes.Emplace(Attribute, FStageParameterValue::MakeFloat(Value));
+				}
+			};
+			const auto Slot = [&Writes, &Data](const FGameplayTag& Attribute, int32 Value)
+			{
+				if (Data.SupportsAttribute(Attribute))
+				{
+					Writes.Emplace(Attribute, FStageParameterValue::MakeEnum(Value));
+				}
+			};
+			const double Value = Setting.Value.Get(0.0);
+			switch (Setting.Control)
+			{
+			case EStageAIFixtureControl::Dimmer:	Float(StageCraftTags::Attribute_Dimmer, Value); break;
+			case EStageAIFixtureControl::Frost:		Float(StageCraftTags::Attribute_Frost, Value); break;
+			case EStageAIFixtureControl::Iris:		Float(StageCraftTags::Attribute_Iris, Value); break;
+			case EStageAIFixtureControl::CTO:		Float(StageCraftTags::Attribute_CTO, Value); break;
+			case EStageAIFixtureControl::GoboSpin:	Float(StageCraftTags::Attribute_GoboSpin, Value); break;
+			case EStageAIFixtureControl::PrismSpin:	Float(StageCraftTags::Attribute_PrismRotation, Value); break;
+			case EStageAIFixtureControl::Pan:		Float(StageCraftTags::Attribute_Pan, Value); break;
+			case EStageAIFixtureControl::Tilt:		Float(StageCraftTags::Attribute_Tilt, Value); break;
+			case EStageAIFixtureControl::Prism:		Slot(StageCraftTags::Attribute_Prism, FMath::Min(FMath::RoundToInt32(Value), Data.Prisms.Num())); break;
+			case EStageAIFixtureControl::Zoom:
+				Float(StageCraftTags::Attribute_Zoom, Setting.Value.IsSet() ? Value : Setting.Name == TEXT("narrow") ? Data.BeamAngleMin : Data.BeamAngleMax);
+				break;
+			case EStageAIFixtureControl::Strobe:
+				// The shutter attribute is the position in the fixture's strobe range (ALightingFixtureActor::GetStrobeRateHz); 0 is open.
+				if (Data.bHasShutter)
+				{
+					const double Range = Data.StrobeRateHz.Y - Data.StrobeRateHz.X;
+					const double Shutter = Value <= 0.0 ? 0.0 : Range > 0.0 ? FMath::Clamp((Value - Data.StrobeRateHz.X) / Range, 0.001, 1.0) : 1.0;
+					Writes.Emplace(StageCraftTags::Attribute_Shutter, FStageParameterValue::MakeFloat(Shutter));
+				}
+				break;
+			case EStageAIFixtureControl::Gobo:
+				if (Setting.Value.IsSet())
+				{
+					const FGameplayTag Wheel = Data.GoboWheel.IsEmpty() ? StageCraftTags::Attribute_Gobo2 : StageCraftTags::Attribute_Gobo;
+					const int32 Slots = Data.GetGoboSlotCount(Wheel == StageCraftTags::Attribute_Gobo ? EStageGoboWheel::Rotating : EStageGoboWheel::Static) - 1;
+					Slot(Wheel, FMath::Min(FMath::RoundToInt32(Value), Slots));
+				}
+				else
+				{
+					FGameplayTag Wheel;
+					int32 Found = 0;
+					if (FindGoboSlot(Data, Setting.Name, Wheel, Found))
+					{
+						Slot(Wheel, Found);
+					}
+				}
+				break;
+			case EStageAIFixtureControl::Color:
+				for (const TPair<FGameplayTag, float>& Pair : Fixture.MatchColor(Setting.Color))
+				{
+					Writes.Emplace(Pair.Key, FStageParameterValue::MakeFloat(Pair.Value));
+				}
+				break;
+			case EStageAIFixtureControl::Gel:
+				if (GelIndex != INDEX_NONE && (Data.AcceptsGelPreset() || Data.HasCellColor()))
+				{
+					Writes.Emplace(StageCraftTags::Param_Fixture_Gel, FStageParameterValue::MakeEnum(GelIndex + 1));
+				}
+				break;
+			default:
+				break;
+			}
+			return Writes;
+		}
+
+		FStageAIActionOutcome SetFixtures(AModularPlayerController& Controller, const FStageAICommand& Command)
+		{
+			const EStageAILanguage Language = Command.Language;
+			FText Error;
+			TArray<ALightingFixtureActor*> Fixtures;
+			for (AModularBaseActor* Target : FindTargets(Controller, Command, Error))
+			{
+				if (ALightingFixtureActor* Fixture = Cast<ALightingFixtureActor>(Target); Fixture && Fixture->GetFixtureData())
+				{
+					Fixtures.Add(Fixture);
+				}
+			}
+			if (Fixtures.IsEmpty())
+			{
+				return Refused(!Error.IsEmpty() ? Error : Pick(Language, LOCTEXT("NoFixturesTargeted", "None of those is a lighting fixture."),
+					INVTEXT("Դրանցից ոչ մեկը լուսային սարք չէ։")));
+			}
+
+			// A gel is looked up once; one the library does not have is an answer, not a silent skip.
+			int32 GelIndex = INDEX_NONE;
+			if (const FStageAIFixtureSetting* Gel = Command.FixtureSettings.FindByPredicate([](const FStageAIFixtureSetting& Setting) { return Setting.Control == EStageAIFixtureControl::Gel; }))
+			{
+				GelIndex = FStageGelLibrary::Get().Find(Gel->Name);
+				if (GelIndex == INDEX_NONE)
+				{
+					return Refused(FText::Format(Pick(Language, LOCTEXT("UnknownGel", "I don't know the gel \"{0}\". Try a Lee or Rosco number (\"lee 106\", \"rosco 27\") or the gel's name."),
+						INVTEXT("«{0}» ժելը չգիտեմ։ Նշեք Lee կամ Rosco համարը («լի 106», «ռոսկո 27») կամ ժելի անունը։")), FText::FromString(Gel->Name)));
+				}
+			}
+
+			// One continuous edit, as one inspector drag: the requests are judged one by one but belong together.
+			const bool bOwnsTransaction = Controller.BeginEditTransaction();
+			TArray<FText> Applied;
+			TArray<FText> Missing;
+			TArray<FStageEconomyResultInfo> Refusals;
+			for (const FStageAIFixtureSetting& Setting : Command.FixtureSettings)
+			{
+				int32 Changed = 0;
+				for (ALightingFixtureActor* Fixture : Fixtures)
+				{
+					for (const TPair<FGameplayTag, FStageParameterValue>& Write : GetSettingWrites(*Fixture, *Fixture->GetFixtureData(), Setting, GelIndex))
+					{
+						FStageEconomyResultInfo Result;
+						Refusals.Append(Controller.RunCapturingRejections([&]() { Result = Controller.RequestParameterChange(Fixture, Write.Key, Write.Value); }));
+						Changed += Result.IsSuccess() ? 1 : 0;
+					}
+				}
+				(Changed > 0 ? Applied : Missing).Add(DescribeControl(Setting, Language));
+			}
+			if (bOwnsTransaction)
+			{
+				Controller.EndEditTransaction();
+			}
+
+			const FText Separator = LOCTEXT("ControlSeparator", ", ");
+			if (Applied.IsEmpty())
+			{
+				return Refused(RefusalOf(Refusals, FText::Format(Pick(Language, LOCTEXT("NoControl", "{0} cannot do that: {1}."), INVTEXT("{0}-ը դա չի կարող՝ {1}։")),
+					DescribeItems(TArray<AModularBaseActor*>(Fixtures)), FText::Join(Separator, Missing))));
+			}
+			const FText Summary = FText::Format(Pick(Language, LOCTEXT("FixturesSet", "{0}: {1}."), INVTEXT("{0}՝ {1}։")),
+				DescribeItems(TArray<AModularBaseActor*>(Fixtures)), FText::Join(Separator, Applied));
+			return Done(Missing.IsEmpty() ? Summary : FText::Format(Pick(Language, LOCTEXT("FixturesSetPartly", "{0} Not available on them: {1}."),
+				INVTEXT("{0} Դրանք չունեն՝ {1}։")), Summary, FText::Join(Separator, Missing)));
+		}
+
 		FStageAIActionOutcome StepHistory(AModularPlayerController& Controller, bool bUndo, EStageAILanguage Language)
 		{
 			const UStageEditHistorySubsystem* History = UWorld::GetSubsystem<UStageEditHistorySubsystem>(Controller.GetWorld());
@@ -864,6 +1055,7 @@ namespace StageAICommandRunner
 		case EStageAIIntent::MoveItems:		return MoveItems(Controller, Command);
 		case EStageAIIntent::ReplaceItems:	return ReplaceItems(Controller, Command);
 		case EStageAIIntent::BuildShape:	return BuildShape(Controller, Command);
+		case EStageAIIntent::SetFixture:	return SetFixtures(Controller, Command);
 		default:
 			return Refused(Pick(Command.Language, LOCTEXT("NotAnAction", "That is not something I can change."), INVTEXT("Դա այն չէ, ինչ կարող եմ փոխել։")));
 		}

@@ -4393,10 +4393,212 @@ The plan was approved in plan mode.
   - The known VSM "One Pass Projection max lights overflow" warning (#39) appeared once.
 - **Not verified by hand:** the crawl while orbiting and flying with a real mouse. The metric is for a still camera; motion is the same mechanism, but Gevor's eye is the final check. Status: **implemented, awaiting manual verification.**
 
-**Commit:** uncommitted (working tree).
+**Commit:** `9193448`.
 
 **Known issues / follow-ups**
 - **Remaining unstable pixels (0.1–0.3 %):** these are the moving-head beams (volumetric) and the arc truss lattice, as the heat map shows. The truss lattice is a procedural mesh with no Nanite or distance field. It only matters if Gevor sees it crawl.
 - **Maximised viewport:** it renders at about 75 % by the engine's automatic rule (see the table). Not changed, since there is no measured benefit at 100 %.
 - **Shadow budget frame-time gain:** still not measured cleanly. The #45 follow-up stands: bench with Kmidden closed, budget on vs off.
 - **Lumen and VSM** were not tuned: no measured symptom. This is the honest outcome of "no blind quality cranking".
+
+## #49 — Professional fixture suite: every fixture type, full optics, true colour mixing, gel libraries, dimensions and photometrics, inspector and assistant control (2026-10-30)
+
+**Request (Gevor, 2026-10-30, pasted, "strictly follow Rules.md"):**
+- Fixture types: moving head spot, wash, beam and hybrid; LED pars; strobes; blinders; pixel bars; profiles with framing shutters.
+- Optics: beam/zoom, static and rotating gobo wheels, prisms, frost, barndoors.
+- Colour: true RGBW, CMY subtractive, CTO correction, Lee/Rosco gel presets.
+- Physical data: dimensions, weight, lumens, candela, throw.
+- UI and assistant fine-tuning.
+- Standards: `TObjectPtr`, no tick, tests, 0 warnings, performance stability, STATE.md #49.
+
+**Gevor's answers before design:**
+- Pixel bars get per-cell colour (cues and DMX).
+- Size means catalog dimensions per model; per-placement editing is beam and accessories.
+- Assistant fixture commands come now; the bigger assistant upgrade planned as #49 moves to #50 (tasks/todo.md Phase 26).
+
+**Design:** Docs/ADR/0020-professional-fixture-suite.md.
+
+**What existed before:**
+- Spot, beam, wash, par, strobe and laser kinds; RGB, RGBW and CMY systems.
+- CTC, one gobo wheel, iris, framing shutters, zoom and cone photometrics.
+- One attributes map that cues, scenes, DMX and the inspector all carry.
+
+**What was wrong or missing:**
+- Bodies were 1 m engine spheres.
+- The inner cone was 0.7 × the outer, so there was no beam versus field angle.
+- RGBW white added pure (1, 1, 1), and CMY ignored the lamp's white.
+- Nothing else in the request existed.
+
+### What changed
+
+**Data model (`ULightingFixtureData`).**
+- **New kinds** (appended): Hybrid, Profile, Fresnel, Blinder, Pixel Bar.
+- **Colour:**
+  - RGBA and RGBWA colour systems.
+  - `Emitters` (colour × relative flux; defaults R/G/B, white at `WhiteEmitterKelvin`, amber at about 590 nm).
+  - CTO (`bHasCTO`, +159 mired at full) and a colour wheel.
+  - Gel frame (`bAcceptsGel`) for white-only fixtures.
+- **Optics:**
+  - Static gobo wheel and rotating-gobo spin.
+  - Prisms (facets, circular or linear, spread, transmission).
+  - Frost (`FrostFieldMultiplier`) and `FieldAngleRatio`.
+  - `EStageBeamShaper {None, FramingShutters, Barndoors}` replaces the `bHasFramingShutters` bool. `PostLoad` migrates old assets through the `_DEPRECATED` property.
+- **Cells:** `CellCount` (up to 32) and `CellControl` (colour, dimmer, or both).
+- **Body:** `FStageFixtureBody` (base, yoke, head, lens, cell strip). `FStageEquipmentSpecs::DimensionsCm` is added for every item.
+- **DMX:** layouts are generated in console order with a block per cell. Validation covers wheel and DMX limits, emitter sets, colour cells without a colour system, and a body larger than the stated size.
+
+**Cells as attributes.**
+- `StageCraft.Attribute.Cell.01..32.{Dimmer, ColorR/G/B/W/A, ColorRGB}` are native tags (`StageFixtureCells`).
+- Cues, fades, scene files (still format v3), DMX and the inspector handle cells with no new path.
+
+**Colour science (`StageColorScience`, pure).**
+- Additive emitter mixing with a luminous fraction.
+- Subtractive lamp × filters with a CTO mired shift.
+- Filters and a combined-cells mix.
+- `MatchAdditive`: the brightest reproduction of a colour. White and amber amounts are found by ternary search on a convex peak, so white is every emitter at full.
+
+**The fixture actor (`ALightingFixtureActor`).**
+- **Beam mix:** `GetBeamMix` drives the light colour. Intensity is rated flux × dimmer × mix fraction ÷ the light colour's luminance (floor 0.05).
+- **Cones:**
+  - The outer cone is the field angle and the inner cone is 2 × beam − field.
+  - Frost widens both angles.
+  - A prism widens the cone so its copies fit.
+  - While a projection is on, the light function draws the edge.
+- **Light function v2** (`M_StageBeamLightFunction`): both gobo wheels, gobo and prism spin on the material's clock (phase and start reset on a speed change, so no tick), prism copies, frost blur, soft barndoors, and `ConeToBeam`.
+- **Lens and cell glow** (`M_StageFixtureEmitter`, one MID):
+  - A cell texture is uploaded only when a cell's colour changes.
+  - Dimmer and strobe are scalars, so fades and flashes never re-upload.
+  - A multi-cell fixture casts one light.
+- **Yoke and head** are scaled to the body from their mesh bounds.
+- **Gel picker:** a library dropdown with an `AppliedGel` label (SaveGame), cleared by any other colour edit.
+- **Colour rows:** the master row, All Cells and per-cell rows solve over every emitter and read back the mix.
+- **New inspector content:** Cells, Fixture (type, size, rated output) and Photometrics field angle; barndoor labels.
+- **Open white defaults to W = 100 %** (amber stays at 0).
+
+**Gel library.**
+- `Scripts/Content/Data/StageGels.csv`: 118 gels (72 Lee, 46 Rosco). **The colours are sRGB approximations of the swatches, not measured spectra.**
+- It becomes `DT_StageGels` (`FStageGelRow`), set in `UStageLightingSettings::GelTable` (Project Settings > Game > StageCraft Lighting).
+- `FStageGelLibrary` validates the rows, sorts them, and finds gels by code, brand + number, unique bare number, or name / unique part of a name.
+
+**Fixture library** (`Scripts/Content/create_fixture_library_content.py`, headless; it also builds both materials and the gel table): eleven generic models in `/Game/StageCraft/Fixtures`.
+
+| Model | DMX channels | Notable features |
+|---|---|---|
+| Spot 470 | 21 | CMY + CTO, colour wheel, spinning and static gobos, 3-facet prism, frost, iris |
+| LED Wash 19x40W RGBW | 14 | |
+| Beam 280 | 12 | 8-facet and linear prisms |
+| Hybrid 440 | 21 | |
+| Profile 600 (moving, framing shutters) | 22 | |
+| LED Par 12x15W RGBWA | 8 | |
+| LED Strobe 1000 | 3 | |
+| LED Blinder 4-Cell 3200 K | 7 | |
+| LED Pixel Bar 1 m 16x RGBW | 67 | |
+| Ellipsoidal 26° 750 W | 1 (dimmer) | Gel frame, shutters, gobo slot, iris |
+| Fresnel 1 kW | 1 (dimmer) | Gel frame, barndoors |
+
+- Every model has dimensions, weight, power, flux and a base mesh built at its real size (`/Game/StageCraft/Lighting/FixtureMeshes`).
+- New categories: Lighting.Conventional and Lighting.Pixel.
+
+**Assistant `set_fixture`** (offline English and Armenian; Claude schema `fixture_settings`).
+- **Controls:** dimmer, colour by name, Lee/Rosco gel, zoom (degrees or narrow/wide), frost, iris, CTO, prism and its spin, gobo (slot or name) and its spin, strobe Hz, pan and tilt. Several are allowed in one prompt.
+- **Targets:** the selection, or named fixtures with a count.
+- **Execution:** one `RequestParameterChange` per fixture and attribute, inside an edit transaction.
+- **Grammar boundaries:** "remove the red pars" still deletes, "change the spots to beams" still replaces, and "purple elephant" is not a command.
+- **Armenian:** the lexicon gained the colour and control words; "դարձրու" now reads as "make".
+
+### Files
+
+**Code**
+- **Changed:**
+  - `Public/Data/LightingFixtureData.h`, `Private/Data/LightingFixtureData.cpp`
+  - `Public/Data/StageItemTypes.h`, `Private/Data/StageItemTypes.cpp` (DimensionsCm, two categories)
+  - `Public/Data/StageParameterTypes.h`, `Private/Data/StageParameterTypes.cpp` (new attributes and fixture rows)
+  - `Public/Actors/LightingFixtureActor.h`, `Private/Actors/LightingFixtureActor.cpp`
+  - `Public/Show/StagePhotometry.h`, `Private/Show/StagePhotometry.cpp` (frost, field, inner cone)
+  - `Public/AI/StageAITypes.h`, `Private/AI/StageAITypes.cpp`
+  - `Public/AI/StageAICommandParser.h`, `Private/AI/StageAICommandParser.cpp`
+  - `Private/AI/StageAICommandSchema.cpp`, `Private/AI/StageAICommandRunner.cpp`, `Private/AI/StageAIArmenian.cpp`
+- **New:**
+  - `Public/Show/StageColorScience.h`, `Private/Show/StageColorScience.cpp`
+  - `Public/Show/StageFixtureCells.h`, `Private/Show/StageFixtureCells.cpp`
+  - `Public/Show/StageGelLibrary.h`, `Private/Show/StageGelLibrary.cpp`
+  - `Public/Show/StageLightingSettings.h`
+
+**Tests**
+- **New:** `Private/Show/Tests/StageFixtureSuiteTests.cpp`, `Private/AI/Tests/StageAIFixtureTests.cpp`.
+- **Changed:**
+  - `Private/Show/Tests/StageLightingTests.cpp` and `StageFixturePlaybackTests.cpp`: `BeamShaper`; the beam lumens now follow the mix.
+  - `Private/AI/Tests/StageAIArmenianTests.cpp`: 40 help examples.
+
+**Content**
+- **New:**
+  - `Content/StageCraft/Fixtures/DA_Fixture_*` (11)
+  - `Content/StageCraft/Lighting/DT_StageGels`, `M_StageFixtureEmitter`
+  - `Content/StageCraft/Lighting/FixtureMeshes/SM_FixtureBase_*` (11)
+- **Rebuilt:** `Content/StageCraft/Lighting/M_StageBeamLightFunction`.
+
+**Scripts and config**
+- **New:** `Scripts/Content/create_fixture_library_content.py`, `Scripts/Content/Data/StageGels.csv`.
+- **Changed:**
+  - `Scripts/Content/create_lighting_content.py`: no longer builds the light function; uses `beam_shaper`.
+  - `Scripts/Bench/RunFixtureBench.ps1`: new `-Item` switch.
+  - `Config/DefaultGame.ini`: Fixtures scanned as StageItems, the emitter material and lens / strip meshes, the gel table.
+
+**Docs:** `Docs/ADR/0020-professional-fixture-suite.md` (new), `Docs/CURRENT_SYSTEMS.md`, `tasks/todo.md` (Phase 27; Phase 26 moved to #50), STATE.md (#48 commit hash `9193448` recorded).
+
+### Verification
+- **Builds:** Editor, Game Development and Game Shipping (`-DisableAdaptiveUnity`) succeeded with **0 warnings**. They were built with `-NoHotReloadFromIDE` while Kmidden2 was open.
+- **Automation:** **117/117** `StageCraft.*` tests pass. 7 new tests:
+  - Lighting.ColorScience, GelLibrary, FixtureSuiteData, FixtureSuiteActor, FixtureLibraryAssets.
+  - AI.Fixtures (34 English forms, 13 Armenian, targets, grammar boundaries) and AI.FixtureSchema.
+  - "Found 117" was checked, so no test name hides another.
+- **Changes to older tests**, each from a deliberate behaviour change:
+  - PanTiltTransform now expects the mix-based beam lumens.
+  - The Armenian help count is 40, for 8 new examples.
+- **Tests caught and fixed during the work:**
+  - The first, greedy RGBW match gave half the output for white.
+  - "purple elephant" parsed as a colour command.
+  - `_DEPRECATED` properties are registered under their old name.
+- **Content script:** all 11 fixtures saved and read back; the gel table has 118 rows matching the CSV. The library asset test validates every model with 0 errors and 0 warnings.
+- **Scripted `-game` runs** (R49, R49b; workspace session and GameUserSettings backed up and restored):
+  - The assistant placed all 11 models.
+  - The English fixture commands in the run were accepted, among them tilt, gobo + prism, colours, frost, iris, CTO, both gels and dimmer. Armenian was covered by the automation tests only.
+  - R49 found "prism 2 on the beam 280" refused: "beam" was a filler word. Fixed, with a regression test.
+  - The screenshot shows the star gobo projected three times by the prism, plus the coloured beams. The fixtures were about 26 m from the camera, so the lens glow, pixel cells and barndoor edges were **not** judged by eye.
+  - `StageCraft.View.MeasureStability` on that frame: GPU 5.98 ms, 0.43 % of pixels unstable. #48's still frames were 0.14–0.31 %, but this frame has prisms, gobos and volumetric beams.
+  - No scene or autosave was written.
+- **Fixture bench** (`RunFixtureBench.ps1 -Counts 50,200,500`, 10 s idle + 10 s crossfading). Kmidden2 was open on the same GPU, so these are regression checks, not a clean A/B:
+
+  | Fixture | 50 crossfade | 200 crossfade | 500 crossfade | 500 idle |
+  |---|---|---|---|---|
+  | DA_MovingHead_Test (same as #48) | 8.17 ms | 10.19 ms | 16.95 ms (game 16.96, GPU 10.15) | 9.74 ms |
+  | #48, for reference | 7.9 ms | 10.2 ms | 15.9 ms | |
+  | DA_Fixture_Spot470 (CMY + CTO, lens, real body) | 8.17 ms | 12.18 ms | 20.95 ms (GPU 10.33) | 13.51 ms (GPU 10.25) |
+
+  - The richer fixture costs about 4 ms more at 500 crossfading. Most of it is visible at idle (GPU 10.25 vs 8.0 ms: 500 more lens meshes and the bigger body).
+  - Caching the beam mix (computed once per colour change) was tried and measured: 21.08 vs 20.95 ms, no gain. It was reverted under Rules §22.
+- **No tick:** fixtures still never tick (asserted in a test). Spin runs on the material's clock. The cell texture uploads only on a colour change.
+- **Not verified by hand:**
+  - The library in the Library panel.
+  - The inspector rows (gel picker, colour wheel, prism, cells, Fixture section).
+  - Spinning gobos and prisms up close.
+  - The lens and pixel glow.
+  - Barndoors.
+  - Typing the assistant commands in the panel.
+
+  Status: **implemented, awaiting manual verification.**
+
+**Commit:** uncommitted (working tree).
+
+**Known issues / follow-ups**
+- **Visible change:** an RGBW fixture saved with W = 0 is now about half as bright (true mixing). New placements default to W = 100 %.
+- **Bodies are simplified:** a box base, a box yoke crossbar, a cylinder or box head. Real meshes can replace them per model without code changes.
+- **Gel colours** are approximations.
+- **A multi-cell fixture casts one light.**
+- **A prism copy's intensity** is an even share.
+- **Assistant limits:**
+  - "strobe" is a control word, so the strobe fixture must be named "the strobes" or selected.
+  - Negative pan/tilt values cannot be typed ("-" is dropped).
+  - Attribute edits are not undo steps (as before; cues record them).
+- **Content-script warning:** headless runs create a transient `StaticMeshEditorSubsystem`, which UE deprecates; it is the only headless path.
+- **Pending:** the assistant upgrade (knowledge base, multi-step, memory) is #50, and #48's manual crawl check is still pending.

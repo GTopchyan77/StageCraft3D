@@ -79,6 +79,18 @@ namespace StagePhotometry
 	 */
 	MODULARSCENEBUILDER_API double GetIrisTransmission(double Iris, double MinFraction);
 
+	/** An angle widened by frost (0 clear .. 1 full, where the angle is FullFrostMultiplier times wider). */
+	MODULARSCENEBUILDER_API double ApplyFrost(double AngleDegrees, double Frost, double FullFrostMultiplier);
+
+	/** Field angle (10 % of peak) of a beam angle (50 % of peak) for a fixture's field/beam ratio (at least 1). */
+	MODULARSCENEBUILDER_API double GetFieldAngle(double BeamAngleDegrees, double FieldAngleRatio);
+
+	/**
+	 * Full angle of a spot light's inner cone (full intensity) for a beam and field angle: the light falls off from the inner
+	 * cone to the field edge, so its midpoint sits at the beam edge. 0 when the field is twice the beam or wider.
+	 */
+	MODULARSCENEBUILDER_API double GetInnerConeAngle(double BeamAngleDegrees, double FieldAngleDegrees);
+
 	/** Peak intensity, illuminance and beam diameter. Non-finite or negative inputs count as zero. */
 	MODULARSCENEBUILDER_API FResult Compute(const FInputs& Inputs);
 }

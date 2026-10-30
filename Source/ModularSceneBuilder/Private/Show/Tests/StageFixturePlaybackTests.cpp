@@ -53,7 +53,7 @@ namespace StageFixturePlaybackTests
 			Data->ColorSystem = EStageFixtureColorSystem::RGBW;
 			Data->GoboWheel.SetNum(2);
 			Data->bHasIris = true;
-			Data->bHasFramingShutters = true;
+			Data->BeamShaper = EStageBeamShaper::FramingShutters;
 			Data->bHasPanTilt = true;
 			Data->BeamAngleMin = 5.f;
 			Data->BeamAngleMax = 50.f;
@@ -162,7 +162,12 @@ bool FStageFixturePanTiltTest::RunTest(const FString& Parameters)
 	const FQuat HeadBefore = Head->GetComponentQuat();
 	TestTrue(TEXT("Dimmer"), Fixture->SetAttribute(StageCraftTags::Attribute_Dimmer, 0.25f));
 	TestTrue(TEXT("A dimmer change leaves the head where it is"), Head->GetComponentQuat().Equals(HeadBefore, 1e-6));
-	TestEqual(TEXT("A dimmer change reaches the beam (lumens)"), Beam->Intensity, 20000.f * 0.25f, 1e-3f);
+	// The beam carries the flux the colour mix really has (Docs/ADR/0020 §2): rated flux x dimmer x mix share, with the light
+	// colour's luminance divided out because the light colour multiplies the intensity.
+	const StageColorScience::FMix Mix = Fixture->GetBeamMix();
+	const float Expected = static_cast<float>(20000.0 * 0.25 * Mix.LuminousFraction / FMath::Max(StageColorScience::GetLuminance(Mix.Color), 0.05));
+	TestEqual(TEXT("A dimmer change reaches the beam (lumens)"), Beam->Intensity, Expected, 0.5f);
+	TestTrue(TEXT("... open white is the fixture's full output"), FMath::IsNearlyEqual(Mix.LuminousFraction, 1.0, 1e-3));
 	return true;
 }
 

@@ -27,6 +27,8 @@ namespace StageCraftTags
 	UE_DEFINE_GAMEPLAY_TAG_COMMENT(Category_Lighting_Par,			"StageCraft.Category.Lighting.Par",			"LED pars and static washes.");
 	UE_DEFINE_GAMEPLAY_TAG_COMMENT(Category_Lighting_Strobe,		"StageCraft.Category.Lighting.Strobe",		"Strobes and blinders.");
 	UE_DEFINE_GAMEPLAY_TAG_COMMENT(Category_Lighting_Laser,			"StageCraft.Category.Lighting.Laser",		"Show lasers.");
+	UE_DEFINE_GAMEPLAY_TAG_COMMENT(Category_Lighting_Conventional,	"StageCraft.Category.Lighting.Conventional",	"Profiles (ellipsoidals) and fresnels.");
+	UE_DEFINE_GAMEPLAY_TAG_COMMENT(Category_Lighting_Pixel,			"StageCraft.Category.Lighting.Pixel",		"Pixel bars and battens with individually controlled cells.");
 	UE_DEFINE_GAMEPLAY_TAG_COMMENT(Category_Audio_LineArray,		"StageCraft.Category.Audio.LineArray",		"Line array elements and hang frames.");
 	UE_DEFINE_GAMEPLAY_TAG_COMMENT(Category_Audio_Subwoofer,		"StageCraft.Category.Audio.Subwoofer",		"Subwoofers.");
 	UE_DEFINE_GAMEPLAY_TAG_COMMENT(Category_Audio_Monitor,			"StageCraft.Category.Audio.Monitor",		"Wedges, side fills and front fills.");

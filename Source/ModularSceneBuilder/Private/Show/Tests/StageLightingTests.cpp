@@ -29,7 +29,7 @@ namespace StageLightingTests
 		Data->GoboWheel[0].Name = FText::FromString(TEXT("Dots"));
 		Data->GoboWheel[0].Transmission = 0.5f;
 		Data->bHasIris = true;
-		Data->bHasFramingShutters = true;
+		Data->BeamShaper = EStageBeamShaper::FramingShutters;
 		Data->BeamAngleMin = 5.f;
 		Data->BeamAngleMax = 50.f;
 #if WITH_EDITOR

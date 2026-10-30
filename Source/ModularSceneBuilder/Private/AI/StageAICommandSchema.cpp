@@ -49,6 +49,7 @@ namespace StageAICommandSchema
 			{ EStageAIIntent::MoveItems, TEXT("move_items") },
 			{ EStageAIIntent::ReplaceItems, TEXT("replace_items") },
 			{ EStageAIIntent::BuildShape, TEXT("build_shape") },
+			{ EStageAIIntent::SetFixture, TEXT("set_fixture") },
 			{ EStageAIIntent::Unsupported, TEXT("unsupported") },
 		};
 		static_assert(UE_ARRAY_COUNT(IntentNames) == int32(EStageAIIntent::Count), "Every intent needs a wire name.");
@@ -60,6 +61,15 @@ namespace StageAICommandSchema
 		const FDirectionName DirectionNames[] = {
 			{ EStageAIDirection::Left, TEXT("left") }, { EStageAIDirection::Right, TEXT("right") }, { EStageAIDirection::Forward, TEXT("forward") },
 			{ EStageAIDirection::Back, TEXT("back") }, { EStageAIDirection::Up, TEXT("up") }, { EStageAIDirection::Down, TEXT("down") } };
+
+		struct FControlName { EStageAIFixtureControl Control; const TCHAR* Name; };
+		const FControlName ControlNames[] = {
+			{ EStageAIFixtureControl::Dimmer, TEXT("dimmer") }, { EStageAIFixtureControl::Color, TEXT("color") }, { EStageAIFixtureControl::Gel, TEXT("gel") },
+			{ EStageAIFixtureControl::Zoom, TEXT("zoom") }, { EStageAIFixtureControl::Frost, TEXT("frost") }, { EStageAIFixtureControl::Iris, TEXT("iris") },
+			{ EStageAIFixtureControl::CTO, TEXT("cto") }, { EStageAIFixtureControl::Prism, TEXT("prism") }, { EStageAIFixtureControl::PrismSpin, TEXT("prism_spin") },
+			{ EStageAIFixtureControl::Gobo, TEXT("gobo") }, { EStageAIFixtureControl::GoboSpin, TEXT("gobo_spin") }, { EStageAIFixtureControl::Strobe, TEXT("strobe") },
+			{ EStageAIFixtureControl::Pan, TEXT("pan") }, { EStageAIFixtureControl::Tilt, TEXT("tilt") } };
+		static_assert(UE_ARRAY_COUNT(ControlNames) == int32(EStageAIFixtureControl::Count), "Every fixture control needs a wire name.");
 
 		struct FShapeName { EStageAIShape Shape; const TCHAR* Name; };
 		const FShapeName ShapeNames[] = {
@@ -139,7 +149,7 @@ namespace StageAICommandSchema
 			Properties->SetObjectField(TEXT("intent"), Intent);
 			Properties->SetObjectField(TEXT("count"), MakeProperty(TEXT("integer"), FString::Printf(TEXT("add_fixtures: how many, 1 to %d. Default 1. delete_items, move_items, replace_items with target named: at most how many of the matching items (the latest placed first); omit for all of them."), StageAICommandParser::MaxFixturesPerCommand)));
 			Properties->SetObjectField(TEXT("item"), MakeProperty(TEXT("string"), TEXT("add_fixtures: words naming the fixture type or catalog name (e.g. \"moving head spot\"); empty picks the first fixture. count_matching, and delete_items / move_items / replace_items with target named: words naming the placed items (\"spot\", \"truss\", \"lights\" for every fixture). unsupported: one of delete (clearing the whole stage), open, save.")));
-			TSharedRef<FJsonObject> Target = MakeProperty(TEXT("string"), TEXT("delete_items, move_items, replace_items: selection for the user's selected items (\"this\", \"the selected\", \"it\"), named for the placed items matching item."));
+			TSharedRef<FJsonObject> Target = MakeProperty(TEXT("string"), TEXT("delete_items, move_items, replace_items, set_fixture: selection for the user's selected items (\"this\", \"the selected\", \"it\"), named for the placed items matching item."));
 			Target->SetArrayField(TEXT("enum"), StringValues(NamesOf(MakeArrayView(TargetNames))));
 			Properties->SetObjectField(TEXT("target"), Target);
 			Properties->SetObjectField(TEXT("replacement"), MakeProperty(TEXT("string"), TEXT("replace_items: words naming the catalog item to put in each target's place (e.g. \"wash\").")));
@@ -155,6 +165,25 @@ namespace StageAICommandSchema
 			Properties->SetObjectField(TEXT("height_cm"), MakeProperty(TEXT("number"), TEXT("build_shape: height in cm (riser top, stair rise, or the truss's hang height). Omit for the default.")));
 			Properties->SetObjectField(TEXT("angle_degrees"), MakeProperty(TEXT("number"), TEXT("build_shape arc_riser and arc_truss: the angle the arc spans, 5 to 360. Omit for the default.")));
 			Properties->SetObjectField(TEXT("handrails"), MakeProperty(TEXT("boolean"), TEXT("build_shape stairs: handrails on both sides. Default true.")));
+			{
+				// set_fixture: the controls to set on the targeted fixtures (target / item / count as for move_items).
+				TSharedRef<FJsonObject> SettingProperties = MakeShared<FJsonObject>();
+				TSharedRef<FJsonObject> Control = MakeProperty(TEXT("string"), TEXT("Which control."));
+				Control->SetArrayField(TEXT("enum"), StringValues(NamesOf(MakeArrayView(ControlNames))));
+				SettingProperties->SetObjectField(TEXT("control"), Control);
+				SettingProperties->SetObjectField(TEXT("value"), MakeProperty(TEXT("number"),
+					TEXT("dimmer, frost, iris, cto: 0 to 1. zoom, pan, tilt: degrees. gobo_spin, prism_spin: rpm, signed. strobe: flashes per second, 0 = off. prism, gobo: the slot, 0 = out / open. Omit for color, gel, a named gobo, or zoom narrow / wide.")));
+				SettingProperties->SetObjectField(TEXT("name"), MakeProperty(TEXT("string"),
+					TEXT("color: a colour name (red, green, blue, white, warm white, cool white, amber, orange, yellow, cyan, magenta, pink, purple, lavender, uv, ...). gel: Lee or Rosco gel by number or name (\"lee 106\", \"rosco 27\", \"congo blue\"). gobo: a gobo name. zoom: narrow or wide.")));
+				TSharedRef<FJsonObject> Setting = MakeShared<FJsonObject>();
+				Setting->SetStringField(TEXT("type"), TEXT("object"));
+				Setting->SetObjectField(TEXT("properties"), SettingProperties);
+				Setting->SetArrayField(TEXT("required"), StringValues({ TEXT("control") }));
+				Setting->SetBoolField(TEXT("additionalProperties"), false);
+				TSharedRef<FJsonObject> Settings = MakeProperty(TEXT("array"), FString::Printf(TEXT("set_fixture: 1 to %d controls to set on the fixtures."), StageAICommandParser::MaxFixtureSettings));
+				Settings->SetObjectField(TEXT("items"), Setting);
+				Properties->SetObjectField(TEXT("fixture_settings"), Settings);
+			}
 			Properties->SetObjectField(TEXT("cue_number"), MakeProperty(TEXT("number"), TEXT("store_cue (omit for the next free number) and go_to_cue: the cue number, 0.001 to 9999.999.")));
 			Properties->SetObjectField(TEXT("label"), MakeProperty(TEXT("string"), TEXT("store_cue: optional cue label.")));
 			Properties->SetObjectField(TEXT("fade_seconds"), MakeProperty(TEXT("number"), TEXT("store_cue: optional crossfade time in seconds, 0 to 600.")));
@@ -204,7 +233,8 @@ namespace StageAICommandSchema
 		{
 			static const TCHAR* const KnownFields[] = { TEXT("intent"), TEXT("count"), TEXT("item"), TEXT("cue_number"), TEXT("label"), TEXT("fade_seconds"),
 				TEXT("weather"), TEXT("hour"), TEXT("sky_on"), TEXT("report"), TEXT("reply_language"), TEXT("target"), TEXT("replacement"), TEXT("direction"),
-				TEXT("distance_cm"), TEXT("shape"), TEXT("radius_cm"), TEXT("width_cm"), TEXT("height_cm"), TEXT("angle_degrees"), TEXT("handrails") };
+				TEXT("distance_cm"), TEXT("shape"), TEXT("radius_cm"), TEXT("width_cm"), TEXT("height_cm"), TEXT("angle_degrees"), TEXT("handrails"),
+				TEXT("fixture_settings") };
 			for (const TPair<FString, TSharedPtr<FJsonValue>>& Field : Input.Values)
 			{
 				if (!Algo::FindByPredicate(KnownFields, [&Field](const TCHAR* Known) { return Field.Key == Known; }))
@@ -313,6 +343,51 @@ namespace StageAICommandSchema
 			else if (Command.Intent == EStageAIIntent::BuildShape)
 			{
 				OutError = LOCTEXT("NoShape", "The build command did not say which shape.");
+				return false;
+			}
+			const TArray<TSharedPtr<FJsonValue>>* Settings = nullptr;
+			if (Input.TryGetArrayField(TEXT("fixture_settings"), Settings))
+			{
+				for (const TSharedPtr<FJsonValue>& Value : *Settings)
+				{
+					const TSharedPtr<FJsonObject>* SettingObject = nullptr;
+					FString ControlName;
+					if (Command.FixtureSettings.Num() >= StageAICommandParser::MaxFixtureSettings || !Value.IsValid() || !Value->TryGetObject(SettingObject)
+						|| !(*SettingObject)->TryGetStringField(TEXT("control"), ControlName))
+					{
+						OutError = LOCTEXT("BadSetting", "A fixture setting was not a control with a value.");
+						return false;
+					}
+					const FControlName* Control = FindByName(MakeArrayView(ControlNames), ControlName);
+					if (!Control)
+					{
+						OutError = FText::Format(LOCTEXT("UnknownControlName", "\"{0}\" is not a fixture control."), FText::FromString(ControlName.Left(32)));
+						return false;
+					}
+					FStageAIFixtureSetting& Setting = Command.FixtureSettings.AddDefaulted_GetRef();
+					Setting.Control = Control->Control;
+					double Number = 0.0;
+					if ((*SettingObject)->TryGetNumberField(TEXT("value"), Number))
+					{
+						Setting.Value = Number;
+					}
+					(*SettingObject)->TryGetStringField(TEXT("name"), Setting.Name);
+					if (Setting.Control == EStageAIFixtureControl::Color)
+					{
+						// The model names the colour; the stage owns what that colour is.
+						const TOptional<FLinearColor> Color = StageAICommandParser::FindColorName(Setting.Name);
+						if (!Color.IsSet())
+						{
+							OutError = FText::Format(LOCTEXT("UnknownColorName", "\"{0}\" is not a colour I know."), FText::FromString(Setting.Name.Left(32)));
+							return false;
+						}
+						Setting.Color = *Color;
+					}
+				}
+			}
+			else if (Command.Intent == EStageAIIntent::SetFixture)
+			{
+				OutError = LOCTEXT("NoSettings", "The fixture command did not say what to set.");
 				return false;
 			}
 			Input.TryGetStringField(TEXT("replacement"), Command.Replacement);
@@ -544,6 +619,83 @@ namespace StageAICommandSchema
 			}
 			return true;
 
+		case EStageAIIntent::SetFixture:
+		{
+			if (Command.Target == EStageAITarget::Named && Command.ItemQuery.IsEmpty())
+			{
+				OutError = Pick(Language, LOCTEXT("SetWhich", "Which fixtures? Select them first, or name them (\"the washes\")."),
+					INVTEXT("Ո՞ր սարքերը։ Նախ ընտրեք դրանք կամ նշեք անունը («վոշերը»)։"));
+				return false;
+			}
+			if (Command.Count.IsSet() && (*Command.Count < 1 || *Command.Count > StageAICommandParser::MaxEditTargets))
+			{
+				OutError = FText::Format(Pick(Language, LOCTEXT("SetCountRange", "I can change 1 to {0} fixtures at a time."), INVTEXT("Միանգամից կարող եմ փոխել 1-ից {0} սարք։")),
+					FText::AsNumber(StageAICommandParser::MaxEditTargets));
+				return false;
+			}
+			if (Command.FixtureSettings.IsEmpty() || Command.FixtureSettings.Num() > StageAICommandParser::MaxFixtureSettings)
+			{
+				OutError = FText::Format(Pick(Language, LOCTEXT("SettingCount", "Tell me what to set (dimmer, colour, gel, zoom, frost, iris, CTO, prism, gobo, strobe, pan, tilt), at most {0} at once."),
+					INVTEXT("Նշեք, թե ինչ փոխեմ (դիմեր, գույն, ժել, զում, ֆրոստ, իրիս, CTO, պրիզմա, գոբո, ստրոբ, պան, թիլթ), միանգամից առավելագույնը {0}։")),
+					FText::AsNumber(StageAICommandParser::MaxFixtureSettings));
+				return false;
+			}
+			for (FStageAIFixtureSetting& Setting : Command.FixtureSettings)
+			{
+				Setting.Name = TrimAndCap(Setting.Name);
+				if (uint8(Setting.Control) >= uint8(EStageAIFixtureControl::Count))
+				{
+					OutError = Pick(Language, LOCTEXT("UnknownControl", "That is not a fixture control I know."), INVTEXT("Այդպիսի կառավարում չգիտեմ։"));
+					return false;
+				}
+				// Unset values are allowed only where a name stands in for them.
+				const bool bNamed = Setting.Control == EStageAIFixtureControl::Gel || Setting.Control == EStageAIFixtureControl::Color
+					|| Setting.Control == EStageAIFixtureControl::Gobo || Setting.Control == EStageAIFixtureControl::Zoom;
+				if (!Setting.Value.IsSet() && !(bNamed && !Setting.Name.IsEmpty()))
+				{
+					OutError = Pick(Language, LOCTEXT("SettingValue", "Give a value, e.g. \"dimmer 50%\", \"zoom 20 degrees\", \"gobo 3\"."),
+						INVTEXT("Նշեք արժեքը, օրինակ՝ «դիմեր 50 տոկոս», «զում 20 աստիճան», «գոբո 3»։"));
+					return false;
+				}
+				if (Setting.Control == EStageAIFixtureControl::Color
+					&& !(FMath::IsFinite(Setting.Color.R) && FMath::IsFinite(Setting.Color.G) && FMath::IsFinite(Setting.Color.B)))
+				{
+					OutError = Pick(Language, LOCTEXT("BadColor", "That colour is not one I can mix."), INVTEXT("Այդ գույնը չեմ կարող խառնել։"));
+					return false;
+				}
+				if (!Setting.Value.IsSet())
+				{
+					continue;
+				}
+				double Min = 0.0;
+				double Max = 1.0;
+				switch (Setting.Control)
+				{
+				case EStageAIFixtureControl::Zoom:		Min = 0.5; Max = 170.0; break;
+				case EStageAIFixtureControl::Pan:
+				case EStageAIFixtureControl::Tilt:		Min = -720.0; Max = 720.0; break;
+				case EStageAIFixtureControl::GoboSpin:
+				case EStageAIFixtureControl::PrismSpin:	Min = -300.0; Max = 300.0; break;
+				case EStageAIFixtureControl::Strobe:	Max = 50.0; break;
+				case EStageAIFixtureControl::Prism:
+				case EStageAIFixtureControl::Gobo:		Max = 254.0; break;
+				default: break;
+				}
+				const double Value = *Setting.Value;
+				const bool bSlot = Setting.Control == EStageAIFixtureControl::Prism || Setting.Control == EStageAIFixtureControl::Gobo;
+				const bool bWhole = !bSlot || Value == FMath::RoundToDouble(Value);
+				if (!FMath::IsFinite(Value) || Value < Min || Value > Max || !bWhole)
+				{
+					FNumberFormattingOptions Format;
+					Format.SetMaximumFractionalDigits(2);
+					OutError = FText::Format(Pick(Language, LOCTEXT("SettingRange", "That value is outside {0} to {1}."), INVTEXT("Այդ արժեքը {0}-ից {1} միջակայքից դուրս է։")),
+						FText::AsNumber(Min, &Format), FText::AsNumber(Max, &Format));
+					return false;
+				}
+			}
+			return true;
+		}
+
 		case EStageAIIntent::BuildShape:
 		{
 			const auto InRange = [](const TOptional<double>& Value, double Min, double Max)
@@ -607,6 +759,8 @@ namespace StageAICommandSchema
 			"selected spots\", with item to narrow it), or target named with item for placed items by name (\"the pars\"). Round and curved "
 			"risers, stairs and curved or circular truss are built with build_shape in centimetres and degrees; a size given without a role "
 			"is a round riser's or a truss circle's diameter.\n"
+			"Lighting fixtures are adjusted with set_fixture (same target rules): dimmer, colour by name, a Lee or Rosco gel, zoom, frost, "
+			"iris, CTO, prism, gobo, gobo or prism spin, strobe, pan and tilt, several in one call (\"make the washes red at 50%\").\n"
 			"If a request needs something the tool cannot do (clearing the whole stage, opening, saving or replacing scenes, several commands "
 			"at once), do not call the tool: say briefly what to do instead, or which single step to start with. If a request is unclear, ask "
 			"one short question. Keep text replies to one or two sentences.\n"

@@ -64,6 +64,26 @@ namespace StagePhotometry
 		return FMath::Square(GetIrisScale(Iris, MinFraction));
 	}
 
+	double ApplyFrost(double AngleDegrees, double Frost, double FullFrostMultiplier)
+	{
+		const double Multiplier = FMath::IsFinite(FullFrostMultiplier) ? FMath::Max(1.0, FullFrostMultiplier) : 1.0;
+		return ClampBeamAngle(ClampBeamAngle(AngleDegrees) * FMath::Lerp(1.0, Multiplier, SanitizeFraction(Frost)));
+	}
+
+	double GetFieldAngle(double BeamAngleDegrees, double FieldAngleRatio)
+	{
+		const double Ratio = FMath::IsFinite(FieldAngleRatio) ? FMath::Max(1.0, FieldAngleRatio) : 1.0;
+		return ClampBeamAngle(ClampBeamAngle(BeamAngleDegrees) * Ratio);
+	}
+
+	double GetInnerConeAngle(double BeamAngleDegrees, double FieldAngleDegrees)
+	{
+		const double Beam = ClampBeamAngle(BeamAngleDegrees);
+		const double Field = FMath::Max(Beam, ClampBeamAngle(FieldAngleDegrees));
+		// Full intensity inside the inner cone, falling to nothing at the field edge: halfway is the beam edge.
+		return FMath::Clamp(2.0 * Beam - Field, 0.0, Field);
+	}
+
 	FResult Compute(const FInputs& Inputs)
 	{
 		FResult Result;

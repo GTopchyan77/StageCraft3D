@@ -213,7 +213,7 @@ bool FStageAIArmenianTest::RunTest(const FString& Parameters)
 				++Examples;
 			}
 		}
-		TestEqual(TEXT("Help examples counted"), Examples, 32);
+		TestEqual(TEXT("Help examples counted"), Examples, 40);
 	}
 
 	// --- Replies follow the prompt ---

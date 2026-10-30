@@ -1,6 +1,5 @@
 # Creates the content for professional fixtures and the patch sheet (Docs/ADR/0007-lighting-patch-paths-and-pipeline-hardening.md):
 #   /Game/StageCraft/Lighting/Gobos/T_Gobo_*              eight starter gobos, imported from Scripts/Content/Gobos (make_gobos.ps1)
-#   /Game/StageCraft/Lighting/M_StageBeamLightFunction    light-function material: gobo x iris x four framing blades, in cone space
 #   /Game/StageCraft/Data/DA_MovingHead_Test              becomes a profile: CTC, gobo wheel, iris, framing shutters (DMX layout regenerated)
 #   /Game/StageCraft/Data/DA_MovingHead_Wash_Test         gains CTC (DMX layout regenerated)
 #   /Game/StageCraft/UI/Panels/DA_Panel_Patch             panel definition for UStagePatchPanel (StageCraft.Panel.Patch)
@@ -8,7 +7,8 @@
 # Headless (no editor window needed; the project's editor must be closed):
 #   UnrealEditor-Cmd.exe <Project>.uproject -run=pythonscript -script="<abs path>/create_lighting_content.py" -unattended -nullrhi
 #
-# Idempotent: textures are re-imported in place, the material is rebuilt, data assets are updated, so references stay valid.
+# Idempotent: textures are re-imported in place, data assets are updated, so references stay valid.
+# M_StageBeamLightFunction is built by create_fixture_library_content.py (STATE.md #49), which needs these gobos first.
 
 import os
 import unreal
@@ -17,45 +17,11 @@ LIGHTING_DIR = "/Game/StageCraft/Lighting"
 GOBO_DIR = LIGHTING_DIR + "/Gobos"
 DATA_DIR = "/Game/StageCraft/Data"
 PANELS_DIR = "/Game/StageCraft/UI/Panels"
-WHITE_TEXTURE = "/Engine/EngineResources/WhiteSquareTexture.WhiteSquareTexture"
 
 # Wheel order and photometric transmission (open area) of each generated gobo.
 GOBOS = [
     ("Dots", 0.30), ("Star", 0.35), ("Bars", 0.45), ("Ring", 0.40),
     ("Fan", 0.42), ("Breakup", 0.38), ("Triangles", 0.25), ("Grid", 0.50),
-]
-
-# Cone-space mask. UV runs 0..1 across the spot cone (LightFunctionCommon.ush), p = -1..1 with the beam edge at radius 1.
-BEAM_SHAPING_HLSL = r"""
-float2 p = (UV - 0.5) * 2.0;
-const float Soft = 0.015;
-
-float GoboAngle = radians(GoboRotation);
-float2 g = float2(cos(GoboAngle) * p.x - sin(GoboAngle) * p.y, sin(GoboAngle) * p.x + cos(GoboAngle) * p.y);
-float2 GoboUV = g * 0.5 + 0.5;
-float Gobo = 1.0;
-if (GoboEnabled > 0.5)
-{
-    Gobo = Texture2DSample(GoboTex, GoboTexSampler, saturate(GoboUV)).r;
-    Gobo *= (all(GoboUV >= 0.0) && all(GoboUV <= 1.0)) ? 1.0 : 0.0;
-}
-
-float Iris = 1.0 - smoothstep(IrisRadius - Soft, IrisRadius + Soft, length(p));
-
-float BladeAngle = radians(BladeRotation);
-float2 q = float2(cos(BladeAngle) * p.x - sin(BladeAngle) * p.y, sin(BladeAngle) * p.x + cos(BladeAngle) * p.y);
-float Top    = 1.0 - smoothstep((1.0 - BladeTop) - Soft,    (1.0 - BladeTop) + Soft,    q.y);
-float Bottom = smoothstep(-(1.0 - BladeBottom) - Soft, -(1.0 - BladeBottom) + Soft, q.y);
-float Right  = 1.0 - smoothstep((1.0 - BladeRight) - Soft,  (1.0 - BladeRight) + Soft,  q.x);
-float Left   = smoothstep(-(1.0 - BladeLeft) - Soft,   -(1.0 - BladeLeft) + Soft,   q.x);
-
-float Mask = Gobo * Iris * Top * Bottom * Right * Left;
-return float3(Mask, Mask, Mask);
-"""
-
-SCALARS = [
-    ("GoboEnabled", 0.0), ("GoboRotation", 0.0), ("IrisRadius", 1.0),
-    ("BladeTop", 0.0), ("BladeRight", 0.0), ("BladeBottom", 0.0), ("BladeLeft", 0.0), ("BladeRotation", 0.0),
 ]
 
 mel = unreal.MaterialEditingLibrary
@@ -116,49 +82,6 @@ def import_gobos():
     return textures
 
 
-# --- Beam-shaping light function ---
-
-def create_beam_shaping_material():
-    material = load_or_create("M_StageBeamLightFunction", LIGHTING_DIR, unreal.Material, unreal.MaterialFactoryNew())
-    mel.delete_all_material_expressions(material)
-    material.set_editor_property("material_domain", unreal.MaterialDomain.MD_LIGHT_FUNCTION)
-
-    custom = mel.create_material_expression(material, unreal.MaterialExpressionCustom, -200, 0)
-    custom.set_editor_property("code", BEAM_SHAPING_HLSL)
-    custom.set_editor_property("output_type", unreal.CustomMaterialOutputType.CMOT_FLOAT3)
-    custom.set_editor_property("description", "Beam shaping")
-    input_names = ["UV", "GoboTex"] + [name for name, _ in SCALARS]
-    inputs = []
-    for input_name in input_names:
-        custom_input = unreal.CustomInput()
-        custom_input.set_editor_property("input_name", input_name)
-        inputs.append(custom_input)
-    custom.set_editor_property("inputs", inputs)
-
-    uv = mel.create_material_expression(material, unreal.MaterialExpressionTextureCoordinate, -600, -200)
-    mel.connect_material_expressions(uv, "", custom, "UV")
-
-    gobo = mel.create_material_expression(material, unreal.MaterialExpressionTextureObjectParameter, -600, -80)
-    gobo.set_editor_property("parameter_name", "GoboTexture")
-    gobo.set_editor_property("texture", unreal.load_asset(WHITE_TEXTURE))
-    gobo.set_editor_property("sampler_type", unreal.MaterialSamplerType.SAMPLERTYPE_LINEAR_GRAYSCALE)
-    mel.connect_material_expressions(gobo, "", custom, "GoboTex")
-
-    y = 40
-    for name, default in SCALARS:
-        scalar = mel.create_material_expression(material, unreal.MaterialExpressionScalarParameter, -600, y)
-        scalar.set_editor_property("parameter_name", name)
-        scalar.set_editor_property("default_value", default)
-        mel.connect_material_expressions(scalar, "", custom, name)
-        y += 60
-
-    mel.connect_material_property(custom, "", unreal.MaterialProperty.MP_EMISSIVE_COLOR)
-    mel.recompile_material(material)
-    eal.save_loaded_asset(material)
-    log("Saved " + LIGHTING_DIR + "/M_StageBeamLightFunction")
-    return material
-
-
 # --- Fixtures ---
 
 def make_gobo_wheel(textures):
@@ -181,7 +104,7 @@ def update_fixture(name, mode_name, ctc, gobo_wheel, iris, shutters):
     fixture.set_editor_property("color_temperature_range_k", unreal.Vector2D(2700.0, 8000.0))
     fixture.set_editor_property("gobo_wheel", gobo_wheel)
     fixture.set_editor_property("has_iris", iris)
-    fixture.set_editor_property("has_framing_shutters", shutters)
+    fixture.set_editor_property("beam_shaper", unreal.StageBeamShaper.FRAMING_SHUTTERS if shutters else unreal.StageBeamShaper.NONE)
     fixture.generate_default_dmx_layout()
     fixture.set_editor_property("dmx_mode_name", "{} {}ch".format(mode_name, fixture.get_dmx_footprint()))
     eal.save_loaded_asset(fixture)
@@ -207,7 +130,7 @@ def create_patch_panel():
 
 
 gobo_textures = import_gobos()
-create_beam_shaping_material()
+
 update_fixture("DA_MovingHead_Test", "Profile", True, make_gobo_wheel(gobo_textures), True, True)
 update_fixture("DA_MovingHead_Wash_Test", "Wash", True, [], False, False)
 create_patch_panel()

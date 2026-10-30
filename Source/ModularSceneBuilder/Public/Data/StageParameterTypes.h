@@ -274,6 +274,26 @@ namespace StageCraftTags
 	MODULARSCENEBUILDER_API UE_DECLARE_GAMEPLAY_TAG_EXTERN(Attribute_BladeC);		// bottom
 	MODULARSCENEBUILDER_API UE_DECLARE_GAMEPLAY_TAG_EXTERN(Attribute_BladeD);		// left
 	MODULARSCENEBUILDER_API UE_DECLARE_GAMEPLAY_TAG_EXTERN(Attribute_BladeRotation);	// degrees
+	MODULARSCENEBUILDER_API UE_DECLARE_GAMEPLAY_TAG_EXTERN(Attribute_ColorA);		// amber emitter 0..1
+	MODULARSCENEBUILDER_API UE_DECLARE_GAMEPLAY_TAG_EXTERN(Attribute_CTO);			// colour temperature orange filter 0..1 (1 = full CTO)
+	MODULARSCENEBUILDER_API UE_DECLARE_GAMEPLAY_TAG_EXTERN(Attribute_ColorWheel);	// colour wheel slot, 0 = open (stepped)
+	MODULARSCENEBUILDER_API UE_DECLARE_GAMEPLAY_TAG_EXTERN(Attribute_Gobo2);		// static gobo wheel slot, 0 = open (stepped)
+	MODULARSCENEBUILDER_API UE_DECLARE_GAMEPLAY_TAG_EXTERN(Attribute_GoboSpin);		// rotating gobo speed in rpm, signed
+	MODULARSCENEBUILDER_API UE_DECLARE_GAMEPLAY_TAG_EXTERN(Attribute_Prism);		// prism slot, 0 = out (stepped)
+	MODULARSCENEBUILDER_API UE_DECLARE_GAMEPLAY_TAG_EXTERN(Attribute_PrismRotation);	// prism speed in rpm, signed
+	MODULARSCENEBUILDER_API UE_DECLARE_GAMEPLAY_TAG_EXTERN(Attribute_Frost);		// 0 = clear .. 1 = full frost
+
+	// Fixture rows that are not attributes.
+	MODULARSCENEBUILDER_API UE_DECLARE_GAMEPLAY_TAG_EXTERN(FeatureGroup_Cells);
+	MODULARSCENEBUILDER_API UE_DECLARE_GAMEPLAY_TAG_EXTERN(FeatureGroup_Fixture);
+	/** Gel picker (enum over the gel library, 0 = none). Writing it sets the colour attributes; it is not recorded itself. */
+	MODULARSCENEBUILDER_API UE_DECLARE_GAMEPLAY_TAG_EXTERN(Param_Fixture_Gel);
+	/** Composite row that sets every cell's colour at once. */
+	MODULARSCENEBUILDER_API UE_DECLARE_GAMEPLAY_TAG_EXTERN(Param_Fixture_AllCells);
+	MODULARSCENEBUILDER_API UE_DECLARE_GAMEPLAY_TAG_EXTERN(Param_Fixture_Kind);
+	MODULARSCENEBUILDER_API UE_DECLARE_GAMEPLAY_TAG_EXTERN(Param_Fixture_Dimensions);
+	MODULARSCENEBUILDER_API UE_DECLARE_GAMEPLAY_TAG_EXTERN(Param_Fixture_Flux);
+	MODULARSCENEBUILDER_API UE_DECLARE_GAMEPLAY_TAG_EXTERN(Param_Photo_FieldAngle);
 
 	/** Read-only beam results derived from the fixture's attributes and position (StagePhotometry). */
 	MODULARSCENEBUILDER_API bool IsPhotometricParameter(const FGameplayTag& ParameterId);
