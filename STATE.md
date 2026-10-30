@@ -4264,7 +4264,7 @@ Design: `Docs/ADR/0019-dmx-patch-and-network-input.md`.
     - A 50-count look down after that turned exactly −10°, and the pawn's tick was off at rest.
 - **Not verified:** the feel by hand with a real mouse, and a touchpad. Status: **implemented, awaiting manual verification.**
 
-**Commit:** uncommitted (working tree).
+**Commit:** `66f1098`.
 
 **Known issues / follow-ups**
 - **Y direction:** the code matches the UE editor's default directions (measured). If Gevor still sees one gesture inverted, it needs naming (RMB look, LMB, MMB, Alt+LMB orbit or Alt+RMB dolly). Making it differ from the editor would be an option in Preferences (like the existing Invert look), not a change of default.
