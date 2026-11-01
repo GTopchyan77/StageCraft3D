@@ -4723,7 +4723,7 @@ The plan was approved in plan mode.
 - **Difference:** the fixtures are now `DA_Fixture_Beam`, the Sketch default since #49, where the original had `DA_MovingHead_Test`. New instance ids; 27,962 bytes, the original was 34,357.
 - **Prevention:** harness cleanup now deletes only names the run's log reports as imported and refuses the source scene. A lesson was saved to Claude's memory.
 
-**Commit:** uncommitted (working tree).
+**Commit:** `00330fb` (committed by Claude at Gevor's one-time request, 2026-11-01).
 
 **Known issues / follow-ups**
 - **Phase B:** the Marketplace panel, publish dialog and read-only preview in a separate `GamePreview` world (needs an ADR addendum first). Controller requests `RequestMarketplaceAcquire` / `RequestMarketplacePublish`.
