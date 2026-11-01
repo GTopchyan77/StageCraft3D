@@ -49,6 +49,7 @@
 #include "Report/StageBillOfMaterialsSubsystem.h"
 #include "Report/StageCableScheduleSubsystem.h"
 #include "Report/StagePatchSheetSubsystem.h"
+#include "Bridge/StageBridgeSubsystem.h"
 #include "Marketplace/StageMarketplaceSubsystem.h"
 #include "Scene/StageSceneComponent.h"
 #include "Subsystems/StageDMXNetworkSubsystem.h"
@@ -2154,6 +2155,52 @@ bool AModularPlayerController::RequestMarketplacePublish(const FStageMarketplace
 	if (!Result.IsSuccess())
 	{
 		ReportRejection(StageMarketplaceRequests::ToRejection(Result));
+	}
+	return Result.IsSuccess();
+}
+
+bool AModularPlayerController::RequestSetBridgeEnabled(bool bEnabled)
+{
+	UStageBridgeSubsystem* Bridge = GetGameInstance() ? GetGameInstance()->GetSubsystem<UStageBridgeSubsystem>() : nullptr;
+	if (!Bridge)
+	{
+		ReportRejection(FStageEconomyResultInfo::Fail(EStageEconomyResult::InvalidRequest, LOCTEXT("NoBridge", "Sending to 3D apps is not available.")));
+		return false;
+	}
+	if (!bEnabled)
+	{
+		Bridge->StopBridge();
+		return true;
+	}
+	FText Error;
+	if (!Bridge->StartBridge(Error))
+	{
+		ReportRejection(FStageEconomyResultInfo::Fail(EStageEconomyResult::InvalidRequest, Error));
+		return false;
+	}
+	return true;
+}
+
+bool AModularPlayerController::RequestExportScene(const FString& SceneName, const FString& FilePath)
+{
+	UStageBridgeSubsystem* Bridge = GetGameInstance() ? GetGameInstance()->GetSubsystem<UStageBridgeSubsystem>() : nullptr;
+	const FStageBridgeResultInfo Result = Bridge ? Bridge->ExportSceneToFile(SceneName, FilePath)
+		: FStageBridgeResultInfo::Fail(EStageBridgeResult::Unavailable, LOCTEXT("NoExport", "Exporting is not available."));
+	if (!Result.IsSuccess())
+	{
+		ReportRejection(FStageEconomyResultInfo::Fail(EStageEconomyResult::InvalidRequest, Result.Message));
+	}
+	return Result.IsSuccess();
+}
+
+bool AModularPlayerController::RequestSendScene(const FString& SceneName, int32 ClientId)
+{
+	UStageBridgeSubsystem* Bridge = GetGameInstance() ? GetGameInstance()->GetSubsystem<UStageBridgeSubsystem>() : nullptr;
+	const FStageBridgeResultInfo Result = Bridge ? Bridge->SendSceneToApp(SceneName, ClientId)
+		: FStageBridgeResultInfo::Fail(EStageBridgeResult::Unavailable, LOCTEXT("NoBridge", "Sending to 3D apps is not available."));
+	if (!Result.IsSuccess())
+	{
+		ReportRejection(FStageEconomyResultInfo::Fail(EStageEconomyResult::InvalidRequest, Result.Message));
 	}
 	return Result.IsSuccess();
 }

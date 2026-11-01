@@ -39,6 +39,8 @@ enum class EStageMarketplaceResult : uint8
 	PurchaseFailed,
 	/** A real-money price needs an authoritative server; the local backend cannot sell or publish for money. */
 	ServerRequired,
+	/** The scene was acquired from the marketplace: only the user's own stages can be published (Docs/ADR/0022-dcc-bridge.md section 4). */
+	NotOriginal,
 };
 
 /** Result of a marketplace request. Message is user-facing; Code is for logic. */

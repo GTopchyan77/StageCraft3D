@@ -158,6 +158,12 @@ void SStageWorkspaceMenuBar::FillFileMenu(FMenuBuilder& MenuBuilder)
 		FSlateIcon(), FUIAction(FExecuteAction::CreateSP(this, &SStageWorkspaceMenuBar::ShowPanel, FGameplayTag(StageCraftTags::Panel_Library))));
 	MenuBuilder.EndSection();
 
+	MenuBuilder.BeginSection(TEXT("Exchange"), LOCTEXT("ExchangeSection", "3D Apps"));
+	MenuBuilder.AddMenuEntry(LOCTEXT("SendTo3DApp", "Send to 3D App..."),
+		LOCTEXT("SendTo3DAppTip", "Send a saved stage to Blender, 3ds Max or Cinema 4D on this computer, or save it as a .glb file (ADR 0022)."),
+		FSlateIcon(), FUIAction(FExecuteAction::CreateSP(this, &SStageWorkspaceMenuBar::ShowPanel, FGameplayTag(StageCraftTags::Panel_SendTo))));
+	MenuBuilder.EndSection();
+
 	FillReportSection(MenuBuilder, WeakController);
 }
 

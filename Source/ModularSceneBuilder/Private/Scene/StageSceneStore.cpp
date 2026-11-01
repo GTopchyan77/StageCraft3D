@@ -57,6 +57,9 @@ namespace StageSceneStore
 		const TCHAR* Fade = TEXT("fade");
 		const TCHAR* Fixtures = TEXT("fixtures");
 		const TCHAR* Attributes = TEXT("attributes");
+
+		// Version 4: where a marketplace stage came from.
+		const TCHAR* OriginListingId = TEXT("originListingId");
 	}
 
 	TArray<TSharedPtr<FJsonValue>> WriteCues(const TArray<FShowCue>& Cues)
@@ -472,6 +475,11 @@ FString FStageSceneStore::Serialize(const FStageSceneDocument& Document)
 	Root->SetArrayField(Field::Items, Items);
 	Root->SetObjectField(Field::Environment, WriteEnvironment(Document.Environment));
 	Root->SetArrayField(Field::Cues, WriteCues(Document.Cues));
+	// Only when set: the user's own stages stay free of it.
+	if (Document.OriginListingId.IsValid())
+	{
+		Root->SetStringField(Field::OriginListingId, Document.OriginListingId.ToString(EGuidFormats::DigitsWithHyphens));
+	}
 
 	FString Contents;
 	const TSharedRef<TJsonWriter<TCHAR, TPrettyJsonPrintPolicy<TCHAR>>> Writer = TJsonWriterFactory<TCHAR, TPrettyJsonPrintPolicy<TCHAR>>::Create(&Contents);
@@ -525,6 +533,13 @@ EStageSceneResult FStageSceneStore::Parse(const FString& Contents, FStageSceneDo
 	if (Version >= 3)
 	{
 		OutDocument.Cues = ReadCues(*Root, OutReport.InvalidCueEntries);
+	}
+	// Migration 3 -> 4: older stages are the user's own. Deny by default: an origin that is there but unreadable is not "own".
+	FString Origin;
+	if (Version >= 4 && Root->TryGetStringField(Field::OriginListingId, Origin)
+		&& (!FGuid::Parse(Origin, OutDocument.OriginListingId) || !OutDocument.OriginListingId.IsValid()))
+	{
+		return EStageSceneResult::Corrupt;
 	}
 
 	TSet<FGuid> SeenIds;

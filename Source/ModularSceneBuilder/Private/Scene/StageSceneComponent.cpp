@@ -99,6 +99,7 @@ FStageSceneDocument UStageSceneComponent::CaptureStage(const FString& Name) cons
 	Document.Name = Name;
 	Document.LevelName = UWorld::RemovePIEPrefix(GetWorld()->GetMapName());
 	Document.SavedAtUtc = FDateTime::UtcNow();
+	Document.OriginListingId = OriginListingId;
 
 	const TArray<AModularBaseActor*> PlacedItems = GetSession()->GetPlacedItems();
 	Document.Items.Reserve(PlacedItems.Num());
@@ -374,6 +375,7 @@ FStageSceneOperationResult UStageSceneComponent::ApplyDocument(const FStageScene
 	}
 	UnplacedItems = MoveTemp(Unplaced);
 	Outcome.KeptCount = UnplacedItems.Num();
+	OriginListingId = Document.OriginListingId;
 	SceneWithDroppedEntries = Report.InvalidItems > 0 && Source == ELoadSource::SavedScene ? Document.Name : FString();
 
 	// Before MarkClean: setting the environment marks the session dirty like any edit, and it is part of what was loaded.

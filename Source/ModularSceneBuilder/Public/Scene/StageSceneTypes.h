@@ -99,4 +99,13 @@ struct FStageSceneDocument
 
 	/** The show's cue list (format version 3). Version 1 and 2 files read as no cues. Sanitized (StageCueRules). */
 	TArray<FShowCue> Cues;
+
+	/**
+	 * The community marketplace listing this stage was acquired as (format version 4; Docs/ADR/0022-dcc-bridge.md §4). Set when a
+	 * listing is imported and kept by every later save of the stage, Save As included, so a bought stage stays inside the app:
+	 * scene export and publishing refuse it. Invalid (the default, and every older file) means the user's own stage.
+	 */
+	FGuid OriginListingId;
+
+	bool IsFromMarketplace() const { return OriginListingId.IsValid(); }
 };

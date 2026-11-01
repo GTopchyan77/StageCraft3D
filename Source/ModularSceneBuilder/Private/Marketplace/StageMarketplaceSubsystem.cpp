@@ -43,6 +43,7 @@ namespace StageMarketplace
 		case EStageMarketplaceResult::NotOwned: return LOCTEXT("Result_NotOwned", "Buy this listing first.");
 		case EStageMarketplaceResult::PurchaseFailed: return LOCTEXT("Result_PurchaseFailed", "The purchase did not go through.");
 		case EStageMarketplaceResult::ServerRequired: return LOCTEXT("Result_ServerRequired", "Real-money sales need an online store; they are not available offline.");
+		case EStageMarketplaceResult::NotOriginal: return LOCTEXT("Result_NotOriginal", "This stage came from the marketplace; only your own stages can be published.");
 		}
 		return FText::GetEmpty();
 	}
@@ -74,6 +75,8 @@ namespace StageMarketplace
 			return EStageMarketplaceResult::WriteFailed;
 		}
 		Package.Scene.Name = OutSceneName;
+		// Whatever the package says, this copy is the listing that was acquired; it stays inside the app (ADR 0022 section 4).
+		Package.Scene.OriginListingId = ListingId;
 		Package.Scene.SavedAtUtc = FDateTime::UtcNow();
 		if (Scenes.Save(Package.Scene) != EStageSceneResult::Success)
 		{
@@ -113,6 +116,11 @@ namespace StageMarketplace
 		if (Report.InvalidItems > 0 || Report.RepairedIds > 0 || Report.InvalidCueEntries > 0)
 		{
 			return EStageMarketplaceResult::Corrupt;
+		}
+		// Republishing someone else's stage is not allowed, whatever it is renamed to (ADR 0022 section 4).
+		if (Package.Scene.IsFromMarketplace())
+		{
+			return EStageMarketplaceResult::NotOriginal;
 		}
 		if (!StagePackage::IsPortable(Package.Scene))
 		{

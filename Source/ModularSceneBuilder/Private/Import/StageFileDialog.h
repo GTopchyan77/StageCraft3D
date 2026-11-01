@@ -21,4 +21,10 @@ namespace StageFileDialog
 	 * unavailable or the user cancelled; on true OutFiles holds absolute paths.
 	 */
 	bool OpenFiles(const FText& Title, const FString& DefaultDirectory, const FString& Filter, TArray<FString>& OutFiles);
+
+	/**
+	 * Lets the user pick where to save one file, starting in DefaultDirectory with DefaultFileName filled in; the dialog asks
+	 * before replacing an existing file. Returns false when unavailable or cancelled; on true OutFile is an absolute path.
+	 */
+	bool SaveFile(const FText& Title, const FString& DefaultDirectory, const FString& DefaultFileName, const FString& Filter, FString& OutFile);
 }

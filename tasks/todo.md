@@ -496,3 +496,19 @@ Decisions (Gevor, 2026-11-01): backend seam + local community-folder backend (HT
 - [ ] Merge import of LightingRig / CueList packages (fixture-id remapping)
 - [ ] Embed imported models in packages (lift `NotPortable`)
 - [ ] HTTP backend + server-side validation, signatures, payouts; real-money listings
+
+## Phase 29 — DCC bridge (requested by Gevor 2026-11-01; STATE.md #53, ADR 0022)
+Gevor's brief had four parts: buy-and-send screen, DCC bridge, AI 3D generation, bilingual semantic search. He chose the bridge first; only his own scenes may leave the app; providers pluggable, offline first.
+- [x] ADR 0022 (formats, own-stages rule, protocol, trust, ownership, roadmap D2-D5)
+- [x] Scene format v4: originListingId set on marketplace import, kept through Save/Save As/autosave; export and publish refuse it
+- [x] GLB export of saved scenes in an isolated world (engine GLTFExporter; procedural parts converted to transient static meshes; owned items only)
+- [x] Localhost TCP bridge: token in a per-user session file, handshake on the socket thread, outbox + SHA-1, one send at a time
+- [x] Controller requests, Send to 3D App panel (File menu), StageFileDialog::SaveFile, dev commands
+- [x] Add-ons: Blender (verified headless 4.3), Cinema 4D, 3ds Max, Maya (connect only)
+- [x] Tests 135/135; Editor/Game/Shipping builds; scripted run with Blender (R53)
+- [ ] Manual verification (Gevor): the panel, Save as .glb, the Blender add-on in a normal Blender session
+- [ ] Manual verification (Gevor or a tester with the apps): Cinema 4D, 3ds Max, Maya add-ons
+- [ ] D2: USD (.usda) writer + Maya import; export off the game thread for large scenes
+- [ ] D3: buy-and-send screen (credits, confirmation, target picker)
+- [ ] D4: bilingual search provider seam, offline synonym/tag expansion first
+- [ ] D5: AI generation provider seam + mesh post-processing (needs a provider choice and key)

@@ -24,6 +24,11 @@ public class ModularSceneBuilder : ModuleRules
 		// ADR 0019: the Art-Net / sACN input is a small receiver of our own on the engine's UDP sockets (FUdpSocketReceiver, FIPv4Address).
 		PrivateDependencyModuleNames.AddRange(new string[] { "Sockets", "Networking" });
 
+		// ADR 0022: the DCC bridge exports saved scenes as glTF binary with the engine's runtime glTF exporter (GLTFExporter plugin),
+		// after turning procedural parts into transient static meshes (MeshDescription, StaticMeshDescription). The bridge's
+		// localhost TCP server uses Sockets/Networking above.
+		PrivateDependencyModuleNames.AddRange(new string[] { "GLTFExporter", "MeshDescription", "StaticMeshDescription" });
+
 		// The UI font's Armenian sub-font (Noto Sans Armenian, SIL OFL 1.1) is read from these files at runtime, so they ship with the module.
 		RuntimeDependencies.Add(Path.Combine(ModuleDirectory, "Resources", "Fonts", "NotoSansArmenian-Regular.ttf"), StagedFileType.UFS);
 		RuntimeDependencies.Add(Path.Combine(ModuleDirectory, "Resources", "Fonts", "NotoSansArmenian-Bold.ttf"), StagedFileType.UFS);

@@ -1,6 +1,6 @@
 # ADR 0021: Community marketplace, `.stage` packages and listing purchases
 
-- **Status:** accepted. Phase A implemented (STATE.md #50). Phase B implemented (STATE.md #51, §12 addendum). Phase C implemented (STATE.md #52, §13 addendum).
+- **Status:** accepted. Phase A implemented (STATE.md #50). Phase B implemented (STATE.md #51, §12 addendum). Phase C implemented (STATE.md #52, §13 addendum). Since STATE.md #53, acquired stages carry their listing id and cannot be republished or exported (ADR 0022 §4).
 - **Related:**
   - ADR 0004 §4 and ADR 0010 §4 (scene files): a package carries a scene document in the existing, versioned scene format. It does not use a second serializer.
   - STATE.md #18 (economy, profile, commerce backend): listing purchases are a new validated economy operation. The profile stays single-writer.

@@ -23,22 +23,13 @@ namespace StageFileDialog
 #if WITH_STAGECRAFT_NATIVE_FILE_DIALOG
 	namespace
 	{
-		/**
-		 * The Windows common item dialog (IFileOpenDialog), for builds without the engine's DesktopPlatform (Shipping). Same filter
-		 * form and results as DesktopPlatform's Windows implementation, which wraps the same COM dialog.
-		 */
-		bool OpenFilesNative(const FText& Title, const FString& DefaultDirectory, const FString& Filter, TArray<FString>& OutFiles)
-		{
-			TComPtr<IFileOpenDialog> Dialog;
-			if (FAILED(::CoCreateInstance(CLSID_FileOpenDialog, nullptr, CLSCTX_INPROC_SERVER, IID_PPV_ARGS(&Dialog))))
-			{
-				return false;
-			}
+		// The Windows common item dialogs (IFileOpenDialog, IFileSaveDialog), for builds without the engine's DesktopPlatform
+		// (Shipping). Same filter form and results as DesktopPlatform's Windows implementation, which wraps the same COM dialogs.
 
-			DWORD Options = 0;
-			Dialog->GetOptions(&Options);
-			Dialog->SetOptions(Options | FOS_ALLOWMULTISELECT | FOS_FILEMUSTEXIST | FOS_FORCEFILESYSTEM);
-			Dialog->SetTitle(*Title.ToString());
+		/** The folder, title and filter setup both dialogs share. Parts holds the filter strings, which must outlive the dialog's use. */
+		void SetUpDialog(IFileDialog& Dialog, const FText& Title, const FString& DefaultDirectory, const FString& Filter, TArray<FString>& Parts)
+		{
+			Dialog.SetTitle(*Title.ToString());
 
 			if (!DefaultDirectory.IsEmpty())
 			{
@@ -48,12 +39,11 @@ namespace StageFileDialog
 				TComPtr<IShellItem> Folder;
 				if (SUCCEEDED(::SHCreateItemFromParsingName(*WindowsPath, nullptr, IID_PPV_ARGS(&Folder))))
 				{
-					Dialog->SetFolder(Folder);
+					Dialog.SetFolder(Folder);
 				}
 			}
 
-			// "Label|*.a;*.b|Label|*.c" -> label/spec pairs. The strings must outlive SetFileTypes, so they stay in Parts.
-			TArray<FString> Parts;
+			// "Label|*.a;*.b|Label|*.c" -> label/spec pairs.
 			Filter.ParseIntoArray(Parts, TEXT("|"), /*bCullEmpty*/ true);
 			TArray<COMDLG_FILTERSPEC> Specs;
 			if (Parts.Num() % 2 == 0)
@@ -65,11 +55,63 @@ namespace StageFileDialog
 					Spec.pszSpec = *Parts[Index + 1];
 				}
 			}
-			Dialog->SetFileTypes(Specs.Num(), Specs.GetData());
+			Dialog.SetFileTypes(Specs.Num(), Specs.GetData());
+		}
 
-			// FindBestParentWindowHandleForDialogs returns the native window handle as const void*.
-			const HWND Parent = FSlateApplication::IsInitialized() ? static_cast<HWND>(const_cast<void*>(FSlateApplication::Get().FindBestParentWindowHandleForDialogs(nullptr))) : nullptr;
-			if (FAILED(Dialog->Show(Parent)))
+		/** FindBestParentWindowHandleForDialogs returns the native window handle as const void*. */
+		HWND GetParentWindow()
+		{
+			return FSlateApplication::IsInitialized() ? static_cast<HWND>(const_cast<void*>(FSlateApplication::Get().FindBestParentWindowHandleForDialogs(nullptr))) : nullptr;
+		}
+
+		bool SaveFileNative(const FText& Title, const FString& DefaultDirectory, const FString& DefaultFileName, const FString& Filter, FString& OutFile)
+		{
+			TComPtr<IFileSaveDialog> Dialog;
+			if (FAILED(::CoCreateInstance(CLSID_FileSaveDialog, nullptr, CLSCTX_INPROC_SERVER, IID_PPV_ARGS(&Dialog))))
+			{
+				return false;
+			}
+
+			DWORD Options = 0;
+			Dialog->GetOptions(&Options);
+			Dialog->SetOptions(Options | FOS_OVERWRITEPROMPT | FOS_FORCEFILESYSTEM);
+			TArray<FString> Parts;
+			SetUpDialog(*Dialog, Title, DefaultDirectory, Filter, Parts);
+			Dialog->SetFileName(*DefaultFileName);
+			if (FAILED(Dialog->Show(GetParentWindow())))
+			{
+				// Includes the user cancelling.
+				return false;
+			}
+
+			TComPtr<IShellItem> Item;
+			PWSTR Path = nullptr;
+			if (FAILED(Dialog->GetResult(&Item)) || FAILED(Item->GetDisplayName(SIGDN_FILESYSPATH, &Path)))
+			{
+				return false;
+			}
+			OutFile = Path;
+			::CoTaskMemFree(Path);
+			FPaths::NormalizeFilename(OutFile);
+			OutFile = FPaths::ConvertRelativePathToFull(OutFile);
+			return true;
+		}
+
+		bool OpenFilesNative(const FText& Title, const FString& DefaultDirectory, const FString& Filter, TArray<FString>& OutFiles)
+		{
+			TComPtr<IFileOpenDialog> Dialog;
+			if (FAILED(::CoCreateInstance(CLSID_FileOpenDialog, nullptr, CLSCTX_INPROC_SERVER, IID_PPV_ARGS(&Dialog))))
+			{
+				return false;
+			}
+
+			DWORD Options = 0;
+			Dialog->GetOptions(&Options);
+			Dialog->SetOptions(Options | FOS_ALLOWMULTISELECT | FOS_FILEMUSTEXIST | FOS_FORCEFILESYSTEM);
+			TArray<FString> Parts;
+			SetUpDialog(*Dialog, Title, DefaultDirectory, Filter, Parts);
+
+			if (FAILED(Dialog->Show(GetParentWindow())))
 			{
 				// Includes the user cancelling.
 				return false;
@@ -134,6 +176,31 @@ namespace StageFileDialog
 		return !OutFiles.IsEmpty();
 #elif WITH_STAGECRAFT_NATIVE_FILE_DIALOG
 		return OpenFilesNative(Title, DefaultDirectory, Filter, OutFiles);
+#else
+		return false;
+#endif
+	}
+
+	bool SaveFile(const FText& Title, const FString& DefaultDirectory, const FString& DefaultFileName, const FString& Filter, FString& OutFile)
+	{
+		OutFile.Reset();
+#if WITH_STAGECRAFT_FILE_DIALOG
+		IDesktopPlatform* DesktopPlatform = FDesktopPlatformModule::Get();
+		if (!DesktopPlatform || !FSlateApplication::IsInitialized())
+		{
+			return false;
+		}
+
+		const void* ParentWindow = FSlateApplication::Get().FindBestParentWindowHandleForDialogs(nullptr);
+		TArray<FString> Picked;
+		if (!DesktopPlatform->SaveFileDialog(ParentWindow, Title.ToString(), DefaultDirectory, DefaultFileName, Filter, EFileDialogFlags::None, Picked) || Picked.IsEmpty())
+		{
+			return false;
+		}
+		OutFile = FPaths::ConvertRelativePathToFull(Picked[0]);
+		return true;
+#elif WITH_STAGECRAFT_NATIVE_FILE_DIALOG
+		return SaveFileNative(Title, DefaultDirectory, DefaultFileName, Filter, OutFile);
 #else
 		return false;
 #endif

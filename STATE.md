@@ -4588,7 +4588,7 @@ The plan was approved in plan mode.
 
   Status: **implemented, awaiting manual verification.**
 
-**Commit:** uncommitted (working tree).
+**Commit:** `3f598a0`.
 
 **Known issues / follow-ups**
 - **Visible change:** an RGBW fixture saved with W = 0 is now about half as bright (true mixing). New placements default to W = 100 %.
@@ -4927,10 +4927,119 @@ The plan was approved in plan mode.
   - Typing these requests in the AI Assistant window by hand.
   - Status: **implemented, awaiting manual verification.**
 
-**Commit:** uncommitted (working tree).
+**Commit:** `c238125`.
 
 **Known issues / follow-ups**
 - "Show more" paging from the chat is not built; the window pages, and "number N" counts within the current page (24).
 - A panel user changing filters while an assistant search is in flight supersedes it; the assistant then reports the panel's results, which is what the window shows.
 - Publishing from the chat is not built (a form suits title, description and price better).
 - The preview grain from #51 remains.
+
+## #53 — DCC bridge (Phase D1): send saved stages to Blender, 3ds Max, Cinema 4D and Maya; export to .glb (2026-11-01)
+
+**Request (Gevor, 2026-11-01, pasted):** a "Universal Bridge & Marketplace Integration" brief.
+1. A buy-and-send screen with live credits.
+2. A localhost bridge with Python add-ons for Blender, Maya, 3ds Max and Cinema 4D, using USD, glTF and FBX.
+3. AI text/image-to-3D generation (English and Armenian) with optimisation, retopology and LODs.
+4. Bilingual semantic search.
+
+These are four projects. Gevor's answers when asked:
+- **Order:** the DCC bridge first.
+- **Exports:** only his own scenes may leave the app; bought marketplace stages stay inside.
+- **Providers:** pluggable, offline first (for the later search and generation phases).
+
+The plan was approved in plan mode.
+
+**Design:** Docs/ADR/0022-dcc-bridge.md (new). Roadmap: D2 USD writer and Maya; D3 buy-and-send screen; D4 bilingual search; D5 AI generation.
+
+**What & why**
+- **Export of saved scenes as glTF binary** (`FStageSceneExporter`).
+  - It reads the saved file, never the live stage (no gizmo, ghosts or unsaved edits).
+  - It spawns the items into a private GamePreview world with `StageMarketplacePreview::SpawnScene`, so no session, rules or DMX are involved.
+  - Items not owned (exact entitlement), or not in this Library, are left out and counted.
+  - Writing: the engine's runtime `GLTFExporter` plugin writes the file; geometry and materials only, no lights or baking. It is written to `<name>.writing.glb` and then moved into place.
+  - **Procedural parts.** The engine exporter skips `UProceduralMeshComponent`, so deck, stairs and arc-truss surfaces are first converted into transient static meshes. This uses the engine's `BuildMeshDescription` and `UStaticMesh::BuildFromMeshDescriptions` (fast build, CPU access).
+- **Own stages only (scene format v4).** `FStageSceneDocument::OriginListingId` is set by the marketplace import.
+  - `UStageSceneComponent` keeps it while that stage is open and writes it back on every save and autosave, so a Save As copy is still marked.
+  - Export (`EStageBridgeResult::NotOriginal`) and publishing (new `EStageMarketplaceResult::NotOriginal`) refuse such stages. Before this, a bought stage could be republished under a new name.
+  - Older files load as the user's own. A present but unreadable or zero id makes the file Corrupt (deny by default).
+- **Localhost bridge** (`FStageBridgeServer`, owned by the new GameInstance subsystem `UStageBridgeSubsystem`).
+  - **Connection:** TCP on 127.0.0.1:47830 only (`-StageBridgePort=` overrides it). No WebSocket, so browsers cannot reach it. Newline-delimited JSON, 64 KB per line, at most 4 connections.
+  - **Off by default:** the bridge listens only while the user's "Allow 3D apps to connect" switch is on.
+  - **Token:** each start writes a fresh 256-bit token, the port and the outbox to `%LOCALAPPDATA%\StageCraft\Bridge\session.json`, which is deleted on stop.
+  - **Handshake:** checked on the socket thread (a valid hello with the token within 5 s, compared in constant time). Anything else gets `bye` and is closed, and only authenticated clients produce game-thread events.
+  - **Threading:** one worker thread owns every socket. Events wake the game thread once per batch (the ADR 0019 pattern); there is no tick. `Stop` joins the worker and is idempotent.
+  - **Sends:** files are never streamed. A send exports into `Saved/StageCraft/Bridge/Outbox`; the add-on checks the path is inside the outbox and the size and SHA-1 match, imports the file, and acks.
+  - **One send at a time.** It ends on the ack, a disconnect, a stop, or a 120 s timer; the outbox copy is then deleted.
+- **Requests and UI.**
+  - `AModularPlayerController::RequestSetBridgeEnabled`, `RequestExportScene` and `RequestSendScene`; refusals go to `OnRequestRejected`.
+  - New floating panel "Send to 3D App" (File › Send to 3D App…; `StageCraft.Panel.SendTo`, `UStageSendToWidget`, built in code, push-bound, no tick). It has the switch, a saved-scene picker with notes (unsaved changes, own-stages rule), one button per connected app (Maya is disabled until USD), and "Save as .glb file…".
+  - New `StageFileDialog::SaveFile`: DesktopPlatform, or COM `IFileSaveDialog` in Shipping.
+- **Add-ons** (`Tools/DCCBridge`): one shared stdlib-only client (`common/stagecraft_bridge_client.py`, copied next to each add-on by `sync_client.ps1`) and README.
+  - Blender: sidebar panel, `bpy.app.timers`; imports into a "StageCraft - <name>" collection.
+  - Cinema 4D: `.pyp` with a command and a MessageData timer; `MergeDocument`.
+  - 3ds Max: Qt window and QTimer; `importFile`.
+  - Maya: connects only and says USD is coming, because Maya has no native glTF importer.
+  - `tests/blender_receive.py` is a headless Blender check.
+- **Dev commands** (compiled out of Shipping): `StageCraft.Bridge.Start`, `Stop`, `Status`, `Export <scene>`, `Send <id|first> <scene>`, `Screenshot`.
+- **Not built, by decision:**
+  - FBX: there is no runtime writer, and every target app imports GLB.
+  - USD: D2.
+  - Buy-and-send screen, semantic search, AI generation: D3–D5.
+
+**Files changed**
+- New:
+  - `Source/ModularSceneBuilder/Public/Bridge/StageBridgeTypes.h`, `Public/Bridge/StageBridgeSubsystem.h`
+  - `Private/Bridge/StageBridgeProtocol.h/.cpp`, `StageBridgeServer.h/.cpp`, `StageSceneExporter.h/.cpp`, `StageBridgeSubsystem.cpp`, `StageBridgeConsoleCommands.cpp`
+  - `Private/Bridge/Tests/StageBridgeTests.cpp` (5 tests)
+  - `Public/UI/StageSendToWidget.h`, `Private/UI/StageSendToWidget.cpp`
+  - `Content/StageCraft/UI/Panels/DA_Panel_SendTo.uasset` (made by the new `Scripts/Content/create_send_to_content.py`)
+  - `Tools/DCCBridge/` (common client and its copies, Blender / Cinema 4D / 3ds Max / Maya add-ons, `sync_client.ps1`, `README.md`, `tests/blender_receive.py`)
+  - `Docs/ADR/0022-dcc-bridge.md`
+- Changed:
+  - `ModularSceneBuilder.uproject` (GLTFExporter plugin enabled)
+  - `ModularSceneBuilder.Build.cs` (GLTFExporter, MeshDescription, StaticMeshDescription)
+  - `Public/Scene/StageSceneTypes.h`, `Private/Scene/StageSceneStore.h/.cpp` (format v4, `originListingId`)
+  - `Public/Scene/StageSceneComponent.h`, `Private/Scene/StageSceneComponent.cpp` (origin carried from load to every save)
+  - `Public/Marketplace/StageMarketplaceTypes.h`, `Private/Marketplace/StageMarketplaceSubsystem.cpp` (`NotOriginal`; import sets the origin; publish refuses it)
+  - `Public/Player/ModularPlayerController.h`, `Private/Player/ModularPlayerController.cpp` (three requests)
+  - `Private/Import/StageFileDialog.h/.cpp` (`SaveFile`; shared dialog setup)
+  - `Public/Workspace/StageWorkspaceTypes.h`, `Private/Workspace/StageWorkspaceTypes.cpp` (`Panel_SendTo`)
+  - `Private/Workspace/StageWorkspaceShell.cpp` (window size), `Private/Workspace/SStageWorkspaceMenuBar.cpp` (File › 3D Apps section)
+  - `Docs/ADR/0021-community-marketplace.md` (status note)
+  - `tasks/todo.md` (Phase 29)
+- STATE.md also got the missing commit hashes of #49 (`3f598a0`) and #52 (`c238125`).
+
+**Verification**
+- **Builds:** Editor, Game and Shipping (`-DisableAdaptiveUnity`) all succeeded with 0 warnings. The Shipping executable contains no `StageCraft.Bridge.` strings.
+- **Automation:** 135/135 pass (130 before plus 5 new):
+  - `StageCraft.Bridge.Protocol`: line framing, over-long lines, hello/ack parsing, unknown types, token compare, sanitising.
+  - `.SceneOrigin`: round trip; v3 loads as own; bad or zero id is Corrupt.
+  - `.ExportRefusals`: bought stage, missing scene, bad name, relative path, wrong extension; nothing written.
+  - `.ProceduralConversion`: quad → 2 triangles, same place, empty section skipped.
+  - `.Server`: real loopback sockets. Wrong token → bye and closed; ack before hello refused; right token → welcome and a Connected event; asset and ack round trip; unknown message → disconnect; stop twice; nothing listens after stop.
+- **Scripted Standalone `-game` run with a real headless Blender 4.3 by Claude** (R53; harness `RunBridgeCheck.ps1` in the session scratchpad).
+  - Bridge on; `R42_Sketch` exported to .glb: 15 items, 2 procedural parts converted, 199,660 bytes, 0.54 s cold and 0.02 s warm. No glTF exporter warnings.
+  - Blender's probe with a wrong token got `bye` "wrong token" and was closed.
+  - The add-on client connected with the session token; StageCraft listed "Blender 4.3.0".
+  - The send was imported and acked: 562 mesh objects, 271,396 triangles, in collection "StageCraft - R42_Sketch". The log reads "Blender imported "R42_Sketch" (15 items)", and the outbox copy was removed.
+  - The client's own refusals all passed: outside the outbox, `..`, wrong size, wrong SHA-1, other format.
+  - Marketplace: `R42_Sketch` was published, then got as "R42_Sketch (2)". Export of it → NotOriginal; publish of it → NotOriginal. It was loaded and saved as "Bridge SaveAs Check"; export → NotOriginal.
+  - Bridge off → session file deleted.
+  - Cleanup removed only the two scenes the log named, plus the Marketplace folder (absent before). The profile and session were restored; R42_Sketch was untouched. The export .glb was kept in the scratchpad.
+  - Screenshots `Saved/Screenshots/SendTo_221626.png`, `SendTo_221655.png` (Blender 4.3.0 listed) and `SendTo_221710.png` ("Blender imported…"). The last one showed the "No app connected yet" hint cut off at the right edge; it now wraps (rebuilt, not re-run).
+- **Not verified:**
+  - Cinema 4D, 3ds Max and Maya add-ons (those apps are not installed here).
+  - The Blender add-on's sidebar panel in an interactive Blender (the headless run used the same client and import function).
+  - The Save dialog by hand.
+  - Status: **implemented, awaiting manual verification.**
+
+**Commit:** uncommitted (working tree).
+
+**Known issues / follow-ups**
+- Materials export through the exporter's runtime path (no baking): complex StageCraft materials may arrive as simple colours. Fixture lights are not exported.
+- 562 objects for 15 items: every mesh component becomes its own glTF node. A per-item merge is a possible D2 option.
+- Scenes imported before format v4 carry no origin and can be exported.
+- Cinema 4D plug-in IDs are from Maxon's development range; register real IDs before distributing.
+- The export runs on the game thread; measured at 0.54 s for 15 items. Larger stages need measuring (D2).
+- D2–D5 as listed in ADR 0022 §8.

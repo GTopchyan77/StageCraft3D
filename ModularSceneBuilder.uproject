@@ -60,6 +60,7 @@
 		{ "Name": "PreciseTransform", "Enabled": false },
 		{ "Name": "RealTimeImport", "Enabled": false },
 		{ "Name": "SkyCreatorPlugin", "Enabled": true },
+		{ "Name": "GLTFExporter", "Enabled": true },
 		{ "Name": "SkyWeatherControls", "Enabled": false },
 		{ "Name": "SpaceCalculator", "Enabled": false },
 		{ "Name": "SplineRouteTool", "Enabled": false },

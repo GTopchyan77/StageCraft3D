@@ -412,6 +412,27 @@ public:
 	bool RequestMarketplacePublish(const FStageMarketplacePublishRequest& Request);
 
 	/**
+	 * Switches the DCC bridge on or off (Docs/ADR/0022-dcc-bridge.md): while on, 3D app add-ons on this computer can connect.
+	 * State changes arrive on UStageBridgeSubsystem::OnStateChanged. False, reported on OnRequestRejected, when it cannot start.
+	 */
+	UFUNCTION(BlueprintCallable, Category = "StageCraft|Requests")
+	bool RequestSetBridgeEnabled(bool bEnabled);
+
+	/**
+	 * Exports the saved scene SceneName to FilePath (absolute, .glb). Only the user's own stages are exported, with the items they
+	 * own. The outcome arrives on UStageBridgeSubsystem::OnSendCompleted; a refusal or failure is also reported on OnRequestRejected.
+	 */
+	UFUNCTION(BlueprintCallable, Category = "StageCraft|Requests")
+	bool RequestExportScene(const FString& SceneName, const FString& FilePath);
+
+	/**
+	 * Sends the saved scene SceneName to the connected 3D app ClientId. True when it was sent; the app's answer arrives on
+	 * UStageBridgeSubsystem::OnSendCompleted. A refusal is reported on OnRequestRejected.
+	 */
+	UFUNCTION(BlueprintCallable, Category = "StageCraft|Requests")
+	bool RequestSendScene(const FString& SceneName, int32 ClientId);
+
+	/**
 	 * Renders a still image of the current view with the user's render settings (Render panel, Render menu), leaving out
 	 * the gizmo, the placement ghost and selection overlays. Returns true when the render started; the image arrives on
 	 * UStageRenderSubsystem::OnRenderFinished. A refusal (already rendering) is reported on OnRequestRejected.

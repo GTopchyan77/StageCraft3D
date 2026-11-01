@@ -179,6 +179,12 @@ private:
 	/** The scene whose load dropped damaged entries; the next save under this name backs its file up first. Empty otherwise. */
 	FString SceneWithDroppedEntries;
 
+	/**
+	 * The marketplace listing the loaded stage was acquired as (Docs/ADR/0022-dcc-bridge.md §4), written back by every save and
+	 * autosave so Save As cannot turn a bought stage into an exportable one. Replaced by the next load; kept by Clear Stage.
+	 */
+	FGuid OriginListingId;
+
 	/** Saved/StageCraft/Scenes/Autosave. Immutable and shared with background tasks, like Store. */
 	TSharedPtr<const class FStageSceneStore, ESPMode::ThreadSafe> AutosaveStore;
 
