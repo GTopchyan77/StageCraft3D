@@ -484,9 +484,14 @@ Decisions (Gevor, 2026-11-01): backend seam + local community-folder backend (HT
 - [x] Tests (PreviewIsolation); Editor / Game / Shipping builds; scripted runs with screenshots
 - [ ] Manual verification (Gevor): orbit/zoom, typing, publish page, OPEN IN STAGE + discard confirm
 - [ ] Follow-ups: preview grain (cause unknown), card thumbnails captured at publish, cue preview
-### Phase C — Assistant marketplace navigator (ADR 0021 §8)
-- [ ] Intents `SearchMarketplace`, `PreviewListing`, `AcquireListing`, `OpenImported` (EN/HY grammar + Claude schema)
-- [ ] Explicit confirmation turn before any purchase
+### Phase C — Assistant marketplace navigator (STATE.md #52, ADR 0021 §13)
+- [x] ADR 0021 §13 addendum (references resolved by the conversation, local confirmation, async waits, panel follows the answered query; no `OpenImported`)
+- [x] Intents `SearchMarketplace`, `ListingDetails`, `PreviewListing`, `AcquireListing` (EN/HY grammar + Claude schema)
+- [x] Explicit confirmation turn before any purchase, read locally (`ParseConfirmation`), never by the online model
+- [x] `FStageMarketplaceQuery::MaxCredits` and the shared `BrowsePageSize`; panel adopts the marketplace's answered query
+- [x] Tests (Marketplace.Grammar / Confirmation / References / Schema / Answers, Query max credits); Editor / Game / Shipping builds; scripted run
+- [ ] Manual verification (Gevor): the chat in the Assistant window, the online model's marketplace calls (needs an API key)
+- [ ] Follow-ups: "show more" paging from the chat, publishing from the chat
 ### Follow-ups
 - [ ] Merge import of LightingRig / CueList packages (fixture-id remapping)
 - [ ] Embed imported models in packages (lift `NotPortable`)

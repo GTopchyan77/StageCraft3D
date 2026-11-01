@@ -47,6 +47,7 @@ FStageMarketplaceQuery StageMarketplaceRules::SanitizeQuery(const FStageMarketpl
 	FStageMarketplaceQuery Clean = Query;
 	Clean.SearchText = Query.SearchText.Left(FStageMarketplaceQuery::MaxSearchTextLength).TrimStartAndEnd();
 	Clean.Offset = FMath::Max(Query.Offset, 0);
+	Clean.MaxCredits = FMath::Max<int64>(Query.MaxCredits, 0);
 	Clean.Limit = FMath::Clamp(Query.Limit, 1, FStageMarketplaceQuery::MaxPageSize);
 	return Clean;
 }
@@ -63,6 +64,10 @@ bool StageMarketplaceRules::Matches(const FStageMarketplaceListing& Listing, con
 	}
 	if ((Query.PriceFilter == EStageMarketplacePriceFilter::Free && !Listing.Price.IsFree())
 		|| (Query.PriceFilter == EStageMarketplacePriceFilter::Paid && Listing.Price.IsFree()))
+	{
+		return false;
+	}
+	if (Query.MaxCredits > 0 && (Listing.Price.HasRealMoneyPrice() || Listing.Price.Credits > Query.MaxCredits))
 	{
 		return false;
 	}

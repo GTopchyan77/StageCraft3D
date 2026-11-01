@@ -29,6 +29,7 @@ namespace StageAIArmenian
 			{ TEXT("կեսօրից հետո"), TEXT("afternoon") },
 			{ TEXT("նոր տեսարան"), TEXT("new scene") },
 			{ TEXT("ինչ կարող"), TEXT("what can") },
+			{ TEXT("ձեռք բեր"), TEXT("acquire") },
 		};
 
 		const FEntry Lexicon[] = {
@@ -87,6 +88,26 @@ namespace StageAIArmenian
 			{ TEXT("բարձրախոս"), TEXT("speaker") }, { TEXT("կոլոնկա"), TEXT("speaker") }, { TEXT("դինամիկ"), TEXT("speaker") },
 			{ TEXT("իր"), TEXT("item"), Exact }, { TEXT("իրեր"), TEXT("item") }, { TEXT("առարկա"), TEXT("item") }, { TEXT("օբյեկտ"), TEXT("item") },
 			{ TEXT("բեմ"), TEXT("stage") },
+
+			// The community marketplace (Docs/ADR/0021 §13).
+			{ TEXT("մարքեթփլեյս"), TEXT("marketplace") }, { TEXT("մարկետփլեյս"), TEXT("marketplace") }, { TEXT("շուկա"), TEXT("marketplace") },
+			{ TEXT("համայնք"), TEXT("community") }, { TEXT("հայտարարությ"), TEXT("listing") }, { TEXT("արդյունք"), TEXT("result") },
+			{ TEXT("գտիր"), TEXT("find"), Exact }, { TEXT("գտեք"), TEXT("find"), Exact }, { TEXT("գտնել"), TEXT("find"), Exact },
+			{ TEXT("որոն"), TEXT("search") }, { TEXT("փնտր"), TEXT("search") },
+			{ TEXT("նախադիտ"), TEXT("preview") }, { TEXT("եռաչափ"), TEXT("3d") },
+			// Buy only in its imperative and infinitive: գն- also begins գնա (go).
+			{ TEXT("գնիր"), TEXT("buy"), Exact }, { TEXT("գնեք"), TEXT("buy"), Exact }, { TEXT("գնել"), TEXT("buy"), Exact },
+			{ TEXT("ներբեռն"), TEXT("download") }, { TEXT("ներմուծ"), TEXT("import") },
+			{ TEXT("ստացիր"), TEXT("get"), Exact }, { TEXT("վերցրու"), TEXT("get"), Exact },
+			{ TEXT("մանրամասն"), TEXT("details") }, { TEXT("նկարագր"), TEXT("describe") }, { TEXT("տեղեկությ"), TEXT("info") }, { TEXT("մասին"), TEXT("about"), Exact },
+			{ TEXT("անվճար"), TEXT("free") }, { TEXT("վճարովի"), TEXT("paid") }, { TEXT("կրեդիտ"), TEXT("credits") }, { TEXT("արժե"), TEXT("cost") },
+			{ TEXT("մինչև"), TEXT("under"), Exact },
+			{ TEXT("ամենաէժան"), TEXT("cheapest") }, { TEXT("էժան"), TEXT("cheapest") }, { TEXT("թանկ"), TEXT("expensive") },
+			{ TEXT("ամենանոր"), TEXT("newest") }, { TEXT("նորագույն"), TEXT("newest") }, { TEXT("հանրաճանաչ"), TEXT("popular") },
+			{ TEXT("ռիգ"), TEXT("rig") }, { TEXT("դիզայն"), TEXT("design") },
+			{ TEXT("համերգ"), TEXT("concert") }, { TEXT("փառատոն"), TEXT("festival") }, { TEXT("թատր"), TEXT("theatre") }, { TEXT("թատեր"), TEXT("theatre") },
+			{ TEXT("կորպորատիվ"), TEXT("corporate") }, { TEXT("ակումբ"), TEXT("club") }, { TEXT("հեռարձակ"), TEXT("broadcast") },
+			{ TEXT("եկեղեց"), TEXT("worship") }, { TEXT("պաշտամունք"), TEXT("worship") },
 
 			// Weather, sky and time of day.
 			{ TEXT("անձրև"), TEXT("rain") }, { TEXT("տեղատարափ"), TEXT("rain") }, { TEXT("փոթորիկ"), TEXT("storm") },
@@ -303,7 +324,7 @@ namespace StageAIArmenian
 			static const TCHAR* const Actions[] = { TEXT("add"), TEXT("place"), TEXT("put"), TEXT("hang"), TEXT("create"), TEXT("store"), TEXT("record"),
 				TEXT("save"), TEXT("export"), TEXT("go"), TEXT("play"), TEXT("run"), TEXT("undo"), TEXT("redo"), TEXT("delete"), TEXT("remove"),
 				TEXT("clear"), TEXT("open"), TEXT("load"), TEXT("on"), TEXT("off"), TEXT("stop"), TEXT("move"), TEXT("raise"), TEXT("lower"),
-				TEXT("replace"), TEXT("change"), TEXT("build"), TEXT("make") };
+				TEXT("replace"), TEXT("change"), TEXT("build"), TEXT("make"), TEXT("buy"), TEXT("download"), TEXT("import"), TEXT("get"), TEXT("preview") };
 			return Algo::FindByPredicate(Actions, [&Word](const TCHAR* Action) { return Word == Action; }) != nullptr;
 		}
 

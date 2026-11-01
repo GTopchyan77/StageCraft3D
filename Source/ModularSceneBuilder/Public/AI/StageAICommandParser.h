@@ -75,6 +75,37 @@ namespace StageAICommandParser
 	 */
 	MODULARSCENEBUILDER_API bool MatchesItemName(const FString& Name, const FString& Query, bool bIsFixture = false);
 
+	/** How a prompt answers a pending purchase offer (Docs/ADR/0021 §13.3). */
+	enum class EStageAIConfirmation : uint8
+	{
+		/** Not an answer: the offer is dropped and the prompt read as a new request. */
+		None,
+		Yes,
+		No,
+	};
+
+	/**
+	 * Reads a short yes or no ("yes", "buy it", "ok", "no", "cancel", «այո», «ոչ») in English or Armenian. A longer request, or one
+	 * with words beyond a confirmation, is None. Any refusal word makes it No. Local only: the online model never decides this.
+	 */
+	MODULARSCENEBUILDER_API EStageAIConfirmation ParseConfirmation(const FString& Text);
+
+	/** What a listing reference found in the current results. */
+	struct FStageAIListingMatch
+	{
+		/** Index into the results, or INDEX_NONE. */
+		int32 Index = INDEX_NONE;
+		/** A title matched several listings (their indices); Index is then INDEX_NONE. */
+		TArray<int32> Ambiguous;
+	};
+
+	/**
+	 * The listing Ref names in Listings: by number (1-based), by title (every word of Ref.Title is a word of the title, or the whole
+	 * title equals it), or the last one talked about (LastListing). A reference to the last listing when there is none, but only one
+	 * result, means that result.
+	 */
+	MODULARSCENEBUILDER_API FStageAIListingMatch ResolveListing(TConstArrayView<FStageAISceneView::FListing> Listings, const FStageAIListingRef& Ref, const FGuid& LastListing);
+
 	/**
 	 * Plan positions (X, Y in cm) for Count added fixtures: a row along Y, FixtureRowSpacing apart and centred on Y = 0, at X = 0
 	 * on an empty stage or FixtureRowGap beyond (towards -X) the lowest X of the items already placed, snapped to FixtureRowGrid.
@@ -103,4 +134,26 @@ namespace StageAIAnswers
 
 	/** The weather preset's lowercase name ("rain") in Language. */
 	MODULARSCENEBUILDER_API FText DescribeWeather(EStageWeatherPreset Preset, EStageAILanguage Language = EStageAILanguage::English);
+
+	// The community marketplace (Docs/ADR/0021 §13), in StageAIMarketplaceAnswers.cpp.
+
+	/** Most results a search answer lists; the Marketplace window shows the whole page. */
+	constexpr int32 MaxListedListings = 8;
+
+	/** The answer to a search: how many match, then the first MaxListedListings by number with their price or ownership. */
+	MODULARSCENEBUILDER_API FText DescribeMarketplaceResults(const FStageAISceneView& Scene, EStageAILanguage Language);
+
+	/** One listing: title, author, kind, category, contents, downloads, size, price or ownership, and its description. */
+	MODULARSCENEBUILDER_API FText DescribeListingDetails(const FStageAISceneView::FListing& Listing, int32 Number, EStageAILanguage Language);
+
+	/** "Buy "X" by Y for N credits? You have M. Say yes to buy it or no to cancel." */
+	MODULARSCENEBUILDER_API FText DescribePurchaseOffer(const FStageMarketplaceListing& Listing, int64 Credits, EStageAILanguage Language);
+
+	/** Why a listing reference found nothing (no results yet, no such number, no title match, several matches). */
+	MODULARSCENEBUILDER_API FText DescribeListingNotFound(const FStageAISceneView& Scene, const FStageAIListingRef& Ref, const StageAICommandParser::FStageAIListingMatch& Match,
+		EStageAILanguage Language);
+
+	/** The listing's kind ("stage design") and category ("festival") in Language. */
+	MODULARSCENEBUILDER_API FText DescribeListingKind(EStagePackageKind Kind, EStageAILanguage Language);
+	MODULARSCENEBUILDER_API FText DescribeListingCategory(const FGameplayTag& Category, EStageAILanguage Language);
 }

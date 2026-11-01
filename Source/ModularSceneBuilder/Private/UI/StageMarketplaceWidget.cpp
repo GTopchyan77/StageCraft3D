@@ -40,8 +40,8 @@
 
 namespace StageMarketplacePanel
 {
-	/** Cards per page: short enough that a page needs no list virtualization. */
-	constexpr int32 PageSize = 24;
+	/** Cards per page: short enough that a page needs no list virtualization; the assistant counts results on the same page. */
+	constexpr int32 PageSize = FStageMarketplaceQuery::BrowsePageSize;
 	constexpr float GroupGap = 14.f;
 	constexpr float FilterColumnWidth = 420.f;
 	/** Degrees per dragged pixel. */
@@ -511,6 +511,8 @@ void UStageMarketplaceWidget::NativeConstruct()
 	CategoryCombo->OnSelectionChanged.AddUniqueDynamic(this, &ThisClass::HandleCategoryChanged);
 	SortCombo->OnSelectionChanged.AddUniqueDynamic(this, &ThisClass::HandleSortChanged);
 
+	// Reopened after an assistant search (or an earlier visit): show the same results, refreshed.
+	AdoptAnsweredQuery();
 	RefreshHeader();
 	RefreshFilters();
 	RefreshSceneChoices();
@@ -574,6 +576,23 @@ void UStageMarketplaceWidget::RunQuery()
 	}
 }
 
+void UStageMarketplaceWidget::AdoptAnsweredQuery()
+{
+	const UStageMarketplaceSubsystem* Marketplace = GetMarketplace();
+	if (!Marketplace)
+	{
+		return;
+	}
+	Query = Marketplace->GetAnsweredQuery();
+	Query.Limit = StageMarketplacePanel::PageSize;
+	SearchField->SetText(FText::FromString(Query.SearchText));
+	// Set from code (ESelectInfo::Direct): the handlers ignore it, so this starts no query.
+	CategoryCombo->SetSelectedIndex(StageMarketplacePanel::Categories().IndexOfByKey(Query.Category) + 1);
+	const int32 SortIndex = MakeArrayView(StageMarketplacePanel::Sorts).IndexOfByKey(Query.Sort);
+	SortCombo->SetSelectedIndex(FMath::Max(SortIndex, 0));
+	RefreshFilters();
+}
+
 void UStageMarketplaceWidget::RebuildCards()
 {
 	using namespace StageCraftWidgetStyle;
@@ -616,9 +635,12 @@ void UStageMarketplaceWidget::RebuildCards()
 
 	const int32 Total = Marketplace ? Marketplace->GetTotalMatches() : 0;
 	const int32 First = ShownListings.IsEmpty() ? 0 : Query.Offset + 1;
-	ResultsText->SetText(Total == 0
+	const FText Results = Total == 0
 		? LOCTEXT("NoResults", "No listings match. Publish one, or loosen the filters.")
-		: FText::Format(LOCTEXT("Results", "{0}-{1} of {2} listings"), First, Query.Offset + ShownListings.Num(), Total));
+		: FText::Format(LOCTEXT("Results", "{0}-{1} of {2} listings"), First, Query.Offset + ShownListings.Num(), Total);
+	ResultsText->SetText(Query.MaxCredits > 0
+		? FText::Format(LOCTEXT("ResultsMaxCredits", "{0}  ·  up to {1} credits"), Results, FText::AsNumber(Query.MaxCredits))
+		: Results);
 	PagingButtons[0]->SetIsEnabled(Query.Offset > 0);
 	PagingButtons[1]->SetIsEnabled(Query.Offset + ShownListings.Num() < Total);
 	RefreshCardStyles();
@@ -762,6 +784,8 @@ void UStageMarketplaceWidget::HandleKindPicked(int32 Index)
 void UStageMarketplaceWidget::HandlePricePicked(int32 Index)
 {
 	Query.PriceFilter = static_cast<EStageMarketplacePriceFilter>(FMath::Clamp(Index, 0, 2));
+	// A price limit set by the assistant has no chip; picking a price filter replaces it.
+	Query.MaxCredits = 0;
 	Query.Offset = 0;
 	RefreshFilters();
 	RunQuery();
@@ -780,6 +804,10 @@ void UStageMarketplaceWidget::HandleSearchCommitted(const FText& Text, ETextComm
 
 void UStageMarketplaceWidget::HandleCategoryChanged(FString SelectedItem, ESelectInfo::Type SelectionType)
 {
+	if (SelectionType == ESelectInfo::Direct)
+	{
+		return;
+	}
 	const int32 Index = CategoryCombo->GetSelectedIndex();
 	const TArray<FGameplayTag>& Categories = StageMarketplacePanel::Categories();
 	Query.Category = Categories.IsValidIndex(Index - 1) ? Categories[Index - 1] : FGameplayTag();
@@ -789,6 +817,10 @@ void UStageMarketplaceWidget::HandleCategoryChanged(FString SelectedItem, ESelec
 
 void UStageMarketplaceWidget::HandleSortChanged(FString SelectedItem, ESelectInfo::Type SelectionType)
 {
+	if (SelectionType == ESelectInfo::Direct)
+	{
+		return;
+	}
 	const int32 Index = SortCombo->GetSelectedIndex();
 	Query.Sort = StageMarketplacePanel::Sorts[FMath::Clamp(Index, 0, int32(UE_ARRAY_COUNT(StageMarketplacePanel::Sorts)) - 1)];
 	Query.Offset = 0;
@@ -865,6 +897,11 @@ void UStageMarketplaceWidget::HandleListingsUpdated(FStageMarketplaceResultInfo 
 	if (!Result.IsSuccess())
 	{
 		ShowStatus(Result.Message, true);
+	}
+	else
+	{
+		// The answer may be to the assistant's query (ADR 0021 §13.5): the filters show what the cards are.
+		AdoptAnsweredQuery();
 	}
 	RebuildCards();
 }

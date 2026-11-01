@@ -207,7 +207,8 @@ void UStageMarketplaceSubsystem::RequestQuery(const FStageMarketplaceQuery& Quer
 	}
 	const uint32 Serial = ++QuerySerial;
 	bQueryInFlight = true;
-	Backend->Query(StageMarketplaceRules::SanitizeQuery(Query), FOnStageMarketplaceQueried::CreateUObject(this, &ThisClass::HandleQueried, Serial));
+	RequestedQuery = StageMarketplaceRules::SanitizeQuery(Query);
+	Backend->Query(RequestedQuery, FOnStageMarketplaceQueried::CreateUObject(this, &ThisClass::HandleQueried, Serial));
 }
 
 void UStageMarketplaceSubsystem::HandleQueried(EStageMarketplaceResult Result, const FStageMarketplaceQueryResult& Page, uint32 Serial)
@@ -221,6 +222,7 @@ void UStageMarketplaceSubsystem::HandleQueried(EStageMarketplaceResult Result, c
 	{
 		Listings = Page.Listings;
 		TotalMatches = Page.TotalMatches;
+		AnsweredQuery = RequestedQuery;
 	}
 	UE_LOG(LogStageCraft, Log, TEXT("Marketplace query: %s, %d of %d listings."), *UEnum::GetValueAsString(Result), Listings.Num(), TotalMatches);
 	OnListingsUpdated.Broadcast(StageMarketplace::Info(Result));

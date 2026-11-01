@@ -4,7 +4,9 @@
 
 #include "CoreMinimal.h"
 #include "AI/StageAILanguage.h"
+#include "Economy/StageEconomyTypes.h"
 #include "Environment/StageEnvironmentTypes.h"
+#include "Marketplace/StageMarketplaceTypes.h"
 #include "StageAITypes.generated.h"
 
 /**
@@ -48,6 +50,16 @@ enum class EStageAIIntent : uint8
 	BuildShape,
 	/** Fixture controls (FixtureSettings) on the targeted fixtures (Docs/ADR/0020 §7). */
 	SetFixture,
+
+	// The community marketplace (Docs/ADR/0021 §13). Listings are named by Listing, against the marketplace's current results.
+	/** Browses the marketplace (MarketplaceQuery); the answer lists the results by number. */
+	SearchMarketplace,
+	/** A question: one listing's details. */
+	ListingDetails,
+	/** The read-only 3D preview of a listing, in the Marketplace window. */
+	PreviewListing,
+	/** Gets a listing: imports it as a saved scene; a paid one is bought after a confirmation turn. */
+	AcquireListing,
 
 	/** A stage operation the assistant deliberately does not run (clearing the whole stage, open, save): it answers where to find it. */
 	Unsupported,
@@ -135,6 +147,25 @@ struct MODULARSCENEBUILDER_API FStageAIFixtureSetting
 	FLinearColor Color = FLinearColor::White;
 };
 
+/** Which listing of the marketplace's current results a command means (Docs/ADR/0021 §13.2). */
+struct MODULARSCENEBUILDER_API FStageAIListingRef
+{
+	/** 1-based position in the results ("number 2", "the second one"); 0 = not given. */
+	int32 Number = 0;
+
+	/** Words of its title ("festival rig"). */
+	FString Title;
+
+	/** Neither given ("buy it", "preview this"): the listing the conversation last talked about. */
+	bool bLast = false;
+
+	/**
+	 * The resolved listing. Set only by UStageAICommandSubsystem after validation (StageAICommandSchema::Validate clears it), so no
+	 * interpreter can name a listing that is not in the results.
+	 */
+	FGuid Id;
+};
+
 /**
  * One interpreted request. Only the fields of its intent are meaningful; an unset optional means "the default" (one fixture,
  * the next free cue number, the default fade, the item's default size).
@@ -199,6 +230,18 @@ struct MODULARSCENEBUILDER_API FStageAICommand
 
 	/** Export. */
 	EStageAIReport Report = EStageAIReport::All;
+
+	/** SearchMarketplace: what to browse (sanitized by Validate; always the first page). */
+	FStageMarketplaceQuery MarketplaceQuery;
+
+	/** ListingDetails, PreviewListing, AcquireListing. */
+	FStageAIListingRef Listing;
+
+	/**
+	 * AcquireListing: the credits price the user agreed to in a confirmation turn. Set only by UStageAICommandSubsystem when it reads
+	 * a "yes" (Validate clears it): no interpreter can confirm a purchase.
+	 */
+	TOptional<int64> ConfirmedCredits;
 
 	/** The language the reply is written in: the prompt's (StageAILanguage::Detect), or the online model's reply_language. */
 	EStageAILanguage Language = EStageAILanguage::English;
@@ -265,11 +308,23 @@ struct FStageAIInterpretation
 	static FStageAIInterpretation MakeReply(const FText& InReply, EStageAIOutcome InOutcome = EStageAIOutcome::Info);
 };
 
+/** A paid listing the assistant offered to buy; the user's next prompt confirms or declines it (Docs/ADR/0021 §13.3). */
+struct FStageAIPurchaseOffer
+{
+	FGuid ListingId;
+	int64 Credits = 0;
+	FString Title;
+	EStageAILanguage Language = EStageAILanguage::English;
+};
+
 /** How running one action ended, as the conversation reports it. */
 struct FStageAIActionOutcome
 {
 	EStageAIOutcome Outcome = EStageAIOutcome::Refused;
 	FText Message;
+
+	/** AcquireListing of a paid listing: the offer the reply asks the user to confirm. Nothing was bought. */
+	TOptional<FStageAIPurchaseOffer> PurchaseOffer;
 
 	static FStageAIActionOutcome Make(EStageAIOutcome InOutcome, const FText& InMessage)
 	{
@@ -317,6 +372,20 @@ struct FStageAISceneView
 	bool bHasEnvironment = false;
 	bool bSkyAvailable = false;
 	FStageEnvironmentSettings Environment;
+
+	/** The marketplace's current results (the panel's cards), with the player's ownership of each (Docs/ADR/0021 §13.2). */
+	struct FListing
+	{
+		FStageMarketplaceListing Listing;
+		EStageOwnershipState Ownership = EStageOwnershipState::Locked;
+	};
+	TArray<FListing> Listings;
+	/** Matches of that query before paging. */
+	int32 ListingMatches = 0;
+	/** The listing the conversation last talked about ("buy it"); invalid for none. */
+	FGuid LastListing;
+	/** The player's credits. */
+	int64 Credits = 0;
 
 	int32 GetFixtureCount() const;
 };

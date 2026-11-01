@@ -199,6 +199,10 @@ struct MODULARSCENEBUILDER_API FStageMarketplaceQuery
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Marketplace")
 	EStageMarketplacePriceFilter PriceFilter = EStageMarketplacePriceFilter::Any;
 
+	/** Highest credits price shown; 0 = no limit. Real-money listings never pass a limit (the two prices cannot be compared). */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Marketplace", meta = (ClampMin = "0"))
+	int64 MaxCredits = 0;
+
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Marketplace")
 	EStageMarketplaceSort Sort = EStageMarketplaceSort::Popular;
 
@@ -212,6 +216,8 @@ struct MODULARSCENEBUILDER_API FStageMarketplaceQuery
 
 	static constexpr int32 MaxPageSize = 200;
 	static constexpr int32 MaxSearchTextLength = 128;
+	/** The page the Marketplace panel and the assistant browse, so "number 12" is the same listing in both (ADR 0021 §13.1). */
+	static constexpr int32 BrowsePageSize = 24;
 };
 
 /** One page of query results. */

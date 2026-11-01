@@ -17,6 +17,20 @@ DECLARE_DYNAMIC_MULTICAST_DELEGATE(FOnStageAIConversationChanged);
  */
 DECLARE_DELEGATE_RetVal_OneParam(FStageAIActionOutcome, FStageAICommandExecutor, const FStageAICommand& /*Command*/);
 
+/** A marketplace answer an action waits for (Docs/ADR/0021 §13.4). */
+enum class EStageAIMarketplaceEvent : uint8
+{
+	/** The next query answer, whoever asked. */
+	Query,
+	/** The next preview answer, whichever listing (only the newest preview is ever answered). */
+	Preview,
+	/** The acquisition of the awaited listing. */
+	Acquire,
+};
+
+/** The awaited marketplace answer: the listing it is about (Preview, Acquire), the result, and the imported scene's name (Acquire). */
+DECLARE_DELEGATE_ThreeParams(FOnStageAIMarketplaceAnswer, const FGuid& /*ListingId*/, const FStageMarketplaceResultInfo& /*Result*/, const FString& /*SceneName*/);
+
 /** What the assistant is doing. One prompt at a time. */
 UENUM(BlueprintType)
 enum class EStageAIAssistantState : uint8
@@ -41,6 +55,8 @@ enum class EStageAIAssistantState : uint8
  *    (StageAICommandSchema::Validate), whichever interpreter produced it.
  *  - One prompt in flight at a time (IsBusy); a second is refused, not queued. The online request and any asset load are
  *    cancelled in Deinitialize.
+ *  - Marketplace (Docs/ADR/0021 §13): listing references are resolved here, against the marketplace's current results. A paid
+ *    listing is bought only after the next prompt says yes, read locally (ParseConfirmation), never by the online model.
  *
  * Game and PIE worlds only. Never ticks and never iterates the world.
  */
@@ -81,6 +97,19 @@ public:
 	bool RequestItemAssets(TConstArrayView<const class UBaseItemData*> Items, FSimpleDelegate OnReady);
 	bool RequestItemAssets(const class UBaseItemData& Item, FSimpleDelegate OnReady);
 
+	/**
+	 * Waits for the marketplace's next Event answer for a pending action and hands it to OnAnswer, once (Docs/ADR/0021 §13.4). Call it
+	 * before starting the request: a refusal can be broadcast inside the request call. False unless an action is in progress and no
+	 * other wait is running. The marketplace delegates are bound only while waiting.
+	 */
+	bool AwaitMarketplace(EStageAIMarketplaceEvent Event, const FGuid& ListingId, FOnStageAIMarketplaceAnswer OnAnswer);
+
+	/** Ends a wait without an answer (the request was refused before it started). */
+	void CancelMarketplaceWait();
+
+	/** The paid listing the last answer offered to buy, if the next prompt has not answered it yet. */
+	const TOptional<FStageAIPurchaseOffer>& GetPurchaseOffer() const { return PurchaseOffer; }
+
 	/** Empties the conversation. Ignored while busy. */
 	void ClearConversation();
 
@@ -107,6 +136,24 @@ private:
 
 	FStageAIInterpretation InterpretLocally(const FString& Prompt) const;
 	void Respond(const FStageAIInterpretation& Interpretation);
+	/** Runs a validated action through the asking player's executor and reports it; keeps a purchase offer it returns. */
+	void RunAction(const FStageAICommand& Command, const FText& Note);
+
+	/** A "yes" or "no" to PurchaseOffer, read locally (Docs/ADR/0021 §13.3); false when Prompt is neither (the offer is dropped). */
+	bool AnswerPurchaseOffer(const FString& Prompt, FStageAICommandExecutor& Executor, TArray<FString>& SelectedItemNames);
+
+	/** Fills Command.Listing.Id from its reference and the marketplace's current results; false with the reason when none matches. */
+	bool ResolveListing(FStageAICommand& Command, FText& OutError);
+
+	class UStageMarketplaceSubsystem* GetMarketplace() const;
+	void AnswerMarketplace(EStageAIMarketplaceEvent Event, const FGuid& ListingId, const FStageMarketplaceResultInfo& Result, const FString& SceneName);
+	void StopMarketplaceWait();
+
+	UFUNCTION()
+	void HandleMarketplaceListings(FStageMarketplaceResultInfo Result);
+
+	UFUNCTION()
+	void HandleMarketplaceAcquired(FGuid ListingId, FStageMarketplaceResultInfo Result, const FString& SceneName);
 	void HandleItemAssetsLoaded();
 
 	/** Note appended to the next answer ("answered offline because ..."), then cleared. */
@@ -130,4 +177,21 @@ private:
 
 	TSharedPtr<struct FStreamableHandle> LoadHandle;
 	FSimpleDelegate PendingAssetsCallback;
+
+	/** The paid listing offered for a "yes" in the next prompt; dropped by any other prompt. */
+	TOptional<FStageAIPurchaseOffer> PurchaseOffer;
+
+	/** The listing the conversation last talked about ("buy it"). */
+	FGuid LastListing;
+
+	/** The marketplace answer a pending action waits for, and the marketplace bound for it. */
+	struct FMarketplaceWait
+	{
+		EStageAIMarketplaceEvent Event = EStageAIMarketplaceEvent::Query;
+		FGuid ListingId;
+		FOnStageAIMarketplaceAnswer OnAnswer;
+	};
+	TOptional<FMarketplaceWait> MarketplaceWait;
+	TWeakObjectPtr<class UStageMarketplaceSubsystem> WaitingMarketplace;
+	FDelegateHandle PreviewReadyHandle;
 };

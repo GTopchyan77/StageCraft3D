@@ -16,6 +16,7 @@ bool FStageAICommand::IsQuestion() const
 	case EStageAIIntent::CountMatching:
 	case EStageAIIntent::ListCues:
 	case EStageAIIntent::EnvironmentStatus:
+	case EStageAIIntent::ListingDetails:
 		return true;
 	default:
 		return false;
@@ -42,6 +43,10 @@ bool FStageAICommand::IsAction() const
 	case EStageAIIntent::ReplaceItems:
 	case EStageAIIntent::BuildShape:
 	case EStageAIIntent::SetFixture:
+	// Marketplace requests change no stage, but they run through the player's executor like every request that changes state.
+	case EStageAIIntent::SearchMarketplace:
+	case EStageAIIntent::PreviewListing:
+	case EStageAIIntent::AcquireListing:
 		return true;
 	default:
 		return false;

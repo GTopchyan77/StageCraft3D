@@ -1461,6 +1461,339 @@ namespace StageAICommandParser
 			return Command;
 		}
 
+		// --- The community marketplace (Docs/ADR/0021 §13) ---
+
+		bool IsMarketplaceWord(const FString& Word)
+		{
+			return IsOneOf(Singular(Word), { TEXT("marketplace"), TEXT("market"), TEXT("community"), TEXT("listing") });
+		}
+
+		/** Words that point at a position in the results ("number 2", "listing 2", "result 2"). */
+		bool IsPositionWord(const FString& Word)
+		{
+			return IsOneOf(Singular(Word), { TEXT("number"), TEXT("no"), TEXT("listing"), TEXT("result"), TEXT("option"), TEXT("card") });
+		}
+
+		/** "first" .. "tenth", "1st", "2nd", "3rd", "4th": a 1-based position. */
+		TOptional<int32> ParseOrdinal(const FString& Word)
+		{
+			static const TCHAR* const Ordinals[] = { TEXT("first"), TEXT("second"), TEXT("third"), TEXT("fourth"), TEXT("fifth"), TEXT("sixth"),
+				TEXT("seventh"), TEXT("eighth"), TEXT("ninth"), TEXT("tenth") };
+			for (int32 Index = 0; Index < UE_ARRAY_COUNT(Ordinals); ++Index)
+			{
+				if (Word == Ordinals[Index])
+				{
+					return Index + 1;
+				}
+			}
+			int32 Digits = 0;
+			while (Digits < Word.Len() && FChar::IsDigit(Word[Digits]))
+			{
+				++Digits;
+			}
+			if (Digits > 0 && IsOneOf(Word.Mid(Digits), { TEXT("st"), TEXT("nd"), TEXT("rd"), TEXT("th") }))
+			{
+				return FCString::Atoi(*Word.Left(Digits));
+			}
+			return {};
+		}
+
+		/** A whole number written as digits ("2"), not a word: "that one" names no position. */
+		TOptional<int32> ParseDigits(const FString& Word)
+		{
+			if (Word.IsEmpty() || !Word.IsNumeric() || Word.Contains(TEXT(".")) || Word.Len() > 4)
+			{
+				return {};
+			}
+			return FCString::Atoi(*Word);
+		}
+
+		/** The text between the first pair of quotes ("...", «...», “...”), trimmed; empty for none. */
+		FString FindQuoted(const FString& Raw)
+		{
+			static const TCHAR Pairs[][2] = { { TEXT('"'), TEXT('"') }, { TCHAR(0x00AB), TCHAR(0x00BB) }, { TCHAR(0x201C), TCHAR(0x201D) } };
+			for (const TCHAR* Pair : Pairs)
+			{
+				const int32 Open = Raw.Find(FString::Chr(Pair[0]));
+				const int32 Close = Open == INDEX_NONE ? INDEX_NONE : Raw.Find(FString::Chr(Pair[1]), ESearchCase::CaseSensitive, ESearchDir::FromStart, Open + 1);
+				if (Close != INDEX_NONE)
+				{
+					return Raw.Mid(Open + 1, Close - Open - 1).TrimStartAndEnd();
+				}
+			}
+			return FString();
+		}
+
+		/**
+		 * The prompt points at one listing in a way nothing else in the grammar does: a quoted title, a position word with a number
+		 * ("number 2"), or an ordinal before "one" or a position word, or ending the prompt after "the" ("the second one", "preview the third").
+		 */
+		bool HasListingReference(const FPrompt& Prompt)
+		{
+			if (!FindQuoted(Prompt.Raw).IsEmpty())
+			{
+				return true;
+			}
+			for (int32 Index = 0; Index < Prompt.Words.Num(); ++Index)
+			{
+				const bool bLastWord = Index + 1 == Prompt.Words.Num();
+				if (IsPositionWord(Prompt.Words[Index]) && !bLastWord && ParseNumber(Prompt.Words[Index + 1]).IsSet())
+				{
+					return true;
+				}
+				// "preview the third" ends on its ordinal; "newest first" does not name a listing.
+				const bool bAfterThe = Index > 0 && Prompt.Words[Index - 1] == TEXT("the");
+				if (ParseOrdinal(Prompt.Words[Index]).IsSet() && ((bLastWord && bAfterThe) || (!bLastWord && (Prompt.Words[Index + 1] == TEXT("one") || IsPositionWord(Prompt.Words[Index + 1])))))
+				{
+					return true;
+				}
+			}
+			return false;
+		}
+
+		bool IsListingFiller(const FString& Word)
+		{
+			return IsMarketplaceWord(Word) || IsPositionWord(Word) || IsOneOf(Word, { TEXT("the"), TEXT("a"), TEXT("an"), TEXT("this"), TEXT("that"),
+				TEXT("these"), TEXT("those"), TEXT("one"), TEXT("it"), TEXT("its"), TEXT("please"), TEXT("me"), TEXT("us"), TEXT("for"), TEXT("from"),
+				TEXT("in"), TEXT("on"), TEXT("of"), TEXT("to"), TEXT("at"), TEXT("my"), TEXT("our"), TEXT("i"), TEXT("we"), TEXT("you"), TEXT("can"),
+				TEXT("could"), TEXT("would"), TEXT("will"), TEXT("want"), TEXT("like"), TEXT("let"), TEXT("lets"), TEXT("see"), TEXT("show"),
+				TEXT("give"), TEXT("tell"), TEXT("about"), TEXT("more"), TEXT("some"), TEXT("now"), TEXT("also"), TEXT("then"), TEXT("and"),
+				TEXT("with"), TEXT("credit"), TEXT("credits"), TEXT("3d"), TEXT("view"), TEXT("look"), TEXT("details"), TEXT("detail"), TEXT("info"),
+				TEXT("information"), TEXT("describe"), TEXT("preview"), TEXT("buy"), TEXT("purchase"), TEXT("acquire"), TEXT("get"),
+				TEXT("download"), TEXT("import"), TEXT("again"), TEXT("just"), TEXT("what"), TEXT("whats"), TEXT("is"), TEXT("are"), TEXT("which"),
+				TEXT("how"), TEXT("much"), TEXT("does"), TEXT("do"), TEXT("cost"), TEXT("costs"), TEXT("price"), TEXT("go"), TEXT("ahead") });
+		}
+
+		/**
+		 * The listing a request names: a quoted title; else a number after a position word, an ordinal, or a lone whole number; else
+		 * the words that are not request words, as title words. Nothing at all ("buy it") is the listing last talked about.
+		 */
+		FStageAIListingRef ReadListingRef(const FPrompt& Prompt)
+		{
+			FStageAIListingRef Ref;
+			Ref.Title = FindQuoted(Prompt.Raw);
+			if (!Ref.Title.IsEmpty())
+			{
+				return Ref;
+			}
+			TArray<FString> TitleWords;
+			for (int32 Index = 0; Index < Prompt.Words.Num(); ++Index)
+			{
+				const FString& Word = Prompt.Words[Index];
+				if (IsPositionWord(Word) && Index + 1 < Prompt.Words.Num())
+				{
+					if (const TOptional<double> Number = ParseNumber(Prompt.Words[Index + 1]))
+					{
+						Ref.Number = Ref.Number > 0 ? Ref.Number : int32(*Number);
+						++Index;
+						continue;
+					}
+				}
+				const TOptional<int32> Position = ParseOrdinal(Word).IsSet() ? ParseOrdinal(Word) : ParseDigits(Word);
+				if (Position.IsSet())
+				{
+					Ref.Number = Ref.Number > 0 ? Ref.Number : *Position;
+					continue;
+				}
+				if (!IsListingFiller(Word))
+				{
+					TitleWords.Add(Word);
+				}
+			}
+			if (Ref.Number == 0)
+			{
+				Ref.Title = FString::Join(TitleWords, TEXT(" "));
+			}
+			Ref.bLast = Ref.Number == 0 && Ref.Title.IsEmpty();
+			return Ref;
+		}
+
+		bool IsSearchFiller(const FString& Word)
+		{
+			return IsMarketplaceWord(Word) || IsOneOf(Word, { TEXT("find"), TEXT("search"), TEXT("searching"), TEXT("look"), TEXT("looking"),
+				TEXT("browse"), TEXT("show"), TEXT("list"), TEXT("me"), TEXT("us"), TEXT("for"), TEXT("the"), TEXT("a"), TEXT("an"), TEXT("any"),
+				TEXT("some"), TEXT("all"), TEXT("in"), TEXT("on"), TEXT("at"), TEXT("from"), TEXT("of"), TEXT("with"), TEXT("what"), TEXT("whats"),
+				TEXT("is"), TEXT("are"), TEXT("there"), TEXT("do"), TEXT("does"), TEXT("you"), TEXT("have"), TEXT("has"), TEXT("got"), TEXT("which"),
+				TEXT("please"), TEXT("can"), TEXT("could"), TEXT("i"), TEXT("we"), TEXT("get"), TEXT("see"), TEXT("available"), TEXT("sorted"),
+				TEXT("sort"), TEXT("by"), TEXT("first"), TEXT("credit"), TEXT("credits"), TEXT("cost"), TEXT("costs"), TEXT("costing"), TEXT("price"),
+				TEXT("priced"), TEXT("and"), TEXT("or"), TEXT("to"), TEXT("that"), TEXT("one"), TEXT("ones"), TEXT("kind"), TEXT("type"),
+				TEXT("category"), TEXT("package"), TEXT("something"), TEXT("anything"), TEXT("new") });
+		}
+
+		/** Search words, filters and order of a marketplace search ("free festival stages under 200 credits, newest first"). */
+		FStageMarketplaceQuery ReadMarketplaceQuery(const FPrompt& Prompt)
+		{
+			FStageMarketplaceQuery Query;
+			Query.Limit = FStageMarketplaceQuery::BrowsePageSize;
+			TArray<FString> TextWords;
+			const TArray<FString>& Words = Prompt.Words;
+			for (int32 Index = 0; Index < Words.Num(); ++Index)
+			{
+				const FString& Word = Words[Index];
+				const FString One = Singular(Word);
+				const FString Next = Index + 1 < Words.Num() ? Words[Index + 1] : FString();
+
+				// A price limit: "under 200", "below 200", "max 200", "up to 200", "less than 200", "cheaper than 200".
+				int32 NumberAt = INDEX_NONE;
+				if (IsOneOf(Word, { TEXT("under"), TEXT("below"), TEXT("max"), TEXT("maximum"), TEXT("within") }))
+				{
+					NumberAt = Index + 1;
+				}
+				else if ((Word == TEXT("up") && Next == TEXT("to")) || (IsOneOf(Word, { TEXT("less"), TEXT("cheaper"), TEXT("lower") }) && Next == TEXT("than")))
+				{
+					NumberAt = Index + 2;
+				}
+				if (NumberAt != INDEX_NONE && Words.IsValidIndex(NumberAt))
+				{
+					if (const TOptional<double> Limit = ParseNumber(Words[NumberAt]))
+					{
+						Query.MaxCredits = int64(FMath::Max(FMath::RoundToDouble(*Limit), 0.0));
+						Index = NumberAt;
+						continue;
+					}
+				}
+
+				if (One == TEXT("free"))
+				{
+					Query.PriceFilter = EStageMarketplacePriceFilter::Free;
+				}
+				else if (One == TEXT("paid"))
+				{
+					Query.PriceFilter = EStageMarketplacePriceFilter::Paid;
+				}
+				else if (IsOneOf(One, { TEXT("stage"), TEXT("design") }))
+				{
+					Query.Kinds.AddUnique(EStagePackageKind::StageDesign);
+				}
+				else if (IsOneOf(One, { TEXT("rig"), TEXT("lighting") }))
+				{
+					Query.Kinds.AddUnique(EStagePackageKind::LightingRig);
+				}
+				else if (One == TEXT("cue"))
+				{
+					Query.Kinds.AddUnique(EStagePackageKind::CueList);
+					Index += Next == TEXT("list") || Next == TEXT("lists") ? 1 : 0;
+				}
+				else if (One == TEXT("concert"))
+				{
+					Query.Category = StageCraftTags::Marketplace_Category_Concert;
+				}
+				else if (One == TEXT("festival"))
+				{
+					Query.Category = StageCraftTags::Marketplace_Category_Festival;
+				}
+				else if (IsOneOf(One, { TEXT("theatre"), TEXT("theater"), TEXT("theatrical") }))
+				{
+					Query.Category = StageCraftTags::Marketplace_Category_Theatre;
+				}
+				else if (One == TEXT("corporate"))
+				{
+					Query.Category = StageCraftTags::Marketplace_Category_Corporate;
+				}
+				else if (One == TEXT("club"))
+				{
+					Query.Category = StageCraftTags::Marketplace_Category_Club;
+				}
+				else if (IsOneOf(One, { TEXT("broadcast"), TEXT("tv"), TEXT("studio") }))
+				{
+					Query.Category = StageCraftTags::Marketplace_Category_Broadcast;
+				}
+				else if (IsOneOf(One, { TEXT("worship"), TEXT("church") }))
+				{
+					Query.Category = StageCraftTags::Marketplace_Category_Worship;
+				}
+				else if (IsOneOf(Word, { TEXT("newest"), TEXT("latest"), TEXT("recent"), TEXT("newer") }))
+				{
+					Query.Sort = EStageMarketplaceSort::Newest;
+				}
+				else if (IsOneOf(Word, { TEXT("cheapest"), TEXT("cheap"), TEXT("cheaper"), TEXT("lowest") }))
+				{
+					Query.Sort = EStageMarketplaceSort::PriceLowToHigh;
+				}
+				else if (IsOneOf(Word, { TEXT("expensive"), TEXT("priciest"), TEXT("highest") }))
+				{
+					Query.Sort = EStageMarketplaceSort::PriceHighToLow;
+				}
+				else if (IsOneOf(Word, { TEXT("popular"), TEXT("top"), TEXT("best"), TEXT("downloaded") }))
+				{
+					Query.Sort = EStageMarketplaceSort::Popular;
+				}
+				else if (IsOneOf(Word, { TEXT("alphabetical"), TEXT("alphabetically"), TEXT("title") }))
+				{
+					Query.Sort = EStageMarketplaceSort::Title;
+				}
+				else if (IsOneOf(Word, { TEXT("most"), TEXT("least") }) || IsSearchFiller(Word) || ParseNumber(Word).IsSet())
+				{
+					continue;
+				}
+				else
+				{
+					TextWords.Add(Word);
+				}
+			}
+			Query.SearchText = FString::Join(TextWords, TEXT(" "));
+			return Query;
+		}
+
+		/**
+		 * Marketplace requests. Read before every other rule, but only when they cannot be anything else: "preview", "buy" and
+		 * "purchase" are only marketplace words; "get", "download" and "import" need a marketplace word or a listing reference; details
+		 * need either, or a listing number; and cue words without a marketplace word stay cue commands.
+		 */
+		TOptional<FStageAICommand> ParseMarketplace(const FPrompt& Prompt)
+		{
+			const bool bMarketWords = Algo::AnyOf(Prompt.Words, [](const FString& Word) { return IsMarketplaceWord(Word); });
+			if (!bMarketWords && Prompt.HasAny({ TEXT("cue"), TEXT("cues") }))
+			{
+				return {};
+			}
+			const bool bReference = HasListingReference(Prompt);
+			const bool bNumber = Algo::AnyOf(Prompt.Words, [](const FString& Word) { return ParseDigits(Word).IsSet(); });
+			const bool bPreview = Prompt.Has(TEXT("preview")) || (Prompt.Has(TEXT("3d")) && Prompt.HasAny({ TEXT("show"), TEXT("view"), TEXT("see"), TEXT("look") }));
+			const bool bBuy = Prompt.HasAny({ TEXT("buy"), TEXT("purchase"), TEXT("acquire") });
+			// "get rid of" is a delete.
+			const bool bFetch = Prompt.HasAny({ TEXT("get"), TEXT("download"), TEXT("import") }) && !Prompt.Has(TEXT("rid"));
+			const bool bDetailWord = Prompt.HasAny({ TEXT("details"), TEXT("detail"), TEXT("describe"), TEXT("info"), TEXT("information") });
+			// "about" and "how much" also appear in other requests ("move it about 2 m"): only with a marketplace word or a clear reference.
+			const bool bAbout = Prompt.Has(TEXT("about")) || (Prompt.bQuestion && Prompt.HasAny({ TEXT("cost"), TEXT("costs"), TEXT("price") }));
+
+			// "don't buy it" asks for nothing.
+			if ((bBuy || bFetch) && Prompt.HasAny({ TEXT("dont"), TEXT("not"), TEXT("never") }))
+			{
+				return {};
+			}
+
+			FStageAICommand Command;
+			if (bPreview)
+			{
+				Command.Intent = EStageAIIntent::PreviewListing;
+			}
+			else if (bBuy || (bFetch && (bMarketWords || bReference)))
+			{
+				Command.Intent = EStageAIIntent::AcquireListing;
+			}
+			else if ((bDetailWord && (bMarketWords || bReference || bNumber)) || (bAbout && (bMarketWords || bReference)))
+			{
+				Command.Intent = EStageAIIntent::ListingDetails;
+			}
+			else if (bMarketWords && bReference)
+			{
+				Command.Intent = EStageAIIntent::ListingDetails;
+			}
+			else if (bMarketWords || Prompt.Has(TEXT("browse")))
+			{
+				Command.Intent = EStageAIIntent::SearchMarketplace;
+				Command.MarketplaceQuery = ReadMarketplaceQuery(Prompt);
+				return Command;
+			}
+			else
+			{
+				return {};
+			}
+			Command.Listing = ReadListingRef(Prompt);
+			return Command;
+		}
+
 		/** The English grammar's rules, in order. */
 		TOptional<FStageAICommand> ParseGrammar(const FString& Text)
 		{
@@ -1475,6 +1808,10 @@ namespace StageAICommandParser
 			{
 				Command.Intent = Prompt.Words[0] == TEXT("undo") ? EStageAIIntent::Undo : EStageAIIntent::Redo;
 				return Command;
+			}
+			if (TOptional<FStageAICommand> Marketplace = ParseMarketplace(Prompt))
+			{
+				return Marketplace;
 			}
 			if (Prompt.HasAny({ TEXT("help"), TEXT("commands") }) || Prompt.HasPhrase({ TEXT("what"), TEXT("can"), TEXT("you"), TEXT("do") })
 				|| Prompt.IsExactly({ TEXT("hi") }) || Prompt.IsExactly({ TEXT("hello") }))
@@ -1673,6 +2010,96 @@ namespace StageAICommandParser
 		}
 		return Points;
 	}
+	EStageAIConfirmation ParseConfirmation(const FString& Text)
+	{
+		// A confirmation is a few words; anything longer is a new request.
+		constexpr int32 MaxWords = 6;
+		const FPrompt Prompt(Text);
+		if (Prompt.Words.IsEmpty() || Prompt.Words.Num() > MaxWords)
+		{
+			return EStageAIConfirmation::None;
+		}
+		const auto StartsWithAny = [](const FString& Word, std::initializer_list<const TCHAR*> Stems)
+		{
+			return Algo::AnyOf(Stems, [&Word](const TCHAR* Stem) { return Word.StartsWith(Stem, ESearchCase::CaseSensitive); });
+		};
+		bool bNo = false;
+		bool bYes = false;
+		for (const FString& Word : Prompt.Words)
+		{
+			// Armenian: ոչ / չէ (no), չեղարկ- (cancel), չգն- (don't buy), մի (don't), հրաժար- (refuse).
+			if (IsOneOf(Word, { TEXT("no"), TEXT("nope"), TEXT("nah"), TEXT("cancel"), TEXT("stop"), TEXT("dont"), TEXT("never"), TEXT("not"),
+					TEXT("ոչ"), TEXT("չէ"), TEXT("մի"), TEXT("չեմ"), TEXT("պետք") })
+				|| StartsWithAny(Word, { TEXT("չեղարկ"), TEXT("չգն"), TEXT("հրաժար") }))
+			{
+				bNo = true;
+			}
+			// Armenian: այո / հա (yes), իհարկե (of course), գնիր / գնել (buy), հաստատ- (confirm), համաձայն- (agree).
+			else if (IsOneOf(Word, { TEXT("yes"), TEXT("yeah"), TEXT("yep"), TEXT("yup"), TEXT("sure"), TEXT("ok"), TEXT("okay"), TEXT("confirm"),
+					TEXT("confirmed"), TEXT("proceed"), TEXT("absolutely"), TEXT("definitely"), TEXT("buy"), TEXT("այո"), TEXT("հա"), TEXT("իհարկե"),
+					TEXT("գնիր"), TEXT("գնեք"), TEXT("գնել") })
+				|| StartsWithAny(Word, { TEXT("հաստատ"), TEXT("համաձայն") }))
+			{
+				bYes = true;
+			}
+			else if (!IsOneOf(Word, { TEXT("please"), TEXT("it"), TEXT("do"), TEXT("go"), TEXT("ahead"), TEXT("that"), TEXT("this"), TEXT("one"),
+					TEXT("thanks"), TEXT("thank"), TEXT("you"), TEXT("i"), TEXT("want"), TEXT("to"), TEXT("lets"), TEXT("let"), TEXT("us"),
+					TEXT("լավ"), TEXT("այն"), TEXT("դա"), TEXT("եմ"), TEXT("խնդրում"), TEXT("արա"), TEXT("շնորհակալություն") }))
+			{
+				// Words beyond a yes or no: a new request (the offer is dropped either way, so nothing is bought).
+				return EStageAIConfirmation::None;
+			}
+		}
+		return bNo ? EStageAIConfirmation::No : bYes ? EStageAIConfirmation::Yes : EStageAIConfirmation::None;
+	}
+
+	FStageAIListingMatch ResolveListing(TConstArrayView<FStageAISceneView::FListing> Listings, const FStageAIListingRef& Ref, const FGuid& LastListing)
+	{
+		FStageAIListingMatch Match;
+		if (Ref.Number > 0)
+		{
+			Match.Index = Listings.IsValidIndex(Ref.Number - 1) ? Ref.Number - 1 : INDEX_NONE;
+			return Match;
+		}
+
+		const FString Title = Ref.Title.TrimStartAndEnd();
+		if (!Title.IsEmpty())
+		{
+			// The whole title wins over word matches ("Rig" when "Rig" and "Festival Rig" are both listed).
+			for (int32 Index = 0; Index < Listings.Num(); ++Index)
+			{
+				if (Listings[Index].Listing.Title.TrimStartAndEnd().Equals(Title, ESearchCase::IgnoreCase))
+				{
+					Match.Index = Index;
+					return Match;
+				}
+			}
+			const TArray<FString> QueryWords = NameWords(Title);
+			for (int32 Index = 0; Index < Listings.Num() && !QueryWords.IsEmpty(); ++Index)
+			{
+				const TArray<FString> TitleWords = NameWords(Listings[Index].Listing.Title);
+				if (Algo::AllOf(QueryWords, [&TitleWords](const FString& Word) { return TitleWords.Contains(Word); }))
+				{
+					Match.Ambiguous.Add(Index);
+				}
+			}
+			if (Match.Ambiguous.Num() == 1)
+			{
+				Match.Index = Match.Ambiguous[0];
+				Match.Ambiguous.Reset();
+			}
+			return Match;
+		}
+
+		if (LastListing.IsValid())
+		{
+			Match.Index = Listings.IndexOfByPredicate([&LastListing](const FStageAISceneView::FListing& Entry) { return Entry.Listing.ListingId == LastListing; });
+			return Match;
+		}
+		Match.Index = Listings.Num() == 1 ? 0 : INDEX_NONE;
+		return Match;
+	}
+
 }
 
 
@@ -1800,8 +2227,9 @@ namespace StageAIAnswers
 			"• \"store cue 5 called Intro fade 3\", \"go\", \"back\", \"go to cue 2\"\n"
 			"• \"make it rain\", \"fog\", \"set time to 18:30\", \"sunset\", \"go outdoors\"\n"
 			"• \"export bill of materials\", \"export patch sheet\", \"export cable schedule\", \"export all reports\"\n"
+			"• \"find free festival stages in the marketplace\", \"details of number 2\", \"preview number 2\", \"buy it\"\n"
 			"• \"undo\", \"redo\"\n"
-			"I also understand Armenian. Everything I change goes through the stage's rules and can be undone with Ctrl+Z."),
+			"I also understand Armenian. Everything I change goes through the stage's rules and can be undone with Ctrl+Z, and I always ask before spending credits."),
 			INVTEXT(
 			"Կարող եմ պատասխանել բեմի մասին հարցերին և կատարել անվտանգ փոփոխություններ, որոնք կարելի է հետարկել։ Փորձեք՝\n"
 			"• վիճակը · քանի՞ սարք կա · ընդհանուր քաշը · հզորությունը · կյուների ցանկը · քանի՞ ֆերմա կա\n"
@@ -1812,8 +2240,9 @@ namespace StageAIAnswers
 			"• պահիր կյու 5 «Ներածություն» 3 վայրկյան · գնա · հետ · գնա կյու 2\n"
 			"• թող անձրև գա · մառախուղ · ժամը 18:30 · մայրամուտ · բացօթյա\n"
 			"• արտահանիր նյութերի ցուցակը · արտահանիր պատչը · արտահանիր մալուխների ցուցակը · արտահանիր բոլոր հաշվետվությունները\n"
+			"• գտիր անվճար փառատոնի բեմեր մարքեթփլեյսում · մանրամասներ 2-րդի մասին · նախադիտիր երկրորդը · գնիր այն\n"
 			"• հետարկիր · կրկնիր\n"
-			"Հասկանում եմ նաև անգլերեն։ Իմ բոլոր փոփոխություններն անցնում են բեմի կանոններով և հետարկվում են Ctrl+Z-ով։"));
+			"Հասկանում եմ նաև անգլերեն։ Իմ բոլոր փոփոխություններն անցնում են բեմի կանոններով և հետարկվում են Ctrl+Z-ով, իսկ կրեդիտ ծախսելուց առաջ միշտ հարցնում եմ։"));
 	}
 
 	FText DescribeNotUnderstood(const FString& Prompt)
@@ -1917,6 +2346,15 @@ namespace StageAIAnswers
 
 		case EStageAIIntent::EnvironmentStatus:
 			return DescribeEnvironment(Scene, Language);
+
+		case EStageAIIntent::ListingDetails:
+		{
+			// UStageAICommandSubsystem resolved the reference before asking (Docs/ADR/0021 §13.2).
+			const int32 Index = Scene.Listings.IndexOfByPredicate([&Command](const FStageAISceneView::FListing& Entry) { return Entry.Listing.ListingId == Command.Listing.Id; });
+			return Scene.Listings.IsValidIndex(Index)
+				? DescribeListingDetails(Scene.Listings[Index], Index + 1, Language)
+				: DescribeListingNotFound(Scene, Command.Listing, StageAICommandParser::FStageAIListingMatch(), Language);
+		}
 
 		case EStageAIIntent::StageSummary:
 		default:

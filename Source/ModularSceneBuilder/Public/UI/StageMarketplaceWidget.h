@@ -63,6 +63,8 @@ private:
 
 	// --- Browsing ---
 	void RunQuery();
+	/** Takes the marketplace's last answered query (whoever sent it) into the filters, without querying. */
+	void AdoptAnsweredQuery();
 	void RebuildCards();
 	void RefreshCardStyles();
 	void RefreshFilters();

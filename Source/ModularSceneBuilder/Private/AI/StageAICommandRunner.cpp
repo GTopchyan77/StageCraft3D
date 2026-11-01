@@ -6,6 +6,7 @@
 #include "Actors/ModularBaseActor.h"
 #include "AI/StageAICommandParser.h"
 #include "AI/StageAICommandSubsystem.h"
+#include "AI/StageAIMarketplaceRunner.h"
 #include "Algo/AllOf.h"
 #include "Camera/PlayerCameraManager.h"
 #include "Components/SelectionComponent.h"
@@ -1056,6 +1057,9 @@ namespace StageAICommandRunner
 		case EStageAIIntent::ReplaceItems:	return ReplaceItems(Controller, Command);
 		case EStageAIIntent::BuildShape:	return BuildShape(Controller, Command);
 		case EStageAIIntent::SetFixture:	return SetFixtures(Controller, Command);
+		case EStageAIIntent::SearchMarketplace:
+		case EStageAIIntent::PreviewListing:
+		case EStageAIIntent::AcquireListing:	return StageAIMarketplaceRunner::Run(Controller, Command);
 		default:
 			return Refused(Pick(Command.Language, LOCTEXT("NotAnAction", "That is not something I can change."), INVTEXT("Դա այն չէ, ինչ կարող եմ փոխել։")));
 		}

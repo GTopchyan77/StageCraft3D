@@ -410,6 +410,16 @@ bool FStageMarketplaceQueryTest::RunTest(const FString& Parameters)
 	Query = FStageMarketplaceQuery();
 	Query.Sort = EStageMarketplaceSort::PriceLowToHigh;
 	TestEqual(TEXT("Real money after credits"), Titles(StageMarketplaceRules::Apply(Mixed, Query)), TArray<FString>{ TEXT("Credits"), TEXT("Money") });
+
+	// A credits limit (ADR 0021 §13.1): free listings pass, real money never does, a negative limit means none.
+	Query = FStageMarketplaceQuery();
+	Query.MaxCredits = 100;
+	Query.Sort = EStageMarketplaceSort::Title;
+	TestEqual(TEXT("Max credits"), Titles(StageMarketplaceRules::Apply(All, Query)), TArray<FString>{ TEXT("Beach Festival"), TEXT("Club Night"), TEXT("Theatre Cues") });
+	TestEqual(TEXT("Max credits excludes real money"), Titles(StageMarketplaceRules::Apply(Mixed, Query)), TArray<FString>());
+	Query.MaxCredits = -5;
+	TestEqual(TEXT("Negative limit is sanitized to none"), StageMarketplaceRules::SanitizeQuery(Query).MaxCredits, int64(0));
+	TestEqual(TEXT("Negative limit filters nothing"), StageMarketplaceRules::Apply(All, Query).TotalMatches, 4);
 	return true;
 }
 

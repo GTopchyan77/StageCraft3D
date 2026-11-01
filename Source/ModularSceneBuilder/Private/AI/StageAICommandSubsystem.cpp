@@ -10,10 +10,13 @@
 #include "Data/BaseItemData.h"
 #include "Engine/AssetManager.h"
 #include "Engine/StreamableManager.h"
+#include "Engine/GameInstance.h"
 #include "Engine/World.h"
 #include "Environment/StageEnvironmentSubsystem.h"
+#include "Marketplace/StageMarketplaceSubsystem.h"
 #include "ModularSceneBuilder.h"
 #include "Subsystems/ShowControlSubsystem.h"
+#include "Subsystems/StageProfileSubsystem.h"
 #include "Subsystems/StageSessionSubsystem.h"
 
 #include UE_INLINE_GENERATED_CPP_BY_NAME(StageAICommandSubsystem)
@@ -47,6 +50,8 @@ void UStageAICommandSubsystem::Deinitialize()
 		LoadHandle.Reset();
 	}
 	PendingAssetsCallback.Unbind();
+	StopMarketplaceWait();
+	PurchaseOffer.Reset();
 	PendingExecutor.Unbind();
 	State = EStageAIAssistantState::Idle;
 	OnConversationChanged.Clear();
@@ -97,6 +102,10 @@ bool UStageAICommandSubsystem::SubmitPrompt(const FString& Prompt, FStageAIComma
 	if (Trimmed.IsEmpty() || IsBusy())
 	{
 		return false;
+	}
+	if (AnswerPurchaseOffer(Trimmed, Executor, SelectedItemNames))
+	{
+		return true;
 	}
 
 	// The history the model sees is the conversation before this prompt.
@@ -197,6 +206,23 @@ void UStageAICommandSubsystem::Respond(const FStageAIInterpretation& Interpretat
 	}
 	UE_LOG(LogStageCraft, Log, TEXT("AI assistant: running %s."), *StageAICommandSchema::GetIntentName(Command.Intent));
 
+	// Listings are named against the marketplace's current results, here and only here (Docs/ADR/0021 §13.2).
+	if (Command.Intent == EStageAIIntent::ListingDetails || Command.Intent == EStageAIIntent::PreviewListing || Command.Intent == EStageAIIntent::AcquireListing)
+	{
+		FText NotFound;
+		if (!ResolveListing(Command, NotFound))
+		{
+			AddMessage(EStageAISpeaker::Assistant, EStageAIOutcome::Refused, WithNote(NotFound, Interpretation.Note));
+			PendingExecutor.Unbind();
+			return;
+		}
+	}
+	else if (Command.Intent == EStageAIIntent::SearchMarketplace)
+	{
+		// New results: "it" means nothing in them until one is named (or there is only one).
+		LastListing.Invalidate();
+	}
+
 	if (Command.Intent == EStageAIIntent::Help)
 	{
 		AddMessage(EStageAISpeaker::Assistant, EStageAIOutcome::Info, WithNote(StageAIAnswers::DescribeHelp(Command.Language), Interpretation.Note));
@@ -209,28 +235,177 @@ void UStageAICommandSubsystem::Respond(const FStageAIInterpretation& Interpretat
 	{
 		AddMessage(EStageAISpeaker::Assistant, EStageAIOutcome::Info, WithNote(StageAIAnswers::AnswerQuestion(Command, CaptureScene()), Interpretation.Note));
 	}
-	else if (!PendingExecutor.IsBound())
+	else
+	{
+		RunAction(Command, Interpretation.Note);
+		return;
+	}
+	SetState(EStageAIAssistantState::Idle);
+}
+
+void UStageAICommandSubsystem::RunAction(const FStageAICommand& Command, const FText& Note)
+{
+	if (!PendingExecutor.IsBound())
 	{
 		AddMessage(EStageAISpeaker::Assistant, EStageAIOutcome::Refused, StageAILanguage::Pick(Command.Language,
 			LOCTEXT("NoPlayer", "There is no player to make that change for."), INVTEXT("Չկա խաղացող, որի համար կատարեմ այդ փոփոխությունը։")));
+		SetState(EStageAIAssistantState::Idle);
+		return;
 	}
-	else
+
+	// Acting while the executor runs, so a pending action may stream assets (RequestItemAssets) or wait for the marketplace.
+	State = EStageAIAssistantState::Acting;
+	const FStageAIActionOutcome Outcome = PendingExecutor.Execute(Command);
+	if (Outcome.Outcome == EStageAIOutcome::Pending && State == EStageAIAssistantState::Acting)
 	{
-		// Acting while the executor runs, so a pending action may stream assets (RequestItemAssets).
-		State = EStageAIAssistantState::Acting;
-		const FStageAIActionOutcome Outcome = PendingExecutor.Execute(Command);
-		if (Outcome.Outcome == EStageAIOutcome::Pending && State == EStageAIAssistantState::Acting)
-		{
-			AddMessage(EStageAISpeaker::Assistant, EStageAIOutcome::Pending, WithNote(Outcome.Message, Interpretation.Note));
-			return;
-		}
-		if (State == EStageAIAssistantState::Acting)
-		{
-			State = EStageAIAssistantState::Idle;
-			AddMessage(EStageAISpeaker::Assistant, Outcome.Outcome, WithNote(Outcome.Message, Interpretation.Note));
-		}
+		AddMessage(EStageAISpeaker::Assistant, EStageAIOutcome::Pending, WithNote(Outcome.Message, Note));
+		return;
+	}
+	if (State == EStageAIAssistantState::Acting)
+	{
+		State = EStageAIAssistantState::Idle;
+		// Kept before the line is added, so a view refreshing on it already sees the offer.
+		PurchaseOffer = Outcome.PurchaseOffer;
+		AddMessage(EStageAISpeaker::Assistant, Outcome.Outcome, WithNote(Outcome.Message, Note));
 	}
 	SetState(EStageAIAssistantState::Idle);
+}
+
+bool UStageAICommandSubsystem::AnswerPurchaseOffer(const FString& Prompt, FStageAICommandExecutor& Executor, TArray<FString>& SelectedItemNames)
+{
+	if (!PurchaseOffer.IsSet())
+	{
+		return false;
+	}
+	// The offer stands for exactly one prompt: a yes, a no, or anything else, which drops it unbought.
+	const FStageAIPurchaseOffer Offer = *PurchaseOffer;
+	PurchaseOffer.Reset();
+	const StageAICommandParser::EStageAIConfirmation Answer = StageAICommandParser::ParseConfirmation(Prompt);
+	if (Answer == StageAICommandParser::EStageAIConfirmation::None)
+	{
+		return false;
+	}
+
+	AddMessage(EStageAISpeaker::User, EStageAIOutcome::Info, FText::FromString(Prompt));
+	if (Answer == StageAICommandParser::EStageAIConfirmation::No)
+	{
+		AddMessage(EStageAISpeaker::Assistant, EStageAIOutcome::Info, FText::Format(StageAILanguage::Pick(Offer.Language,
+			LOCTEXT("PurchaseDeclined", "OK, \"{0}\" was not bought."), INVTEXT("Լավ, «{0}»-ը չգնվեց։")), FText::FromString(Offer.Title)));
+		return true;
+	}
+
+	// Validated like any command (which also clears the confirmation fields), then confirmed here: the only place that can.
+	FStageAICommand Command;
+	Command.Intent = EStageAIIntent::AcquireListing;
+	Command.Language = Offer.Language;
+	FText Error;
+	if (!StageAICommandSchema::Validate(Command, Error))
+	{
+		AddMessage(EStageAISpeaker::Assistant, EStageAIOutcome::Refused, Error);
+		return true;
+	}
+	Command.Listing.Id = Offer.ListingId;
+	Command.Listing.bLast = false;
+	Command.ConfirmedCredits = Offer.Credits;
+	LastListing = Offer.ListingId;
+	UE_LOG(LogStageCraft, Log, TEXT("AI assistant: purchase of listing %s for %lld credits confirmed by the user."), *Offer.ListingId.ToString(), Offer.Credits);
+
+	PendingExecutor = MoveTemp(Executor);
+	PromptSelection = MoveTemp(SelectedItemNames);
+	RunAction(Command, FText::GetEmpty());
+	return true;
+}
+
+bool UStageAICommandSubsystem::ResolveListing(FStageAICommand& Command, FText& OutError)
+{
+	const FStageAISceneView Scene = CaptureScene();
+	const StageAICommandParser::FStageAIListingMatch Match = StageAICommandParser::ResolveListing(Scene.Listings, Command.Listing, LastListing);
+	if (!Scene.Listings.IsValidIndex(Match.Index))
+	{
+		OutError = StageAIAnswers::DescribeListingNotFound(Scene, Command.Listing, Match, Command.Language);
+		return false;
+	}
+	Command.Listing.Id = Scene.Listings[Match.Index].Listing.ListingId;
+	LastListing = Command.Listing.Id;
+	return true;
+}
+
+UStageMarketplaceSubsystem* UStageAICommandSubsystem::GetMarketplace() const
+{
+	const UWorld* World = GetWorld();
+	const UGameInstance* GameInstance = World ? World->GetGameInstance() : nullptr;
+	return GameInstance ? GameInstance->GetSubsystem<UStageMarketplaceSubsystem>() : nullptr;
+}
+
+bool UStageAICommandSubsystem::AwaitMarketplace(EStageAIMarketplaceEvent Event, const FGuid& ListingId, FOnStageAIMarketplaceAnswer OnAnswer)
+{
+	UStageMarketplaceSubsystem* Marketplace = GetMarketplace();
+	if (State != EStageAIAssistantState::Acting || !Marketplace || MarketplaceWait.IsSet() || !OnAnswer.IsBound())
+	{
+		return false;
+	}
+	MarketplaceWait.Emplace();
+	MarketplaceWait->Event = Event;
+	MarketplaceWait->ListingId = ListingId;
+	MarketplaceWait->OnAnswer = MoveTemp(OnAnswer);
+	WaitingMarketplace = Marketplace;
+	switch (Event)
+	{
+	case EStageAIMarketplaceEvent::Query:
+		Marketplace->OnListingsUpdated.AddUniqueDynamic(this, &ThisClass::HandleMarketplaceListings);
+		break;
+	case EStageAIMarketplaceEvent::Acquire:
+		Marketplace->OnAcquireCompleted.AddUniqueDynamic(this, &ThisClass::HandleMarketplaceAcquired);
+		break;
+	case EStageAIMarketplaceEvent::Preview:
+		PreviewReadyHandle = Marketplace->OnPreviewReady.AddWeakLambda(this,
+			[this](const FGuid& PreviewedListing, const FStageMarketplaceResultInfo& Result, const FStageMarketplacePreviewScene&)
+			{
+				AnswerMarketplace(EStageAIMarketplaceEvent::Preview, PreviewedListing, Result, FString());
+			});
+		break;
+	}
+	return true;
+}
+
+void UStageAICommandSubsystem::CancelMarketplaceWait()
+{
+	StopMarketplaceWait();
+}
+
+void UStageAICommandSubsystem::StopMarketplaceWait()
+{
+	// Removing inside a broadcast is safe: both delegate kinds iterate a copy or defer compaction.
+	if (UStageMarketplaceSubsystem* Marketplace = WaitingMarketplace.Get())
+	{
+		Marketplace->OnListingsUpdated.RemoveDynamic(this, &ThisClass::HandleMarketplaceListings);
+		Marketplace->OnAcquireCompleted.RemoveDynamic(this, &ThisClass::HandleMarketplaceAcquired);
+		Marketplace->OnPreviewReady.Remove(PreviewReadyHandle);
+	}
+	PreviewReadyHandle.Reset();
+	WaitingMarketplace.Reset();
+	MarketplaceWait.Reset();
+}
+
+void UStageAICommandSubsystem::HandleMarketplaceListings(FStageMarketplaceResultInfo Result)
+{
+	AnswerMarketplace(EStageAIMarketplaceEvent::Query, FGuid(), Result, FString());
+}
+
+void UStageAICommandSubsystem::HandleMarketplaceAcquired(FGuid ListingId, FStageMarketplaceResultInfo Result, const FString& SceneName)
+{
+	AnswerMarketplace(EStageAIMarketplaceEvent::Acquire, ListingId, Result, SceneName);
+}
+
+void UStageAICommandSubsystem::AnswerMarketplace(EStageAIMarketplaceEvent Event, const FGuid& ListingId, const FStageMarketplaceResultInfo& Result, const FString& SceneName)
+{
+	if (!MarketplaceWait.IsSet() || MarketplaceWait->Event != Event || (Event == EStageAIMarketplaceEvent::Acquire && ListingId != MarketplaceWait->ListingId))
+	{
+		return;
+	}
+	FOnStageAIMarketplaceAnswer OnAnswer = MoveTemp(MarketplaceWait->OnAnswer);
+	StopMarketplaceWait();
+	OnAnswer.ExecuteIfBound(ListingId, Result, SceneName);
 }
 
 void UStageAICommandSubsystem::FinishPendingAction(const FStageAIActionOutcome& Outcome)
@@ -240,6 +415,7 @@ void UStageAICommandSubsystem::FinishPendingAction(const FStageAIActionOutcome& 
 		return;
 	}
 	State = EStageAIAssistantState::Idle;
+	StopMarketplaceWait();
 	PendingExecutor.Unbind();
 	PromptSelection.Reset();
 	AddMessage(EStageAISpeaker::Assistant, Outcome.Outcome, Outcome.Message);
@@ -298,6 +474,8 @@ void UStageAICommandSubsystem::ClearConversation()
 		return;
 	}
 	Messages.Reset();
+	PurchaseOffer.Reset();
+	LastListing.Invalidate();
 	OnConversationChanged.Broadcast();
 }
 
@@ -360,6 +538,21 @@ FStageAISceneView UStageAICommandSubsystem::CaptureScene() const
 		Scene.bHasEnvironment = true;
 		Scene.bSkyAvailable = Environment->IsSkyAvailable();
 		Scene.Environment = Environment->GetSettings();
+	}
+	// The marketplace's current page (the panel's cards) and the player's credits (Docs/ADR/0021 §13.2).
+	if (const UStageMarketplaceSubsystem* Marketplace = GetMarketplace())
+	{
+		for (const FStageMarketplaceListing& Listing : Marketplace->GetListings())
+		{
+			Scene.Listings.Add({ Listing, Marketplace->GetListingOwnership(Listing.ListingId) });
+		}
+		Scene.ListingMatches = Marketplace->GetTotalMatches();
+	}
+	Scene.LastListing = LastListing;
+	const UGameInstance* GameInstance = World ? World->GetGameInstance() : nullptr;
+	if (const UStageProfileSubsystem* Profile = GameInstance ? GameInstance->GetSubsystem<UStageProfileSubsystem>() : nullptr)
+	{
+		Scene.Credits = Profile->GetBalance(StageCraftTags::Currency_Credits);
 	}
 	return Scene;
 }

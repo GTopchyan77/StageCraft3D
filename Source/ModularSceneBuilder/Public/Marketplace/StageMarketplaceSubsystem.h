@@ -60,6 +60,9 @@ public:
 	UFUNCTION(BlueprintPure, Category = "StageCraft|Marketplace")
 	bool IsQueryInFlight() const { return bQueryInFlight; }
 
+	/** The query whose answer is in GetListings() (sanitized), whoever sent it: views follow it (ADR 0021 §13.5). */
+	const FStageMarketplaceQuery& GetAnsweredQuery() const { return AnsweredQuery; }
+
 	/** A listing of the last answered query, or null. The economy reads offers here, never from callers. */
 	const FStageMarketplaceListing* FindListing(const FGuid& ListingId) const;
 
@@ -149,6 +152,10 @@ private:
 	/** The page of the last answered query: the only offers that can be acquired or bought. */
 	TArray<FStageMarketplaceListing> Listings;
 	int32 TotalMatches = 0;
+
+	/** The newest query sent, and the one the current Listings answer. */
+	FStageMarketplaceQuery RequestedQuery;
+	FStageMarketplaceQuery AnsweredQuery;
 
 	/** Increments per query; an answer with an older serial is stale. */
 	uint32 QuerySerial = 0;
