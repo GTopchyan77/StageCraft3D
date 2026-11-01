@@ -10,9 +10,16 @@
 
 #include "Engine/GameInstance.h"
 #include "Engine/World.h"
+#include "Framework/Application/SlateApplication.h"
 #include "HAL/IConsoleManager.h"
+#include "ImageUtils.h"
 #include "Marketplace/StageMarketplaceSubsystem.h"
+#include "Misc/FileHelper.h"
+#include "Misc/Paths.h"
 #include "ModularSceneBuilder.h"
+#include "UI/StageMarketplaceWidget.h"
+#include "UObject/UObjectIterator.h"
+#include "Widgets/SWindow.h"
 
 namespace StageMarketplaceCommands
 {
@@ -88,6 +95,57 @@ namespace StageMarketplaceCommands
 		UE_LOG(LogStageCraft, Display, TEXT("StageCraft.Marketplace.Get %s: %s %s"), *Args[0], *UEnum::GetValueAsString(Result.Code), *Result.Message.ToString());
 	}
 
+	/** <listing number from Status | id>: loads the read-only preview; an open Marketplace panel shows it (ADR 0021 §12.3). */
+	void Preview(const TArray<FString>& Args, UWorld* World)
+	{
+		UStageMarketplaceSubsystem* Marketplace = GetMarketplace(World);
+		if (!Marketplace || Args.IsEmpty())
+		{
+			UE_LOG(LogStageCraft, Display, TEXT("Usage: StageCraft.Marketplace.Preview <listing number from Status | listing id>"));
+			return;
+		}
+		FGuid ListingId;
+		if (!FGuid::Parse(Args[0], ListingId) && Marketplace->GetListings().IsValidIndex(FCString::Atoi(*Args[0]) - 1))
+		{
+			ListingId = Marketplace->GetListings()[FCString::Atoi(*Args[0]) - 1].ListingId;
+		}
+		const FStageMarketplaceResultInfo Result = Marketplace->RequestPreview(ListingId);
+		UE_LOG(LogStageCraft, Display, TEXT("StageCraft.Marketplace.Preview %s: %s %s"), *Args[0], *UEnum::GetValueAsString(Result.Code), *Result.Message.ToString());
+	}
+
+	/** Saves the window that hosts the Marketplace panel (a floating window by default) as Saved/Screenshots/Marketplace_<time>.png. */
+	void Screenshot(const TArray<FString>& Args, UWorld* World)
+	{
+		for (TObjectIterator<UStageMarketplaceWidget> It; It; ++It)
+		{
+			const TSharedPtr<SWidget> Widget = It->GetCachedWidget();
+			const TSharedPtr<SWindow> Window = Widget.IsValid() ? FSlateApplication::Get().FindWidgetWindow(Widget.ToSharedRef()) : nullptr;
+			if (!Window.IsValid())
+			{
+				continue;
+			}
+			TArray<FColor> Pixels;
+			FIntVector Size;
+			if (!FSlateApplication::Get().TakeScreenshot(Window.ToSharedRef(), Pixels, Size) || Pixels.IsEmpty())
+			{
+				UE_LOG(LogStageCraft, Display, TEXT("StageCraft.Marketplace.Screenshot: capture failed."));
+				return;
+			}
+			for (FColor& Pixel : Pixels)
+			{
+				Pixel.A = 255;
+			}
+			TArray64<uint8> Png;
+			FImageUtils::PNGCompressImageArray(Size.X, Size.Y, Pixels, Png);
+			const FString File = FPaths::ProjectSavedDir() / TEXT("Screenshots") / FString::Printf(TEXT("Marketplace_%s.png"), *FDateTime::Now().ToString(TEXT("%H%M%S")));
+			const bool bSaved = FFileHelper::SaveArrayToFile(Png, *File);
+			UE_LOG(LogStageCraft, Display, TEXT("StageCraft.Marketplace.Screenshot: window \"%s\" %dx%d, %s %s."), *Window->GetTitle().ToString(), Size.X, Size.Y,
+				bSaved ? TEXT("saved") : TEXT("NOT saved"), *File);
+			return;
+		}
+		UE_LOG(LogStageCraft, Display, TEXT("StageCraft.Marketplace.Screenshot: the Marketplace window is not open."));
+	}
+
 	/** <StageDesign|LightingRig|CueList> <credits> <saved scene name...>; the scene name is also the title. */
 	void Publish(const TArray<FString>& Args, UWorld* World)
 	{
@@ -115,6 +173,10 @@ namespace StageMarketplaceCommands
 		FConsoleCommandWithWorldAndArgsDelegate::CreateStatic(&Status));
 	FAutoConsoleCommandWithWorldAndArgs GetCommand(TEXT("StageCraft.Marketplace.Get"), TEXT("<number | id> Acquires a listing (buys it with credits if paid) and imports it as a scene."),
 		FConsoleCommandWithWorldAndArgsDelegate::CreateStatic(&Get));
+	FAutoConsoleCommandWithWorldAndArgs PreviewCommand(TEXT("StageCraft.Marketplace.Preview"), TEXT("<number | id> Loads the read-only 3D preview (shown in an open Marketplace panel)."),
+		FConsoleCommandWithWorldAndArgsDelegate::CreateStatic(&Preview));
+	FAutoConsoleCommandWithWorldAndArgs ScreenshotCommand(TEXT("StageCraft.Marketplace.Screenshot"), TEXT("Saves the Marketplace window to Saved/Screenshots."),
+		FConsoleCommandWithWorldAndArgsDelegate::CreateStatic(&Screenshot));
 	FAutoConsoleCommandWithWorldAndArgs PublishCommand(TEXT("StageCraft.Marketplace.Publish"), TEXT("<StageDesign|LightingRig|CueList> <credits> <saved scene name> Publishes a saved scene."),
 		FConsoleCommandWithWorldAndArgsDelegate::CreateStatic(&Publish));
 }

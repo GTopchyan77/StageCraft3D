@@ -165,9 +165,11 @@ void UStageMarketplaceSubsystem::Deinitialize()
 	OnListingsUpdated.Clear();
 	OnAcquireCompleted.Clear();
 	OnPublishCompleted.Clear();
+	OnPreviewReady.Clear();
 	Listings.Reset();
 	PendingAcquires.Reset();
 	bQueryInFlight = false;
+	bPreviewLoading = false;
 	bPublishing = false;
 	Backend = nullptr;
 
@@ -342,6 +344,73 @@ void UStageMarketplaceSubsystem::FinishAcquire(const FGuid& ListingId, const FSt
 	}
 	UE_LOG(LogStageCraft, Log, TEXT("Marketplace acquire %s: %s %s"), *ListingId.ToString(), *UEnum::GetValueAsString(Final.Code), *Final.Message.ToString());
 	OnAcquireCompleted.Broadcast(ListingId, Final, Final.IsSuccess() ? SceneName : FString());
+}
+
+// --- Read-only preview ---
+
+FStageMarketplaceResultInfo UStageMarketplaceSubsystem::RequestPreview(FGuid ListingId)
+{
+	if (!Backend)
+	{
+		return StageMarketplace::Info(EStageMarketplaceResult::BackendUnavailable);
+	}
+	// Only offers the backend returned; a caller cannot point the preview at an arbitrary id.
+	if (!FindListing(ListingId))
+	{
+		return StageMarketplace::Info(EStageMarketplaceResult::NotFound);
+	}
+	const uint32 Serial = ++PreviewSerial;
+	bPreviewLoading = true;
+	Backend->FetchPackage(ListingId, EStageMarketplaceFetchPurpose::Preview,
+		FOnStageMarketplacePackageFetched::CreateUObject(this, &ThisClass::HandlePreviewFetched, ListingId, Serial));
+	return FStageMarketplaceResultInfo::Ok();
+}
+
+void UStageMarketplaceSubsystem::HandlePreviewFetched(EStageMarketplaceResult Result, const FStageMarketplacePackageBytes& Bytes, FGuid ListingId, uint32 Serial)
+{
+	if (Serial != PreviewSerial)
+	{
+		return; // Superseded: another listing is being previewed now.
+	}
+	if (Result != EStageMarketplaceResult::Success || !Bytes.IsValid())
+	{
+		FinishPreview(ListingId, StageMarketplace::Info(Result == EStageMarketplaceResult::Success ? EStageMarketplaceResult::Corrupt : Result), nullptr, Serial);
+		return;
+	}
+
+	WorkPipe.Launch(UE_SOURCE_LOCATION, [WeakThis = TWeakObjectPtr<ThisClass>(this), Bytes, ListingId, Serial]()
+	{
+		// The same verification as an import: a package that would not import is not shown either.
+		FStagePackage Package;
+		EStageMarketplaceResult ReadResult = StagePackage::Read(*Bytes, Package);
+		if (ReadResult == EStageMarketplaceResult::Success && Package.Manifest.PackageId != ListingId)
+		{
+			ReadResult = EStageMarketplaceResult::Corrupt;
+		}
+		FStageMarketplacePreviewScene Scene;
+		if (ReadResult == EStageMarketplaceResult::Success)
+		{
+			Scene = MakeShared<const FStageSceneDocument, ESPMode::ThreadSafe>(MoveTemp(Package.Scene));
+		}
+		AsyncTask(ENamedThreads::GameThread, [WeakThis, ReadResult, Scene = MoveTemp(Scene), ListingId, Serial]()
+		{
+			if (ThisClass* This = WeakThis.Get())
+			{
+				This->FinishPreview(ListingId, StageMarketplace::Info(ReadResult), Scene, Serial);
+			}
+		});
+	});
+}
+
+void UStageMarketplaceSubsystem::FinishPreview(const FGuid& ListingId, const FStageMarketplaceResultInfo& Result, const FStageMarketplacePreviewScene& Scene, uint32 Serial)
+{
+	if (Serial != PreviewSerial)
+	{
+		return;
+	}
+	bPreviewLoading = false;
+	UE_LOG(LogStageCraft, Log, TEXT("Marketplace preview %s: %s %s"), *ListingId.ToString(), *UEnum::GetValueAsString(Result.Code), *Result.Message.ToString());
+	OnPreviewReady.Broadcast(ListingId, Result, Result.IsSuccess() ? Scene : nullptr);
 }
 
 // --- Publishing ---

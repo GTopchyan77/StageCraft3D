@@ -4733,3 +4733,108 @@ The plan was approved in plan mode.
 - **Browsing reads whole files:** a query loads each package file to read its manifest. Use a prefix read or a cache if folders get large, measured first.
 - **The local backend pays no seller and has no authentication.** It handles credits only; real money needs the HTTP/server backend, and the request must then carry the real-money price (ADR 0021 §11).
 - **Engine log on damaged packages:** a damaged zlib section makes the engine log its own LogCompression error before the package is refused.
+
+---
+
+## #51 — Community marketplace Phase B: Marketplace panel, publish workflow, isolated read-only 3D preview (2026-11-01)
+
+**Request (Gevor, 2026-11-01, pasted, "strictly follow Rules.md"):** Phase B of the Community Marketplace.
+1. A performant marketplace panel: search, filters by category, kind and price, publisher, rating and credits. A publish workflow: pick a saved scene, add a description and tags, set a credit price, publish to the community folder.
+2. A safe, isolated, read-only 3D preview of `.stage` packages before getting them.
+3. Standards: `TObjectPtr`, encapsulation, no per-frame Tick, all tests, 0 warnings, STATE.md, Editor/Game/Shipping builds.
+
+**Gevor's answers before design:**
+- **Rating:** downloads now, ratings later. Cards show downloads as popularity. Real ratings need accounts on a server, because a shared folder lets anyone stuff the votes.
+- **Paid preview:** yes, read-only. Any listing can be inspected before buying.
+
+**Design:** Docs/ADR/0021-community-marketplace.md §12 (Phase B addendum). It replaces §6–7 where they differ: the panel is UMG, not Slate, and the preview is a render target, not an `SViewport`.
+
+**What & why**
+- **`UStageMarketplaceWidget`** (`StageCraft.Panel.Marketplace`, `DisableNativeTick`).
+  - **The panel:** a code-built UMG panel, like every workspace panel.
+    - Registered by `DA_Panel_Marketplace` (made by `Scripts/Content/create_marketplace_content.py`).
+    - Opens floating at 1180 × 760, like Sketch.
+    - Listed in the Window menu automatically, plus Edit › Community Marketplace....
+  - **BROWSE page:**
+    - Search on Enter. Kind chips ALL / STAGE / RIG / CUES and price chips ANY / FREE / PAID. Category and sort dropdowns.
+    - 24 cards per page with PREV / NEXT. A page needs no list virtualization.
+    - Each card shows the title, publisher, kind, category, counts, downloads, and the price or ownership badge.
+    - A details column shows the publisher, publish date, stats, size, tags and description, with three actions:
+      - PREVIEW 3D
+      - GET (FREE) / BUY · N CREDITS / GET AGAIN (OWNED), disabled with a reason when Locked
+      - OPEN IN STAGE
+    - The header shows the backend and the credit balance.
+  - **PUBLISH page:** saved-scene dropdown, title, description (multi-line), comma-separated tags, kind, category, price in credits and PUBLISH. The browser queries again on success.
+  - **Binding:**
+    - Reads come from the marketplace subsystem, the profile and the session.
+    - Writes go only through the controller.
+    - Delegates are bound in NativeConstruct and unbound in NativeDestruct; there is no polling.
+    - The card list is rebuilt only by query answers (async, a later frame), never inside a card's own click.
+- **Controller:** new `RequestMarketplaceAcquire(FGuid)` and `RequestMarketplacePublish(Request)`. Refusals take the common `ReportRejection` path (status bar and error cue), mapped to `FStageEconomyResultInfo`.
+  - OPEN IN STAGE uses `RequestLoadScene`.
+  - With unsaved changes, the first click turns the button into "DISCARD CHANGES AND OPEN" and a second click is required. This is the same duty File › Open has.
+- **Subsystem:** new `RequestPreview(FGuid)` plus the native `OnPreviewReady(ListingId, Result, TSharedPtr<const FStageSceneDocument>)`.
+  - It takes only listings the backend returned.
+  - It fetches with purpose Preview, which is not counted as a download.
+  - It verifies the whole package on the work pipe with `StagePackage::Read`, the same checks as an import, and requires the id to match.
+  - A newer preview supersedes an older one. Nothing is written.
+  - The panel shows whichever preview is newest, so a console or a future assistant request appears in it too.
+- **`FStageMarketplacePreview`** (an `FGCObject` owned by the panel):
+  - It builds an `FPreviewScene`: a GamePreview world with its own light and sky, a plain grey floor, and a `USceneCaptureComponent2D` drawing into a 1280 × 720 render target.
+  - It renders only on change: a new scene, an orbit drag or a wheel zoom. FRAME resets the view. There is no tick and no timer.
+  - `StageMarketplacePreview::SpawnScene` spawns catalog items the way `RestoreItem` does: deferred spawn, `RestoreSnapshotState`, `InitializeFromItemData`, `FinishSpawning`. Items this build lacks are counted, not spawned.
+  - **Read-only by construction:**
+    - No StageCraft world subsystem exists in a GamePreview world.
+    - `FPreviewScene` never begins play, so actors never register with anything.
+    - There is no controller, spawn system, selection or history in that world.
+  - It is destroyed with the panel.
+- **`UStageMarketplacePreviewWidget`** shows the image and turns a drag (orbit) or the wheel (zoom) into calls on the preview. `DisableNativeTick`.
+- **New dev console commands:** `StageCraft.Marketplace.Preview <n|id>` and `StageCraft.Marketplace.Screenshot` (Slate capture of the floating window), compiled out of Shipping.
+
+**Files changed**
+- New:
+  - `Source/ModularSceneBuilder/Public/UI/StageMarketplaceWidget.h`, `Private/UI/StageMarketplaceWidget.cpp`
+  - `Public/UI/StageMarketplacePreviewWidget.h`, `Private/UI/StageMarketplacePreviewWidget.cpp`
+  - `Private/Marketplace/StageMarketplacePreview.h/.cpp`
+  - `Scripts/Content/create_marketplace_content.py`
+  - `Content/StageCraft/UI/Panels/DA_Panel_Marketplace.uasset` (made by that script)
+- Changed:
+  - `Public/Marketplace/StageMarketplaceSubsystem.h`, `Private/Marketplace/StageMarketplaceSubsystem.cpp` (RequestPreview, OnPreviewReady)
+  - `Private/Marketplace/StageMarketplaceConsoleCommands.cpp` (Preview, Screenshot)
+  - `Private/Marketplace/Tests/StageMarketplaceTests.cpp` (PreviewIsolation)
+  - `Public/Player/ModularPlayerController.h`, `Private/Player/ModularPlayerController.cpp` (marketplace requests)
+  - `Public/Workspace/StageWorkspaceTypes.h`, `Private/Workspace/StageWorkspaceTypes.cpp` (Panel_Marketplace tag)
+  - `Private/Workspace/StageWorkspaceShell.cpp` (floating window size)
+  - `Private/Workspace/SStageWorkspaceMenuBar.cpp` (Edit › Community Marketplace...)
+  - `Docs/ADR/0021-community-marketplace.md` (§12 addendum, status)
+  - `tasks/todo.md` (Phase B)
+
+**Verification**
+- **Builds:** Editor, Game and Shipping (`-DisableAdaptiveUnity`) all succeeded with 0 warnings. The Shipping executable contains no `StageCraft.Marketplace` command strings.
+- **Automation:** 125/125 pass (124 before plus 1 new). The new `StageCraft.Marketplace.PreviewIsolation` test checks that:
+  - a GamePreview world has no session, show control, DMX patch or edit history;
+  - two catalog items spawn and one unknown item is counted;
+  - the preview actors never begin play and live in the preview world;
+  - the fixture is at its saved place.
+- **Scripted Standalone `-game` runs by Claude** (R51, R51b, R51c; the safe harness only removes scenes the log reports as imported; the profile and session were restored):
+  - Opening `StageCraft.Panel.Marketplace` gave a floating "Community Marketplace" window.
+  - Two publishes of R42_Sketch (free and 150 credits) appeared in the panel's cards as soon as a query answered.
+  - `Preview 1` showed the read-only preview: 15 placed, 0 not in the library. The screenshot shows the decks, riser, truss loop, freehand truss and fixtures. Previewing the paid listing bought nothing.
+  - The main stage read "clean, 4 items" before and after the preview, and after the purchase. The preview does not touch the stage.
+  - The paid purchase made the header update from 5,000 to 4,850 credits and the card change to OWNED with 1 download, with no polling. The status line read 'Added to your scenes as "R42_Sketch (2)"'.
+  - Screenshots: Saved/Screenshots/Marketplace_191514.png (free preview), _191520.png (after the purchase), _191810.png (paid preview after the lighting change).
+- **Not verified (no input automation):**
+  - Mouse orbit and zoom in the preview. They call the same `Render` path as FRAME.
+  - Typing in the search and publish fields.
+  - The PUBLISH page by hand.
+  - OPEN IN STAGE and its discard confirmation.
+  - Status: **implemented, awaiting manual verification.**
+
+**Commit:** uncommitted (working tree).
+
+**Known issues / follow-ups**
+- **Preview image quality:** the still capture shows fine grain on large surfaces. Turning AO off, using a plain floor material and raising exposure did not remove it; the cause is not identified yet (probably a sampler the main viewport smooths over frames with temporal AA). The image is dark-ish but readable.
+- **Fixtures in the preview:** they show lens glow but no beams or cues. Show control does not exist in the preview world (by design), so a cue preview needs its own playback.
+- **No card thumbnails yet:** publishing does not capture one. The preview renderer can produce one at publish time.
+- **Imports from elsewhere:** OPEN IN STAGE is enabled only for listings acquired from the panel in this session. A listing acquired through the console, or in an earlier session, opens through File › Open.
+- **Ratings** need the server backend (ADR 0021 §11).

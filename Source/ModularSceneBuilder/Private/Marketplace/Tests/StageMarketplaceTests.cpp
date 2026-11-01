@@ -17,6 +17,16 @@
 #include "Misc/AutomationTest.h"
 #include "Misc/FileHelper.h"
 #include "Misc/Paths.h"
+#include "Actors/LightingFixtureActor.h"
+#include "Actors/ModularBaseActor.h"
+#include "Data/LightingFixtureData.h"
+#include "Engine/Engine.h"
+#include "Engine/World.h"
+#include "History/StageEditHistorySubsystem.h"
+#include "Marketplace/StageMarketplacePreview.h"
+#include "Subsystems/ShowControlSubsystem.h"
+#include "Subsystems/StageDMXPatchSubsystem.h"
+#include "Subsystems/StageSessionSubsystem.h"
 
 namespace StageMarketplaceTests
 {
@@ -530,6 +540,58 @@ bool FStageMarketplaceLocalStoreTest::RunTest(const FString& Parameters)
 	}
 
 	IFileManager::Get().DeleteDirectory(*Directory, /*RequireExists*/ false, /*Tree*/ true);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FStageMarketplacePreviewIsolationTest, "StageCraft.Marketplace.PreviewIsolation", StageMarketplaceTests::Flags)
+
+bool FStageMarketplacePreviewIsolationTest::RunTest(const FString& Parameters)
+{
+	using namespace StageMarketplaceTests;
+
+	// A world like FPreviewScene's (ADR 0021 §12.3): GamePreview, actors initialized, play never begun.
+	UWorld* World = UWorld::CreateWorld(EWorldType::GamePreview, /*bInformEngineOfWorld*/ false, TEXT("StageMarketplacePreviewTestWorld"));
+	FWorldContext& Context = GEngine->CreateNewWorldContext(EWorldType::GamePreview);
+	Context.SetCurrentWorld(World);
+	World->InitializeActorsForPlay(FURL());
+
+	// Read-only by construction: no stage system exists there to register with or to edit through.
+	TestNull(TEXT("No stage session in a preview world"), UWorld::GetSubsystem<UStageSessionSubsystem>(World));
+	TestNull(TEXT("No show control in a preview world"), UWorld::GetSubsystem<UShowControlSubsystem>(World));
+	TestNull(TEXT("No DMX patch in a preview world"), UWorld::GetSubsystem<UStageDMXPatchSubsystem>(World));
+	TestNull(TEXT("No edit history in a preview world"), UWorld::GetSubsystem<UStageEditHistorySubsystem>(World));
+
+	ULightingFixtureData* Fixture = NewObject<ULightingFixtureData>(GetTransientPackage());
+	Fixture->ActorClass = ALightingFixtureActor::StaticClass();
+	UBaseItemData* Prop = NewObject<UBaseItemData>(GetTransientPackage());
+	Prop->ActorClass = AModularBaseActor::StaticClass();
+	const TMap<FSoftObjectPath, UBaseItemData*> Catalog = { { FSoftObjectPath(Fixture), Fixture }, { FSoftObjectPath(Prop), Prop } };
+
+	FStageSceneDocument Scene;
+	FStageItemSnapshot& FixtureItem = Scene.Items.Add_GetRef(MakeItem(CratePath, FVector(0, 0, 600)));
+	FixtureItem.Item = TSoftObjectPtr<UBaseItemData>(Fixture);
+	FStageItemSnapshot& PropItem = Scene.Items.Add_GetRef(MakeItem(CratePath, FVector(500, 0, 0)));
+	PropItem.Item = TSoftObjectPtr<UBaseItemData>(Prop);
+	Scene.Items.Add(MakeItem(TEXT("/Game/StageCraft/Items/DA_NotInThisBuild.DA_NotInThisBuild"), FVector::ZeroVector));
+
+	TArray<TObjectPtr<AActor>> Actors;
+	FBox Bounds(ForceInit);
+	const FStageMarketplacePreviewStats Stats = StageMarketplacePreview::SpawnScene(*World, Scene, Catalog, Actors, Bounds);
+	TestEqual(TEXT("Catalog items are shown"), Stats.Placed, 2);
+	TestEqual(TEXT("An item this build does not have is counted, not spawned"), Stats.NotInLibrary, 1);
+	TestTrue(TEXT("The shown stage has bounds to frame"), Bounds.IsValid != 0);
+	for (const AActor* Actor : Actors)
+	{
+		TestFalse(TEXT("Preview actors never begin play (so they never register with stage systems)"), Actor->HasActorBegunPlay());
+		TestEqual(TEXT("Preview actors live in the preview world"), Actor->GetWorld(), World);
+	}
+	if (const ALightingFixtureActor* Light = Actors.IsEmpty() ? nullptr : Cast<ALightingFixtureActor>(Actors[0]))
+	{
+		TestTrue(TEXT("The fixture is at its saved place"), Light->GetActorLocation().Equals(FVector(0, 0, 600), 0.01));
+	}
+
+	GEngine->DestroyWorldContext(World);
+	World->DestroyWorld(/*bInformEngineOfWorld*/ false);
 	return true;
 }
 

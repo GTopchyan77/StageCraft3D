@@ -475,11 +475,15 @@ Decisions (Gevor, 2026-11-01): backend seam + local community-folder backend (HT
 - [x] `StageCraft.Marketplace.*` dev console commands
 - [x] Tests; Editor / Game / Shipping builds; scripted runtime run
 - [ ] Manual verification (Gevor)
-### Phase B — Marketplace panel and read-only 3D preview (ADR 0021 §6-7; preview world needs an ADR addendum first)
-- [ ] Controller requests `RequestMarketplaceAcquire` / `RequestMarketplacePublish` (refusals on `OnRequestRejected`)
-- [ ] Floating Marketplace panel: search, kind chips, category, price filter, sort, virtualized cards, details, Get/Buy/Open
-- [ ] Publish dialog with viewport thumbnail
-- [ ] Read-only preview in a separate `GamePreview` world (no controller, session or history)
+### Phase B — Marketplace panel and read-only 3D preview (STATE.md #51, ADR 0021 §12)
+- [x] ADR 0021 §12 addendum (UMG panel, render-target preview, ratings deferred, paid listings previewable)
+- [x] Controller requests `RequestMarketplaceAcquire` / `RequestMarketplacePublish` (refusals on `OnRequestRejected`)
+- [x] Floating Marketplace panel: search, kind and price chips, category, sort, 24 cards per page, details, Get/Buy/Open (discard confirm)
+- [x] Publish page: saved scene, title, description, tags, kind, category, credit price
+- [x] Read-only preview: `FPreviewScene` (GamePreview) + scene capture, render on change only; `RequestPreview` verified like an import
+- [x] Tests (PreviewIsolation); Editor / Game / Shipping builds; scripted runs with screenshots
+- [ ] Manual verification (Gevor): orbit/zoom, typing, publish page, OPEN IN STAGE + discard confirm
+- [ ] Follow-ups: preview grain (cause unknown), card thumbnails captured at publish, cue preview
 ### Phase C — Assistant marketplace navigator (ADR 0021 §8)
 - [ ] Intents `SearchMarketplace`, `PreviewListing`, `AcquireListing`, `OpenImported` (EN/HY grammar + Claude schema)
 - [ ] Explicit confirmation turn before any purchase

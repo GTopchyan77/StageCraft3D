@@ -1,6 +1,6 @@
 # ADR 0021: Community marketplace, `.stage` packages and listing purchases
 
-- **Status:** accepted. Phase A implemented (STATE.md #50). Phases B and C are planned below.
+- **Status:** accepted. Phase A implemented (STATE.md #50). Phase B implemented (STATE.md #51, §12 addendum). Phase C is planned below.
 - **Related:**
   - ADR 0004 §4 and ADR 0010 §4 (scene files): a package carries a scene document in the existing, versioned scene format. It does not use a second serializer.
   - STATE.md #18 (economy, profile, commerce backend): listing purchases are a new validated economy operation. The profile stays single-writer.
@@ -191,3 +191,69 @@ New `EStageAIIntent` values: `SearchMarketplace` (text, kind, category, max pric
 - **Manifest caching** in the local backend if a folder grows beyond a few hundred packages. Measure first (§22). Today a query loads each whole file to read its manifest. A bounded prefix read (header, table and manifest only) is the first step if browsing gets slow.
 - **The real-money request.** `FStagePurchaseRequest` carries only the credits price. When a server backend can settle real money, the request must also carry the listing's real-money price and currency, and the server must look them up itself, never trusting the client's copy.
 - **Versioned republishing** of a listing by its author.
+
+## 12. Phase B addendum: the panel and the preview as built (2026-11-01)
+
+Gevor's Phase B request (2026-11-01): a marketplace panel with search, filters by category, kind and price, publisher and credits; a publish workflow (saved scene, description, tags, price); and an isolated, read-only 3D preview before acquiring. Standards as before.
+
+Gevor's answers before design:
+
+| Question | Choice |
+|---|---|
+| Rating | **Downloads now, ratings later.** Cards show downloads as popularity. Real ratings need accounts on a server: in a shared folder anyone could stuff a vote count. |
+| Paid preview | **Yes, read-only.** Any listing can be inspected before buying. Preview fetches are not downloads, and the preview can never be saved or imported. |
+
+This addendum replaces the design in §6 and §7 where they differ.
+
+### 12.1 The panel is a code-built UMG widget
+
+Every workspace panel in this app is a `UUserWidget` built in code and registered through a `UStagePanelDefinition` asset, so the Marketplace follows suit; §7's "Slate panel" is superseded.
+
+- **Registration.** `UStageMarketplaceWidget` (`DisableNativeTick`), panel tag `StageCraft.Panel.Marketplace`, definition asset `DA_Panel_Marketplace` made by `Scripts/Content/create_marketplace_content.py`. It is not in the default layout, so it opens as a floating window (1180 × 760 by default), like Sketch. It is listed in the Window menu automatically and opened from Edit › Community Marketplace....
+- **Browsing.**
+  - A search box queries when you press Enter.
+  - Chips filter by kind (ALL / STAGE / RIG / CUES) and price (ANY / FREE / PAID); dropdowns choose the category and the sort.
+  - Results are shown 24 per page with PREV / NEXT. A page of cards is short enough that no list virtualization is needed, so each answered query rebuilds the card list once.
+  - Each card shows the title, the publisher, the kind and category, the counts, downloads, the price and an ownership badge (FREE / OWNED / credits / LOCKED).
+- **Details.** The selected listing's description, keywords, stats and size, with three actions:
+  - PREVIEW 3D.
+  - GET or BUY (the credit price), refused and explained when Locked.
+  - OPEN IN STAGE, once it has been acquired in this session.
+- **Wallet.** The credit balance is shown in the header and follows `OnBalanceChanged`.
+- **Publishing.** A section lists the saved scenes and has fields for title, description, keywords (comma-separated), kind, category and credit price, plus PUBLISH. After a publish, the browser queries again so the new listing appears.
+
+### 12.2 Writes go through the controller
+
+- **New requests.** `AModularPlayerController::RequestMarketplaceAcquire(ListingId)` and `RequestMarketplacePublish(Request)` call the subsystem and report refusals on `OnRequestRejected` (status bar and error cue), like every other request.
+- **Reads go direct.** Queries and previews are reads, so the panel calls the subsystem for them.
+- **Opening an acquired scene** uses the existing `RequestLoadScene`.
+  - The panel first checks the session's dirty flag.
+  - With unsaved changes, the button changes to "DISCARD CHANGES AND OPEN" and a second click is needed. This is the same confirmation duty File › Open has.
+
+### 12.3 The read-only preview
+
+- **Fetching and verifying.** `UStageMarketplaceSubsystem::RequestPreview(ListingId)` fetches with purpose Preview (not counted as a download). It verifies the whole package on the work pipe with `StagePackage::Read`, the same checks as an import. Only then does it hand the scene to `OnPreviewReady` (native delegate, `TSharedPtr<const FStageSceneDocument>`).
+  - A newer preview supersedes an older one by serial number.
+  - Nothing is written to disk.
+- **Rendering.** `FStageMarketplacePreview` (owned by the panel, `FGCObject`) builds an `FPreviewScene`: a `GamePreview` world with its own light and sky. It is drawn by a `USceneCaptureComponent2D` into a 1280 × 720 render target, which the panel shows as an image.
+- **Navigation.** Dragging orbits and the wheel zooms; FRAME resets the view.
+  - It renders only when something changes: a new scene, an orbit or a zoom (the render size is fixed). No tick, no timer.
+  - Each capture first sends the world's end-of-frame updates, because the preview world never ticks.
+  - §6's `SViewport` with a viewport client was rejected: it would draw every frame while the panel is open.
+- **Spawning.** Items are spawned the way `USpawnSystemComponent::RestoreItem` spawns them: `SpawnActorDeferred`, `RestoreSnapshotState`, `InitializeFromItemData`, `FinishSpawning`.
+  - Only catalog items are spawned (resolved through `UStageItemSubsystem`), whether or not the viewer owns them. Viewing grants nothing, and the import path still enforces locks.
+  - Unknown items are counted and reported ("3 items are not in your library"), not spawned.
+  - A large grey floor gives scale.
+- **Read-only by construction.** No edit path exists into the preview world:
+  - No stage world subsystem is created in a `GamePreview` world (session, show control, DMX patch, history, environment), because they only support Game and PIE.
+  - `FPreviewScene` never calls `BeginPlay`, so the actors never register with anything.
+  - There is no player controller, spawn system, selection or history.
+  - The main stage, its dirty flag, undo history, show control and DMX output are never touched.
+- **Consequence:** no cue playback in the preview. Fixtures show their saved look but not cues, DMX or strobe clocks.
+- **Lifetime.** The preview world lives as long as the panel's widget. It is destroyed in `NativeDestruct`, including when the shell rebuilds panels after level travel. The render target is held through `AddReferencedObjects`.
+
+### 12.4 Consequences and follow-ups (Phase B)
+
+- **Card thumbnails.** Listings still have no thumbnail images in cards; publishing does not capture one yet. The preview renderer can produce one at publish time, so that is the obvious next step.
+- **Cue preview.** It needs its own playback against the preview's fixtures (show control does not exist there).
+- **Ratings** need the server backend (§11).

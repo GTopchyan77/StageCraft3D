@@ -484,6 +484,12 @@ void SStageWorkspaceMenuBar::FillEditMenu(FMenuBuilder& MenuBuilder)
 		FSlateIcon(), FUIAction(FExecuteAction::CreateSP(this, &SStageWorkspaceMenuBar::ShowPanel, FGameplayTag(StageCraftTags::Panel_Assistant))));
 	MenuBuilder.EndSection();
 
+	MenuBuilder.BeginSection(TEXT("Marketplace"), LOCTEXT("MarketplaceSection", "Community"));
+	MenuBuilder.AddMenuEntry(LOCTEXT("Marketplace", "Community Marketplace..."),
+		LOCTEXT("MarketplaceTip", "Browse stages, lighting rigs and cue lists from the community, inspect them in a read-only 3D preview, get or buy them with credits, and publish your own saved scenes."),
+		FSlateIcon(), FUIAction(FExecuteAction::CreateSP(this, &SStageWorkspaceMenuBar::ShowPanel, FGameplayTag(StageCraftTags::Panel_Marketplace))));
+	MenuBuilder.EndSection();
+
 	MenuBuilder.BeginSection(TEXT("Preferences"));
 	MenuBuilder.AddMenuEntry(LOCTEXT("Preferences", "Preferences..."),
 		LOCTEXT("PreferencesTip", "Keyboard shortcuts, camera look, viewport and audio preferences."), FSlateIcon(),

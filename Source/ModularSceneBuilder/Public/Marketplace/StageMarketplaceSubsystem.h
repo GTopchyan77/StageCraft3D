@@ -6,6 +6,7 @@
 #include "Economy/StageEconomyTypes.h"
 #include "Marketplace/StageMarketplaceBackend.h"
 #include "Marketplace/StageMarketplaceTypes.h"
+#include "Scene/StageSceneTypes.h"
 #include "Subsystems/GameInstanceSubsystem.h"
 #include "Tasks/Pipe.h"
 #include "StageMarketplaceSubsystem.generated.h"
@@ -13,6 +14,11 @@
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FOnStageMarketplaceListingsUpdated, FStageMarketplaceResultInfo, Result);
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_ThreeParams(FOnStageMarketplaceAcquireCompleted, FGuid, ListingId, FStageMarketplaceResultInfo, Result, const FString&, SceneName);
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_TwoParams(FOnStageMarketplacePublishCompleted, FStageMarketplaceResultInfo, Result, const FStageMarketplaceListing&, Listing);
+
+using FStageMarketplacePreviewScene = TSharedPtr<const FStageSceneDocument, ESPMode::ThreadSafe>;
+/** Native (C++ views only): the verified scene of a previewed listing, or null with a failure. */
+DECLARE_MULTICAST_DELEGATE_ThreeParams(FOnStageMarketplacePreviewReady, const FGuid& /*ListingId*/, const FStageMarketplaceResultInfo& /*Result*/,
+	const FStageMarketplacePreviewScene& /*Scene*/);
 
 /**
  * The community marketplace on this client (Docs/ADR/0021-community-marketplace.md §4): browsing, acquiring (download and
@@ -74,6 +80,19 @@ public:
 	UFUNCTION(BlueprintPure, Category = "StageCraft|Marketplace")
 	bool IsAcquiring(FGuid ListingId) const { return PendingAcquires.Contains(ListingId); }
 
+	// --- Read-only preview (Docs/ADR/0021-community-marketplace.md §12.3) ---
+
+	/**
+	 * Fetches a listing of the last query for the read-only preview, free or paid (viewing grants nothing), and verifies the whole
+	 * package exactly as an import does. Nothing is written and it is not counted as a download. A newer preview supersedes one
+	 * still loading. The verified scene arrives on OnPreviewReady.
+	 */
+	FStageMarketplaceResultInfo RequestPreview(FGuid ListingId);
+
+	bool IsPreviewLoading() const { return bPreviewLoading; }
+
+	FOnStageMarketplacePreviewReady OnPreviewReady;
+
 	// --- Publishing ---
 
 	/** Publishes a saved scene. One publish at a time. Completion arrives on OnPublishCompleted with the new listing. */
@@ -114,6 +133,9 @@ private:
 	void HandlePackageFetched(EStageMarketplaceResult Result, const FStageMarketplacePackageBytes& Bytes, FGuid ListingId);
 	void FinishAcquire(const FGuid& ListingId, const FStageMarketplaceResultInfo& Result, const FString& SceneName);
 
+	void HandlePreviewFetched(EStageMarketplaceResult Result, const FStageMarketplacePackageBytes& Bytes, FGuid ListingId, uint32 Serial);
+	void FinishPreview(const FGuid& ListingId, const FStageMarketplaceResultInfo& Result, const FStageMarketplacePreviewScene& Scene, uint32 Serial);
+
 	void HandlePackageBuilt(EStageMarketplaceResult Result, const FStageMarketplacePackageBytes& Bytes);
 	void HandlePublished(EStageMarketplaceResult Result, const FStageMarketplaceListing& Listing);
 	void FinishPublish(const FStageMarketplaceResultInfo& Result, const FStageMarketplaceListing& Listing);
@@ -131,6 +153,10 @@ private:
 	/** Increments per query; an answer with an older serial is stale. */
 	uint32 QuerySerial = 0;
 	bool bQueryInFlight = false;
+
+	/** Increments per preview request; an answer with an older serial is stale and dropped. */
+	uint32 PreviewSerial = 0;
+	bool bPreviewLoading = false;
 
 	/** Listings being bought, downloaded or imported. */
 	TSet<FGuid> PendingAcquires;

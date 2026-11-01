@@ -9,6 +9,7 @@
 #include "Environment/StageEnvironmentTypes.h"
 #include "History/StageEditCommand.h"
 #include "Input/StageKeyBindings.h"
+#include "Marketplace/StageMarketplaceTypes.h"
 #include "Placement/StagePlacementTypes.h"
 #include "Scene/StageSceneTypes.h"
 #include "Show/ShowControlTypes.h"
@@ -397,6 +398,18 @@ public:
 	/** Deletes the saved scene Name from disk (the caller confirms). The stage on screen is not changed. Reported like Save. */
 	UFUNCTION(BlueprintCallable, Category = "StageCraft|Requests")
 	EStageSceneResult RequestDeleteScene(const FString& Name);
+
+	/**
+	 * Gets a community marketplace listing (Docs/ADR/0021-community-marketplace.md §12.2): free and owned ones are downloaded and
+	 * added to the saved scenes; paid ones are bought with credits first. The stage on screen is not changed. Refusals are reported
+	 * on OnRequestRejected; completion arrives on UStageMarketplaceSubsystem::OnAcquireCompleted.
+	 */
+	UFUNCTION(BlueprintCallable, Category = "StageCraft|Requests")
+	bool RequestMarketplaceAcquire(FGuid ListingId);
+
+	/** Publishes a saved scene to the marketplace. Reported like RequestMarketplaceAcquire; completion on OnPublishCompleted. */
+	UFUNCTION(BlueprintCallable, Category = "StageCraft|Requests")
+	bool RequestMarketplacePublish(const FStageMarketplacePublishRequest& Request);
 
 	/**
 	 * Renders a still image of the current view with the user's render settings (Render panel, Render menu), leaving out

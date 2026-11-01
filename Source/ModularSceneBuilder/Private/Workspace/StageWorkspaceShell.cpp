@@ -464,6 +464,7 @@ void FStageWorkspaceShell::RegisterPanelSpawners()
 	// squeezing the main layout. Slate's fallback for a new floating tab is 1000 x 600 (ADR 0015 §2.7, ADR 0016 §2.6).
 	FTabManager::RegisterDefaultTabWindowSize(FGameplayTag(StageCraftTags::Panel_Sketch).GetTagName(), FVector2D(1100.0, 820.0));
 	FTabManager::RegisterDefaultTabWindowSize(FGameplayTag(StageCraftTags::Panel_Assistant).GetTagName(), FVector2D(560.0, 720.0));
+	FTabManager::RegisterDefaultTabWindowSize(FGameplayTag(StageCraftTags::Panel_Marketplace).GetTagName(), FVector2D(1180.0, 760.0));
 }
 
 void FStageWorkspaceShell::SyncReportedHosts()

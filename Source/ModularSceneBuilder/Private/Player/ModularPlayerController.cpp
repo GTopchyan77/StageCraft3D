@@ -49,6 +49,7 @@
 #include "Report/StageBillOfMaterialsSubsystem.h"
 #include "Report/StageCableScheduleSubsystem.h"
 #include "Report/StagePatchSheetSubsystem.h"
+#include "Marketplace/StageMarketplaceSubsystem.h"
 #include "Scene/StageSceneComponent.h"
 #include "Subsystems/StageDMXNetworkSubsystem.h"
 #include "Sketch/StageSketchBuilder.h"
@@ -2119,6 +2120,42 @@ EStageSceneResult AModularPlayerController::RequestDeleteScene(const FString& Na
 	return Result == EStageSceneResult::Busy || Result == EStageSceneResult::Unavailable
 		? ReportSceneRefusal(EStageSceneOperation::Delete, Result, Name)
 		: Result;
+}
+
+namespace StageMarketplaceRequests
+{
+	/** Marketplace refusals take the common refusal path, which speaks FStageEconomyResultInfo. */
+	FStageEconomyResultInfo ToRejection(const FStageMarketplaceResultInfo& Result)
+	{
+		const EStageEconomyResult Code = Result.Code == EStageMarketplaceResult::ServerRequired ? EStageEconomyResult::ServerRequired
+			: Result.Code == EStageMarketplaceResult::PurchaseFailed ? EStageEconomyResult::BackendRejected
+			: EStageEconomyResult::InvalidRequest;
+		return FStageEconomyResultInfo::Fail(Code, Result.Message);
+	}
+}
+
+bool AModularPlayerController::RequestMarketplaceAcquire(FGuid ListingId)
+{
+	UStageMarketplaceSubsystem* Marketplace = GetGameInstance() ? GetGameInstance()->GetSubsystem<UStageMarketplaceSubsystem>() : nullptr;
+	const FStageMarketplaceResultInfo Result = Marketplace ? Marketplace->RequestAcquire(ListingId)
+		: FStageMarketplaceResultInfo::Fail(EStageMarketplaceResult::BackendUnavailable, LOCTEXT("NoMarketplace", "The marketplace is not available."));
+	if (!Result.IsSuccess())
+	{
+		ReportRejection(StageMarketplaceRequests::ToRejection(Result));
+	}
+	return Result.IsSuccess();
+}
+
+bool AModularPlayerController::RequestMarketplacePublish(const FStageMarketplacePublishRequest& Request)
+{
+	UStageMarketplaceSubsystem* Marketplace = GetGameInstance() ? GetGameInstance()->GetSubsystem<UStageMarketplaceSubsystem>() : nullptr;
+	const FStageMarketplaceResultInfo Result = Marketplace ? Marketplace->RequestPublish(Request)
+		: FStageMarketplaceResultInfo::Fail(EStageMarketplaceResult::BackendUnavailable, LOCTEXT("NoMarketplace", "The marketplace is not available."));
+	if (!Result.IsSuccess())
+	{
+		ReportRejection(StageMarketplaceRequests::ToRejection(Result));
+	}
+	return Result.IsSuccess();
 }
 
 bool AModularPlayerController::RequestRender()
