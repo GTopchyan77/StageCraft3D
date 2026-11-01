@@ -36,6 +36,8 @@ enum class EStageEconomyResult : uint8
 	Locked,
 	/** A session rule (GameMode) forbids the action, e.g. the stage's item limit is reached. */
 	SessionRuleViolation,
+	/** A real-money price needs an authoritative server; the offline commerce backend cannot settle it (Docs/ADR/0021-community-marketplace.md §5). */
+	ServerRequired,
 };
 
 /** How an item, parameter or entitlement relates to the current player. */
@@ -109,6 +111,10 @@ struct MODULARSCENEBUILDER_API FStagePurchaseRecord
 
 	UPROPERTY(BlueprintReadOnly, SaveGame, Category = "Economy")
 	FGameplayTagContainer EntitlementsGranted;
+
+	/** Set for a community marketplace listing (ProductId is then StageListing:<id>); committing it adds the listing to OwnedListings. */
+	UPROPERTY(BlueprintReadOnly, SaveGame, Category = "Economy")
+	FGuid ListingId;
 };
 
 /**
@@ -135,6 +141,13 @@ struct MODULARSCENEBUILDER_API FStagePlayerProfile
 
 	UPROPERTY(BlueprintReadOnly, SaveGame, Category = "Profile")
 	TArray<FStagePurchaseRecord> PurchaseHistory;
+
+	/**
+	 * Community marketplace listings bought (Docs/ADR/0021-community-marketplace.md §5). A listing is not a gameplay tag, because
+	 * user content cannot register tags safely at runtime. Added after version 1 as a tagged property: older saves load with none.
+	 */
+	UPROPERTY(BlueprintReadOnly, SaveGame, Category = "Profile")
+	TArray<FGuid> OwnedListings;
 };
 
 /** A purchase handed to the commerce backend. TransactionId is unique per attempt (idempotency key for a server). */

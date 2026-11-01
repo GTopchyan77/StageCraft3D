@@ -439,9 +439,9 @@ Decisions (Gevor, 2026-10-30): the symptom is thin geometry crawling during came
 - [x] Fixture bench 50/200/500 (Kmidden open: regression check only); builds Editor/Game/Shipping 0 warnings; automation 110/110
 - [ ] Manual verification (Gevor): truss / stairs / cables while orbiting and flying
 
-## Phase 26 — Offline-first assistant: knowledge base, multi-step, memory (requested by Gevor 2026-10-30; moved to STATE.md #50, ADR 0021)
+## Phase 26 — Offline-first assistant: knowledge base, multi-step, memory (requested by Gevor 2026-10-30; next free STATE.md entry, ADR 0022)
 Decisions (Gevor, 2026-10-30): the free offline engine is the full default; Claude (ANTHROPIC_API_KEY) only extends it.
-Gevor's fixture-suite request took #49 (Phase 27); this phase follows it unchanged.
+Gevor's fixture-suite request took #49 (Phase 27) and the marketplace took #50 / ADR 0021 (Phase 28); this phase follows them unchanged.
 - [ ] Feature knowledge base (DataTable + CSV, English and Armenian), `StageAIFeatureSearch`, `how_to` / `where_is` / `open_panel`
 - [ ] Reply action buttons; open and flash panels
 - [ ] Multi-step prompts (splitter, queued plan, stop on first refusal)
@@ -462,3 +462,28 @@ Decisions (Gevor, 2026-10-30): per-cell pixel bars (cues and DMX); catalog dimen
 - [x] Assistant `set_fixture` (EN/HY, Claude schema), runner through RequestParameterChange
 - [x] Tests (117/117); Editor / Game / Shipping builds; scripted visual run; fixture bench
 - [ ] Manual verification (Gevor): library, inspector rows, gel picker, cells, prism/gobo spin, assistant fixture commands
+
+## Phase 28 — Community marketplace and cloud showcase (requested by Gevor 2026-11-01; STATE.md #50, ADR 0021)
+Decisions (Gevor, 2026-11-01): backend seam + local community-folder backend (HTTP backend once a server API exists); credits only, real money modelled but refused without an authoritative server; phased A/B/C.
+### Phase A — package format, backend, subsystem, listing purchases (STATE.md #50)
+- [x] ADR 0021
+- [x] `.stage` container (`StagePackage`): MNFT/SCEN/THMB sections, zlib, SHA-1, caps, untrusted-input checks
+- [x] `StageMarketplaceRules`: query filter/sort/page, ownership, listing-purchase validation, import scene names
+- [x] `UStageMarketplaceBackend` seam + `UStageLocalMarketplaceBackend` (`FStageLocalMarketplaceStore`, one pipe, downloads.json)
+- [x] `UStageMarketplaceSubsystem`: query, acquire (buy -> download -> verify -> scene), publish a saved scene
+- [x] Economy: `RequestListingPurchase` (offer snapshot, `ServerRequired`), profile `OwnedListings` (old saves hash unchanged)
+- [x] `StageCraft.Marketplace.*` dev console commands
+- [x] Tests; Editor / Game / Shipping builds; scripted runtime run
+- [ ] Manual verification (Gevor)
+### Phase B — Marketplace panel and read-only 3D preview (ADR 0021 §6-7; preview world needs an ADR addendum first)
+- [ ] Controller requests `RequestMarketplaceAcquire` / `RequestMarketplacePublish` (refusals on `OnRequestRejected`)
+- [ ] Floating Marketplace panel: search, kind chips, category, price filter, sort, virtualized cards, details, Get/Buy/Open
+- [ ] Publish dialog with viewport thumbnail
+- [ ] Read-only preview in a separate `GamePreview` world (no controller, session or history)
+### Phase C — Assistant marketplace navigator (ADR 0021 §8)
+- [ ] Intents `SearchMarketplace`, `PreviewListing`, `AcquireListing`, `OpenImported` (EN/HY grammar + Claude schema)
+- [ ] Explicit confirmation turn before any purchase
+### Follow-ups
+- [ ] Merge import of LightingRig / CueList packages (fixture-id remapping)
+- [ ] Embed imported models in packages (lift `NotPortable`)
+- [ ] HTTP backend + server-side validation, signatures, payouts; real-money listings

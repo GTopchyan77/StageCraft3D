@@ -9,6 +9,8 @@
 #include "Economy/StageUnlockCondition.h"
 #include "Engine/AssetManager.h"
 #include "Engine/GameInstance.h"
+#include "Marketplace/StageMarketplaceRules.h"
+#include "Marketplace/StageMarketplaceSubsystem.h"
 #include "ModularSceneBuilder.h"
 #include "Subsystems/StageProfileSubsystem.h"
 
@@ -71,7 +73,9 @@ void UStageEconomySubsystem::Deinitialize()
 {
 	OnProductCatalogLoaded.Clear();
 	OnPurchaseCompleted.Clear();
+	OnListingPurchaseCompleted.Clear();
 	PendingPurchases.Reset();
+	PendingListingOffers.Reset();
 	Products.Reset();
 	Backend = nullptr;
 	bCatalogLoaded = false;
@@ -382,6 +386,112 @@ void UStageEconomySubsystem::HandlePurchaseProcessed(bool bApproved, const FText
 	UE_LOG(LogStageCraft, Log, TEXT("Purchase %s of %s: %s %s"), *TransactionId.ToString(), *Product->GetPrimaryAssetId().ToString(),
 		Result.IsSuccess() ? TEXT("completed") : TEXT("failed"), *Result.Message.ToString());
 	OnPurchaseCompleted.Broadcast(Product, Result);
+}
+
+// --- Community marketplace listings ---
+
+bool UStageEconomySubsystem::CanSettleRealMoney() const
+{
+	return Backend && Backend->CanSettleRealMoney();
+}
+
+bool UStageEconomySubsystem::IsListingPurchasePending(FGuid ListingId) const
+{
+	return ListingId.IsValid() && PendingPurchases.Contains(StageMarketplaceRules::MakeListingProductId(ListingId));
+}
+
+FStageEconomyResultInfo UStageEconomySubsystem::ValidateListingPurchase(const FStageMarketplaceListing* Offer, bool bIgnorePending) const
+{
+	const UStageProfileSubsystem* Profile = GetProfile();
+
+	FStageListingPurchaseContext Context;
+	Context.Listing = Offer;
+	Context.Profile = Profile ? &Profile->GetProfile() : nullptr;
+	Context.bIntegrityValid = Profile && Profile->IsIntegrityValid();
+	Context.bPending = !bIgnorePending && Offer && IsListingPurchasePending(Offer->ListingId);
+	Context.bCanSettleRealMoney = CanSettleRealMoney();
+	return StageMarketplaceRules::ValidateListingPurchase(Context);
+}
+
+FStageEconomyResultInfo UStageEconomySubsystem::CanPurchaseListing(FGuid ListingId) const
+{
+	// The offer comes from the marketplace (what the backend returned), never from the caller: deny when it is unknown.
+	const UStageMarketplaceSubsystem* Marketplace = GetGameInstance()->GetSubsystem<UStageMarketplaceSubsystem>();
+	return ValidateListingPurchase(Marketplace ? Marketplace->FindListing(ListingId) : nullptr, /*bIgnorePending*/ false);
+}
+
+FStageEconomyResultInfo UStageEconomySubsystem::RequestListingPurchase(FGuid ListingId)
+{
+	const UStageMarketplaceSubsystem* Marketplace = GetGameInstance()->GetSubsystem<UStageMarketplaceSubsystem>();
+	const FStageMarketplaceListing* Listing = Marketplace ? Marketplace->FindListing(ListingId) : nullptr;
+	const FStageEconomyResultInfo Validation = ValidateListingPurchase(Listing, /*bIgnorePending*/ false);
+	if (!Validation.IsSuccess())
+	{
+		UE_LOG(LogStageCraft, Log, TEXT("Purchase of listing %s refused: %s"), *ListingId.ToString(), *Validation.Message.ToString());
+		return Validation;
+	}
+
+	FStagePurchaseRequest Request;
+	Request.TransactionId = FGuid::NewGuid();
+	Request.ProductId = StageMarketplaceRules::MakeListingProductId(ListingId);
+	FStageCurrencyAmount& Credits = Request.Price.AddDefaulted_GetRef();
+	Credits.Currency = StageCraftTags::Currency_Credits;
+	Credits.Amount = Listing->Price.Credits;
+
+	PendingPurchases.Add(Request.ProductId, Request.TransactionId);
+	PendingListingOffers.Add(Request.TransactionId, *Listing);
+	UE_LOG(LogStageCraft, Log, TEXT("Purchase %s of listing %s (%lld credits) sent to %s."), *Request.TransactionId.ToString(), *ListingId.ToString(),
+		Listing->Price.Credits, *GetNameSafe(Backend));
+
+	// The local backend answers inside this call; a server answers later. Both paths are the same.
+	Backend->ProcessPurchase(Request, FOnStagePurchaseProcessed::CreateUObject(this, &ThisClass::HandleListingPurchaseProcessed, Request.TransactionId));
+	return FStageEconomyResultInfo::Ok();
+}
+
+void UStageEconomySubsystem::HandleListingPurchaseProcessed(bool bApproved, const FText& Reason, FGuid TransactionId)
+{
+	FStageMarketplaceListing Offer;
+	if (!PendingListingOffers.RemoveAndCopyValue(TransactionId, Offer))
+	{
+		// Stale or duplicate answer (a backend must answer once; this keeps a second answer harmless).
+		UE_LOG(LogStageCraft, Warning, TEXT("Ignoring backend answer for unknown listing transaction %s."), *TransactionId.ToString());
+		return;
+	}
+	PendingPurchases.Remove(StageMarketplaceRules::MakeListingProductId(Offer.ListingId));
+
+	FStageEconomyResultInfo Result;
+	if (!bApproved)
+	{
+		Result = FStageEconomyResultInfo::Fail(EStageEconomyResult::BackendRejected,
+			Reason.IsEmpty() ? LOCTEXT("ListingDeclined", "The purchase was declined.") : Reason);
+	}
+	else
+	{
+		// Credits may have been spent elsewhere while the backend was busy.
+		Result = ValidateListingPurchase(&Offer, /*bIgnorePending*/ true);
+	}
+
+	if (Result.IsSuccess())
+	{
+		FStagePurchaseRecord Record;
+		Record.TransactionId = TransactionId;
+		Record.ProductId = StageMarketplaceRules::MakeListingProductId(Offer.ListingId);
+		Record.ListingId = Offer.ListingId;
+		Record.Timestamp = FDateTime::UtcNow();
+		FStageCurrencyAmount& Paid = Record.AmountPaid.AddDefaulted_GetRef();
+		Paid.Currency = StageCraftTags::Currency_Credits;
+		Paid.Amount = Offer.Price.Credits;
+
+		UStageProfileSubsystem* Profile = GetProfile();
+		if (!Profile || !Profile->CommitPurchase(Record))
+		{
+			Result = FStageEconomyResultInfo::Fail(EStageEconomyResult::InsufficientFunds, LOCTEXT("ListingCommitFailed", "The purchase could not be applied."));
+		}
+	}
+
+	UE_LOG(LogStageCraft, Log, TEXT("Purchase %s of listing %s: %s %s"), *TransactionId.ToString(), *Offer.ListingId.ToString(),
+		Result.IsSuccess() ? TEXT("completed") : TEXT("failed"), *Result.Message.ToString());
+	OnListingPurchaseCompleted.Broadcast(Offer.ListingId, Result);
 }
 
 bool UStageEconomySubsystem::DevGrantCurrency(FGameplayTag Currency, int64 Amount)

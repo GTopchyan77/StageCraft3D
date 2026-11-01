@@ -53,6 +53,11 @@ bool UStageProfileSubsystem::HasEntitlement(FGameplayTag Entitlement) const
 	return Entitlement.IsValid() && Profile.Entitlements.HasTagExact(Entitlement);
 }
 
+bool UStageProfileSubsystem::OwnsListing(FGuid ListingId) const
+{
+	return ListingId.IsValid() && Profile.OwnedListings.Contains(ListingId);
+}
+
 void UStageProfileSubsystem::SetDisplayName(const FString& NewName)
 {
 	Profile.DisplayName = NewName.Left(64).TrimStartAndEnd();
@@ -131,6 +136,10 @@ bool UStageProfileSubsystem::CommitPurchase(const FStagePurchaseRecord& Record)
 		Profile.Balances.FindOrAdd(Paid.Currency) -= Paid.Amount;
 	}
 	Profile.Entitlements.AppendTags(Record.EntitlementsGranted);
+	if (Record.ListingId.IsValid())
+	{
+		Profile.OwnedListings.AddUnique(Record.ListingId);
+	}
 	Profile.PurchaseHistory.Add(Record);
 
 	RequestSave();
@@ -190,6 +199,19 @@ FString UStageProfileSubsystem::ComputeIntegrityHash() const
 	for (const FStagePurchaseRecord& Record : Profile.PurchaseHistory)
 	{
 		Parts.Add(TEXT("P:") + Record.TransactionId.ToString() + TEXT("/") + Record.ProductId.ToString());
+	}
+
+	// Marketplace listings (ADR 0021 §5). A profile that owns none adds no part, so saves written before listings existed still
+	// hash exactly as they did and need no version bump.
+	TArray<FString> Listings;
+	for (const FGuid& Listing : Profile.OwnedListings)
+	{
+		Listings.Add(Listing.ToString());
+	}
+	Listings.Sort();
+	for (const FString& Listing : Listings)
+	{
+		Parts.Add(TEXT("O:") + Listing);
 	}
 	Parts.Add(FString::Printf(TEXT("L:%d"), Profile.Level));
 	Parts.Add(StageProfile::IntegritySalt);

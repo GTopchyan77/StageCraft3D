@@ -32,6 +32,12 @@ public:
 	/** Must call OnProcessed exactly once, now or later (on the game thread). */
 	virtual void ProcessPurchase(const FStagePurchaseRequest& Request, FOnStagePurchaseProcessed OnProcessed)
 		PURE_VIRTUAL(UStageCommerceBackend::ProcessPurchase, );
+
+	/**
+	 * True only for a backend whose answers come from an authoritative server that re-validates the purchase and moves real money
+	 * (Economy security 7). Real-money marketplace listings are refused as ServerRequired unless this is true (ADR 0021 §5).
+	 */
+	virtual bool CanSettleRealMoney() const { return false; }
 };
 
 /** Offline backend: the local profile is the authority, so every validated purchase is approved. */

@@ -59,6 +59,9 @@ public:
 
 	explicit FStageSceneStore(FString InDirectory);
 
+	/** Saved/StageCraft/Scenes: the user's scenes (File menu), and where marketplace imports land (ADR 0021 §4). */
+	static FString GetDefaultDirectory();
+
 	/** The same rules as workspace layout names: 1-64 letters, digits, space, '-', '_', '(' and ')'; no reserved device names. */
 	static bool IsValidSceneName(const FString& Name);
 

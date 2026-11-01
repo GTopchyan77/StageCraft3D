@@ -6,10 +6,12 @@
 #include "Subsystems/GameInstanceSubsystem.h"
 #include "Data/StageParameterTypes.h"
 #include "Economy/StageEconomyTypes.h"
+#include "Marketplace/StageMarketplaceTypes.h"
 #include "StageEconomySubsystem.generated.h"
 
 DECLARE_DYNAMIC_MULTICAST_DELEGATE(FOnStageProductCatalogLoaded);
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_TwoParams(FOnStagePurchaseCompleted, class UStageProductData*, Product, FStageEconomyResultInfo, Result);
+DECLARE_DYNAMIC_MULTICAST_DELEGATE_TwoParams(FOnStageListingPurchaseCompleted, FGuid, ListingId, FStageEconomyResultInfo, Result);
 
 /**
  * The economy's rules and its only writer: product catalog, ownership queries, purchase
@@ -105,6 +107,33 @@ public:
 	UPROPERTY(BlueprintAssignable, Category = "StageCraft|Economy")
 	FOnStagePurchaseCompleted OnPurchaseCompleted;
 
+	// --- Community marketplace listings (Docs/ADR/0021-community-marketplace.md §5) ---
+
+	/**
+	 * Everything RequestListingPurchase checks, without buying. The offer is the one the marketplace backend returned
+	 * (UStageMarketplaceSubsystem::FindListing), never a price from the caller.
+	 */
+	UFUNCTION(BlueprintCallable, Category = "StageCraft|Economy")
+	FStageEconomyResultInfo CanPurchaseListing(FGuid ListingId) const;
+
+	/**
+	 * Starts buying a paid listing with credits. Success means accepted and sent to the commerce backend; completion arrives on
+	 * OnListingPurchaseCompleted. Real-money listings are refused (ServerRequired) unless the commerce backend can settle them.
+	 * Prefer UStageMarketplaceSubsystem::RequestAcquire, which also downloads and imports the listing.
+	 */
+	UFUNCTION(BlueprintCallable, Category = "StageCraft|Economy")
+	FStageEconomyResultInfo RequestListingPurchase(FGuid ListingId);
+
+	UFUNCTION(BlueprintPure, Category = "StageCraft|Economy")
+	bool IsListingPurchasePending(FGuid ListingId) const;
+
+	/** True when the commerce backend is an authoritative server that can settle real money. */
+	UFUNCTION(BlueprintPure, Category = "StageCraft|Economy")
+	bool CanSettleRealMoney() const;
+
+	UPROPERTY(BlueprintAssignable, Category = "StageCraft|Economy")
+	FOnStageListingPurchaseCompleted OnListingPurchaseCompleted;
+
 	// --- Development only (compiled out of Shipping) ---
 
 	/** Adds currency (negative removes), bypassing the shop. For testing and for future reward systems' prototypes. */
@@ -120,6 +149,10 @@ private:
 	void LoadProductCatalog();
 	void HandleProductCatalogLoaded();
 	void HandlePurchaseProcessed(bool bApproved, const FText& Reason, FGuid TransactionId, TWeakObjectPtr<class UStageProductData> WeakProduct);
+	void HandleListingPurchaseProcessed(bool bApproved, const FText& Reason, FGuid TransactionId);
+
+	/** Listing checks shared by CanPurchaseListing and the re-check on settlement (against the offer snapshot). */
+	FStageEconomyResultInfo ValidateListingPurchase(const FStageMarketplaceListing* Offer, bool bIgnorePending) const;
 
 	/** Checks shared by CanPurchase and the re-check on settlement. bIgnorePending skips the in-flight check. */
 	FStageEconomyResultInfo ValidatePurchase(const class UStageProductData* Product, bool bIgnorePending) const;
@@ -132,8 +165,14 @@ private:
 	UPROPERTY(Transient)
 	TObjectPtr<class UStageCommerceBackend> Backend = nullptr;
 
-	/** Product -> transaction in flight. */
+	/** Product -> transaction in flight. Listings use StageListing:<id> ids, so one map guards both kinds. */
 	TMap<FPrimaryAssetId, FGuid> PendingPurchases;
+
+	/**
+	 * Transaction -> the listing as offered when the purchase was accepted. Settlement re-validates and charges this snapshot, so a
+	 * newer marketplace query that replaces the visible listings can neither lose the purchase nor change its price.
+	 */
+	TMap<FGuid, FStageMarketplaceListing> PendingListingOffers;
 
 	bool bCatalogLoaded = false;
 };

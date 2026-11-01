@@ -4602,3 +4602,134 @@ The plan was approved in plan mode.
   - Attribute edits are not undo steps (as before; cues record them).
 - **Content-script warning:** headless runs create a transient `StaticMeshEditorSubsystem`, which UE deprecates; it is the only headless path.
 - **Pending:** the assistant upgrade (knowledge base, multi-step, memory) is #50, and #48's manual crawl check is still pending.
+
+---
+
+## #50 — Community marketplace Phase A: `.stage` packages, marketplace backend and subsystem, credit purchases of listings (2026-11-01)
+
+**Request (Gevor, 2026-11-01, pasted, "strictly follow Rules.md"):** the Community Marketplace and Cloud Showcase.
+1. `.stage` project packages: fixtures, multi-cell channels, DMX patch, truss geometry, cues.
+2. A marketplace panel: browse, filter by category, popularity and price, read-only 3D preview.
+3. Assistant marketplace navigation: search, preview, import.
+4. Standards: `TObjectPtr`, encapsulation, no tick polling, 0 warnings, all tests, STATE.md.
+
+**Gevor's answers before design:**
+- **Backend:** a backend seam plus a local "community folder" backend. An HTTP backend comes once a server API exists. There is no server today.
+- **Money:** credits only. Real-money prices exist in the data but are refused unless the commerce backend is an authoritative server (Rules.md Economy security 7, §66).
+- **Delivery:** phased. This entry is **Phase A**: format, backend, subsystem, purchases, tests. Phase B (panel and read-only preview) and Phase C (assistant navigator) are planned in the ADR and in tasks/todo.md Phase 28.
+
+**Design:** Docs/ADR/0021-community-marketplace.md. ADR 0021 and #50 were reserved for the assistant upgrade (Phase 26), which now takes the next free entry and ADR 0022, as it did when the fixture suite took #49.
+
+**What & why**
+- **A `.stage` package (`StagePackage`) is a container around the existing scene format (v3), not a second serializer.**
+  - **It holds everything a stage needs.** Item SaveGame state already holds fixture cells and attributes, the DMX patch and span/truss geometry, and the scene holds the cues and environment.
+  - **The container** is the magic `STAGEPKG`, a version, and a table of sections, each with a FourCC, a codec (stored or zlib), sizes and a SHA-1.
+  - **The sections** are `MNFT` (manifest JSON, 256 KiB cap), `SCEN` (the scene JSON, 64 MiB cap) and an optional `THMB` (PNG, 2 MiB cap). A whole package is capped at 96 MiB.
+  - **Browsing reads only the manifest.** The scene is never inflated for a query.
+  - **The reader treats every package as untrusted.** It refuses the whole package on:
+    - a bad magic, version, section count or repeated section;
+    - an out-of-bounds or wrapping size, trailing bytes, or an unknown codec;
+    - any size over its cap, checked before allocating (no decompression bombs);
+    - a size or hash mismatch;
+    - a scene the parser had to repair, or stats that do not match the scene;
+    - imported models (`NotPortable`, since those exist only on the machine that imported them).
+  - **What the manifest holds.** Id, title, description, author, kind (StageDesign / LightingRig / CueList), category, keywords, price (credits plus a real-money amount and ISO code), creation date, stats (items, fixtures, cues) and the required catalog items.
+  - **How it is validated.** Text is normalized, and over-long fields are refused, never cut. Required items are recomputed from the scene, never trusted. Categories are native tags `StageCraft.Marketplace.Category.*`, and unknown ones read as Other.
+- **`StageMarketplaceRules`** (pure, tested) holds four things:
+  - **Query filtering:** every search word must appear; kinds, exact category and Free/Paid filters apply.
+  - **Sorting and paging:** sort by Popular, Newest, price either way or Title, with deterministic tie-breaks, and real money sorted after credits. Paging is clamped.
+  - **Ownership and purchase checks:** listing ownership (Free / Owned / Purchasable / Locked) and the listing-purchase validation order.
+  - **Import names:** unique scene names for imports ("Title", "Title (2)", ...). An import never replaces a scene.
+- **`UStageMarketplaceBackend`** (abstract) has three calls: Query, FetchPackage (Acquire or Preview; only acquisitions count as downloads) and Publish. Each answers exactly once on the game thread.
+  - **`UStageLocalMarketplaceBackend`** runs `FStageLocalMarketplaceStore` on one `UE::Tasks::FPipe` and answers through `AsyncTask(GameThread)` with a weak `this`. `BeginDestroy` waits for the pipe.
+  - **The folder** is `Saved/StageCraft/Marketplace/Community`, or `CommunityDirectory` in DefaultGame.ini (a shared folder makes a LAN showcase). Popularity is kept in `downloads.json`.
+  - **Browsing** skips unreadable files and files whose manifest id differs from their file name (a renamed copy).
+  - **Publishing** re-reads the whole package and writes atomically with KeepExisting.
+- **`UStageMarketplaceSubsystem`** (GameInstance) does three things:
+  - **Queries.** A newer query supersedes an older one by serial number. Results are pushed on `OnListingsUpdated`.
+  - **`RequestAcquire`.**
+    - Free or owned listings: fetch, verify, then write a new scene into the scenes folder and keep a copy in `Saved/StageCraft/Marketplace/Library`.
+    - Paid listings: buy through the economy first.
+    - At most one acquisition per listing is in flight. The result arrives on `OnAcquireCompleted`.
+    - It never spawns actors. Opening an import uses the existing scene load, so catalog, entitlements, rules, undo and the unsaved-changes prompt all apply.
+  - **`RequestPublish`** publishes a saved scene (what is on disk is what gets published).
+    - On the game thread: the text, price, thumbnail and catalog-loaded checks, and the light-item paths for the fixture count.
+    - On the work pipe: load the scene, check portability, build the package. The backend then publishes it.
+    - A real-money price without a server is refused with `ServerRequired`. One publish runs at a time.
+- **Economy:**
+  - **Listing purchases.** New `CanPurchaseListing` / `RequestListingPurchase` / `OnListingPurchaseCompleted`. The offer is read from `UStageMarketplaceSubsystem::FindListing`, never from the caller, and snapshotted per transaction, so a newer query cannot change or lose a pending purchase.
+  - **Settlement** goes through the commerce backend with `ProductId` `StageListing:<guid>` and a fresh TransactionId. The snapshot is validated again when the backend answers, then committed all or nothing.
+  - **New result and backend flag.** `EStageEconomyResult::ServerRequired` (appended) and `UStageCommerceBackend::CanSettleRealMoney()`, which is false for the local backend.
+  - **Catalog-only rule kept.** Products are still catalog-only; listings use this separate validated operation (Economy security 4 intact).
+- **Profile:**
+  - **New field.** `FStagePlayerProfile::OwnedListings` (SaveGame), with `FStagePurchaseRecord::ListingId` and `OwnsListing()`. `CommitPurchase` adds the listing.
+  - **Integrity hash.** It adds one sorted `O:<guid>` part per owned listing. A profile that owns none hashes exactly as before, so there is no version bump and no wallet reset (verified with Gevor's 2026-10-06 save).
+- **Smaller changes:**
+  - `FStageSceneStore::GetDefaultDirectory()` is now the one source for the scenes folder (used by `UStageSceneComponent`).
+  - New dev-only console commands `StageCraft.Marketplace.Query/Status/Get/Publish`, compiled out of Shipping.
+
+**Files changed**
+- New:
+  - `Docs/ADR/0021-community-marketplace.md`
+  - `Source/ModularSceneBuilder/Public/Marketplace/StageMarketplaceTypes.h`, `StageMarketplaceBackend.h`, `StageMarketplaceSubsystem.h`
+  - `Source/ModularSceneBuilder/Private/Marketplace/StageMarketplaceTypes.cpp`, `StagePackage.h/.cpp`, `StageMarketplaceRules.h/.cpp`, `StageLocalMarketplaceStore.h/.cpp`, `StageMarketplaceBackend.cpp`, `StageMarketplaceSubsystem.cpp`, `StageMarketplaceConsoleCommands.cpp`, `Tests/StageMarketplaceTests.cpp`
+- Changed:
+  - `Source/ModularSceneBuilder/Public/Economy/StageEconomyTypes.h` (ServerRequired, ListingId, OwnedListings)
+  - `Public/Economy/StageCommerceBackend.h` (CanSettleRealMoney)
+  - `Public/Subsystems/StageEconomySubsystem.h`, `Private/Subsystems/StageEconomySubsystem.cpp` (listing purchases)
+  - `Public/Subsystems/StageProfileSubsystem.h`, `Private/Subsystems/StageProfileSubsystem.cpp` (OwnsListing, commit, hash)
+  - `Private/Scene/StageSceneStore.h/.cpp` (GetDefaultDirectory), `Private/Scene/StageSceneComponent.cpp`
+  - `Config/DefaultGame.ini` (MarketplaceBackendClass, CommunityDirectory)
+  - `tasks/todo.md` (Phase 28 added; Phase 26 renumbered to ADR 0022)
+- No content assets, maps or input actions changed.
+
+**Verification**
+- **Builds:** Editor, Game and Shipping (`-DisableAdaptiveUnity`) all succeeded with 0 warnings. The Shipping executable contains no `StageCraft.Marketplace` command strings; the Development game executable does.
+- **Automation:** 124/124 pass (117 before plus 7 new `StageCraft.Marketplace.*` tests):
+  - Package.RoundTrip
+  - Package.Untrusted (magic, version, counts, truncation, trailing bytes, wrapping size, repeated section, codec, caps, hash, damaged scene while browsing still works, oversize file)
+  - Manifest
+  - Query
+  - PurchaseRules (every refusal branch, no real purchase)
+  - SceneName
+  - LocalStore (temporary folder, removed afterwards)
+- **Scripted Standalone `-game` runs by Claude.** The profile save and the workspace session were backed up and restored; the community folder, library and imported scenes were removed.
+  - **Run 1:**
+    - The old profile loaded with "integrity ok", 5000 credits.
+    - R42_Sketch was published free and for 150 credits: 15 items and 9 fixtures counted.
+    - The query listed 2 listings, shown as Free and Purchasable.
+    - Getting the free one imported "R42_Sketch (2)".
+    - Getting the paid one bought it through the local commerce backend (5000 → 4850, integrity still ok, listing then Owned) and imported "(3)".
+    - Getting both again re-imported them with no charge.
+    - Each listing showed 1 download after the first acquisition (the counter after the re-acquisition was not logged).
+    - "festival nothing" returned 0 listings.
+    - A publish sent while another was running was refused as Busy.
+  - **Run 2:**
+    - The free listing was imported as "R42_Sketch (2)".
+    - `StageCraft.Scene.Load "R42_Sketch (2)"` placed 15 items with 0 refused, unknown, invalid or repaired; fixtures re-registered and DMX-patched.
+    - The screenshot (Saved/Screenshots/WindowsEditor/ScreenShot00087.png) shows the deck, riser, truss loop with beams and the freehand truss.
+    - Publishing "No Such Scene" was refused as NotFound. Its message was wrong ("no longer in the marketplace"); it was fixed to say the scene is not saved, and the builds and 124/124 above were run after that fix.
+- **Not verified:**
+  - No UI exists yet (Phase B), so nothing was verified by hand in a panel.
+  - The real-money refusal is covered by tests only; the console cannot set a real-money price.
+  - Status: **implemented, awaiting manual verification** (console commands in a `-game` or PIE session).
+
+**Incident: R42_Sketch.json deleted and regenerated**
+- My runtime harness deleted Gevor's `Saved/StageCraft/Scenes/R42_Sketch.json` twice.
+  - First, a regex edit emptied the step list, and the cleanup by folder diff treated the existing scene as new.
+  - Second, I sent a run in parallel with a rewrite that the tool had refused, so the old script ran again.
+- `Saved/` is gitignored, and `Remove-Item` skips the Recycle Bin.
+- **Recovery:** the scene was regenerated by replaying the original sketch commands from `Saved/Logs/R42_Run2.log`. It is the same layout (2 decks with 36 panels, 2 truss runs with 25 sections, 7 fixtures; 15 items).
+- **Difference:** the fixtures are now `DA_Fixture_Beam`, the Sketch default since #49, where the original had `DA_MovingHead_Test`. New instance ids; 27,962 bytes, the original was 34,357.
+- **Prevention:** harness cleanup now deletes only names the run's log reports as imported and refuses the source scene. A lesson was saved to Claude's memory.
+
+**Commit:** uncommitted (working tree).
+
+**Known issues / follow-ups**
+- **Phase B:** the Marketplace panel, publish dialog and read-only preview in a separate `GamePreview` world (needs an ADR addendum first). Controller requests `RequestMarketplaceAcquire` / `RequestMarketplacePublish`.
+- **Phase C:** assistant intents, with an explicit confirmation turn before any purchase.
+- **Imports are whole scenes:** every kind imports as a new scene. Merging a LightingRig or CueList package into the open stage needs fixture-id remapping.
+- **`NotPortable`:** stages with imported models cannot be published until model files are embedded.
+- **Browsing reads whole files:** a query loads each package file to read its manifest. Use a prefix read or a cache if folders get large, measured first.
+- **The local backend pays no seller and has no authentication.** It handles credits only; real money needs the HTTP/server backend, and the request must then carry the real-money price (ADR 0021 §11).
+- **Engine log on damaged packages:** a damaged zlib section makes the engine log its own LogCompression error before the package is refused.

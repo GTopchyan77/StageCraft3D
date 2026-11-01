@@ -53,6 +53,10 @@ public:
 	UFUNCTION(BlueprintPure, Category = "StageCraft|Profile")
 	int32 GetPlayerLevel() const { return Profile.Level; }
 
+	/** True when the community marketplace listing was bought with this profile. */
+	UFUNCTION(BlueprintPure, Category = "StageCraft|Profile")
+	bool OwnsListing(FGuid ListingId) const;
+
 	/** False when the loaded save failed its integrity check. Spending is frozen until the profile is reset. */
 	UFUNCTION(BlueprintPure, Category = "StageCraft|Profile")
 	bool IsIntegrityValid() const { return bIntegrityValid; }

@@ -322,6 +322,11 @@ FStageSceneStore::FStageSceneStore(FString InDirectory)
 {
 }
 
+FString FStageSceneStore::GetDefaultDirectory()
+{
+	return FPaths::Combine(FPaths::ProjectSavedDir(), TEXT("StageCraft"), TEXT("Scenes"));
+}
+
 bool FStageSceneStore::IsValidSceneName(const FString& Name)
 {
 	// One naming rule for every user file the app writes, so users learn it once.

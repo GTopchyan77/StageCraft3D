@@ -40,7 +40,7 @@ void UStageSceneComponent::BeginPlay()
 	ensureMsgf(SpawnSystem && Selection, TEXT("%s: UStageSceneComponent needs USpawnSystemComponent and USelectionComponent on the same actor; scenes cannot be loaded."),
 		*GetNameSafe(GetOwner()));
 
-	const FString ScenesDirectory = FPaths::Combine(FPaths::ProjectSavedDir(), TEXT("StageCraft"), TEXT("Scenes"));
+	const FString ScenesDirectory = FStageSceneStore::GetDefaultDirectory();
 	Store = MakeShared<FStageSceneStore, ESPMode::ThreadSafe>(ScenesDirectory);
 	// A folder of its own: autosaves never appear among, or overwrite, the scenes the user saved.
 	AutosaveStore = MakeShared<FStageSceneStore, ESPMode::ThreadSafe>(FPaths::Combine(ScenesDirectory, TEXT("Autosave")));
