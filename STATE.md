@@ -4830,7 +4830,7 @@ The plan was approved in plan mode.
   - OPEN IN STAGE and its discard confirmation.
   - Status: **implemented, awaiting manual verification.**
 
-**Commit:** uncommitted (working tree).
+**Commit:** `22ab270` (committed by Claude with Gevor's permission, 2026-11-01).
 
 **Known issues / follow-ups**
 - **Preview image quality:** the still capture shows fine grain on large surfaces. Turning AO off, using a plain floor material and raising exposure did not remove it; the cause is not identified yet (probably a sampler the main viewport smooths over frames with temporal AA). The image is dark-ish but readable.
