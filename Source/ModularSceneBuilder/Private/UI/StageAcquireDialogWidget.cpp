@@ -23,6 +23,7 @@
 #include "Marketplace/StageMarketplaceSubsystem.h"
 #include "Misc/Paths.h"
 #include "Player/ModularPlayerController.h"
+#include "ProfilingDebugging/CpuProfilerTrace.h"
 #include "Services/StageAIToolSubsystem.h"
 #include "Subsystems/StageEconomySubsystem.h"
 #include "Subsystems/StageProfileSubsystem.h"
@@ -456,6 +457,8 @@ void UStageAcquireDialogWidget::RefreshWallet()
 	const UStageProfileSubsystem* Profile = BoundProfile.Get();
 	const UStageEconomySubsystem* Economy = BoundEconomy.Get();
 	const UStageMarketplaceSubsystem* Marketplace = BoundMarketplace.Get();
+	bHasShownPrice = Listing != nullptr;
+	ShownPrice = Listing ? Listing->Price : FStageMarketplacePrice();
 	if (!Listing)
 	{
 		TitleText->SetText(LOCTEXT("Gone", "This listing is no longer in the results"));
@@ -526,40 +529,39 @@ void UStageAcquireDialogWidget::RebuildTargets()
 {
 	using namespace StageCraftWidgetStyle;
 	const UStageCraftUITheme& Palette = GetTheme();
+	TRACE_CPUPROFILER_EVENT_SCOPE(StageAcquireDialog_RebuildTargets);
 	const UStageAcquireDispatchSubsystem* Dispatch = BoundDispatch.Get();
-	const UStageBridgeSubsystem* Bridge = BoundBridge.Get();
-	const UStageAIToolSubsystem* Tools = BoundTools.Get();
+	const bool bOrderRunning = Dispatch && Dispatch->IsOrderPending();
+
+	// One snapshot of the bridge clients and tool states for every row (no per-row lookups).
+	FStageDispatchContext Context;
+	const bool bHasContext = Dispatch && Dispatch->MakeContext(ListingId, Context);
 
 	// Identity of the selected row, so a rebuild (an app connecting) keeps it.
 	const FStageDispatchTarget Previous = Targets.IsValidIndex(SelectedTarget) ? Targets[SelectedTarget] : FStageDispatchTarget();
 
 	Targets.Reset();
+	TargetAvailability.Reset();
 	Targets.Add(FStageDispatchTarget());
 	FStageDispatchTarget File;
 	File.Kind = EStageDispatchKind::SaveFile;
 	File.FilePath = ChosenFilePath;
 	Targets.Add(File);
-	if (Bridge)
+	for (const FStageBridgeClientInfo& Client : Context.Clients)
 	{
-		for (const FStageBridgeClientInfo& Client : Bridge->GetClients())
-		{
-			FStageDispatchTarget App;
-			App.Kind = EStageDispatchKind::BridgeApp;
-			App.BridgeClientId = Client.ClientId;
-			Targets.Add(App);
-		}
+		FStageDispatchTarget App;
+		App.Kind = EStageDispatchKind::BridgeApp;
+		App.BridgeClientId = Client.ClientId;
+		Targets.Add(App);
 	}
-	if (Tools)
+	for (const FStageAIToolInfo& Tool : Context.Tools)
 	{
-		for (const FStageAIToolInfo& Tool : Tools->GetTools())
+		if (Tool.Can(EStageAIToolCapability::AcceptModel))
 		{
-			if (Tool.Can(EStageAIToolCapability::AcceptModel))
-			{
-				FStageDispatchTarget ToolTarget;
-				ToolTarget.Kind = EStageDispatchKind::AITool;
-				ToolTarget.ProviderId = Tool.ProviderId;
-				Targets.Add(ToolTarget);
-			}
+			FStageDispatchTarget ToolTarget;
+			ToolTarget.Kind = EStageDispatchKind::AITool;
+			ToolTarget.ProviderId = Tool.ProviderId;
+			Targets.Add(ToolTarget);
 		}
 	}
 	SelectedTarget = Targets.IndexOfByPredicate([&Previous](const FStageDispatchTarget& Target)
@@ -573,7 +575,8 @@ void UStageAcquireDialogWidget::RebuildTargets()
 	for (int32 Index = 0; Index < Targets.Num(); ++Index)
 	{
 		const FStageDispatchTarget& Target = Targets[Index];
-		const EStageDispatchAvailability Availability = Dispatch ? Dispatch->EvaluateTarget(ListingId, Target) : EStageDispatchAvailability::Unavailable;
+		const EStageDispatchAvailability Availability = bHasContext ? StageDispatchRules::EvaluateTarget(Target, Context) : EStageDispatchAvailability::Unavailable;
+		TargetAvailability.Add(Availability);
 		const bool bAvailable = Availability == EStageDispatchAvailability::Available;
 		const bool bSelected = Index == SelectedTarget;
 
@@ -592,7 +595,7 @@ void UStageAcquireDialogWidget::RebuildTargets()
 			break;
 		case EStageDispatchKind::BridgeApp:
 		{
-			const FStageBridgeClientInfo* Client = Bridge ? Bridge->GetClients().FindByPredicate([&Target](const FStageBridgeClientInfo& Info) { return Info.ClientId == Target.BridgeClientId; }) : nullptr;
+			const FStageBridgeClientInfo* Client = Context.Clients.FindByPredicate([&Target](const FStageBridgeClientInfo& Info) { return Info.ClientId == Target.BridgeClientId; });
 			Name = Client ? FText::Format(LOCTEXT("RowApp", "{0} {1}"), StageBridgeProtocol::GetAppDisplayName(Client->App), FText::FromString(Client->AppVersion))
 				: LOCTEXT("RowAppGone", "3D app");
 			Detail = LOCTEXT("RowAppDetail", "Connected through its StageCraft add-on; imported as glTF.");
@@ -600,8 +603,8 @@ void UStageAcquireDialogWidget::RebuildTargets()
 		}
 		case EStageDispatchKind::AITool:
 		{
-			FStageAIToolInfo Info;
-			Name = Tools && Tools->FindTool(Target.ProviderId, Info) ? Info.DisplayName : FText::FromName(Target.ProviderId);
+			const FStageAIToolInfo* Info = Context.Tools.FindByPredicate([&Target](const FStageAIToolInfo& Tool) { return Tool.ProviderId == Target.ProviderId; });
+			Name = Info ? Info->DisplayName : FText::FromName(Target.ProviderId);
 			Detail = LOCTEXT("RowToolDetail", "AI tool: receives the finished model.");
 			break;
 		}
@@ -628,14 +631,16 @@ void UStageAcquireDialogWidget::RebuildTargets()
 		Style.SetNormal(MakeBox(bSelected ? Palette.RowHover : Palette.RowBackground, CornerRadius, bSelected ? Palette.AccentColor : Palette.Divider, 1.f));
 		Style.SetHovered(MakeBox(Palette.RowHover, CornerRadius, bSelected ? Palette.AccentColor : Palette.Divider, 1.f));
 		Row->SetStyle(Style);
-		// A row that cannot be used stays readable (it says why) but cannot be picked.
-		Row->SetIsEnabled(bAvailable);
+		// A row that cannot be used stays readable (it says why) but cannot be picked; none can while an order runs, since the
+		// order's target is fixed when it starts.
+		Row->SetIsEnabled(bAvailable && !bOrderRunning);
 		TargetList->AddChildToVerticalBox(Row)->SetPadding(FMargin(0.f, 0.f, 0.f, 4.f));
 		TargetButtons.Add(Row);
 	}
 
-	Buttons[int32(EButton::ConnectApps)]->SetVisibility(Bridge && Bridge->GetClients().IsEmpty() ? ESlateVisibility::Visible : ESlateVisibility::Collapsed);
-	const bool bAnyToolNeedsKey = Tools && Tools->GetTools().ContainsByPredicate([](const FStageAIToolInfo& Info) { return !Info.HasUsableKey(); });
+	const UStageBridgeSubsystem* Bridge = BoundBridge.Get();
+	Buttons[int32(EButton::ConnectApps)]->SetVisibility(Bridge && Context.Clients.IsEmpty() ? ESlateVisibility::Visible : ESlateVisibility::Collapsed);
+	const bool bAnyToolNeedsKey = Context.Tools.ContainsByPredicate([](const FStageAIToolInfo& Info) { return !Info.HasUsableKey(); });
 	Buttons[int32(EButton::ManageKeys)]->SetVisibility(bAnyToolNeedsKey ? ESlateVisibility::Visible : ESlateVisibility::Collapsed);
 }
 
@@ -645,13 +650,14 @@ void UStageAcquireDialogWidget::RefreshFooter()
 	const UStageMarketplaceSubsystem* Marketplace = BoundMarketplace.Get();
 	const bool bOrderRunning = Dispatch && Dispatch->IsOrderPending();
 	const bool bAcquiring = Marketplace && Marketplace->IsAcquiring(ListingId);
-	const bool bTargetReady = Targets.IsValidIndex(SelectedTarget) && Dispatch
-		&& Dispatch->EvaluateTarget(ListingId, Targets[SelectedTarget]) == EStageDispatchAvailability::Available
+	// As last shown in the rows (RebuildTargets); the dispatcher checks again when the order is confirmed.
+	const bool bTargetReady = Targets.IsValidIndex(SelectedTarget) && TargetAvailability.IsValidIndex(SelectedTarget)
+		&& TargetAvailability[SelectedTarget] == EStageDispatchAvailability::Available
 		&& StageDispatchRules::HasValidPath(Targets[SelectedTarget]);
 
 	UStageChoiceButton* Confirm = Buttons[int32(EButton::Confirm)];
 	StageAcquireDialog::SetLabel(Confirm, bOrderRunning ? LOCTEXT("ConfirmWorking", "WORKING...") : DescribeConfirm());
-	const bool bEnabled = GetListing() && GetPurchaseCheck().IsSuccess() && bTargetReady && !bOrderRunning && !bAcquiring;
+	const bool bEnabled = bHasShownPrice && GetPurchaseCheck().IsSuccess() && bTargetReady && !bOrderRunning && !bAcquiring;
 	Confirm->SetIsEnabled(bEnabled);
 	StyleChoice(*Confirm, bEnabled);
 	StageAcquireDialog::SetLabel(Buttons[int32(EButton::Close)], bOwnOrder || bOrderRunning ? LOCTEXT("Close", "CLOSE") : LOCTEXT("Cancel", "CANCEL"));
@@ -700,15 +706,14 @@ void UStageAcquireDialogWidget::HandleButton(int32 Index)
 	{
 	case EButton::Confirm:
 	{
-		const FStageMarketplaceListing* Listing = GetListing();
-		if (!Controller || !Listing || !Targets.IsValidIndex(SelectedTarget))
+		if (!Controller || !bHasShownPrice || !Targets.IsValidIndex(SelectedTarget))
 		{
 			return;
 		}
 		FStageAcquireOrder Order;
 		Order.ListingId = ListingId;
 		// The price on screen, so a price that changed meanwhile is refused instead of charged.
-		Order.ExpectedCredits = Listing->Price.Credits;
+		Order.ExpectedPrice = ShownPrice;
 		Order.Target = Targets[SelectedTarget];
 		const TArray<FStageEconomyResultInfo> Refusals = Controller->RunCapturingRejections([&Controller, &Order]() { Controller->RequestAcquireAndDispatch(Order); });
 		if (Refusals.IsEmpty())
@@ -732,8 +737,13 @@ void UStageAcquireDialogWidget::HandleButton(int32 Index)
 		const int64 Shortfall = GetShortfall();
 		if (Controller && Shortfall > 0)
 		{
+			// Shown first: a store may answer inside the request, and its answer (HandleTopUpCompleted) must not be overwritten.
+			SetStatus(LOCTEXT("TopUpStarted", "Asking the store for credits..."), false);
 			const TArray<FStageEconomyResultInfo> Refusals = Controller->RunCapturingRejections([&Controller, Shortfall]() { Controller->RequestCreditTopUp(Shortfall); });
-			SetStatus(Refusals.IsEmpty() ? LOCTEXT("TopUpStarted", "Asking the store for credits...") : Refusals[0].Message, !Refusals.IsEmpty());
+			if (!Refusals.IsEmpty())
+			{
+				SetStatus(Refusals[0].Message, true);
+			}
 		}
 		return;
 	}
@@ -797,10 +807,13 @@ void UStageAcquireDialogWidget::HandleOrderProgress(FGuid InListingId, EStageOrd
 	}
 	const FStageMarketplaceListing* Listing = GetListing();
 	const FText Title = Listing ? FText::FromString(Listing->Title) : FText::GetEmpty();
+	// The order's own target: the rows may have been rebuilt or reselected since it started.
+	const UStageAcquireDispatchSubsystem* Dispatch = BoundDispatch.Get();
+	const FText Destination = Dispatch && Dispatch->IsOrderPending() ? DescribeTarget(Dispatch->GetPendingOrder().Target) : FText::GetEmpty();
 	SetStatus(Stage == EStageOrderStage::Acquiring
 		? FText::Format(LOCTEXT("Acquiring", "Getting \"{0}\": buying if needed, downloading and checking the package..."), Title)
-		: FText::Format(LOCTEXT("Delivering", "Sending \"{0}\" to {1}..."), Title, Targets.IsValidIndex(SelectedTarget) ? DescribeTarget(Targets[SelectedTarget]) : FText::GetEmpty()), false);
-	RefreshFooter();
+		: FText::Format(LOCTEXT("Delivering", "Sending \"{0}\" to {1}..."), Title, Destination), false);
+	RequestRefresh();
 }
 
 void UStageAcquireDialogWidget::HandleOrderCompleted(const FStageOrderResultInfo& Result)

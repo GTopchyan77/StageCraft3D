@@ -16,6 +16,7 @@
 #include "HAL/IConsoleManager.h"
 #include "ImageUtils.h"
 #include "Misc/FileHelper.h"
+#include "IO/StageCraftPaths.h"
 #include "Misc/Paths.h"
 #include "ModularSceneBuilder.h"
 #include "UI/StageSendToWidget.h"
@@ -78,10 +79,16 @@ namespace StageBridgeCommands
 			return;
 		}
 		const FString SceneName = FString::Join(Args, TEXT(" "));
-		const FString Path = FPaths::ConvertRelativePathToFull(FPaths::Combine(FPaths::ProjectSavedDir(), TEXT("StageCraft"), TEXT("Bridge"), TEXT("Exports"),
+		const FString Path = FPaths::ConvertRelativePathToFull(FPaths::Combine(StageCraftPaths::DataRoot(), TEXT("Bridge"), TEXT("Exports"),
 			SceneName + FStageSceneExporter::FileExtension));
-		const FStageBridgeResultInfo Result = Bridge->ExportSceneToFile(SceneName, Path);
-		UE_LOG(LogStageCraft, Display, TEXT("StageCraft.Bridge.Export \"%s\": %s %s"), *SceneName, *UEnum::GetValueAsString(Result.Code), *Result.Message.ToString());
+		const FStageBridgeResultInfo Started = Bridge->BeginExportSceneToFile(SceneName, Path, FOnStageBridgeExportFinished::CreateLambda([SceneName](const FStageBridgeResultInfo& Result)
+		{
+			UE_LOG(LogStageCraft, Display, TEXT("StageCraft.Bridge.Export \"%s\": %s %s"), *SceneName, *UEnum::GetValueAsString(Result.Code), *Result.Message.ToString());
+		}));
+		if (!Started.IsSuccess())
+		{
+			UE_LOG(LogStageCraft, Display, TEXT("StageCraft.Bridge.Export \"%s\": %s %s"), *SceneName, *UEnum::GetValueAsString(Started.Code), *Started.Message.ToString());
+		}
 	}
 
 	/** Sends to a client id, or "first" for the first connected app. */

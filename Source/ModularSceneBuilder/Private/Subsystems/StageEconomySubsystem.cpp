@@ -76,14 +76,94 @@ void UStageEconomySubsystem::Deinitialize()
 	OnPurchaseCompleted.Clear();
 	OnListingPurchaseCompleted.Clear();
 	OnCreditTopUpCompleted.Clear();
+	if (UGameInstance* GameInstance = GetGameInstance())
+	{
+		for (TPair<FGuid, FTimerHandle>& Timer : BackendTimers)
+		{
+			GameInstance->GetTimerManager().ClearTimer(Timer.Value);
+		}
+	}
+	BackendTimers.Reset();
+	// Answers that arrive after this are dropped by the bound delegates (weak) and by the lookups below finding nothing.
 	PendingPurchases.Reset();
 	PendingListingOffers.Reset();
 	PendingTopUp = FStageTopUpRequest();
+	UnresolvedProducts.Reset();
+	UnresolvedListingOffers.Reset();
+	UnresolvedTopUps.Reset();
 	Products.Reset();
 	Backend = nullptr;
 	bCatalogLoaded = false;
 
 	Super::Deinitialize();
+}
+
+float UStageEconomySubsystem::GetBackendTimeoutSeconds() const
+{
+	constexpr float DefaultTimeoutSeconds = 30.f;
+	return BackendTimeoutSeconds > 0.f ? BackendTimeoutSeconds : DefaultTimeoutSeconds;
+}
+
+void UStageEconomySubsystem::StartBackendTimer(const FGuid& TransactionId)
+{
+	UGameInstance* GameInstance = GetGameInstance();
+	if (!GameInstance)
+	{
+		return;
+	}
+	FTimerHandle& Handle = BackendTimers.FindOrAdd(TransactionId);
+	GameInstance->GetTimerManager().SetTimer(Handle, FTimerDelegate::CreateUObject(this, &ThisClass::HandleBackendTimeout, TransactionId),
+		GetBackendTimeoutSeconds(), /*bLoop*/ false);
+}
+
+void UStageEconomySubsystem::StopBackendTimer(const FGuid& TransactionId)
+{
+	FTimerHandle Handle;
+	if (BackendTimers.RemoveAndCopyValue(TransactionId, Handle))
+	{
+		if (UGameInstance* GameInstance = GetGameInstance())
+		{
+			GameInstance->GetTimerManager().ClearTimer(Handle);
+		}
+	}
+}
+
+void UStageEconomySubsystem::HandleBackendTimeout(FGuid TransactionId)
+{
+	BackendTimers.Remove(TransactionId);
+	const FText Seconds = FText::AsNumber(FMath::RoundToInt(GetBackendTimeoutSeconds()));
+	const FStageEconomyResultInfo TimedOut = FStageEconomyResultInfo::Fail(EStageEconomyResult::BackendTimeout,
+		FText::Format(LOCTEXT("BackendTimeout", "The store did not answer within {0} seconds. Nothing was charged here; if the store charged you, the purchase will be applied when it answers."), Seconds));
+
+	FStageMarketplaceListing Offer;
+	if (PendingListingOffers.RemoveAndCopyValue(TransactionId, Offer))
+	{
+		PendingPurchases.Remove(StageMarketplaceRules::MakeListingProductId(Offer.ListingId));
+		UnresolvedListingOffers.Add(TransactionId, Offer);
+		UE_LOG(LogStageCraft, Warning, TEXT("Purchase %s of listing %s: no answer from %s; waiting for a late answer."), *TransactionId.ToString(), *Offer.ListingId.ToString(), *GetNameSafe(Backend));
+		OnListingPurchaseCompleted.Broadcast(Offer.ListingId, TimedOut);
+		return;
+	}
+	if (PendingTopUp.TransactionId == TransactionId)
+	{
+		const FStageTopUpRequest Request = PendingTopUp;
+		PendingTopUp = FStageTopUpRequest();
+		UnresolvedTopUps.Add(TransactionId, Request);
+		UE_LOG(LogStageCraft, Warning, TEXT("Top-up %s: no answer from %s; waiting for a late answer."), *TransactionId.ToString(), *GetNameSafe(Backend));
+		OnCreditTopUpCompleted.Broadcast(Request.Currency, 0, TimedOut);
+		return;
+	}
+	const FPrimaryAssetId* ProductId = PendingPurchases.FindKey(TransactionId);
+	if (!ProductId)
+	{
+		return;
+	}
+	const FPrimaryAssetId Id = *ProductId;
+	PendingPurchases.Remove(Id);
+	const TObjectPtr<UStageProductData>* Product = Products.FindByPredicate([&Id](const UStageProductData* Candidate) { return Candidate && Candidate->GetPrimaryAssetId() == Id; });
+	UnresolvedProducts.Add(TransactionId, Product ? Product->Get() : nullptr);
+	UE_LOG(LogStageCraft, Warning, TEXT("Purchase %s of %s: no answer from %s; waiting for a late answer."), *TransactionId.ToString(), *Id.ToString(), *GetNameSafe(Backend));
+	OnPurchaseCompleted.Broadcast(Product ? Product->Get() : nullptr, TimedOut);
 }
 
 UStageProfileSubsystem* UStageEconomySubsystem::GetProfile() const
@@ -333,6 +413,7 @@ FStageEconomyResultInfo UStageEconomySubsystem::RequestPurchase(UStageProductDat
 	UE_LOG(LogStageCraft, Log, TEXT("Purchase %s of %s sent to %s."), *Request.TransactionId.ToString(), *Request.ProductId.ToString(), *GetNameSafe(Backend));
 
 	// May complete synchronously (local backend) or much later (server); both paths are the same.
+	StartBackendTimer(Request.TransactionId);
 	Backend->ProcessPurchase(Request, FOnStagePurchaseProcessed::CreateUObject(this, &ThisClass::HandlePurchaseProcessed,
 		Request.TransactionId, TWeakObjectPtr<UStageProductData>(Product)));
 	return FStageEconomyResultInfo::Ok();
@@ -342,13 +423,31 @@ void UStageEconomySubsystem::HandlePurchaseProcessed(bool bApproved, const FText
 {
 	UStageProductData* Product = WeakProduct.Get();
 	const FGuid* Pending = Product ? PendingPurchases.Find(Product->GetPrimaryAssetId()) : nullptr;
-	if (!Pending || *Pending != TransactionId)
+	const bool bOnTime = Pending && *Pending == TransactionId;
+	const bool bLate = !bOnTime && UnresolvedProducts.Contains(TransactionId);
+	if (!bOnTime && !bLate)
 	{
 		// Stale or duplicate answer (a backend must answer once; this keeps a second answer harmless).
 		UE_LOG(LogStageCraft, Warning, TEXT("Ignoring backend answer for unknown transaction %s."), *TransactionId.ToString());
 		return;
 	}
-	PendingPurchases.Remove(Product->GetPrimaryAssetId());
+	StopBackendTimer(TransactionId);
+	UnresolvedProducts.Remove(TransactionId);
+	if (bOnTime)
+	{
+		PendingPurchases.Remove(Product->GetPrimaryAssetId());
+	}
+	if (bLate && !bApproved)
+	{
+		// The requester was already told BackendTimeout and nothing was applied: a late refusal changes nothing.
+		UE_LOG(LogStageCraft, Log, TEXT("Purchase %s: late refusal after the timeout; nothing to undo."), *TransactionId.ToString());
+		return;
+	}
+	if (!Product)
+	{
+		UE_LOG(LogStageCraft, Warning, TEXT("Purchase %s: approved, but the product is no longer loaded; left for the server to reconcile."), *TransactionId.ToString());
+		return;
+	}
 
 	FStageEconomyResultInfo Result;
 	if (!bApproved)
@@ -358,37 +457,49 @@ void UStageEconomySubsystem::HandlePurchaseProcessed(bool bApproved, const FText
 	}
 	else
 	{
-		// The world may have moved on while the backend was busy (another purchase spent the credits).
-		Result = ValidatePurchase(Product, /*bIgnorePending*/ true);
-	}
-
-	if (Result.IsSuccess())
-	{
-		TMap<FGameplayTag, int64> Totals;
-		StageEconomy::SumPrice(Product->Price, Totals);
-
-		FStagePurchaseRecord Record;
-		Record.TransactionId = TransactionId;
-		Record.ProductId = Product->GetPrimaryAssetId();
-		Record.Timestamp = FDateTime::UtcNow();
-		Record.EntitlementsGranted = Product->GrantedEntitlements;
-		for (const TPair<FGameplayTag, int64>& Cost : Totals)
+		Result = CommitProductPurchase(TransactionId, *Product);
+		if (bLate && !Result.IsSuccess())
 		{
-			FStageCurrencyAmount& Paid = Record.AmountPaid.AddDefaulted_GetRef();
-			Paid.Currency = Cost.Key;
-			Paid.Amount = Cost.Value;
-		}
-
-		UStageProfileSubsystem* Profile = GetProfile();
-		if (!Profile || !Profile->CommitPurchase(Record))
-		{
-			Result = FStageEconomyResultInfo::Fail(EStageEconomyResult::InsufficientFunds, LOCTEXT("CommitFailed", "The purchase could not be applied."));
+			UE_LOG(LogStageCraft, Warning, TEXT("Purchase %s: late approval could not be applied (%s); left for the server to reconcile."), *TransactionId.ToString(), *Result.Message.ToString());
 		}
 	}
 
-	UE_LOG(LogStageCraft, Log, TEXT("Purchase %s of %s: %s %s"), *TransactionId.ToString(), *Product->GetPrimaryAssetId().ToString(),
-		Result.IsSuccess() ? TEXT("completed") : TEXT("failed"), *Result.Message.ToString());
+	UE_LOG(LogStageCraft, Log, TEXT("Purchase %s of %s: %s%s %s"), *TransactionId.ToString(), *Product->GetPrimaryAssetId().ToString(),
+		Result.IsSuccess() ? TEXT("completed") : TEXT("failed"), bLate ? TEXT(" (late answer)") : TEXT(""), *Result.Message.ToString());
 	OnPurchaseCompleted.Broadcast(Product, Result);
+}
+
+FStageEconomyResultInfo UStageEconomySubsystem::CommitProductPurchase(const FGuid& TransactionId, UStageProductData& Product)
+{
+	// The world may have moved on while the backend was busy (another purchase spent the credits, a late answer for a product
+	// bought again since): re-validate before anything is applied.
+	FStageEconomyResultInfo Result = ValidatePurchase(&Product, /*bIgnorePending*/ true);
+	if (!Result.IsSuccess())
+	{
+		return Result;
+	}
+
+	TMap<FGameplayTag, int64> Totals;
+	StageEconomy::SumPrice(Product.Price, Totals);
+
+	FStagePurchaseRecord Record;
+	Record.TransactionId = TransactionId;
+	Record.ProductId = Product.GetPrimaryAssetId();
+	Record.Timestamp = FDateTime::UtcNow();
+	Record.EntitlementsGranted = Product.GrantedEntitlements;
+	for (const TPair<FGameplayTag, int64>& Cost : Totals)
+	{
+		FStageCurrencyAmount& Paid = Record.AmountPaid.AddDefaulted_GetRef();
+		Paid.Currency = Cost.Key;
+		Paid.Amount = Cost.Value;
+	}
+
+	UStageProfileSubsystem* Profile = GetProfile();
+	if (!Profile || !Profile->CommitPurchase(Record))
+	{
+		return FStageEconomyResultInfo::Fail(EStageEconomyResult::InsufficientFunds, LOCTEXT("CommitFailed", "The purchase could not be applied."));
+	}
+	return Result;
 }
 
 // --- Community marketplace listings ---
@@ -447,6 +558,7 @@ FStageEconomyResultInfo UStageEconomySubsystem::RequestListingPurchase(FGuid Lis
 		Listing->Price.Credits, *GetNameSafe(Backend));
 
 	// The local backend answers inside this call; a server answers later. Both paths are the same.
+	StartBackendTimer(Request.TransactionId);
 	Backend->ProcessPurchase(Request, FOnStagePurchaseProcessed::CreateUObject(this, &ThisClass::HandleListingPurchaseProcessed, Request.TransactionId));
 	return FStageEconomyResultInfo::Ok();
 }
@@ -454,13 +566,25 @@ FStageEconomyResultInfo UStageEconomySubsystem::RequestListingPurchase(FGuid Lis
 void UStageEconomySubsystem::HandleListingPurchaseProcessed(bool bApproved, const FText& Reason, FGuid TransactionId)
 {
 	FStageMarketplaceListing Offer;
-	if (!PendingListingOffers.RemoveAndCopyValue(TransactionId, Offer))
+	const bool bOnTime = PendingListingOffers.RemoveAndCopyValue(TransactionId, Offer);
+	const bool bLate = !bOnTime && UnresolvedListingOffers.RemoveAndCopyValue(TransactionId, Offer);
+	if (!bOnTime && !bLate)
 	{
 		// Stale or duplicate answer (a backend must answer once; this keeps a second answer harmless).
 		UE_LOG(LogStageCraft, Warning, TEXT("Ignoring backend answer for unknown listing transaction %s."), *TransactionId.ToString());
 		return;
 	}
-	PendingPurchases.Remove(StageMarketplaceRules::MakeListingProductId(Offer.ListingId));
+	StopBackendTimer(TransactionId);
+	if (bOnTime)
+	{
+		PendingPurchases.Remove(StageMarketplaceRules::MakeListingProductId(Offer.ListingId));
+	}
+	if (bLate && !bApproved)
+	{
+		// The requester was already told BackendTimeout and nothing was applied: a late refusal changes nothing.
+		UE_LOG(LogStageCraft, Log, TEXT("Purchase %s of listing %s: late refusal after the timeout; nothing to undo."), *TransactionId.ToString(), *Offer.ListingId.ToString());
+		return;
+	}
 
 	FStageEconomyResultInfo Result;
 	if (!bApproved)
@@ -470,31 +594,43 @@ void UStageEconomySubsystem::HandleListingPurchaseProcessed(bool bApproved, cons
 	}
 	else
 	{
-		// Credits may have been spent elsewhere while the backend was busy.
-		Result = ValidateListingPurchase(&Offer, /*bIgnorePending*/ true);
-	}
-
-	if (Result.IsSuccess())
-	{
-		FStagePurchaseRecord Record;
-		Record.TransactionId = TransactionId;
-		Record.ProductId = StageMarketplaceRules::MakeListingProductId(Offer.ListingId);
-		Record.ListingId = Offer.ListingId;
-		Record.Timestamp = FDateTime::UtcNow();
-		FStageCurrencyAmount& Paid = Record.AmountPaid.AddDefaulted_GetRef();
-		Paid.Currency = StageCraftTags::Currency_Credits;
-		Paid.Amount = Offer.Price.Credits;
-
-		UStageProfileSubsystem* Profile = GetProfile();
-		if (!Profile || !Profile->CommitPurchase(Record))
+		Result = CommitListingPurchase(TransactionId, Offer);
+		if (bLate && !Result.IsSuccess())
 		{
-			Result = FStageEconomyResultInfo::Fail(EStageEconomyResult::InsufficientFunds, LOCTEXT("ListingCommitFailed", "The purchase could not be applied."));
+			UE_LOG(LogStageCraft, Warning, TEXT("Purchase %s of listing %s: late approval could not be applied (%s); left for the server to reconcile."),
+				*TransactionId.ToString(), *Offer.ListingId.ToString(), *Result.Message.ToString());
 		}
 	}
 
-	UE_LOG(LogStageCraft, Log, TEXT("Purchase %s of listing %s: %s %s"), *TransactionId.ToString(), *Offer.ListingId.ToString(),
-		Result.IsSuccess() ? TEXT("completed") : TEXT("failed"), *Result.Message.ToString());
+	UE_LOG(LogStageCraft, Log, TEXT("Purchase %s of listing %s: %s%s %s"), *TransactionId.ToString(), *Offer.ListingId.ToString(),
+		Result.IsSuccess() ? TEXT("completed") : TEXT("failed"), bLate ? TEXT(" (late answer)") : TEXT(""), *Result.Message.ToString());
 	OnListingPurchaseCompleted.Broadcast(Offer.ListingId, Result);
+}
+
+FStageEconomyResultInfo UStageEconomySubsystem::CommitListingPurchase(const FGuid& TransactionId, const FStageMarketplaceListing& Offer)
+{
+	// Credits may have been spent elsewhere while the backend was busy, or the listing bought again after a timeout.
+	FStageEconomyResultInfo Result = ValidateListingPurchase(&Offer, /*bIgnorePending*/ true);
+	if (!Result.IsSuccess())
+	{
+		return Result;
+	}
+
+	FStagePurchaseRecord Record;
+	Record.TransactionId = TransactionId;
+	Record.ProductId = StageMarketplaceRules::MakeListingProductId(Offer.ListingId);
+	Record.ListingId = Offer.ListingId;
+	Record.Timestamp = FDateTime::UtcNow();
+	FStageCurrencyAmount& Paid = Record.AmountPaid.AddDefaulted_GetRef();
+	Paid.Currency = StageCraftTags::Currency_Credits;
+	Paid.Amount = Offer.Price.Credits;
+
+	UStageProfileSubsystem* Profile = GetProfile();
+	if (!Profile || !Profile->CommitPurchase(Record))
+	{
+		return FStageEconomyResultInfo::Fail(EStageEconomyResult::InsufficientFunds, LOCTEXT("ListingCommitFailed", "The purchase could not be applied."));
+	}
+	return Result;
 }
 
 bool UStageEconomySubsystem::CanSellCredits() const
@@ -524,22 +660,49 @@ FStageEconomyResultInfo UStageEconomySubsystem::RequestCreditTopUp(FGameplayTag 
 	PendingTopUp.Currency = Currency;
 	PendingTopUp.Amount = Amount;
 	UE_LOG(LogStageCraft, Log, TEXT("Top-up %s of %lld %s sent to %s."), *PendingTopUp.TransactionId.ToString(), Amount, *Currency.ToString(), *GetNameSafe(Backend));
-	Backend->ProcessCreditTopUp(PendingTopUp, FOnStageTopUpProcessed::CreateUObject(this, &ThisClass::HandleCreditTopUpProcessed, PendingTopUp.TransactionId));
+	// Copied: the backend may answer inside the call, which resets PendingTopUp.
+	const FStageTopUpRequest Request = PendingTopUp;
+	StartBackendTimer(Request.TransactionId);
+	Backend->ProcessCreditTopUp(Request, FOnStageTopUpProcessed::CreateUObject(this, &ThisClass::HandleCreditTopUpProcessed, Request.TransactionId));
 	return FStageEconomyResultInfo::Ok();
 }
 
 void UStageEconomySubsystem::HandleCreditTopUpProcessed(int64 GrantedAmount, const FText& Reason, FGuid TransactionId)
 {
-	if (!PendingTopUp.TransactionId.IsValid() || PendingTopUp.TransactionId != TransactionId)
+	FStageTopUpRequest Request;
+	const bool bOnTime = PendingTopUp.TransactionId.IsValid() && PendingTopUp.TransactionId == TransactionId;
+	const bool bLate = !bOnTime && UnresolvedTopUps.RemoveAndCopyValue(TransactionId, Request);
+	if (!bOnTime && !bLate)
 	{
 		UE_LOG(LogStageCraft, Warning, TEXT("Ignoring backend answer for unknown top-up %s."), *TransactionId.ToString());
 		return;
 	}
-	const FStageTopUpRequest Request = PendingTopUp;
-	PendingTopUp = FStageTopUpRequest();
+	StopBackendTimer(TransactionId);
+	if (bOnTime)
+	{
+		Request = PendingTopUp;
+		PendingTopUp = FStageTopUpRequest();
+	}
+	if (bLate && GrantedAmount <= 0)
+	{
+		UE_LOG(LogStageCraft, Log, TEXT("Top-up %s: late refusal after the timeout; nothing to undo."), *TransactionId.ToString());
+		return;
+	}
 
+	const FStageEconomyResultInfo Result = ApplyTopUp(Request, GrantedAmount, Reason);
+	const int64 Applied = Result.IsSuccess() ? GrantedAmount : 0;
+	if (bLate && !Result.IsSuccess())
+	{
+		UE_LOG(LogStageCraft, Warning, TEXT("Top-up %s: late grant could not be applied (%s); left for the server to reconcile."), *TransactionId.ToString(), *Result.Message.ToString());
+	}
+	UE_LOG(LogStageCraft, Log, TEXT("Top-up %s: %s%s (%lld of %lld) %s"), *TransactionId.ToString(), Result.IsSuccess() ? TEXT("completed") : TEXT("failed"),
+		bLate ? TEXT(" (late answer)") : TEXT(""), Applied, Request.Amount, *Result.Message.ToString());
+	OnCreditTopUpCompleted.Broadcast(Request.Currency, Applied, Result);
+}
+
+FStageEconomyResultInfo UStageEconomySubsystem::ApplyTopUp(const FStageTopUpRequest& Request, int64 GrantedAmount, const FText& Reason)
+{
 	FStageEconomyResultInfo Result = FStageEconomyResultInfo::Ok();
-	int64 Applied = 0;
 	if (GrantedAmount <= 0)
 	{
 		Result = FStageEconomyResultInfo::Fail(EStageEconomyResult::BackendRejected, Reason.IsEmpty() ? LOCTEXT("TopUpDeclined", "The credit purchase was declined.") : Reason);
@@ -560,15 +723,8 @@ void UStageEconomySubsystem::HandleCreditTopUpProcessed(int64 GrantedAmount, con
 		{
 			Result = FStageEconomyResultInfo::Fail(EStageEconomyResult::InvalidRequest, LOCTEXT("TopUpApply", "The credits could not be added to the balance."));
 		}
-		else
-		{
-			Applied = GrantedAmount;
-		}
 	}
-
-	UE_LOG(LogStageCraft, Log, TEXT("Top-up %s: %s (%lld of %lld) %s"), *TransactionId.ToString(), Result.IsSuccess() ? TEXT("completed") : TEXT("failed"),
-		Applied, Request.Amount, *Result.Message.ToString());
-	OnCreditTopUpCompleted.Broadcast(Request.Currency, Applied, Result);
+	return Result;
 }
 
 bool UStageEconomySubsystem::DevGrantCurrency(FGameplayTag Currency, int64 Amount)

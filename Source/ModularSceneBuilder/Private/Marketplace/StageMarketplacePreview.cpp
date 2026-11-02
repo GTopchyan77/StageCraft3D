@@ -43,30 +43,36 @@ FStageMarketplacePreviewStats StageMarketplacePreview::SpawnScene(UWorld& World,
 	FStageMarketplacePreviewStats Stats;
 	for (const FStageItemSnapshot& Snapshot : Scene.Items)
 	{
-		UBaseItemData* Item = Catalog.FindRef(Snapshot.Item.ToSoftObjectPath());
-		UClass* ActorClass = Item ? Item->ActorClass.LoadSynchronous() : nullptr;
-		if (!ActorClass)
-		{
-			++Stats.NotInLibrary;
-			continue;
-		}
-
-		// State first, so ApplyItemData builds the saved look (the order RestoreItem uses).
-		AModularBaseActor* Actor = World.SpawnActorDeferred<AModularBaseActor>(ActorClass, Snapshot.Transform, nullptr, nullptr,
-			ESpawnActorCollisionHandlingMethod::AlwaysSpawn);
-		if (!Actor)
-		{
-			++Stats.NotInLibrary;
-			continue;
-		}
-		Actor->RestoreSnapshotState(Snapshot);
-		Actor->InitializeFromItemData(Item);
-		Actor->FinishSpawning(Snapshot.Transform);
-		OutActors.Add(Actor);
-		OutBounds += Actor->GetComponentsBoundingBox(/*bNonColliding*/ true);
-		++Stats.Placed;
+		SpawnItem(World, Snapshot, Catalog, OutActors, OutBounds, Stats);
 	}
 	return Stats;
+}
+
+void StageMarketplacePreview::SpawnItem(UWorld& World, const FStageItemSnapshot& Snapshot, const TMap<FSoftObjectPath, UBaseItemData*>& Catalog,
+	TArray<TObjectPtr<AActor>>& OutActors, FBox& OutBounds, FStageMarketplacePreviewStats& Stats)
+{
+	UBaseItemData* Item = Catalog.FindRef(Snapshot.Item.ToSoftObjectPath());
+	UClass* ActorClass = Item ? Item->ActorClass.LoadSynchronous() : nullptr;
+	if (!ActorClass)
+	{
+		++Stats.NotInLibrary;
+		return;
+	}
+
+	// State first, so ApplyItemData builds the saved look (the order RestoreItem uses).
+	AModularBaseActor* Actor = World.SpawnActorDeferred<AModularBaseActor>(ActorClass, Snapshot.Transform, nullptr, nullptr,
+		ESpawnActorCollisionHandlingMethod::AlwaysSpawn);
+	if (!Actor)
+	{
+		++Stats.NotInLibrary;
+		return;
+	}
+	Actor->RestoreSnapshotState(Snapshot);
+	Actor->InitializeFromItemData(Item);
+	Actor->FinishSpawning(Snapshot.Transform);
+	OutActors.Add(Actor);
+	OutBounds += Actor->GetComponentsBoundingBox(/*bNonColliding*/ true);
+	++Stats.Placed;
 }
 
 FStageMarketplacePreview::FStageMarketplacePreview() = default;
@@ -211,18 +217,12 @@ void FStageMarketplacePreview::Frame()
 	Render();
 }
 
-void FStageMarketplacePreview::Orbit(float DeltaYaw, float DeltaPitch)
+void FStageMarketplacePreview::MoveView(float DeltaYaw, float DeltaPitch, float ZoomSteps)
 {
 	using namespace StageMarketplacePreviewImpl;
 	Yaw = FRotator::NormalizeAxis(Yaw + DeltaYaw);
 	Pitch = FMath::Clamp(Pitch + DeltaPitch, MinPitch, MaxPitch);
-	Render();
-}
-
-void FStageMarketplacePreview::Zoom(float Steps)
-{
-	using namespace StageMarketplacePreviewImpl;
-	Distance = FMath::Clamp(Distance * FMath::Pow(ZoomStep, double(Steps)), Radius * MinDistanceRadii, Radius * MaxDistanceRadii);
+	Distance = FMath::Clamp(Distance * FMath::Pow(ZoomStep, double(ZoomSteps)), Radius * MinDistanceRadii, Radius * MaxDistanceRadii);
 	Render();
 }
 

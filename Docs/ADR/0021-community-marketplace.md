@@ -338,3 +338,33 @@ Search, preview and acquire answer later. The runner returns a Pending outcome (
 - "Show more" (paging the results from the chat) is not built; the panel pages.
 - Publishing from the chat is not built. Publishing needs a title, description, price and category, which a form handles better.
 - A merge import of rigs and cue lists into the open stage still needs fixture-id remapping (§11).
+
+## 14. Addendum: unanswered backends (2026-11-02, STATE.md #55)
+
+**Problem.** The commerce backend contract is "answer exactly once", and nothing enforced it. A backend that never answered (a server that went away, a lost request) left the purchase pending for the rest of the run: every later request for that product or listing was `PurchasePending`, the marketplace acquire stayed `Busy`, and the acquire dispatcher refused every order. The same held for the marketplace fetch and for AI tools.
+
+**Decision.** Every wait on another party has a deadline, as config with a validated default:
+
+| Wait | Owner | Config | Default | On timeout |
+|---|---|---|---|---|
+| Purchase, listing purchase, top-up | `UStageEconomySubsystem` | `BackendTimeoutSeconds` | 30 s | `BackendTimeout` |
+| Package fetch while acquiring | `UStageMarketplaceSubsystem` | `FetchTimeoutSeconds` | 60 s | `TimedOut`; the listing can be got again (owned: free) |
+| AI tool key check or hand-off | `UStageAIToolSubsystem` | `OperationTimeoutSeconds` | 120 s | provider `Cancel`, then `TimedOut` |
+| App import after a send | `UStageBridgeSubsystem` | `SendTimeoutSeconds` | 120 s | `AppFailed` (unchanged behaviour, now config) |
+| A whole acquire order | `UStageAcquireDispatchSubsystem` | `OrderTimeoutSeconds` | 300 s | `TimedOut`, safety net over the others |
+
+**Late answers to the economy (Gevor's decision).** After `BackendTimeout` the transaction moves to an unresolved list (kept for the run, not saved):
+- a late **approval** is applied through the normal path: re-validated against the offer as it was, then committed. The store may already have charged, so dropping it would leave the user paid and not granted.
+- a late **refusal** is dropped: nothing was applied, the requester was already told.
+- if re-validation fails (the item was bought again meanwhile, so `AlreadyOwned`), nothing is applied and the TransactionId is logged "left for the server to reconcile". A real server must treat the id as its idempotency key and refund.
+- a second answer to the same transaction is ignored, as before.
+
+**Alternatives considered.**
+- Drop late answers: simpler, but wrong for a server that charged late.
+- No timeout, a user Cancel only: the dispatcher and economy would still stay pending forever without the user acting.
+
+**Consequences.**
+- Offline nothing changes: the local backend answers inside the call, before any deadline.
+- A purchase that times out and is approved later is owned, but its download may not have run (the acquire ended). Getting the listing again downloads it for free.
+- Unresolved transactions are lost on restart; reconciling them is the server's job.
+- Tests: `StageCraft.Economy.BackendTimeout`, `.ListingPurchaseFlow`, `StageCraft.Dispatch.OrderTimeout`, `StageCraft.Services.VaultBeforeDispatch`.

@@ -4,13 +4,14 @@
 
 #include "HAL/FileManager.h"
 #include "IO/StageAtomicFile.h"
+#include "IO/StageCraftPaths.h"
 #include "Misc/Paths.h"
 
 namespace StageReportFiles
 {
 	FString GetOutputDirectory()
 	{
-		return FPaths::ConvertRelativePathToFull(FPaths::ProjectSavedDir() / TEXT("StageCraft") / TEXT("Reports"));
+		return FPaths::ConvertRelativePathToFull(FPaths::Combine(StageCraftPaths::DataRoot(), TEXT("Reports")));
 	}
 
 	FString MakeUniqueStemPath(const FString& Directory, const FString& Stem, TConstArrayView<const TCHAR*> Extensions)

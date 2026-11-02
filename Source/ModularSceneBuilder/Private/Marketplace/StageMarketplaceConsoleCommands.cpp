@@ -202,7 +202,7 @@ namespace StageMarketplaceCommands
 
 		FStageAcquireOrder Order;
 		Order.ListingId = ListingId;
-		Order.ExpectedCredits = Listing->Price.Credits;
+		Order.ExpectedPrice = Listing->Price;
 		const FString Kind = Args[1].ToLower();
 		const FString Value = Args.Num() > 2 ? Args[2] : FString();
 		if (Kind == TEXT("glb"))

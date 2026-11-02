@@ -29,6 +29,7 @@
 #include "Import/StageMeshImportSubsystem.h"
 #include "Misc/App.h"
 #include "Misc/FileHelper.h"
+#include "IO/StageCraftPaths.h"
 #include "Misc/Paths.h"
 #include "ProfilingDebugging/MiscTrace.h"
 #include "ModularSceneBuilder.h"
@@ -450,7 +451,7 @@ namespace StageFixtureBenchmark
 				}
 			}
 
-			const FString Directory = FPaths::ConvertRelativePathToFull(FPaths::ProjectSavedDir() / TEXT("StageCraft") / TEXT("Benchmarks"));
+			const FString Directory = FPaths::ConvertRelativePathToFull(FPaths::Combine(StageCraftPaths::DataRoot(), TEXT("Benchmarks")));
 			const FString Path = Directory / FString::Printf(TEXT("FixtureBench_%s.csv"), *FDateTime::Now().ToString(TEXT("%Y%m%d-%H%M%S")));
 			IFileManager::Get().MakeDirectory(*Directory, /*Tree*/ true);
 			const bool bWritten = FFileHelper::SaveStringToFile(Csv, *Path);

@@ -4,6 +4,7 @@
 
 #include "CoreMinimal.h"
 #include "GameFramework/PlayerController.h"
+#include "Bridge/StageBridgeTypes.h"
 #include "Data/StageParameterTypes.h"
 #include "Economy/StageEconomyTypes.h"
 #include "Environment/StageEnvironmentTypes.h"
@@ -18,6 +19,7 @@
 #include "ModularPlayerController.generated.h"
 
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FOnStageRequestRejected, const FStageEconomyResultInfo&, Result);
+DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FOnStageSceneExportCompleted, const FStageBridgeResultInfo&, Result);
 
 /** What a left click on a stage item does to the selection. */
 enum class EStageSelectionClick : uint8
@@ -420,8 +422,9 @@ public:
 	bool RequestSetBridgeEnabled(bool bEnabled);
 
 	/**
-	 * Exports the saved scene SceneName to FilePath (absolute, .glb). Only the user's own stages are exported, with the items they
-	 * own. The outcome arrives on UStageBridgeSubsystem::OnSendCompleted; a refusal or failure is also reported on OnRequestRejected.
+	 * Starts exporting the saved scene SceneName to FilePath (absolute, .glb), over several frames. Only the user's own stages (or
+	 * marketplace stages whose publisher allowed it) are exported, with the items they own. True when started; the outcome arrives
+	 * on OnSceneExportCompleted. A refusal or failure is also reported on OnRequestRejected.
 	 */
 	UFUNCTION(BlueprintCallable, Category = "StageCraft|Requests")
 	bool RequestExportScene(const FString& SceneName, const FString& FilePath);
@@ -472,6 +475,10 @@ public:
 	/** Every refused request (UI toasts, shop prompts, error cue). */
 	UPROPERTY(BlueprintAssignable, Category = "StageCraft|Requests")
 	FOnStageRequestRejected OnRequestRejected;
+
+	/** The outcome of an export started by RequestExportScene (exports run over several frames). Failures are also on OnRequestRejected. */
+	UPROPERTY(BlueprintAssignable, Category = "StageCraft|Requests")
+	FOnStageSceneExportCompleted OnSceneExportCompleted;
 
 #if !UE_BUILD_SHIPPING
 	// Development verification only (StageCraft.Edit.* console commands): drive the same handlers as
@@ -670,6 +677,8 @@ private:
 	void RecordCueEdit(const FText& Description, const TArray<FShowCue>& Before, const class UShowControlSubsystem& Show) const;
 
 	void ReportRejection(const FStageEconomyResultInfo& Result);
+	/** RequestExportScene's export has ended: reported on OnSceneExportCompleted (and OnRequestRejected when it failed). */
+	void HandleSceneExported(const FStageBridgeResultInfo& Result);
 	class AStageCraftGameModeBase* GetStageGameMode() const;
 	class UStageEconomySubsystem* GetEconomy() const;
 

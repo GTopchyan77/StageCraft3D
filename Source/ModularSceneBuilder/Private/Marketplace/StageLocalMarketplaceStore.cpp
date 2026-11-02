@@ -9,6 +9,7 @@
 #include "Marketplace/StageMarketplaceRules.h"
 #include "Marketplace/StagePackage.h"
 #include "Misc/FileHelper.h"
+#include "IO/StageCraftPaths.h"
 #include "Misc/Paths.h"
 #include "ModularSceneBuilder.h"
 #include "Serialization/JsonReader.h"
@@ -42,7 +43,7 @@ FStageLocalMarketplaceStore::FStageLocalMarketplaceStore(FString InDirectory)
 
 FString FStageLocalMarketplaceStore::GetDefaultDirectory()
 {
-	return FPaths::Combine(FPaths::ProjectSavedDir(), TEXT("StageCraft"), TEXT("Marketplace"), TEXT("Community"));
+	return FPaths::Combine(StageCraftPaths::DataRoot(), TEXT("Marketplace"), TEXT("Community"));
 }
 
 FString FStageLocalMarketplaceStore::GetPackagePath(const FGuid& ListingId) const

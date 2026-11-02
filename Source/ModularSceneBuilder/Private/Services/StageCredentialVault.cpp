@@ -6,6 +6,7 @@
 #include "HAL/PlatformProcess.h"
 #include "IO/StageAtomicFile.h"
 #include "Misc/FileHelper.h"
+#include "IO/StageCraftPaths.h"
 #include "Misc/Paths.h"
 
 #if PLATFORM_WINDOWS
@@ -24,13 +25,31 @@ namespace StageCredentialVaultImpl
 	constexpr int64 MaxFileBytes = 64 * 1024;
 	const TCHAR* FileExtension = TEXT(".key");
 
-	/** Zeroes and releases a byte buffer that held a secret. */
+	/**
+	 * Zeroes memory that held a secret so the optimiser cannot drop it as a dead store (a plain memset right before a free may
+	 * be removed). SecureZeroMemory on Windows; a volatile loop elsewhere.
+	 */
+	void SecureZero(void* Data, SIZE_T Bytes)
+	{
+		if (!Data || Bytes == 0)
+		{
+			return;
+		}
+#if PLATFORM_WINDOWS
+		::SecureZeroMemory(Data, Bytes);
+#else
+		volatile uint8* Cursor = static_cast<volatile uint8*>(Data);
+		for (SIZE_T Index = 0; Index < Bytes; ++Index)
+		{
+			Cursor[Index] = 0;
+		}
+#endif
+	}
+
+	/** Zeroes the whole allocation (slack included: a shrunk buffer may still hold old bytes) and releases it. */
 	void Wipe(TArray<uint8>& Bytes)
 	{
-		if (Bytes.Num() > 0)
-		{
-			FPlatformMemory::Memzero(Bytes.GetData(), Bytes.Num());
-		}
+		SecureZero(Bytes.GetData(), static_cast<SIZE_T>(Bytes.Max()));
 		Bytes.Empty();
 	}
 
@@ -81,7 +100,7 @@ FStageCredentialVault::FStageCredentialVault(FString InDirectory)
 FString FStageCredentialVault::GetDefaultDirectory()
 {
 	// The per-user local application data folder on Windows; other Windows users cannot read it.
-	return FPaths::Combine(FPlatformProcess::UserSettingsDir(), TEXT("StageCraft"), TEXT("Credentials"));
+	return FPaths::Combine(StageCraftPaths::UserRoot(), TEXT("Credentials"));
 }
 
 bool FStageCredentialVault::IsSupported()
@@ -125,7 +144,7 @@ EStageVaultResult FStageCredentialVault::Store(FName Id, FStringView Secret) con
 		const FTCHARToUTF8 Utf8(Secret.GetData(), Secret.Len());
 		Plain.Append(reinterpret_cast<const uint8*>(Utf8.Get()), Utf8.Length());
 		// The converter's own buffer held the key too.
-		FPlatformMemory::Memzero(const_cast<ANSICHAR*>(Utf8.Get()), Utf8.Length());
+		SecureZero(const_cast<ANSICHAR*>(Utf8.Get()), Utf8.Length());
 	}
 
 	TArray<uint8> Blob;
@@ -166,7 +185,12 @@ EStageVaultResult FStageCredentialVault::Load(FName Id, FString& OutSecret) cons
 		return EStageVaultResult::NotFound;
 	}
 	TArray<uint8> File;
-	if (Size <= HeaderSize || Size > MaxFileBytes || !FFileHelper::LoadFileToArray(File, *Path, FILEREAD_Silent)
+	if (Size > MaxFileBytes || !FFileHelper::LoadFileToArray(File, *Path, FILEREAD_Silent))
+	{
+		return EStageVaultResult::Failed;
+	}
+	// Checked on the bytes read, not the size seen before: the file may have changed in between.
+	if (File.Num() <= HeaderSize || File.Num() > MaxFileBytes
 		|| FMemory::Memcmp(File.GetData(), Magic, UE_ARRAY_COUNT(Magic)) != 0 || File[4] != FormatVersion)
 	{
 		return EStageVaultResult::Failed;
@@ -181,7 +205,7 @@ EStageVaultResult FStageCredentialVault::Load(FName Id, FString& OutSecret) cons
 	{
 		const FUTF8ToTCHAR Text(reinterpret_cast<const ANSICHAR*>(Plain.GetData()), Plain.Num());
 		OutSecret = FString::ConstructFromPtrSize(Text.Get(), Text.Length());
-		FPlatformMemory::Memzero(const_cast<TCHAR*>(Text.Get()), Text.Length() * sizeof(TCHAR));
+		SecureZero(const_cast<TCHAR*>(Text.Get()), Text.Length() * sizeof(TCHAR));
 	}
 	Wipe(Plain);
 	if (OutSecret.IsEmpty() || OutSecret.Len() > MaxSecretLength)
@@ -217,9 +241,6 @@ EStageVaultResult FStageCredentialVault::Remove(FName Id) const
 void FStageCredentialVault::WipeString(FString& Secret)
 {
 	TArray<TCHAR, FString::AllocatorType>& Chars = Secret.GetCharArray();
-	if (Chars.Num() > 0)
-	{
-		FPlatformMemory::Memzero(Chars.GetData(), Chars.Num() * sizeof(TCHAR));
-	}
+	StageCredentialVaultImpl::SecureZero(Chars.GetData(), static_cast<SIZE_T>(Chars.Max()) * sizeof(TCHAR));
 	Secret.Empty();
 }

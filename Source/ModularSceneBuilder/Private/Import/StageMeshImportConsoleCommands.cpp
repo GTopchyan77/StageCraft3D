@@ -21,6 +21,7 @@
 #include "HAL/IConsoleManager.h"
 #include "ImageUtils.h"
 #include "Import/StageMeshImportSubsystem.h"
+#include "IO/StageCraftPaths.h"
 #include "Misc/Paths.h"
 #include "ModularSceneBuilder.h"
 #include "Player/ModularPlayerController.h"
@@ -132,7 +133,7 @@ namespace StageImportCommands
 		{
 			return;
 		}
-		const FString Directory = FPaths::ProjectSavedDir() / TEXT("StageCraft") / TEXT("Thumbnails");
+		const FString Directory = FPaths::Combine(StageCraftPaths::DataRoot(), TEXT("Thumbnails"));
 		for (const UStageImportedItemData* Item : Importer->GetImportedItems())
 		{
 			UTextureRenderTarget2D* Thumbnail = Item ? Cast<UTextureRenderTarget2D>(Item->GetCatalogIcon()) : nullptr;

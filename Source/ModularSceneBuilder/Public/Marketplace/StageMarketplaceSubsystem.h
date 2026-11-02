@@ -4,6 +4,7 @@
 
 #include "CoreMinimal.h"
 #include "Economy/StageEconomyTypes.h"
+#include "Engine/TimerHandle.h"
 #include "Marketplace/StageMarketplaceBackend.h"
 #include "Marketplace/StageMarketplaceTypes.h"
 #include "Scene/StageSceneTypes.h"
@@ -115,9 +116,16 @@ public:
 	/**
 	 * May a stage acquired as OriginListingId leave the app (export, send to a 3D app)? Decided from the package kept in the
 	 * library when it was acquired: the publisher's allowExport flag and, for a paid listing, ownership (ADR 0022 §11.1).
-	 * Ok, or NotOriginal with the reason. Reads the library file synchronously on the game thread; call it once per export.
+	 * Ok, or NotOriginal with the reason. Reads the library file synchronously; the export job does the two halves separately
+	 * (ReadLibraryManifest on a worker, DecideExportRights on the game thread).
 	 */
 	FStageMarketplaceResultInfo CheckExportRights(const FGuid& OriginListingId) const;
+
+	/** The manifest of the library copy of OriginListingId. False when missing or unreadable. File work only: any thread. */
+	static bool ReadLibraryManifest(const FGuid& OriginListingId, struct FStagePackageManifest& OutManifest);
+
+	/** CheckExportRights from a manifest already read (null: none could be read). Game thread (reads the profile). */
+	FStageMarketplaceResultInfo DecideExportRights(const FGuid& OriginListingId, const struct FStagePackageManifest* LibraryManifest) const;
 
 	UPROPERTY(BlueprintAssignable, Category = "StageCraft|Marketplace")
 	FOnStageMarketplaceListingsUpdated OnListingsUpdated;
@@ -133,14 +141,27 @@ protected:
 	UPROPERTY(Config)
 	TSoftClassPtr<class UStageMarketplaceBackend> MarketplaceBackendClass;
 
+	/**
+	 * Seconds the backend has to deliver a package being acquired before the acquire ends as TimedOut (ADR 0021 §14). A paid
+	 * listing is owned by then, so getting it again downloads it for free. Values <= 0 fall back to the default.
+	 */
+	UPROPERTY(Config)
+	float FetchTimeoutSeconds = 60.f;
+
+public:
+	/** FetchTimeoutSeconds, validated. */
+	float GetFetchTimeoutSeconds() const;
+
 private:
+	void HandleFetchTimeout(FGuid ListingId, uint32 Serial);
+	void ClearFetchTimer(const FGuid& ListingId);
 	void HandleQueried(EStageMarketplaceResult Result, const FStageMarketplaceQueryResult& Page, uint32 Serial);
 
 	UFUNCTION()
 	void HandleListingPurchaseCompleted(FGuid ListingId, FStageEconomyResultInfo Result);
 
 	void StartDownload(const FGuid& ListingId);
-	void HandlePackageFetched(EStageMarketplaceResult Result, const FStageMarketplacePackageBytes& Bytes, FGuid ListingId);
+	void HandlePackageFetched(EStageMarketplaceResult Result, const FStageMarketplacePackageBytes& Bytes, FGuid ListingId, uint32 Serial);
 	void FinishAcquire(const FGuid& ListingId, const FStageMarketplaceResultInfo& Result, const FString& SceneName);
 
 	void HandlePreviewFetched(EStageMarketplaceResult Result, const FStageMarketplacePackageBytes& Bytes, FGuid ListingId, uint32 Serial);
@@ -174,6 +195,15 @@ private:
 
 	/** Listings being bought, downloaded or imported. */
 	TSet<FGuid> PendingAcquires;
+
+	/** Per listing being downloaded: the fetch awaited (an answer with another serial is stale) and its deadline. */
+	struct FPendingFetch
+	{
+		uint32 Serial = 0;
+		FTimerHandle Timer;
+	};
+	TMap<FGuid, FPendingFetch> PendingFetches;
+	uint32 FetchSerial = 0;
 	bool bPublishing = false;
 
 	/** Package verification, scene writes and package builds run here one at a time, so two imports never pick the same scene name. */

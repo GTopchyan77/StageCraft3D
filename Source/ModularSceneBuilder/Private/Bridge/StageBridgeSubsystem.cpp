@@ -6,6 +6,7 @@
 #include "Bridge/StageBridgeProtocol.h"
 #include "Bridge/StageBridgeServer.h"
 #include "Bridge/StageSceneExporter.h"
+#include "Bridge/StageSceneExportJob.h"
 #include "Dom/JsonObject.h"
 #include "Engine/GameInstance.h"
 #include "HAL/FileManager.h"
@@ -14,6 +15,7 @@
 #include "Misc/CommandLine.h"
 #include "Misc/FileHelper.h"
 #include "Misc/Parse.h"
+#include "IO/StageCraftPaths.h"
 #include "Misc/Paths.h"
 #include "Misc/SecureHash.h"
 #include "Scene/StageSceneStore.h"
@@ -41,17 +43,6 @@ namespace StageBridgeSubsystemImpl
 		return static_cast<uint16>(Port);
 	}
 
-	FString Sha1OfFile(const FString& Path)
-	{
-		TArray<uint8> Bytes;
-		if (!FFileHelper::LoadFileToArray(Bytes, *Path))
-		{
-			return FString();
-		}
-		FSHAHash Hash;
-		FSHA1::HashBuffer(Bytes.GetData(), Bytes.Num(), Hash.Hash);
-		return Hash.ToString().ToLower();
-	}
 }
 
 UStageBridgeSubsystem::UStageBridgeSubsystem() = default;
@@ -61,19 +52,25 @@ UStageBridgeSubsystem::~UStageBridgeSubsystem() = default;
 
 void UStageBridgeSubsystem::Deinitialize()
 {
+	// Nobody is told about a shutdown: listeners may already be gone, and StopBridge would broadcast to them.
+	OnStateChanged.Clear();
+	OnClientsChanged.Clear();
+	OnSendCompleted.Clear();
 	StopBridge();
+	// An export to a file still running is abandoned with its world; its requester is not called (see BeginExportSceneToFile).
+	ExportJob.Reset();
 	Super::Deinitialize();
 }
 
 FString UStageBridgeSubsystem::GetSessionFilePath()
 {
 	// UserSettingsDir is the user's local application data folder: other users of the computer cannot read the token.
-	return FPaths::Combine(FPlatformProcess::UserSettingsDir(), TEXT("StageCraft"), TEXT("Bridge"), TEXT("session.json"));
+	return FPaths::Combine(StageCraftPaths::UserRoot(), TEXT("Bridge"), TEXT("session.json"));
 }
 
 FString UStageBridgeSubsystem::GetOutboxDirectory()
 {
-	return FPaths::ConvertRelativePathToFull(FPaths::Combine(FPaths::ProjectSavedDir(), TEXT("StageCraft"), TEXT("Bridge"), TEXT("Outbox")));
+	return FPaths::ConvertRelativePathToFull(FPaths::Combine(StageCraftPaths::DataRoot(), TEXT("Bridge"), TEXT("Outbox")));
 }
 
 bool UStageBridgeSubsystem::IsRunning() const
@@ -86,7 +83,25 @@ int32 UStageBridgeSubsystem::GetPort() const
 	return IsRunning() ? Server->GetPort() : 0;
 }
 
+float UStageBridgeSubsystem::GetSendTimeoutSeconds() const
+{
+	constexpr float DefaultTimeoutSeconds = 120.f;
+	return SendTimeoutSeconds > 0.f ? SendTimeoutSeconds : DefaultTimeoutSeconds;
+}
+
 bool UStageBridgeSubsystem::StartBridge(FText& OutError)
+{
+	return StartBridgeOn(StageBridgeSubsystemImpl::GetPort(), OutError);
+}
+
+#if WITH_DEV_AUTOMATION_TESTS
+bool UStageBridgeSubsystem::StartBridgeOnAnyPortForTests(FText& OutError)
+{
+	return StartBridgeOn(/*Port*/ 0, OutError);
+}
+#endif
+
+bool UStageBridgeSubsystem::StartBridgeOn(uint16 Port, FText& OutError)
 {
 	if (IsRunning())
 	{
@@ -96,7 +111,7 @@ bool UStageBridgeSubsystem::StartBridge(FText& OutError)
 	ClearOutbox();
 	Token = StageBridgeProtocol::MakeToken();
 	Server = MakeUnique<FStageBridgeServer>();
-	if (!Server->Start(StageBridgeSubsystemImpl::GetPort(), Token, [this]() { ScheduleDrain(); }, OutError))
+	if (!Server->Start(Port, Token, [this]() { ScheduleDrain(); }, OutError))
 	{
 		Server.Reset();
 		Token.Reset();
@@ -190,6 +205,12 @@ void UStageBridgeSubsystem::DrainEvents()
 	bool bClientsChanged = false;
 	Server->Drain([this, &bClientsChanged](const FStageBridgeEvent& Event)
 	{
+		// A listener of FinishSend may switch the bridge off in the middle of a batch; the rest of it belongs to the old session
+		// (a Connected event would otherwise add a client to a bridge that is off).
+		if (!Server.IsValid())
+		{
+			return;
+		}
 		switch (Event.Kind)
 		{
 		case FStageBridgeEvent::EKind::Connected:
@@ -210,7 +231,7 @@ void UStageBridgeSubsystem::DrainEvents()
 
 		case FStageBridgeEvent::EKind::Ack:
 			// An ack for anything but the pending send (late, after a timeout, or invented) changes nothing.
-			if (!Pending.IsSet() || Pending->ClientId != Event.ClientId || Pending->AssetId != Event.Ack.Id)
+			if (!Pending.IsSet() || !Pending->bSent || Pending->ClientId != Event.ClientId || Pending->AssetId != Event.Ack.Id)
 			{
 				UE_LOG(LogStageCraft, Log, TEXT("Bridge: ignored an ack from client %d for an asset that is not pending."), Event.ClientId);
 				break;
@@ -231,7 +252,8 @@ void UStageBridgeSubsystem::DrainEvents()
 		}
 	});
 
-	if (bClientsChanged)
+	// StopBridge has already announced its own change if it ran during the batch.
+	if (bClientsChanged && Server.IsValid())
 	{
 		OnClientsChanged.Broadcast();
 	}
@@ -242,14 +264,52 @@ const FStageBridgeClientInfo* UStageBridgeSubsystem::FindClient(int32 ClientId) 
 	return Clients.FindByPredicate([ClientId](const FStageBridgeClientInfo& Client) { return Client.ClientId == ClientId; });
 }
 
-FStageBridgeResultInfo UStageBridgeSubsystem::ExportSceneToFile(const FString& SceneName, const FString& Path)
+bool UStageBridgeSubsystem::IsExporting() const
 {
+	return ExportJob.IsValid() && ExportJob->IsRunning();
+}
+
+FStageBridgeResultInfo UStageBridgeSubsystem::StartExportJob(const FString& SceneName, const FString& Path, bool bComputeSha1, TFunction<void(const FStageSceneExportOutcome&)> OnDone)
+{
+	if (IsExporting())
+	{
+		return FStageBridgeResultInfo::Fail(EStageBridgeResult::Busy, LOCTEXT("ExportBusy", "Another export is running; try again when it has finished."));
+	}
 	UGameInstance* GameInstance = GetGameInstance();
-	FStageBridgeResultInfo Result = GameInstance ? FStageSceneExporter::ExportSavedScene(*GameInstance, FStageSceneStore(FStageSceneStore::GetDefaultDirectory()), SceneName, Path)
-		: FStageBridgeResultInfo::Fail(EStageBridgeResult::Unavailable, LOCTEXT("NoGameInstance", "Exporting is not available."));
-	UE_LOG(LogStageCraft, Log, TEXT("Bridge: export of \"%s\" to %s: %s."), *SceneName, *Path, *UEnum::GetValueAsString(Result.Code));
-	OnSendCompleted.Broadcast(Result);
-	return Result;
+	if (!GameInstance)
+	{
+		return FStageBridgeResultInfo::Fail(EStageBridgeResult::Unavailable, LOCTEXT("NoGameInstance", "Exporting is not available."));
+	}
+	FStageSceneExportJobParams Params;
+	Params.SceneName = SceneName;
+	Params.Path = Path;
+	Params.bComputeSha1 = bComputeSha1;
+	FStageBridgeResultInfo Refusal;
+	// The job ends before this subsystem (Deinitialize drops it, which cancels it), so the weak lambda never outlives its owner.
+	ExportJob = FStageSceneExportJob::Start(*GameInstance, MoveTemp(Params), FOnStageSceneExportFinished::CreateWeakLambda(this,
+		[this, OnDone = MoveTemp(OnDone)](const FStageSceneExportOutcome& Outcome)
+		{
+			// The job has ended; it is released here, after its callback (the ticker keeps it alive until then).
+			ExportJob.Reset();
+			OnDone(Outcome);
+		}), Refusal);
+	return ExportJob.IsValid() ? FStageBridgeResultInfo() : Refusal;
+}
+
+FStageBridgeResultInfo UStageBridgeSubsystem::BeginExportSceneToFile(const FString& SceneName, const FString& Path, FOnStageBridgeExportFinished OnFinished)
+{
+	if (Pending.IsSet())
+	{
+		return FStageBridgeResultInfo::Fail(EStageBridgeResult::Busy, LOCTEXT("ExportBusy", "Another export is running; try again when it has finished."));
+	}
+	FStageBridgeResultInfo Started = StartExportJob(SceneName, Path, /*bComputeSha1*/ false, [SceneName, Path, OnFinished = MoveTemp(OnFinished)](const FStageSceneExportOutcome& Outcome)
+	{
+		UE_LOG(LogStageCraft, Log, TEXT("Bridge: export of \"%s\" to %s: %s."), *SceneName, *Path, *UEnum::GetValueAsString(Outcome.Result.Code));
+		OnFinished.ExecuteIfBound(Outcome.Result);
+	});
+	Started.SceneName = SceneName;
+	Started.FilePath = Path;
+	return Started;
 }
 
 FStageBridgeResultInfo UStageBridgeSubsystem::SendSceneToApp(const FString& SceneName, int32 ClientId)
@@ -272,44 +332,65 @@ FStageBridgeResultInfo UStageBridgeSubsystem::SendSceneToApp(const FString& Scen
 	{
 		return FStageBridgeResultInfo::Fail(EStageBridgeResult::Busy, LOCTEXT("Busy", "Another send is waiting for its app; try again when it has finished."));
 	}
-	UGameInstance* GameInstance = GetGameInstance();
-	if (!GameInstance)
-	{
-		return FStageBridgeResultInfo::Fail(EStageBridgeResult::Unavailable, LOCTEXT("NoGameInstance", "Exporting is not available."));
-	}
 
 	const FString AssetId = StageBridgeProtocol::MakeAssetId();
 	const FString Path = FPaths::Combine(GetOutboxDirectory(), AssetId + FStageSceneExporter::FileExtension);
-	FStageBridgeResultInfo Result = FStageSceneExporter::ExportSavedScene(*GameInstance, FStageSceneStore(FStageSceneStore::GetDefaultDirectory()), SceneName, Path);
-	Result.ClientId = ClientId;
-	if (!Result.IsSuccess())
+	// The export runs over several frames; the SHA-1 is computed on a worker as it finishes (HandleSendExported).
+	FStageBridgeResultInfo Started = StartExportJob(SceneName, Path, /*bComputeSha1*/ true, [this](const FStageSceneExportOutcome& Outcome)
 	{
-		return Result;
-	}
-
-	StageBridgeProtocol::FAsset Asset;
-	Asset.Id = AssetId;
-	Asset.Format = TEXT("glb");
-	Asset.Name = SceneName;
-	Asset.Path = Path;
-	Asset.Sha1 = StageBridgeSubsystemImpl::Sha1OfFile(Path);
-	Asset.Bytes = IFileManager::Get().FileSize(*Path);
-	if (Asset.Sha1.IsEmpty())
+		HandleSendExported(Outcome);
+	});
+	Started.SceneName = SceneName;
+	Started.ClientId = ClientId;
+	if (!Started.IsSuccess())
 	{
-		IFileManager::Get().Delete(*Path, /*RequireExists*/ false, /*EvenReadOnly*/ false, /*Quiet*/ true);
-		return FStageBridgeResultInfo::Fail(EStageBridgeResult::WriteFailed, LOCTEXT("Unreadable", "The exported file could not be read back."));
+		return Started;
 	}
-	Server->Send(ClientId, StageBridgeProtocol::MakeAsset(Asset));
 
 	Pending.Emplace();
 	Pending->AssetId = AssetId;
 	Pending->ClientId = ClientId;
-	Pending->Result = Result;
-	GameInstance->GetTimerManager().SetTimer(SendTimeout, FTimerDelegate::CreateUObject(this, &ThisClass::HandleSendTimeout), SendTimeoutSeconds, /*bLoop*/ false);
+	Pending->Result = Started;
+	Pending->Result.FilePath = Path;
+	UE_LOG(LogStageCraft, Log, TEXT("Bridge: exporting \"%s\" for client %d as %s."), *SceneName, ClientId, *AssetId);
+	Started.Message = FText::Format(LOCTEXT("Sending", "Sending \"{0}\" to {1}..."), FText::FromString(SceneName), StageBridgeProtocol::GetAppDisplayName(Client->App));
+	return Started;
+}
 
-	UE_LOG(LogStageCraft, Log, TEXT("Bridge: sent \"%s\" to client %d as %s (%lld bytes)."), *SceneName, ClientId, *AssetId, Asset.Bytes);
-	Result.Message = FText::Format(LOCTEXT("Sending", "Sending \"{0}\" to {1}..."), FText::FromString(SceneName), StageBridgeProtocol::GetAppDisplayName(Client->App));
-	return Result;
+void UStageBridgeSubsystem::HandleSendExported(const FStageSceneExportOutcome& Outcome)
+{
+	if (!Pending.IsSet() || Pending->bSent)
+	{
+		return;
+	}
+	if (!Outcome.Result.IsSuccess())
+	{
+		FinishSend(Outcome.Result.Code, Outcome.Result.Message);
+		return;
+	}
+	// The app may have left, or the bridge stopped, while the stage was exported.
+	const FStageBridgeClientInfo* Client = FindClient(Pending->ClientId);
+	UGameInstance* GameInstance = GetGameInstance();
+	if (!IsRunning() || !Client || !GameInstance)
+	{
+		FinishSend(EStageBridgeResult::NotConnected, LOCTEXT("GoneWhileExporting", "The app disconnected while the stage was being exported."));
+		return;
+	}
+
+	StageBridgeProtocol::FAsset Asset;
+	Asset.Id = Pending->AssetId;
+	Asset.Format = TEXT("glb");
+	Asset.Name = Pending->Result.SceneName;
+	Asset.Path = Pending->Result.FilePath;
+	Asset.Sha1 = Outcome.Sha1;
+	Asset.Bytes = IFileManager::Get().FileSize(*Asset.Path);
+	Server->Send(Pending->ClientId, StageBridgeProtocol::MakeAsset(Asset));
+
+	Pending->bSent = true;
+	Pending->Result.ExportedItems = Outcome.Result.ExportedItems;
+	Pending->Result.SkippedItems = Outcome.Result.SkippedItems;
+	GameInstance->GetTimerManager().SetTimer(SendTimeout, FTimerDelegate::CreateUObject(this, &ThisClass::HandleSendTimeout), GetSendTimeoutSeconds(), /*bLoop*/ false);
+	UE_LOG(LogStageCraft, Log, TEXT("Bridge: sent \"%s\" to client %d as %s (%lld bytes)."), *Asset.Name, Pending->ClientId, *Asset.Id, Asset.Bytes);
 }
 
 void UStageBridgeSubsystem::HandleSendTimeout()
@@ -325,6 +406,11 @@ void UStageBridgeSubsystem::FinishSend(EStageBridgeResult Code, const FText& Mes
 	if (!Pending.IsSet())
 	{
 		return;
+	}
+	// Ended while its export still ran (the app left, the bridge stopped): that export is of no use now.
+	if (!Pending->bSent)
+	{
+		ExportJob.Reset();
 	}
 	FStageBridgeResultInfo Result = MoveTemp(Pending->Result);
 	Pending.Reset();

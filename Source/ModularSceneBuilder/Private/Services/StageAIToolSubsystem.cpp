@@ -2,9 +2,11 @@
 
 #include "Services/StageAIToolSubsystem.h"
 
+#include "Engine/GameInstance.h"
 #include "ModularSceneBuilder.h"
 #include "Services/StageAIToolProvider.h"
 #include "Services/StageCredentialVault.h"
+#include "TimerManager.h"
 
 #include UE_INLINE_GENERATED_CPP_BY_NAME(StageAIToolSubsystem)
 
@@ -58,10 +60,16 @@ void UStageAIToolSubsystem::Initialize(FSubsystemCollectionBase& Collection)
 			UE_LOG(LogStageCraft, Warning, TEXT("AI tools: ProviderClasses entry '%s' is not a concrete UStageAIToolProvider with a valid, unique id; skipped."), *ClassPtr.ToString());
 		}
 	}
+	if (OperationTimeoutSeconds <= 0.f)
+	{
+		UE_LOG(LogStageCraft, Warning, TEXT("AI tools: OperationTimeoutSeconds %.1f is not positive; using %.0f."), OperationTimeoutSeconds, GetOperationTimeoutSeconds());
+	}
+	RefreshSavedKeys();
 }
 
 void UStageAIToolSubsystem::Deinitialize()
 {
+	ClearOperationTimer();
 	OnToolsChanged.Clear();
 	OnKeyVerified.Clear();
 	OnJobCompleted.Clear();
@@ -76,14 +84,23 @@ void UStageAIToolSubsystem::Deinitialize()
 	++OperationSerial;
 	Providers.Reset();
 	CheckedKeys.Reset();
+	SavedKeys.Reset();
 	Vault.Reset();
 	Super::Deinitialize();
+}
+
+float UStageAIToolSubsystem::GetOperationTimeoutSeconds() const
+{
+	constexpr float DefaultTimeoutSeconds = 120.f;
+	return OperationTimeoutSeconds > 0.f ? OperationTimeoutSeconds : DefaultTimeoutSeconds;
 }
 
 void UStageAIToolSubsystem::InitializeForTests(const FString& VaultDirectory)
 {
 #if WITH_DEV_AUTOMATION_TESTS
 	Vault = MakeUnique<FStageCredentialVault>(VaultDirectory);
+	CheckedKeys.Reset();
+	RefreshSavedKeys();
 #endif
 }
 
@@ -92,9 +109,26 @@ void UStageAIToolSubsystem::RegisterProviderForDevelopment(TSubclassOf<UStageAIT
 #if !UE_BUILD_SHIPPING
 	if (AddProvider(Class))
 	{
+		RefreshSavedKeys();
 		OnToolsChanged.Broadcast();
 	}
 #endif
+}
+
+void UStageAIToolSubsystem::RefreshSavedKeys()
+{
+	SavedKeys.Reset();
+	if (!Vault)
+	{
+		return;
+	}
+	for (const UStageAIToolProvider* Provider : Providers)
+	{
+		if (Provider && Provider->RequiresApiKey() && Vault->Contains(Provider->GetProviderId()))
+		{
+			SavedKeys.Add(Provider->GetProviderId());
+		}
+	}
 }
 
 bool UStageAIToolSubsystem::AddProvider(TSubclassOf<UStageAIToolProvider> Class)
@@ -129,12 +163,22 @@ EStageAIToolKeyState UStageAIToolSubsystem::GetKeyState(const UStageAIToolProvid
 		return EStageAIToolKeyState::NotNeeded;
 	}
 	const FName Id = Provider.GetProviderId();
-	if (!Vault || !Vault->Contains(Id))
+	if (!Vault || !SavedKeys.Contains(Id))
 	{
 		return EStageAIToolKeyState::Missing;
 	}
 	const EStageAIToolKeyState* Checked = CheckedKeys.Find(Id);
 	return Checked ? *Checked : EStageAIToolKeyState::Saved;
+}
+
+FStageAIToolInfo UStageAIToolSubsystem::DescribeProvider(const UStageAIToolProvider& Provider) const
+{
+	FStageAIToolInfo Info;
+	Info.ProviderId = Provider.GetProviderId();
+	Info.DisplayName = Provider.GetDisplayName();
+	Info.Capabilities = static_cast<uint8>(Provider.GetCapabilities());
+	Info.KeyState = GetKeyState(Provider);
+	return Info;
 }
 
 TArray<FStageAIToolInfo> UStageAIToolSubsystem::GetTools() const
@@ -145,11 +189,7 @@ TArray<FStageAIToolInfo> UStageAIToolSubsystem::GetTools() const
 	{
 		if (Provider)
 		{
-			FStageAIToolInfo& Info = Tools.AddDefaulted_GetRef();
-			Info.ProviderId = Provider->GetProviderId();
-			Info.DisplayName = Provider->GetDisplayName();
-			Info.Capabilities = static_cast<uint8>(Provider->GetCapabilities());
-			Info.KeyState = GetKeyState(*Provider);
+			Tools.Add(DescribeProvider(*Provider));
 		}
 	}
 	return Tools;
@@ -157,15 +197,13 @@ TArray<FStageAIToolInfo> UStageAIToolSubsystem::GetTools() const
 
 bool UStageAIToolSubsystem::FindTool(FName ProviderId, FStageAIToolInfo& OutInfo) const
 {
-	for (const FStageAIToolInfo& Info : GetTools())
+	const UStageAIToolProvider* Provider = FindProvider(ProviderId);
+	if (!Provider)
 	{
-		if (Info.ProviderId == ProviderId)
-		{
-			OutInfo = Info;
-			return true;
-		}
+		return false;
 	}
-	return false;
+	OutInfo = DescribeProvider(*Provider);
+	return true;
 }
 
 bool UStageAIToolSubsystem::IsKeyStorageAvailable() const
@@ -194,6 +232,7 @@ FStageAIToolResultInfo UStageAIToolSubsystem::StoreKey(FName ProviderId, const F
 	}
 	// A new key has not been checked yet.
 	CheckedKeys.Remove(ProviderId);
+	SavedKeys.Add(ProviderId);
 	UE_LOG(LogStageCraft, Log, TEXT("AI tools: key saved for '%s'."), *ProviderId.ToString());
 	OnToolsChanged.Broadcast();
 	return FStageAIToolResultInfo::Ok(ProviderId, LOCTEXT("KeySaved", "Key saved."));
@@ -211,6 +250,7 @@ FStageAIToolResultInfo UStageAIToolSubsystem::RemoveKey(FName ProviderId)
 		return StageAITools::FromVault(Removed, ProviderId);
 	}
 	CheckedKeys.Remove(ProviderId);
+	SavedKeys.Remove(ProviderId);
 	UE_LOG(LogStageCraft, Log, TEXT("AI tools: key removed for '%s'."), *ProviderId.ToString());
 	OnToolsChanged.Broadcast();
 	return FStageAIToolResultInfo::Ok(ProviderId, LOCTEXT("KeyRemoved", "Key removed."));
@@ -306,14 +346,53 @@ TDelegate<void(const FStageAIToolResultInfo&)> UStageAIToolSubsystem::BeginOpera
 	Operation = InOperation;
 	OperationProvider = ProviderId;
 	const uint32 Serial = ++OperationSerial;
+	ClearOperationTimer();
+	if (UGameInstance* GameInstance = GetGameInstance())
+	{
+		GameInstance->GetTimerManager().SetTimer(OperationTimer, FTimerDelegate::CreateUObject(this, &ThisClass::HandleOperationTimeout, Serial),
+			GetOperationTimeoutSeconds(), /*bLoop*/ false);
+	}
 	return TDelegate<void(const FStageAIToolResultInfo&)>::CreateWeakLambda(this, [this, Serial](const FStageAIToolResultInfo& Result)
 	{
 		HandleAnswer(Result, Serial);
 	});
 }
 
+void UStageAIToolSubsystem::ClearOperationTimer()
+{
+	if (UGameInstance* GameInstance = GetGameInstance())
+	{
+		GameInstance->GetTimerManager().ClearTimer(OperationTimer);
+	}
+	OperationTimer.Invalidate();
+}
+
+void UStageAIToolSubsystem::HandleOperationTimeout(uint32 ForSerial)
+{
+	if (!IsBusy() || ForSerial != OperationSerial)
+	{
+		return;
+	}
+	UE_LOG(LogStageCraft, Warning, TEXT("AI tools: '%s' did not answer within %.0f s; cancelling."), *OperationProvider.ToString(), GetOperationTimeoutSeconds());
+	if (UStageAIToolProvider* Provider = FindProvider(OperationProvider))
+	{
+		Provider->Cancel();
+	}
+	// The provider may have answered inside Cancel; only a still-open operation is closed here.
+	if (IsBusy() && ForSerial == OperationSerial)
+	{
+		HandleAnswer(FStageAIToolResultInfo::Fail(EStageAIToolResult::TimedOut, OperationProvider,
+			FText::Format(LOCTEXT("TimedOut", "The AI tool did not answer within {0} seconds."), FText::AsNumber(FMath::RoundToInt(GetOperationTimeoutSeconds())))), ForSerial);
+	}
+}
+
 void UStageAIToolSubsystem::HandleAnswer(const FStageAIToolResultInfo& Answer, uint32 ForSerial)
 {
+	// The provider contract (StageAIToolProvider.h) is game-thread answers; state here is not guarded for any other thread.
+	if (!ensureMsgf(IsInGameThread(), TEXT("AI tool '%s' answered off the game thread; the answer is ignored."), *Answer.ProviderId.ToString()))
+	{
+		return;
+	}
 	if (!IsBusy() || ForSerial != OperationSerial)
 	{
 		UE_LOG(LogStageCraft, Verbose, TEXT("AI tools: ignored an answer from '%s' that is no longer awaited."), *Answer.ProviderId.ToString());
@@ -326,6 +405,7 @@ void UStageAIToolSubsystem::HandleAnswer(const FStageAIToolResultInfo& Answer, u
 	Result.ProviderId = OperationProvider;
 	Operation = EOperation::None;
 	OperationProvider = NAME_None;
+	ClearOperationTimer();
 
 	if (Result.Code == EStageAIToolResult::KeyRejected || (Finished == EOperation::Verify && Result.IsSuccess()))
 	{

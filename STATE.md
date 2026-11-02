@@ -5166,7 +5166,7 @@ Plan approved in plan mode.
   - Esc to close.
   - Status: **implemented, awaiting manual verification.**
 
-**Commit:** uncommitted (working tree).
+**Commit:** `7a193e7`.
 
 **Known issues / follow-ups**
 - Getting an owned listing again imports another copy of the scene. Reusing the existing copy needs an origin index of the saved scenes.
@@ -5174,3 +5174,100 @@ Plan approved in plan mode.
 - `UStageMockAIToolProvider` ships in Shipping as unreachable code: UHT cannot compile a UCLASS out, and registration is a no-op in Shipping.
 - Losing the library copy of a package loses its export rights; getting the listing again restores them.
 - D2 (USD, Maya), D4 (bilingual search), D5 (a live AI provider, and moving the assistant's keys into the vault).
+- (Update in #55: the order path now has live integration tests, `StageCraft.Dispatch.OrderFlow` / `.OrderTimeout`.)
+
+## #55 — Acquire & Send hardening (Phase D3.1): audit fixes, backend timeouts, live integration tests, game-thread work (2026-11-02)
+
+**Status: implemented, awaiting manual verification** (all four milestones done; Claude verified them with tests, benchmarks and a scripted run with Blender).
+
+**Request (Gevor, 2026-11-02, pasted):** three briefs.
+1. Automated tests of the credit flow, the DCC dispatcher on 127.0.0.1:47830 and the vault key before dispatch.
+2. A memory-safety and decoupling audit of the D3 code.
+3. Moving heavy export, IO and socket work off the game thread.
+
+Gevor's choices:
+- Automation tests on a harness game instance (not `AFunctionalTest`).
+- After a backend timeout, a late approval is honoured and a late refusal ignored.
+
+Plan approved in plan mode.
+
+**Design:** Docs/ADR/0021-community-marketplace.md §14 (unanswered backends, late answers), Docs/ADR/0022-dcc-bridge.md §12 (exports spread over frames, with measurements), and Docs/Audits/2026-11-02-acquire-send-audit.md (23 findings with status, and where each step runs).
+
+**Premises of the briefs that do not hold (reported, not built):**
+- WebSocket: rejected in ADR 0022 §9; the bridge is TCP only.
+- USD: D2. Tests use .glb; Maya stays "needs USD".
+- Pixel Streaming: not enabled in this project; the numbers are local frame times.
+- Sockets were already on a worker thread, and package IO on `UE::Tasks` pipes.
+- "Subscription tiers": in this model they are exact-tag entitlements, and they are tested as such.
+
+**What & why**
+1. **M1, audit fixes** (Docs/Audits/2026-11-02-acquire-send-audit.md, #2–#16):
+   - The Services panel no longer overwrites a key check's answer with "Checking..." (it is set first). The same for the dialog's top-up text.
+   - A duplicate LOCTEXT key `StageCraftDispatch/Busy` with two texts is now `OrderBusy` / `TargetBusy`.
+   - Keys: the typed copy is wiped with `WipeString`; the panel no longer caches typed text across rebuilds (cards update in place); wiping uses `SecureZeroMemory` over the whole allocation; the vault checks the bytes it read, not an earlier file size.
+   - The dialog names the order's own target in its progress text, locks the rows during an order, confirms the price as drawn, and does no disk access per refresh (key presence kept in memory; one dispatch context per refresh).
+   - The order compares the whole price (`FStageAcquireOrder::ExpectedPrice`, was `ExpectedCredits`).
+   - Delivery runs on the next tick, not inside the marketplace broadcast.
+   - The Marketplace panel keeps its close-dialog timer handle; the bridge clears its delegates before stopping at teardown and stops a drain once it is stopped; AI tool answers off the game thread are refused (`ensure`).
+2. **M2, timeouts** (ADR 0021 §14): economy `BackendTimeoutSeconds` 30 (purchase, listing, top-up; new `EStageEconomyResult::BackendTimeout`), marketplace `FetchTimeoutSeconds` 60 (new `EStageMarketplaceResult::TimedOut`), AI tools `OperationTimeoutSeconds` 120 (provider cancelled; new `EStageAIToolResult::TimedOut`), bridge `SendTimeoutSeconds` 120 (was a constant), dispatcher `OrderTimeoutSeconds` 300 (new `EStageOrderResult::TimedOut`).
+   - After an economy timeout, a late approval is re-validated and applied, a late refusal is dropped, and an approval that can no longer apply (bought again meanwhile) is logged for the server to reconcile. Never charged twice.
+3. **M3, integration tests:**
+   - `StageCraftPaths::DataRoot` / `UserRoot` (Private/IO) replace 13 hard-coded `Saved/StageCraft` and `%LOCALAPPDATA%\StageCraft` roots; `FStageScopedDataRoot` points them at a temp folder in tests.
+   - `FStageTestGameInstance` (Private/Tests): a real game instance with every subsystem, the profile not persisted, `UStageTestCommerceBackend`, chosen timeouts, and a deterministic `Pump` (task queue, async loading, deferred streamable callbacks, timers).
+   - `UStageTestAIToolProvider`, `UStageTestEventRecorder`, a shared `FStageBridgeTestClient`, `StageTestFixtures` (publish a listing into the temp community folder).
+   - `UStageBridgeSubsystem::StartBridgeOnAnyPortForTests`.
+   - 8 tests: `StageCraft.Economy.ListingPurchaseFlow`, `.BackendTimeout`, `.EntitlementGates`; `StageCraft.Dispatch.OrderFlow`, `.OrderTimeout`; `StageCraft.Services.VaultBeforeDispatch`; `StageCraft.Bridge.LoopbackApps` (Blender, Maya, 3ds Max, Cinema 4D clients), `.ExportJob`.
+   - `Scripts/Tests/RunAutomation.ps1`: runs the suite (offscreen renderer or `-NullRHI`), checks the test count, and fails if the profile slot, `Saved/StageCraft`, GameUserSettings.ini or `%LOCALAPPDATA%\StageCraft` changed.
+4. **M4, game-thread work** (ADR 0022 §12): measured first with the new `StageCraft.Bench.Export` (development only), then:
+   - `FStageSceneExportJob` (Private/Bridge): scene and library reads, file move and SHA-1 on workers; spawning and baking on the game thread with a 4 ms budget per frame; world creation and the engine's glTF write stay single frames.
+   - `UStageBridgeSubsystem::BeginExportSceneToFile` (requester-only callback) replaces the synchronous `ExportSceneToFile`; `SendSceneToApp` exports through the job, then sends. The Send-To panel hears its exports through `AModularPlayerController::OnSceneExportCompleted`, so the dispatcher's outbox export no longer shows there.
+   - `FStageSceneExporter::CreateExportWorld` builds the world without physics, navigation, AI, effects, audio or world partition (shared by the synchronous path).
+   - The Marketplace preview captures at most once per frame while orbiting or zooming (`FStageMarketplacePreview::MoveView` replaces `Orbit`/`Zoom`).
+   - Measured and rejected: forcing a garbage collection after each export (a 390 ms first purge).
+
+**Measurements** (`StageCraft.Bench.Export Copies=40 Runs=5`: 240 items, `-game` 1280×720, another editor using the GPU; frames without an export: median 18–28 ms):
+- Before: one frame of 86–113 ms per export (136 ms cold).
+- After: longest game-thread slice 17–23 ms in steady runs (world creation), up to 49 ms when destroyed worlds pile up before the engine's periodic collection; glTF 9–13 ms; spawning spread over ~15 frames. An export takes 300–900 ms of wall time instead of ~100 ms.
+- World creation with the lean world: 14–21 ms against 28–31 ms on comparable runs.
+
+**Files changed**
+- New:
+  - `Private/IO/StageCraftPaths.h/.cpp`
+  - `Private/Bridge/StageSceneExportJob.h/.cpp`, `Private/Diagnostics/StageExportBenchmark.cpp`
+  - `Private/Tests/StageTestGameInstance.h/.cpp`, `StageTestEventRecorder.h/.cpp`, `StageTestFixtures.h`
+  - `Private/Economy/Tests/StageTestCommerceBackend.h/.cpp`, `StageEconomyFlowTests.cpp`
+  - `Private/Services/Tests/StageTestAIToolProvider.h/.cpp`
+  - `Private/Marketplace/Tests/StageDispatchOrderTests.cpp`
+  - `Private/Bridge/Tests/StageBridgeTestClient.h`, `StageBridgeLoopbackTests.cpp`
+  - `Scripts/Tests/RunAutomation.ps1`, `Docs/Audits/2026-11-02-acquire-send-audit.md`
+- Changed:
+  - Economy: `Public/Economy/StageEconomyTypes.h`, `Public/Subsystems/StageEconomySubsystem.h`, `Private/Subsystems/StageEconomySubsystem.cpp`
+  - Marketplace: `Public/Marketplace/StageMarketplaceTypes.h`, `StageMarketplaceSubsystem.h`, `StageDispatchTypes.h`, `StageAcquireDispatchSubsystem.h`; `Private/Marketplace/StageMarketplaceSubsystem.cpp`, `StageAcquireDispatchSubsystem.cpp`, `StageDispatchRules.cpp`, `StageLocalMarketplaceStore.cpp`, `StageMarketplacePreview.h/.cpp`, `StageMarketplaceConsoleCommands.cpp`
+  - Bridge: `Public/Bridge/StageBridgeSubsystem.h`; `Private/Bridge/StageBridgeSubsystem.cpp`, `StageSceneExporter.h/.cpp`, `StageBridgeConsoleCommands.cpp`, `Tests/StageBridgeTests.cpp` (shared client)
+  - Services: `Public/Services/StageAIToolTypes.h`, `StageAIToolSubsystem.h`; `Private/Services/StageAIToolSubsystem.cpp`, `StageCredentialVault.cpp`, `StageMockAIToolProvider.cpp`
+  - UI: `Public/UI/StageAcquireDialogWidget.h`, `StageServicesWidget.h`, `StageMarketplaceWidget.h`, `StageSendToWidget.h`; `Private/UI/StageAcquireDialogWidget.cpp`, `StageServicesWidget.cpp`, `StageMarketplaceWidget.cpp`, `StageSendToWidget.cpp`
+  - Controller: `Public/Player/ModularPlayerController.h`, `Private/Player/ModularPlayerController.cpp`
+  - Paths only: `Private/Scene/StageSceneStore.cpp`, `Report/StageReportFiles.cpp`, `Import/StageMeshImportSubsystem.cpp`, `Import/StageMeshImportConsoleCommands.cpp`, `Workspace/StageWorkspaceSubsystem.cpp`, `Diagnostics/StageFixtureBenchmark.cpp`
+  - Docs: `Docs/ADR/0021-community-marketplace.md` §14, `Docs/ADR/0022-dcc-bridge.md` §12, `tasks/todo.md` (Phase 31)
+- STATE.md #54's commit hash (`7a193e7`) was missing and is now recorded.
+
+**Verification**
+- **Builds:** Editor, Game and Shipping (`-DisableAdaptiveUnity`), all 0 warnings. One deprecation warning (raw-pointer `AddReferencedObject`) appeared during the work and was fixed.
+- **Shipping binary** (UTF-16 and ASCII scan): no `StageCraft.Bench.Export`, `StageCraft.Marketplace.Order`, `StageCraft.AITools.Mock` or "DEV: ADD THE MISSING"; "GET CREDITS" present (control).
+- **Automation:** 149/149 with an offscreen renderer and 149/149 with `-nullrhi`, through `RunAutomation.ps1 -ExpectedCount 149`. User data unchanged (62 files checked).
+  - With a renderer the tests really export, send to C++ stand-ins for all four apps (ack ok, ack with error, disconnect mid-send, send timeout), hand a model to a test tool with the key read from the vault, and cancel an export half-way (no callback, no world, no file).
+  - Without one, those deliveries are asserted to fail as "no renderer", with the purchase kept.
+  - The tests found one harness gap during the work (the item catalog was not loaded yet when a test exported); the harness now waits for the catalogs.
+- **Benchmarks:** three scripted `-game` runs of `StageCraft.Bench.Export` (logs in the session scratchpad; CSVs in `Saved/StageCraft/Benchmarks`).
+- **Scripted Standalone `-game` run with headless Blender 5.2.2** (R55, the R54 harness): every step behaved as in R54, now through the export job. Refused "kept inside" `.glb` and export; bought and opened; bought and saved `R38.glb` (66,428 bytes); tool refused without a key, then handed over; sent to Blender, imported and acked (8 meshes, 3,136 triangles); all 12 Blender checks passed. Scenes removed, profile restored (same hash), workspace and GameUserSettings.ini restored.
+- **Not verified:** by hand in the editor. The Send-To panel during a large export (the window should keep drawing and show "Exporting..."), the acquire dialog during a `.glb` order, Services & Keys SAVE and CHECK.
+
+**Commit:** uncommitted (working tree).
+
+**Known issues / follow-ups**
+- World creation (14–49 ms) and the glTF write (~10 ms here, scaling with the stage) remain single game-thread frames. A reusable export world would remove the first at a memory cost while idle.
+- Back-to-back exports make world creation slower until the engine's periodic garbage collection.
+- The marketplace, dispatch and key requests on the controller do not consult the GameMode (audit #19; follows the existing marketplace requests; needs its own ADR).
+- Unresolved transactions after a timeout are kept for the run only; reconciliation after a restart is the server's job.
+- Test classes ship as unreachable UCLASSes (`UStageTestCommerceBackend`, `UStageTestAIToolProvider`, `UStageTestEventRecorder`), like the mock tool.
+- The marketplace fetch timeout has no automated test (needs a test marketplace backend); it is covered by review only.

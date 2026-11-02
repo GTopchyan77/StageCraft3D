@@ -524,3 +524,14 @@ Gevor's choices: a publisher "allow export" flag (amends ADR 0022 §4); D3 plus 
 - [ ] Manual verification (Gevor): the acquire dialog (all rows, GET CREDITS, Esc), the publish choice, Services & Keys key entry
 - [ ] Follow-up: getting an owned listing again should reuse the existing scene copy (needs an origin index of saved scenes)
 - [ ] Follow-up: a live AI provider (D5); move the assistant's keys into the vault
+
+## Phase 31 — Acquire & Send hardening (D3.1): audit, timeouts, integration tests, game-thread work (requested by Gevor 2026-11-02; STATE.md #55, ADR 0021 §14, ADR 0022 §12, Docs/Audits/2026-11-02-acquire-send-audit.md)
+Gevor's choices: automation tests on a harness game instance (not AFunctionalTest); after a backend timeout a late approval is honoured, a late refusal dropped.
+- [x] M1 audit fixes: CHECK/top-up status order, LOCTEXT key clash, key wiping (SecureZeroMemory, no typed-key cache), vault size race, order-target progress text, whole-price check, dialog without disk access, close-timer handle, bridge teardown/drain, exporter comments
+- [x] M2 timeouts: economy (late approval honoured), marketplace fetch, AI tools, bridge send (config), dispatcher order
+- [x] M3 harness (FStageTestGameInstance, StageCraftPaths data root, test commerce backend, test AI tool, event recorder, shared bridge client) + 8 integration tests; Scripts/Tests/RunAutomation.ps1 checks counts and that user data is untouched
+- [x] M4 measured: StageCraft.Bench.Export; FStageSceneExportJob (worker IO + hashing, spawn/bake over frames, lean export world); requester-only export callbacks; delivery off the broadcast; preview capture once per frame
+- [x] Tests 149/149 with and without a renderer; Editor/Game/Shipping builds
+- [ ] Manual verification (Gevor): export from Send to 3D App on a large stage (the panel keeps drawing, "Exporting..." shows), the acquire dialog during a .glb order, Services & Keys SAVE/CHECK
+- [ ] Follow-up: GameMode consultation for the marketplace/dispatch/key requests (audit #19; its own ADR)
+- [ ] Follow-up: world creation and glTF stay single-frame steps; a reusable export world would remove the first (memory cost while idle)

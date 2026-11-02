@@ -40,10 +40,13 @@ private:
 	class UTextBlock* MakeText(const FText& Text, int32 Size, FName Typeface, const FLinearColor& Color);
 	class UStageChoiceButton* MakeButton(const FText& Label, const FText& Tip, int32 Index, void (UStageServicesWidget::*Handler)(int32));
 	const class UStageCraftUITheme& GetTheme() const;
-	void StyleChoice(class UStageChoiceButton& Button, bool bSelected) const;
+	void StyleChoice(class UStageChoiceButton& Button) const;
 
 	void RequestRebuild();
-	void RebuildTools();
+	/** Rebuilds the tool cards when the set of tools changed; otherwise updates their state labels and buttons in place, so a key being typed survives. */
+	void RefreshTools();
+	void RebuildToolCards(const TArray<FStageAIToolInfo>& Infos);
+	void UpdateToolCard(int32 Row, const FStageAIToolInfo& Info);
 	void RebuildApps();
 	void SetStatus(const FText& Message, bool bWarning);
 	FText DescribeKeyState(EStageAIToolKeyState State) const;
@@ -55,6 +58,9 @@ private:
 	void HandleToolsChanged();
 	UFUNCTION()
 	void HandleKeyVerified(const FStageAIToolResultInfo& Result);
+	/** A hand-off ended (the dispatcher's): CHECK is usable again. */
+	UFUNCTION()
+	void HandleJobCompleted(const FStageAIToolResultInfo& Result);
 	UFUNCTION()
 	void HandleBridgeStateChanged(bool bRunning);
 
@@ -64,9 +70,17 @@ private:
 	TObjectPtr<class UVerticalBox> ToolList = nullptr;
 	UPROPERTY(Transient)
 	TObjectPtr<class UVerticalBox> AppList = nullptr;
-	/** One password field per tool row, in GetTools() order. */
+	/** Per tool row, in GetTools() order: the password field, the key state label and the SAVE / CHECK / REMOVE buttons. */
 	UPROPERTY(Transient)
 	TArray<TObjectPtr<class UEditableTextBox>> KeyFields;
+	UPROPERTY(Transient)
+	TArray<TObjectPtr<class UTextBlock>> StateLabels;
+	UPROPERTY(Transient)
+	TArray<TObjectPtr<class UStageChoiceButton>> SaveButtons;
+	UPROPERTY(Transient)
+	TArray<TObjectPtr<class UStageChoiceButton>> CheckButtons;
+	UPROPERTY(Transient)
+	TArray<TObjectPtr<class UStageChoiceButton>> RemoveButtons;
 	UPROPERTY(Transient)
 	TObjectPtr<class UTextBlock> StatusText = nullptr;
 

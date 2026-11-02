@@ -307,5 +307,43 @@ Rows that cannot be used stay visible with the reason, and cannot be picked. Lin
   - `StageCraft.Services.CredentialVault`, `.AIToolMock`.
 - **Follow-ups:**
   - Getting an owned listing again adds another copy of the scene. Reusing the existing copy needs an origin index of the saved scenes.
-  - The order path is verified end to end, not by an automated test with a live marketplace.
+  - The order path is verified end to end, not by an automated test with a live marketplace. (Since #55 it is: `StageCraft.Dispatch.OrderFlow`.)
   - D2 (USD, Maya), D4 and D5 as in §8.
+
+## 12. Addendum: exports spread over frames (2026-11-02, STATE.md #55)
+
+**Problem.** An export ran in one call on the game thread: scene file read, export-rights read, world creation, spawning every item (with synchronous class loads), baking procedural parts, the engine's glTF write, and for a send the SHA-1 of the whole file. Measured with `StageCraft.Bench.Export` (240 items, 40 copies of R38 Cues, `-game`, offscreen at 1280×720, another editor sharing the GPU): **one frame of 86–113 ms** (warm; 136 ms cold). It also ran inside the marketplace's `OnAcquireCompleted` broadcast when an order delivered.
+
+**Decision.** `FStageSceneExportJob` (Private/Bridge) runs the same steps with the same rules and wording (shared through `FStageSceneExporter` helpers) as a state machine:
+
+| Step | Thread | Frames |
+|---|---|---|
+| read and parse the scene; read the library manifest of a marketplace stage | worker (`UE::Tasks`) | — |
+| decide export rights (profile), collect the catalog | game | with the next step's frame |
+| create the export world | game | one |
+| spawn items | game | several: a time budget per frame (`FrameBudgetMs`, 4 ms), at least one item |
+| bake procedural parts | game | several, same budget |
+| the engine's glTF conversion and write | game | one: `UGLTFExporter` reads components and world state, so it cannot be split or moved |
+| destroy the world | game | one |
+| move the file into place, its size, its SHA-1 | worker | — |
+| the requester's callback | game | — |
+
+- One export at a time, owned by `UStageBridgeSubsystem` (`BeginExportSceneToFile`, `SendSceneToApp`). It steps on the game instance's timer manager, so it lives and ticks with its game instance. Dropping it cancels it: no callback, the world destroyed, the temporary file removed. Worker steps carry only strings and bytes.
+- A file export reports to its requester only. Before, it was broadcast on `OnSendCompleted`, so the dispatcher's private AI-tool outbox export showed up in the Send-To panel. The panel now hears its own exports through `AModularPlayerController::OnSceneExportCompleted`.
+- A send exports (with the SHA-1 computed on a worker) and then sends the asset message. `IsSending` covers both parts; an export failure or the app leaving during the export ends the send on `OnSendCompleted`.
+- The export world is created without physics, navigation, AI, effects, audio or world partition (`FStageSceneExporter::CreateExportWorld`): on comparable runs, 14–21 ms instead of 28–31 ms.
+- The acquire dispatcher delivers on the tick after the acquire completed, never inside the marketplace broadcast.
+
+**Measured after** (same bench, same session conditions; frames without an export: median 18–28 ms, p95 24–49 ms):
+- the job's longest game-thread slice: **17–23 ms** (world creation) in steady runs, up to 49 ms when destroyed worlds pile up (below);
+- glTF write: 9–13 ms (one frame);
+- spawning 240 items: 31–65 ms in total, spread over about 15 frames;
+- an export now takes 300–900 ms of wall time instead of ~100 ms, but no single frame carries more than the largest slice.
+
+**Not done, measured.** Forcing a garbage collection after each export: world creation stays flat (15–22 ms), but the forced full purge cost a 390 ms frame the first time and tens of ms after each export. Rejected; destroyed worlds are left to the engine's periodic collection. Back-to-back exports therefore see world creation grow (14 to 49 ms over ten exports in 30 s) until the next collection.
+
+**Consequences.**
+- "Zero frame drops" is not claimed: two steps stay single game-thread frames (world creation and glTF), and their cost scales with the stage.
+- Pixel Streaming is not enabled in this project; the numbers are local frame times.
+- Callers that relied on a synchronous `ExportSceneToFile` now pass a callback. The synchronous `ExportDocument` / `ExportSavedScene` remain for tests and as the benchmark's baseline.
+- Tests: `StageCraft.Bridge.ExportJob`, `.LoopbackApps`; `StageCraft.Dispatch.OrderFlow`; `StageCraft.Services.VaultBeforeDispatch` (each runs the job with a renderer, and asserts the refusal without one).

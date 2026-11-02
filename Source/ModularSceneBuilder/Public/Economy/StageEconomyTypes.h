@@ -38,6 +38,11 @@ enum class EStageEconomyResult : uint8
 	SessionRuleViolation,
 	/** A real-money price needs an authoritative server; the offline commerce backend cannot settle it (Docs/ADR/0021-community-marketplace.md §5). */
 	ServerRequired,
+	/**
+	 * The commerce backend did not answer within UStageEconomySubsystem::BackendTimeoutSeconds. Nothing was applied; a late
+	 * approval is still honoured (the store may have charged), a late refusal is dropped (ADR 0021 §14).
+	 */
+	BackendTimeout,
 };
 
 /** How an item, parameter or entitlement relates to the current player. */

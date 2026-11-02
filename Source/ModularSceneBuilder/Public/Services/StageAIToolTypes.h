@@ -39,6 +39,8 @@ enum class EStageAIToolResult : uint8
 	Failed,
 	/** Cancelled before the tool answered. */
 	Cancelled,
+	/** The tool did not answer within UStageAIToolSubsystem::OperationTimeoutSeconds; the operation was cancelled. */
+	TimedOut,
 };
 
 /** What is known about a tool's key. Never the key itself. */

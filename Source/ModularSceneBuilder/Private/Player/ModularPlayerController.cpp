@@ -2186,13 +2186,23 @@ bool AModularPlayerController::RequestSetBridgeEnabled(bool bEnabled)
 bool AModularPlayerController::RequestExportScene(const FString& SceneName, const FString& FilePath)
 {
 	UStageBridgeSubsystem* Bridge = GetGameInstance() ? GetGameInstance()->GetSubsystem<UStageBridgeSubsystem>() : nullptr;
-	const FStageBridgeResultInfo Result = Bridge ? Bridge->ExportSceneToFile(SceneName, FilePath)
+	const FStageBridgeResultInfo Result = Bridge
+		? Bridge->BeginExportSceneToFile(SceneName, FilePath, FOnStageBridgeExportFinished::CreateUObject(this, &ThisClass::HandleSceneExported))
 		: FStageBridgeResultInfo::Fail(EStageBridgeResult::Unavailable, LOCTEXT("NoExport", "Exporting is not available."));
 	if (!Result.IsSuccess())
 	{
 		ReportRejection(FStageEconomyResultInfo::Fail(EStageEconomyResult::InvalidRequest, Result.Message));
 	}
 	return Result.IsSuccess();
+}
+
+void AModularPlayerController::HandleSceneExported(const FStageBridgeResultInfo& Result)
+{
+	if (!Result.IsSuccess())
+	{
+		ReportRejection(FStageEconomyResultInfo::Fail(EStageEconomyResult::InvalidRequest, Result.Message));
+	}
+	OnSceneExportCompleted.Broadcast(Result);
 }
 
 bool AModularPlayerController::RequestSendScene(const FString& SceneName, int32 ClientId)

@@ -77,7 +77,7 @@ FText StageDispatchRules::Describe(EStageDispatchAvailability Availability)
 	case EStageDispatchAvailability::NeedsUsd: return LOCTEXT("NeedsUsd", "Needs USD, which comes in a later update.");
 	case EStageDispatchAvailability::NeedsKey: return LOCTEXT("NeedsKey", "Needs an API key (Window > Services & Keys).");
 	case EStageDispatchAvailability::KeyRejected: return LOCTEXT("KeyRejected", "The saved key was refused. Save a new one in Window > Services & Keys.");
-	case EStageDispatchAvailability::Busy: return LOCTEXT("Busy", "Busy with another hand-off.");
+	case EStageDispatchAvailability::Busy: return LOCTEXT("TargetBusy", "Busy with another hand-off.");
 	case EStageDispatchAvailability::Unavailable:
 	default: return LOCTEXT("Unavailable", "Not available.");
 	}

@@ -19,6 +19,7 @@
 #include "InterchangeResult.h"
 #include "InterchangeResultsContainer.h"
 #include "InterchangeSourceData.h"
+#include "IO/StageCraftPaths.h"
 #include "Misc/Paths.h"
 #include "ModularSceneBuilder.h"
 #include "Subsystems/StageItemSubsystem.h"
@@ -132,7 +133,7 @@ bool UStageMeshImportSubsystem::CanImportAny(const TArray<FString>& Files) const
 
 FString UStageMeshImportSubsystem::GetImportListPath()
 {
-	return FPaths::ProjectSavedDir() / TEXT("StageCraft") / TEXT("Imports.json");
+	return FPaths::Combine(StageCraftPaths::DataRoot(), TEXT("Imports.json"));
 }
 
 bool UStageMeshImportSubsystem::ValidateRequest(const FString& NormalizedFile, EStageMeshImportOrigin Origin, FStageMeshImportOutcome& OutRefusal) const

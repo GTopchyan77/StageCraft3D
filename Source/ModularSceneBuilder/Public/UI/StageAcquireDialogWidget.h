@@ -136,6 +136,14 @@ private:
 	FGuid ListingId;
 	/** What the stage can be sent to, in row order; rebuilt with the rows. */
 	TArray<FStageDispatchTarget> Targets;
+	/** Targets' availability as last shown, same order (one dispatch-context snapshot per refresh). */
+	TArray<EStageDispatchAvailability> TargetAvailability;
+	/**
+	 * The price as last drawn. Confirm sends this, not the listing's price at click time: a refresh is deferred a tick after
+	 * OnListingsUpdated, and the user must only ever confirm a price they have seen (the dispatcher refuses any other).
+	 */
+	FStageMarketplacePrice ShownPrice;
+	bool bHasShownPrice = false;
 	int32 SelectedTarget = 0;
 	/** The .glb path picked for SaveFile; kept across rebuilds. */
 	FString ChosenFilePath;

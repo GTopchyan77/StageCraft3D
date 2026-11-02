@@ -177,8 +177,10 @@ void UStageSendToWidget::NativeConstruct()
 		Bridge->OnClientsChanged.AddUniqueDynamic(this, &ThisClass::HandleClientsChanged);
 		Bridge->OnSendCompleted.AddUniqueDynamic(this, &ThisClass::HandleSendCompleted);
 	}
-	if (const AModularPlayerController* Controller = GetStageController())
+	if (AModularPlayerController* Controller = GetStageController())
 	{
+		BoundController = Controller;
+		Controller->OnSceneExportCompleted.AddUniqueDynamic(this, &ThisClass::HandleExportCompleted);
 		if (UStageSceneComponent* Scenes = Controller->GetSceneFiles())
 		{
 			BoundScenes = Scenes;
@@ -203,6 +205,11 @@ void UStageSendToWidget::NativeDestruct()
 		Bridge->OnSendCompleted.RemoveDynamic(this, &ThisClass::HandleSendCompleted);
 	}
 	BoundBridge.Reset();
+	if (AModularPlayerController* Controller = BoundController.Get())
+	{
+		Controller->OnSceneExportCompleted.RemoveDynamic(this, &ThisClass::HandleExportCompleted);
+	}
+	BoundController.Reset();
 	if (UStageSceneComponent* Scenes = BoundScenes.Get())
 	{
 		Scenes->OnSceneOperationFinished.RemoveDynamic(this, &ThisClass::HandleSceneOperationFinished);
@@ -379,8 +386,14 @@ void UStageSendToWidget::HandleClientsChanged()
 
 void UStageSendToWidget::HandleSendCompleted(const FStageBridgeResultInfo& Result)
 {
-	SetStatus(Result.FilePath.IsEmpty() || Result.ClientId != 0 ? Result.Message
-		: FText::Format(LOCTEXT("SavedTo", "{0} Saved to {1}"), Result.Message, FText::FromString(Result.FilePath)), !Result.IsSuccess());
+	SetStatus(Result.Message, !Result.IsSuccess());
+	RebuildTargets();
+}
+
+void UStageSendToWidget::HandleExportCompleted(const FStageBridgeResultInfo& Result)
+{
+	SetStatus(Result.IsSuccess() ? FText::Format(LOCTEXT("SavedTo", "{0} Saved to {1}"), Result.Message, FText::FromString(Result.FilePath)) : Result.Message,
+		!Result.IsSuccess());
 	RebuildTargets();
 }
 

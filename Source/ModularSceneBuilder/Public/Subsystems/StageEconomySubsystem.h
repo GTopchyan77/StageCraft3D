@@ -3,6 +3,7 @@
 #pragma once
 
 #include "CoreMinimal.h"
+#include "Engine/TimerHandle.h"
 #include "Subsystems/GameInstanceSubsystem.h"
 #include "Data/StageParameterTypes.h"
 #include "Economy/StageEconomyTypes.h"
@@ -165,12 +166,36 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "StageCraft|Economy|Dev", meta = (DevelopmentOnly))
 	bool DevGrantCurrency(FGameplayTag Currency, int64 Amount);
 
+	/** The time the commerce backend has to answer a purchase or top-up (BackendTimeoutSeconds, validated). */
+	float GetBackendTimeoutSeconds() const;
+
+	/** Transactions that timed out and are still waiting for a late answer (diagnostics and tests). */
+	int32 GetUnresolvedTransactionCount() const { return UnresolvedProducts.Num() + UnresolvedListingOffers.Num() + UnresolvedTopUps.Num(); }
+
 protected:
 	/** Settles purchases. Empty uses UStageLocalCommerceBackend. */
 	UPROPERTY(Config)
 	TSoftClassPtr<class UStageCommerceBackend> CommerceBackendClass;
 
+	/**
+	 * Seconds the backend has to answer before the request ends as BackendTimeout (ADR 0021 §14). Without it a backend that
+	 * never answers leaves the purchase pending for the rest of the run, and every later request for it is PurchasePending.
+	 * Values <= 0 fall back to the default.
+	 */
+	UPROPERTY(Config)
+	float BackendTimeoutSeconds = 30.f;
+
 private:
+	/** Starts the answer deadline of TransactionId. Called before the backend is asked: it may answer inside the call. */
+	void StartBackendTimer(const FGuid& TransactionId);
+	/** Clears the deadline of TransactionId, if it still has one. Idempotent. */
+	void StopBackendTimer(const FGuid& TransactionId);
+	void HandleBackendTimeout(FGuid TransactionId);
+
+	/** Applies an approved, re-validated product purchase; shared by the on-time and the late answer. */
+	FStageEconomyResultInfo CommitProductPurchase(const FGuid& TransactionId, class UStageProductData& Product);
+	FStageEconomyResultInfo CommitListingPurchase(const FGuid& TransactionId, const FStageMarketplaceListing& Offer);
+	FStageEconomyResultInfo ApplyTopUp(const FStageTopUpRequest& Request, int64 GrantedAmount, const FText& Reason);
 	void LoadProductCatalog();
 	void HandleProductCatalogLoaded();
 	void HandlePurchaseProcessed(bool bApproved, const FText& Reason, FGuid TransactionId, TWeakObjectPtr<class UStageProductData> WeakProduct);
@@ -202,6 +227,15 @@ private:
 
 	/** The top-up in flight; an invalid TransactionId when none. At most one at a time. */
 	FStageTopUpRequest PendingTopUp;
+
+	/** Answer deadline per transaction in flight (purchases, listing offers, the top-up). */
+	TMap<FGuid, FTimerHandle> BackendTimers;
+
+	// Timed out, waiting for a late answer: an approval is applied (re-validated), a refusal dropped. Not saved: a restart
+	// leaves reconciliation to the server, which keys on the TransactionId.
+	TMap<FGuid, TWeakObjectPtr<class UStageProductData>> UnresolvedProducts;
+	TMap<FGuid, FStageMarketplaceListing> UnresolvedListingOffers;
+	TMap<FGuid, FStageTopUpRequest> UnresolvedTopUps;
 
 	bool bCatalogLoaded = false;
 };

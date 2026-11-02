@@ -24,6 +24,10 @@ namespace StageMarketplacePreview
 	 */
 	FStageMarketplacePreviewStats SpawnScene(class UWorld& World, const FStageSceneDocument& Scene, const TMap<FSoftObjectPath, class UBaseItemData*>& Catalog,
 		TArray<TObjectPtr<class AActor>>& OutActors, FBox& OutBounds);
+
+	/** One item of SpawnScene, for callers that spread a scene over several frames (the export job). Adds to Stats. */
+	void SpawnItem(class UWorld& World, const FStageItemSnapshot& Snapshot, const TMap<FSoftObjectPath, class UBaseItemData*>& Catalog,
+		TArray<TObjectPtr<class AActor>>& OutActors, FBox& OutBounds, FStageMarketplacePreviewStats& Stats);
 }
 
 /**
@@ -64,11 +68,11 @@ public:
 	/** Removes the shown stage (the preview world stays for the next Show). */
 	void Clear();
 
-	/** Turns the camera around the stage; degrees. */
-	void Orbit(float DeltaYaw, float DeltaPitch);
-
-	/** Positive steps move the camera closer. */
-	void Zoom(float Steps);
+	/**
+	 * Turns the camera around the stage (degrees) and zooms (positive steps move closer), then captures once. The view coalesces
+	 * a frame's input into one call, so a fast mouse costs one capture per frame, not one per event.
+	 */
+	void MoveView(float DeltaYaw, float DeltaPitch, float ZoomSteps);
 
 	/** Back to the default three-quarter view of the whole stage. */
 	void Frame();

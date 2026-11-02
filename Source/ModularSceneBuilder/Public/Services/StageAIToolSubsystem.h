@@ -3,6 +3,7 @@
 #pragma once
 
 #include "CoreMinimal.h"
+#include "Engine/TimerHandle.h"
 #include "Services/StageAIToolTypes.h"
 #include "Subsystems/GameInstanceSubsystem.h"
 #include "Templates/UniquePtr.h"
@@ -35,7 +36,7 @@ public:
 	virtual void Deinitialize() override;
 	//~ End USubsystem Interface
 
-	/** Every configured tool with its key state. Checks the vault folder (a few small file lookups); call on change, not per frame. */
+	/** Every configured tool with its key state. No disk access: key presence is known from Initialize, StoreKey and RemoveKey. */
 	TArray<FStageAIToolInfo> GetTools() const;
 
 	/** False when no tool has that id. */
@@ -62,6 +63,9 @@ public:
 	/** Abandons the operation in flight; its listener gets Cancelled. Idempotent. */
 	void CancelOperation();
 
+	/** The time a tool has to answer before its operation is cancelled with TimedOut (OperationTimeoutSeconds, validated). */
+	float GetOperationTimeoutSeconds() const;
+
 	/**
 	 * Development builds and tests only (no effect in Shipping): adds a provider of Class that is not in the config, e.g. the
 	 * offline mock. Ignored if a provider with the same id exists.
@@ -86,6 +90,13 @@ protected:
 	UPROPERTY(Config)
 	TArray<TSoftClassPtr<class UStageAIToolProvider>> ProviderClasses;
 
+	/**
+	 * Seconds a tool has to answer a key check or a hand-off. Without it a tool that never answers would keep the subsystem (and
+	 * the acquire dispatcher behind it) busy for the rest of the run. Values <= 0 fall back to the default.
+	 */
+	UPROPERTY(Config)
+	float OperationTimeoutSeconds = 120.f;
+
 private:
 	enum class EOperation : uint8
 	{
@@ -96,7 +107,12 @@ private:
 
 	class UStageAIToolProvider* FindProvider(FName ProviderId) const;
 	EStageAIToolKeyState GetKeyState(const class UStageAIToolProvider& Provider) const;
+	FStageAIToolInfo DescribeProvider(const class UStageAIToolProvider& Provider) const;
 	bool AddProvider(TSubclassOf<class UStageAIToolProvider> Class);
+	/** Re-reads which providers have a key in the vault (one file lookup each). On Initialize and when the vault changes. */
+	void RefreshSavedKeys();
+	void HandleOperationTimeout(uint32 ForSerial);
+	void ClearOperationTimer();
 
 	/** Reads the key for Provider (or none, when it needs none). Fails with NeedsKey / Unavailable / Failed. */
 	FStageAIToolResultInfo ReadKey(const class UStageAIToolProvider& Provider, FString& OutKey) const;
@@ -110,6 +126,11 @@ private:
 
 	/** Outcomes of key checks in this run. Saved keys without an entry are EStageAIToolKeyState::Saved. */
 	TMap<FName, EStageAIToolKeyState> CheckedKeys;
+
+	/** Providers with a key in the vault. Mirrors the vault folder so views never touch the disk (Rules §29). */
+	TSet<FName> SavedKeys;
+
+	FTimerHandle OperationTimer;
 
 	TUniquePtr<class FStageCredentialVault> Vault;
 

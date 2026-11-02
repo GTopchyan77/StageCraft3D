@@ -11,6 +11,7 @@
 #include "Interaction/StageTransformRules.h"
 #include "Misc/Base64.h"
 #include "Misc/FileHelper.h"
+#include "IO/StageCraftPaths.h"
 #include "Misc/Paths.h"
 #include "Policies/PrettyJsonPrintPolicy.h"
 #include "Serialization/JsonReader.h"
@@ -327,7 +328,7 @@ FStageSceneStore::FStageSceneStore(FString InDirectory)
 
 FString FStageSceneStore::GetDefaultDirectory()
 {
-	return FPaths::Combine(FPaths::ProjectSavedDir(), TEXT("StageCraft"), TEXT("Scenes"));
+	return FPaths::Combine(StageCraftPaths::DataRoot(), TEXT("Scenes"));
 }
 
 bool FStageSceneStore::IsValidSceneName(const FString& Name)

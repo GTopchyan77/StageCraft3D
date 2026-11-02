@@ -18,6 +18,7 @@
 #include "Engine/World.h"
 #include "Player/ModularPlayerController.h"
 #include "Services/StageAIToolSubsystem.h"
+#include "Services/StageCredentialVault.h"
 #include "TimerManager.h"
 #include "UI/StageCraftUITheme.h"
 #include "UI/StageCraftWidgetStyle.h"
@@ -75,25 +76,20 @@ UStageChoiceButton* UStageServicesWidget::MakeButton(const FText& Label, const F
 	{
 		LabelSlot->SetPadding(FMargin(8.f, 3.f));
 	}
-	StyleChoice(*Button, false);
+	StyleChoice(*Button);
 	return Button;
 }
 
-void UStageServicesWidget::StyleChoice(UStageChoiceButton& Button, bool bSelected) const
+void UStageServicesWidget::StyleChoice(UStageChoiceButton& Button) const
 {
 	using namespace StageCraftWidgetStyle;
 	const UStageCraftUITheme& Palette = GetTheme();
-	FButtonStyle Style = bSelected
-		? MakeFlatButton(Palette.AccentColor, Palette.AccentColor * 1.1f, Palette.AccentColor * 0.85f)
-		: MakeFlatButton(FLinearColor::Transparent, Palette.RowHover, Palette.Divider);
-	if (!bSelected)
-	{
-		Style.SetNormal(MakeBox(FLinearColor::Transparent, CornerRadius, Palette.Divider, 1.f));
-	}
+	FButtonStyle Style = MakeFlatButton(FLinearColor::Transparent, Palette.RowHover, Palette.Divider);
+	Style.SetNormal(MakeBox(FLinearColor::Transparent, CornerRadius, Palette.Divider, 1.f));
 	Button.SetStyle(Style);
 	if (UTextBlock* Label = Cast<UTextBlock>(Button.GetContent()))
 	{
-		Label->SetColorAndOpacity(FSlateColor(bSelected ? Palette.WindowBackground : Palette.TextSecondary));
+		Label->SetColorAndOpacity(FSlateColor(Palette.TextSecondary));
 	}
 }
 
@@ -160,6 +156,7 @@ void UStageServicesWidget::NativeConstruct()
 		BoundTools = Tools;
 		Tools->OnToolsChanged.AddUniqueDynamic(this, &ThisClass::HandleToolsChanged);
 		Tools->OnKeyVerified.AddUniqueDynamic(this, &ThisClass::HandleKeyVerified);
+		Tools->OnJobCompleted.AddUniqueDynamic(this, &ThisClass::HandleJobCompleted);
 	}
 	if (UStageBridgeSubsystem* Bridge = GameInstance ? GameInstance->GetSubsystem<UStageBridgeSubsystem>() : nullptr)
 	{
@@ -167,7 +164,7 @@ void UStageServicesWidget::NativeConstruct()
 		Bridge->OnStateChanged.AddUniqueDynamic(this, &ThisClass::HandleBridgeStateChanged);
 		Bridge->OnClientsChanged.AddUniqueDynamic(this, &ThisClass::HandleToolsChanged);
 	}
-	RebuildTools();
+	RefreshTools();
 	RebuildApps();
 }
 
@@ -177,6 +174,7 @@ void UStageServicesWidget::NativeDestruct()
 	{
 		Tools->OnToolsChanged.RemoveDynamic(this, &ThisClass::HandleToolsChanged);
 		Tools->OnKeyVerified.RemoveDynamic(this, &ThisClass::HandleKeyVerified);
+		Tools->OnJobCompleted.RemoveDynamic(this, &ThisClass::HandleJobCompleted);
 	}
 	if (UStageBridgeSubsystem* Bridge = BoundBridge.Get())
 	{
@@ -210,7 +208,7 @@ void UStageServicesWidget::RequestRebuild()
 		RebuildTimer = World->GetTimerManager().SetTimerForNextTick(FTimerDelegate::CreateWeakLambda(this, [this]()
 		{
 			RebuildTimer.Invalidate();
-			RebuildTools();
+			RefreshTools();
 			RebuildApps();
 		}));
 	}
@@ -229,25 +227,60 @@ FText UStageServicesWidget::DescribeKeyState(EStageAIToolKeyState State) const
 	}
 }
 
-void UStageServicesWidget::RebuildTools()
+void UStageServicesWidget::RefreshTools()
+{
+	const UStageAIToolSubsystem* Tools = BoundTools.Get();
+	const TArray<FStageAIToolInfo> Infos = Tools ? Tools->GetTools() : TArray<FStageAIToolInfo>();
+
+	TArray<FName> Ids;
+	Ids.Reserve(Infos.Num());
+	for (const FStageAIToolInfo& Info : Infos)
+	{
+		Ids.Add(Info.ProviderId);
+	}
+	// Same tools as shown: update in place. Rebuilding would destroy the fields, and with them a key the user is typing; copying
+	// that text across a rebuild would put the key in more unwiped memory (FText cannot be wiped).
+	if (Ids == RowIds && !Ids.IsEmpty())
+	{
+		for (int32 Row = 0; Row < Infos.Num(); ++Row)
+		{
+			UpdateToolCard(Row, Infos[Row]);
+		}
+		return;
+	}
+	RebuildToolCards(Infos);
+}
+
+void UStageServicesWidget::UpdateToolCard(int32 Row, const FStageAIToolInfo& Info)
+{
+	if (!StateLabels.IsValidIndex(Row) || !SaveButtons.IsValidIndex(Row) || !CheckButtons.IsValidIndex(Row) || !RemoveButtons.IsValidIndex(Row))
+	{
+		return;
+	}
+	const UStageCraftUITheme& Palette = GetTheme();
+	const UStageAIToolSubsystem* Tools = BoundTools.Get();
+	const bool bProblem = Info.KeyState == EStageAIToolKeyState::Missing || Info.KeyState == EStageAIToolKeyState::Rejected;
+	StateLabels[Row]->SetText(DescribeKeyState(Info.KeyState));
+	StateLabels[Row]->SetColorAndOpacity(FSlateColor(bProblem ? Palette.WarningColor : Palette.AccentColor));
+
+	const bool bHasKey = Info.KeyState != EStageAIToolKeyState::Missing && Info.KeyState != EStageAIToolKeyState::NotNeeded;
+	SaveButtons[Row]->SetIsEnabled(Info.KeyState != EStageAIToolKeyState::NotNeeded && Tools && Tools->IsKeyStorageAvailable());
+	CheckButtons[Row]->SetIsEnabled(bHasKey && Tools && !Tools->IsBusy());
+	RemoveButtons[Row]->SetIsEnabled(bHasKey);
+}
+
+void UStageServicesWidget::RebuildToolCards(const TArray<FStageAIToolInfo>& Infos)
 {
 	using namespace StageCraftWidgetStyle;
 	const UStageCraftUITheme& Palette = GetTheme();
 	const UStageAIToolSubsystem* Tools = BoundTools.Get();
-	const TArray<FStageAIToolInfo> Infos = Tools ? Tools->GetTools() : TArray<FStageAIToolInfo>();
-
-	// Text typed into a row survives a rebuild (another tool's state changed meanwhile).
-	TMap<FName, FText> Typed;
-	for (int32 Index = 0; Index < KeyFields.Num() && Index < RowIds.Num(); ++Index)
-	{
-		if (KeyFields[Index] && !KeyFields[Index]->GetText().IsEmpty())
-		{
-			Typed.Add(RowIds[Index], KeyFields[Index]->GetText());
-		}
-	}
 
 	ToolList->ClearChildren();
 	KeyFields.Reset();
+	StateLabels.Reset();
+	SaveButtons.Reset();
+	CheckButtons.Reset();
+	RemoveButtons.Reset();
 	RowIds.Reset();
 	if (Infos.IsEmpty())
 	{
@@ -274,11 +307,12 @@ void UStageServicesWidget::RebuildTools()
 		UVerticalBox* Content = WidgetTree->ConstructWidget<UVerticalBox>(UVerticalBox::StaticClass());
 		Card->SetContent(Content);
 
-		const bool bProblem = Info.KeyState == EStageAIToolKeyState::Missing || Info.KeyState == EStageAIToolKeyState::Rejected;
 		UHorizontalBox* TitleRow = WidgetTree->ConstructWidget<UHorizontalBox>(UHorizontalBox::StaticClass());
 		TitleRow->AddChildToHorizontalBox(MakeText(Info.DisplayName, 9, TEXT("Bold"), Palette.TextPrimary))->SetSize(FSlateChildSize(ESlateSizeRule::Fill));
-		TitleRow->AddChildToHorizontalBox(MakeText(DescribeKeyState(Info.KeyState), 8, TEXT("Regular"), bProblem ? Palette.WarningColor : Palette.AccentColor))->SetVerticalAlignment(VAlign_Center);
+		UTextBlock* StateLabel = MakeText(FText::GetEmpty(), 8, TEXT("Regular"), Palette.AccentColor);
+		TitleRow->AddChildToHorizontalBox(StateLabel)->SetVerticalAlignment(VAlign_Center);
 		Content->AddChildToVerticalBox(TitleRow);
+		StateLabels.Add(StateLabel);
 
 		UEditableTextBox* Field = WidgetTree->ConstructWidget<UEditableTextBox>(UEditableTextBox::StaticClass());
 		Field->SetWidgetStyle(MakeInputField(Palette));
@@ -286,20 +320,16 @@ void UStageServicesWidget::RebuildTools()
 		Field->SetHintText(Info.KeyState == EStageAIToolKeyState::NotNeeded ? LOCTEXT("NoKeyHint", "This tool needs no key")
 			: LOCTEXT("KeyHint", "Paste a new API key, then SAVE"));
 		Field->SetIsEnabled(Info.KeyState != EStageAIToolKeyState::NotNeeded);
-		if (const FText* Previous = Typed.Find(Info.ProviderId))
-		{
-			Field->SetText(*Previous);
-		}
 		KeyFields.Add(Field);
 
 		const int32 Base = Row * StageServicesPanel::ActionCount;
 		UStageChoiceButton* Save = MakeButton(LOCTEXT("Save", "SAVE"), LOCTEXT("SaveTip", "Encrypt and store the key for your Windows user."), Base + int32(EToolAction::Save), &ThisClass::HandleToolAction);
 		UStageChoiceButton* Check = MakeButton(LOCTEXT("Check", "CHECK"), LOCTEXT("CheckTip", "Ask the service whether it accepts the saved key."), Base + int32(EToolAction::Check), &ThisClass::HandleToolAction);
 		UStageChoiceButton* Remove = MakeButton(LOCTEXT("Remove", "REMOVE"), LOCTEXT("RemoveTip", "Delete the saved key from this computer."), Base + int32(EToolAction::Remove), &ThisClass::HandleToolAction);
-		const bool bHasKey = Info.KeyState != EStageAIToolKeyState::Missing && Info.KeyState != EStageAIToolKeyState::NotNeeded;
-		Save->SetIsEnabled(Info.KeyState != EStageAIToolKeyState::NotNeeded && Tools && Tools->IsKeyStorageAvailable());
-		Check->SetIsEnabled(bHasKey && Tools && !Tools->IsBusy());
-		Remove->SetIsEnabled(bHasKey);
+		SaveButtons.Add(Save);
+		CheckButtons.Add(Check);
+		RemoveButtons.Add(Remove);
+		UpdateToolCard(Row, Info);
 
 		UHorizontalBox* KeyRow = WidgetTree->ConstructWidget<UHorizontalBox>(UHorizontalBox::StaticClass());
 		KeyRow->AddChildToHorizontalBox(Field)->SetSize(FSlateChildSize(ESlateSizeRule::Fill));
@@ -362,13 +392,18 @@ void UStageServicesWidget::HandleToolAction(int32 Index)
 		// The field is cleared whatever happens: a key is typed once.
 		KeyFields[Row]->SetText(FText::GetEmpty());
 		Refusals = Controller->RunCapturingRejections([&Controller, Id, &Key]() { Controller->RequestStoreProviderKey(Id, Key); });
-		Key.Reset();
+		FStageCredentialVault::WipeString(Key);
 		SetStatus(Refusals.IsEmpty() ? LOCTEXT("Saved", "Key saved. Press CHECK to test it with the service.") : Refusals[0].Message, !Refusals.IsEmpty());
 		break;
 	}
 	case EToolAction::Check:
+		// Shown first: a tool may answer inside the request, and its answer (HandleKeyVerified) must not be overwritten.
+		SetStatus(LOCTEXT("Checking", "Checking the key with the service..."), false);
 		Refusals = Controller->RunCapturingRejections([&Controller, Id]() { Controller->RequestVerifyProviderKey(Id); });
-		SetStatus(Refusals.IsEmpty() ? LOCTEXT("Checking", "Checking the key with the service...") : Refusals[0].Message, !Refusals.IsEmpty());
+		if (!Refusals.IsEmpty())
+		{
+			SetStatus(Refusals[0].Message, true);
+		}
 		break;
 	case EToolAction::Remove:
 		Refusals = Controller->RunCapturingRejections([&Controller, Id]() { Controller->RequestRemoveProviderKey(Id); });
@@ -401,6 +436,11 @@ void UStageServicesWidget::HandleBridgeStateChanged(bool bRunning)
 void UStageServicesWidget::HandleKeyVerified(const FStageAIToolResultInfo& Result)
 {
 	SetStatus(Result.Message, !Result.IsSuccess());
+	RequestRebuild();
+}
+
+void UStageServicesWidget::HandleJobCompleted(const FStageAIToolResultInfo& Result)
+{
 	RequestRebuild();
 }
 

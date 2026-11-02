@@ -3,6 +3,7 @@
 #include "Services/StageMockAIToolProvider.h"
 
 #include "HAL/FileManager.h"
+#include "IO/StageCraftPaths.h"
 #include "Misc/Paths.h"
 
 #include UE_INLINE_GENERATED_CPP_BY_NAME(StageMockAIToolProvider)
@@ -13,7 +14,7 @@ const FName UStageMockAIToolProvider::ProviderId(TEXT("mock"));
 
 FString UStageMockAIToolProvider::GetReceivedDirectory()
 {
-	return FPaths::Combine(FPaths::ProjectSavedDir(), TEXT("StageCraft"), TEXT("AITools"), TEXT("Mock"));
+	return FPaths::Combine(StageCraftPaths::DataRoot(), TEXT("AITools"), TEXT("Mock"));
 }
 
 FText UStageMockAIToolProvider::GetDisplayName() const

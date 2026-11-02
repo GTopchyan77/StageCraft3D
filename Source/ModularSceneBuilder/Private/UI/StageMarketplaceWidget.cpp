@@ -577,6 +577,11 @@ void UStageMarketplaceWidget::NativeDestruct()
 		Dispatch->OnOrderCompleted.RemoveDynamic(this, &ThisClass::HandleOrderCompleted);
 	}
 	BoundDispatch.Reset();
+	if (UWorld* World = GetWorld())
+	{
+		World->GetTimerManager().ClearTimer(CloseDialogTimer);
+		World->GetTimerManager().ClearTimer(PreviewMoveTimer);
+	}
 	// The dialog goes with the panel; an order it started carries on in the dispatcher.
 	if (DialogLayer)
 	{
@@ -952,6 +957,11 @@ void UStageMarketplaceWidget::OpenImportedScene(const FGuid& ListingId)
 
 void UStageMarketplaceWidget::OpenAcquireDialog(const FGuid& ListingId)
 {
+	// A close asked for this frame must not remove the dialog being opened now.
+	if (UWorld* World = GetWorld())
+	{
+		World->GetTimerManager().ClearTimer(CloseDialogTimer);
+	}
 	if (!AcquireDialog)
 	{
 		AcquireDialog = CreateWidget<UStageAcquireDialogWidget>(this, UStageAcquireDialogWidget::StaticClass());
@@ -972,12 +982,13 @@ void UStageMarketplaceWidget::CloseAcquireDialog()
 {
 	// Asked from inside the dialog (its button, its Esc): removing it now would destroy the widget whose callback is running.
 	UWorld* World = GetWorld();
-	if (!World)
+	if (!World || World->GetTimerManager().TimerExists(CloseDialogTimer))
 	{
 		return;
 	}
-	World->GetTimerManager().SetTimerForNextTick(FTimerDelegate::CreateWeakLambda(this, [this]()
+	CloseDialogTimer = World->GetTimerManager().SetTimerForNextTick(FTimerDelegate::CreateWeakLambda(this, [this]()
 	{
+		CloseDialogTimer.Invalidate();
 		if (DialogLayer)
 		{
 			DialogLayer->ClearChildren();
@@ -1113,18 +1124,36 @@ void UStageMarketplaceWidget::HandlePreviewReady(const FGuid& ListingId, const F
 
 void UStageMarketplaceWidget::HandlePreviewOrbit(const FVector2D& DragPixels)
 {
-	if (Preview.IsValid() && PreviewListing.IsValid())
-	{
-		Preview->Orbit(DragPixels.X * StageMarketplacePanel::OrbitYawPerPixel, -DragPixels.Y * StageMarketplacePanel::OrbitPitchPerPixel);
-	}
+	PendingOrbitPixels += DragPixels;
+	RequestPreviewMove();
 }
 
 void UStageMarketplaceWidget::HandlePreviewZoom(float WheelSteps)
 {
-	if (Preview.IsValid() && PreviewListing.IsValid())
+	PendingZoomSteps += WheelSteps;
+	RequestPreviewMove();
+}
+
+void UStageMarketplaceWidget::RequestPreviewMove()
+{
+	UWorld* World = GetWorld();
+	if (!World || World->GetTimerManager().TimerExists(PreviewMoveTimer))
 	{
-		Preview->Zoom(WheelSteps);
+		return;
 	}
+	// A mouse can report several moves per frame; the scene is captured once per frame with all of them.
+	PreviewMoveTimer = World->GetTimerManager().SetTimerForNextTick(FTimerDelegate::CreateWeakLambda(this, [this]()
+	{
+		PreviewMoveTimer.Invalidate();
+		const FVector2D Orbit = PendingOrbitPixels;
+		const float Zoom = PendingZoomSteps;
+		PendingOrbitPixels = FVector2D::ZeroVector;
+		PendingZoomSteps = 0.f;
+		if (Preview.IsValid() && PreviewListing.IsValid())
+		{
+			Preview->MoveView(Orbit.X * StageMarketplacePanel::OrbitYawPerPixel, -Orbit.Y * StageMarketplacePanel::OrbitPitchPerPixel, Zoom);
+		}
+	}));
 }
 
 // --- Publishing ---

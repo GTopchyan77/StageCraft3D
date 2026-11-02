@@ -11,12 +11,14 @@
 #include "Marketplace/StageMarketplaceRules.h"
 #include "Marketplace/StagePackage.h"
 #include "Misc/FileHelper.h"
+#include "IO/StageCraftPaths.h"
 #include "Misc/Paths.h"
 #include "ModularSceneBuilder.h"
 #include "Scene/StageSceneStore.h"
 #include "Subsystems/StageEconomySubsystem.h"
 #include "Subsystems/StageItemSubsystem.h"
 #include "Subsystems/StageProfileSubsystem.h"
+#include "TimerManager.h"
 
 #include UE_INLINE_GENERATED_CPP_BY_NAME(StageMarketplaceSubsystem)
 
@@ -45,6 +47,7 @@ namespace StageMarketplace
 		case EStageMarketplaceResult::PurchaseFailed: return LOCTEXT("Result_PurchaseFailed", "The purchase did not go through.");
 		case EStageMarketplaceResult::ServerRequired: return LOCTEXT("Result_ServerRequired", "Real-money sales need an online store; they are not available offline.");
 		case EStageMarketplaceResult::NotOriginal: return LOCTEXT("Result_NotOriginal", "This stage came from the marketplace; only your own stages can be published.");
+		case EStageMarketplaceResult::TimedOut: return LOCTEXT("Result_TimedOut", "The marketplace did not deliver the package in time. If you bought it, get it again: it costs nothing.");
 		}
 		return FText::GetEmpty();
 	}
@@ -168,6 +171,12 @@ void UStageMarketplaceSubsystem::Deinitialize()
 	{
 		Economy->OnListingPurchaseCompleted.RemoveDynamic(this, &ThisClass::HandleListingPurchaseCompleted);
 	}
+	TArray<FGuid> Fetching;
+	PendingFetches.GetKeys(Fetching);
+	for (const FGuid& ListingId : Fetching)
+	{
+		ClearFetchTimer(ListingId);
+	}
 	// Imports and package builds are bounded file work; the pipe must be empty before it is destroyed.
 	WorkPipe.WaitUntilEmpty();
 
@@ -202,10 +211,32 @@ FText UStageMarketplaceSubsystem::GetBackendName() const
 
 FString UStageMarketplaceSubsystem::GetLibraryDirectory()
 {
-	return FPaths::Combine(FPaths::ProjectSavedDir(), TEXT("StageCraft"), TEXT("Marketplace"), TEXT("Library"));
+	return FPaths::Combine(StageCraftPaths::DataRoot(), TEXT("Marketplace"), TEXT("Library"));
 }
 
 FStageMarketplaceResultInfo UStageMarketplaceSubsystem::CheckExportRights(const FGuid& OriginListingId) const
+{
+	FStagePackageManifest Manifest;
+	const bool bHasManifest = ReadLibraryManifest(OriginListingId, Manifest);
+	return DecideExportRights(OriginListingId, bHasManifest ? &Manifest : nullptr);
+}
+
+bool UStageMarketplaceSubsystem::ReadLibraryManifest(const FGuid& OriginListingId, FStagePackageManifest& OutManifest)
+{
+	if (!OriginListingId.IsValid())
+	{
+		return false;
+	}
+	// The library copy is the publisher's package exactly as it was acquired; a missing or unreadable copy means no rights.
+	const FString LibraryPath = FPaths::Combine(GetLibraryDirectory(), OriginListingId.ToString(EGuidFormats::Digits) + StagePackage::FileExtension);
+	TArray<uint8> Bytes;
+	bool bHasThumbnail = false;
+	return IFileManager::Get().FileSize(*LibraryPath) <= StagePackage::MaxPackageBytes
+		&& FFileHelper::LoadFileToArray(Bytes, *LibraryPath, FILEREAD_Silent)
+		&& StagePackage::ReadManifest(Bytes, OutManifest, bHasThumbnail) == EStageMarketplaceResult::Success;
+}
+
+FStageMarketplaceResultInfo UStageMarketplaceSubsystem::DecideExportRights(const FGuid& OriginListingId, const FStagePackageManifest* LibraryManifest) const
 {
 	const UStageProfileSubsystem* Profile = GetProfile();
 	if (!Profile || !OriginListingId.IsValid())
@@ -213,16 +244,7 @@ FStageMarketplaceResultInfo UStageMarketplaceSubsystem::CheckExportRights(const 
 		return FStageMarketplaceResultInfo::Fail(EStageMarketplaceResult::NotOriginal, StageMarketplace::Describe(EStageMarketplaceResult::NotOriginal));
 	}
 
-	// The library copy is the publisher's package exactly as it was acquired; a missing or unreadable copy means no rights.
-	const FString LibraryPath = FPaths::Combine(GetLibraryDirectory(), OriginListingId.ToString(EGuidFormats::Digits) + StagePackage::FileExtension);
-	TArray<uint8> Bytes;
-	FStagePackageManifest Manifest;
-	bool bHasThumbnail = false;
-	const bool bHasManifest = IFileManager::Get().FileSize(*LibraryPath) <= StagePackage::MaxPackageBytes
-		&& FFileHelper::LoadFileToArray(Bytes, *LibraryPath, FILEREAD_Silent)
-		&& StagePackage::ReadManifest(Bytes, Manifest, bHasThumbnail) == EStageMarketplaceResult::Success;
-
-	switch (StageMarketplaceRules::ResolveExportRights(OriginListingId, bHasManifest ? &Manifest : nullptr, Profile->GetProfile()))
+	switch (StageMarketplaceRules::ResolveExportRights(OriginListingId, LibraryManifest, Profile->GetProfile()))
 	{
 	case EStageExportRights::Allowed:
 		return FStageMarketplaceResultInfo::Ok();
@@ -356,11 +378,57 @@ void UStageMarketplaceSubsystem::StartDownload(const FGuid& ListingId)
 		FinishAcquire(ListingId, StageMarketplace::Info(EStageMarketplaceResult::BackendUnavailable), FString());
 		return;
 	}
-	Backend->FetchPackage(ListingId, EStageMarketplaceFetchPurpose::Acquire, FOnStageMarketplacePackageFetched::CreateUObject(this, &ThisClass::HandlePackageFetched, ListingId));
+	const uint32 Serial = ++FetchSerial;
+	FPendingFetch& Fetch = PendingFetches.FindOrAdd(ListingId);
+	Fetch.Serial = Serial;
+	if (UGameInstance* GameInstance = GetGameInstance())
+	{
+		GameInstance->GetTimerManager().SetTimer(Fetch.Timer, FTimerDelegate::CreateUObject(this, &ThisClass::HandleFetchTimeout, ListingId, Serial),
+			GetFetchTimeoutSeconds(), /*bLoop*/ false);
+	}
+	Backend->FetchPackage(ListingId, EStageMarketplaceFetchPurpose::Acquire, FOnStageMarketplacePackageFetched::CreateUObject(this, &ThisClass::HandlePackageFetched, ListingId, Serial));
 }
 
-void UStageMarketplaceSubsystem::HandlePackageFetched(EStageMarketplaceResult Result, const FStageMarketplacePackageBytes& Bytes, FGuid ListingId)
+float UStageMarketplaceSubsystem::GetFetchTimeoutSeconds() const
 {
+	constexpr float DefaultTimeoutSeconds = 60.f;
+	return FetchTimeoutSeconds > 0.f ? FetchTimeoutSeconds : DefaultTimeoutSeconds;
+}
+
+void UStageMarketplaceSubsystem::ClearFetchTimer(const FGuid& ListingId)
+{
+	FPendingFetch Fetch;
+	if (PendingFetches.RemoveAndCopyValue(ListingId, Fetch))
+	{
+		if (UGameInstance* GameInstance = GetGameInstance())
+		{
+			GameInstance->GetTimerManager().ClearTimer(Fetch.Timer);
+		}
+	}
+}
+
+void UStageMarketplaceSubsystem::HandleFetchTimeout(FGuid ListingId, uint32 Serial)
+{
+	const FPendingFetch* Fetch = PendingFetches.Find(ListingId);
+	if (!Fetch || Fetch->Serial != Serial)
+	{
+		return;
+	}
+	PendingFetches.Remove(ListingId);
+	UE_LOG(LogStageCraft, Warning, TEXT("Marketplace: the package of %s did not arrive within %.0f s."), *ListingId.ToString(), GetFetchTimeoutSeconds());
+	FinishAcquire(ListingId, StageMarketplace::Info(EStageMarketplaceResult::TimedOut), FString());
+}
+
+void UStageMarketplaceSubsystem::HandlePackageFetched(EStageMarketplaceResult Result, const FStageMarketplacePackageBytes& Bytes, FGuid ListingId, uint32 Serial)
+{
+	// Only the fetch still awaited counts: a package that arrives after its deadline (or after a newer fetch) is dropped.
+	const FPendingFetch* Fetch = PendingFetches.Find(ListingId);
+	if (!Fetch || Fetch->Serial != Serial)
+	{
+		UE_LOG(LogStageCraft, Log, TEXT("Marketplace: ignored a package of %s that is no longer awaited."), *ListingId.ToString());
+		return;
+	}
+	ClearFetchTimer(ListingId);
 	if (Result != EStageMarketplaceResult::Success || !Bytes.IsValid())
 	{
 		FinishAcquire(ListingId, StageMarketplace::Info(Result == EStageMarketplaceResult::Success ? EStageMarketplaceResult::Corrupt : Result), FString());

@@ -3,6 +3,7 @@
 #pragma once
 
 #include "CoreMinimal.h"
+#include "Marketplace/StageMarketplaceTypes.h"
 #include "StageDispatchTypes.generated.h"
 
 /** Where an acquired stage goes (Docs/ADR/0022-dcc-bridge.md §11.2). */
@@ -73,9 +74,12 @@ struct MODULARSCENEBUILDER_API FStageAcquireOrder
 	UPROPERTY(BlueprintReadWrite, Category = "Dispatch")
 	FGuid ListingId;
 
-	/** The credits price the user saw and confirmed; the order is refused if the listing's price is different now. */
+	/**
+	 * The whole price the user saw and confirmed (credits and any real-money part); the order is refused if any part of the
+	 * listing's price is different now.
+	 */
 	UPROPERTY(BlueprintReadWrite, Category = "Dispatch")
-	int64 ExpectedCredits = 0;
+	FStageMarketplacePrice ExpectedPrice;
 
 	UPROPERTY(BlueprintReadWrite, Category = "Dispatch")
 	FStageDispatchTarget Target;
@@ -109,6 +113,11 @@ enum class EStageOrderResult : uint8
 	AcquireFailed,
 	/** The stage was acquired, but could not be delivered to its target. */
 	DeliveryFailed,
+	/**
+	 * The order did not end within UStageAcquireDispatchSubsystem::OrderTimeoutSeconds. SceneName says whether it was acquired;
+	 * a purchase still being settled may complete later and appear in the user's scenes.
+	 */
+	TimedOut,
 };
 
 USTRUCT(BlueprintType)

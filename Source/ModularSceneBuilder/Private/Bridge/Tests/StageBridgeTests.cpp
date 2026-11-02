@@ -11,6 +11,7 @@
 #include "Bridge/StageBridgeProtocol.h"
 #include "Bridge/StageBridgeServer.h"
 #include "Bridge/StageSceneExporter.h"
+#include "Bridge/Tests/StageBridgeTestClient.h"
 #include "Components/StaticMeshComponent.h"
 #include "Engine/Engine.h"
 #include "Engine/GameInstance.h"
@@ -51,68 +52,8 @@ namespace StageBridgeTests
 		return Item;
 	}
 
-	/** A loopback client socket for the server tests. */
-	struct FTestClient
-	{
-		FSocket* Socket = nullptr;
-		FString Received;
-
-		bool Connect(uint16 Port)
-		{
-			ISocketSubsystem* Sockets = ISocketSubsystem::Get(PLATFORM_SOCKETSUBSYSTEM);
-			Socket = Sockets->CreateSocket(NAME_Stream, TEXT("StageBridgeTestClient"), false);
-			return Socket && Socket->Connect(*FIPv4Endpoint(FIPv4Address(127, 0, 0, 1), Port).ToInternetAddr());
-		}
-
-		void Send(const FString& Line)
-		{
-			const TArray<uint8> Data = Bytes(Line + TEXT("\n"));
-			int32 Sent = 0;
-			Socket->Send(Data.GetData(), Data.Num(), Sent);
-		}
-
-		/** Reads until Needle arrived, the server closed the connection, or the time ran out. True when Needle arrived. */
-		bool WaitFor(const FString& Needle, bool* bOutClosed = nullptr, double Seconds = 3.0)
-		{
-			const double Deadline = FPlatformTime::Seconds() + Seconds;
-			uint8 Buffer[4096];
-			while (FPlatformTime::Seconds() < Deadline && !Received.Contains(Needle))
-			{
-				if (!Socket->Wait(ESocketWaitConditions::WaitForRead, FTimespan::FromMilliseconds(50.0)))
-				{
-					continue;
-				}
-				int32 Read = 0;
-				if (!Socket->Recv(Buffer, sizeof(Buffer), Read))
-				{
-					if (bOutClosed)
-					{
-						*bOutClosed = true;
-					}
-					break;
-				}
-				Received += FString(FUTF8ToTCHAR(reinterpret_cast<const ANSICHAR*>(Buffer), Read).Length(), FUTF8ToTCHAR(reinterpret_cast<const ANSICHAR*>(Buffer), Read).Get());
-			}
-			return Received.Contains(Needle);
-		}
-
-		/** Waits for the server to close the connection. */
-		bool WaitClosed(double Seconds = 3.0)
-		{
-			bool bClosed = false;
-			WaitFor(TEXT("\u0001never\u0001"), &bClosed, Seconds);
-			return bClosed;
-		}
-
-		~FTestClient()
-		{
-			if (Socket)
-			{
-				Socket->Close();
-				ISocketSubsystem::Get(PLATFORM_SOCKETSUBSYSTEM)->DestroySocket(Socket);
-			}
-		}
-	};
+	/** The loopback stand-in for an add-on, shared with the integration tests. */
+	using FTestClient = FStageBridgeTestClient;
 
 	/** Drains Server until Predicate holds for an event or the time runs out. The worker posts from its own thread. */
 	bool DrainUntil(FStageBridgeServer& Server, TArray<FStageBridgeEvent>& OutEvents, TFunctionRef<bool(const FStageBridgeEvent&)> Predicate, double Seconds = 3.0)

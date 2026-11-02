@@ -41,6 +41,8 @@ enum class EStageMarketplaceResult : uint8
 	ServerRequired,
 	/** The scene was acquired from the marketplace: only the user's own stages can be published (Docs/ADR/0022-dcc-bridge.md section 4). */
 	NotOriginal,
+	/** The marketplace backend did not deliver the package within UStageMarketplaceSubsystem::FetchTimeoutSeconds (ADR 0021 §14). */
+	TimedOut,
 };
 
 /** Result of a marketplace request. Message is user-facing; Code is for logic. */
@@ -122,6 +124,12 @@ struct MODULARSCENEBUILDER_API FStageMarketplacePrice
 
 	bool IsFree() const { return Credits == 0 && RealMoneyMinorUnits == 0; }
 	bool HasRealMoneyPrice() const { return RealMoneyMinorUnits != 0; }
+
+	/** Every part of the price is the same (credits, real-money amount and currency): what a confirmed price must match. */
+	bool IsSameAs(const FStageMarketplacePrice& Other) const
+	{
+		return Credits == Other.Credits && RealMoneyMinorUnits == Other.RealMoneyMinorUnits && RealMoneyCurrency.Equals(Other.RealMoneyCurrency, ESearchCase::IgnoreCase);
+	}
 };
 
 /** One published package as a browser sees it. Built from the package manifest by the backend; read-only for everyone else. */

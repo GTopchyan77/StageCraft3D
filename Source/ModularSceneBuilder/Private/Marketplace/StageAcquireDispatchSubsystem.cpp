@@ -8,9 +8,11 @@
 #include "HAL/FileManager.h"
 #include "Marketplace/StageDispatchRules.h"
 #include "Marketplace/StageMarketplaceSubsystem.h"
+#include "IO/StageCraftPaths.h"
 #include "Misc/Paths.h"
 #include "ModularSceneBuilder.h"
 #include "Services/StageAIToolSubsystem.h"
+#include "TimerManager.h"
 
 #include UE_INLINE_GENERATED_CPP_BY_NAME(StageAcquireDispatchSubsystem)
 
@@ -26,6 +28,7 @@ void UStageAcquireDispatchSubsystem::Initialize(FSubsystemCollectionBase& Collec
 
 void UStageAcquireDispatchSubsystem::Deinitialize()
 {
+	ClearTimers();
 	UnbindAll();
 	OnOrderProgress.Clear();
 	OnOrderCompleted.Clear();
@@ -39,7 +42,7 @@ void UStageAcquireDispatchSubsystem::Deinitialize()
 
 FString UStageAcquireDispatchSubsystem::GetToolOutboxDirectory()
 {
-	return FPaths::ConvertRelativePathToFull(FPaths::Combine(FPaths::ProjectSavedDir(), TEXT("StageCraft"), TEXT("AITools"), TEXT("Outbox")));
+	return FPaths::ConvertRelativePathToFull(FPaths::Combine(StageCraftPaths::DataRoot(), TEXT("AITools"), TEXT("Outbox")));
 }
 
 FStageDispatchContext UStageAcquireDispatchSubsystem::MakeContext(const FStageMarketplaceListing& Listing) const
@@ -61,11 +64,39 @@ FStageDispatchContext UStageAcquireDispatchSubsystem::MakeContext(const FStageMa
 	return Context;
 }
 
-EStageDispatchAvailability UStageAcquireDispatchSubsystem::EvaluateTarget(const FGuid& ListingId, const FStageDispatchTarget& Target) const
+bool UStageAcquireDispatchSubsystem::MakeContext(const FGuid& ListingId, FStageDispatchContext& OutContext) const
 {
 	const UStageMarketplaceSubsystem* Marketplace = GetGameInstance()->GetSubsystem<UStageMarketplaceSubsystem>();
 	const FStageMarketplaceListing* Listing = Marketplace ? Marketplace->FindListing(ListingId) : nullptr;
-	return Listing ? StageDispatchRules::EvaluateTarget(Target, MakeContext(*Listing)) : EStageDispatchAvailability::Unavailable;
+	if (!Listing)
+	{
+		return false;
+	}
+	OutContext = MakeContext(*Listing);
+	return true;
+}
+
+EStageDispatchAvailability UStageAcquireDispatchSubsystem::EvaluateTarget(const FGuid& ListingId, const FStageDispatchTarget& Target) const
+{
+	FStageDispatchContext Context;
+	return MakeContext(ListingId, Context) ? StageDispatchRules::EvaluateTarget(Target, Context) : EStageDispatchAvailability::Unavailable;
+}
+
+float UStageAcquireDispatchSubsystem::GetOrderTimeoutSeconds() const
+{
+	constexpr float DefaultTimeoutSeconds = 300.f;
+	return OrderTimeoutSeconds > 0.f ? OrderTimeoutSeconds : DefaultTimeoutSeconds;
+}
+
+void UStageAcquireDispatchSubsystem::ClearTimers()
+{
+	if (UGameInstance* GameInstance = GetGameInstance())
+	{
+		GameInstance->GetTimerManager().ClearTimer(DeliveryTimer);
+		GameInstance->GetTimerManager().ClearTimer(OrderTimer);
+	}
+	DeliveryTimer.Invalidate();
+	OrderTimer.Invalidate();
 }
 
 FStageOrderResultInfo UStageAcquireDispatchSubsystem::RequestOrder(const FStageAcquireOrder& Order)
@@ -85,7 +116,7 @@ FStageOrderResultInfo UStageAcquireDispatchSubsystem::RequestOrder(const FStageA
 
 	if (IsOrderPending())
 	{
-		return Refuse(EStageOrderResult::Busy, LOCTEXT("Busy", "Another order is still running; wait for it to finish."));
+		return Refuse(EStageOrderResult::Busy, LOCTEXT("OrderBusy", "Another order is still running; wait for it to finish."));
 	}
 	UStageMarketplaceSubsystem* Marketplace = GetGameInstance()->GetSubsystem<UStageMarketplaceSubsystem>();
 	const FStageMarketplaceListing* Listing = Marketplace ? Marketplace->FindListing(Order.ListingId) : nullptr;
@@ -93,8 +124,9 @@ FStageOrderResultInfo UStageAcquireDispatchSubsystem::RequestOrder(const FStageA
 	{
 		return Refuse(EStageOrderResult::NotFound, LOCTEXT("NotFound", "That listing is no longer in the results; search again."));
 	}
-	// The user confirmed a price; a different one now (a newer query, a changed listing) needs a new confirmation.
-	if (Listing->Price.Credits != Order.ExpectedCredits)
+	// The user confirmed a price; a different one now (a newer query, a changed listing) needs a new confirmation. Every part
+	// counts: a real-money part that changed while credits stayed equal is still a different price.
+	if (!Listing->Price.IsSameAs(Order.ExpectedPrice))
 	{
 		return Refuse(EStageOrderResult::PriceChanged, FText::Format(LOCTEXT("PriceChanged", "The price of \"{0}\" changed to {1} credits. Check it and confirm again."),
 			FText::FromString(Listing->Title), FText::AsNumber(Listing->Price.Credits)));
@@ -115,18 +147,20 @@ FStageOrderResultInfo UStageAcquireDispatchSubsystem::RequestOrder(const FStageA
 	// Bound before the request: an acquire can fail or finish inside RequestAcquire.
 	Marketplace->OnAcquireCompleted.AddUniqueDynamic(this, &ThisClass::HandleAcquireCompleted);
 	SetStage(EStageOrderStage::Acquiring);
+	GetGameInstance()->GetTimerManager().SetTimer(OrderTimer, FTimerDelegate::CreateUObject(this, &ThisClass::HandleOrderTimeout), GetOrderTimeoutSeconds(), /*bLoop*/ false);
 
 	const FStageMarketplaceResultInfo Started = Marketplace->RequestAcquire(Order.ListingId);
 	if (!Started.IsSuccess())
 	{
 		// Refused before anything was bought: back to idle, reported to the caller only.
+		ClearTimers();
 		UnbindAll();
 		SetStage(EStageOrderStage::Idle);
 		Pending = FStageAcquireOrder();
 		return Refuse(EStageOrderResult::AcquireFailed, Started.Message);
 	}
 
-	UE_LOG(LogStageCraft, Log, TEXT("Dispatch: order for \"%s\" (%lld credits) to %s started."), *PendingListing.Title, Order.ExpectedCredits, *DescribeTarget().ToString());
+	UE_LOG(LogStageCraft, Log, TEXT("Dispatch: order for \"%s\" (%lld credits) to %s started."), *PendingListing.Title, Order.ExpectedPrice.Credits, *DescribeTarget().ToString());
 	FStageOrderResultInfo Accepted;
 	Accepted.ListingId = Order.ListingId;
 	Accepted.Target = Order.Target;
@@ -155,7 +189,42 @@ void UStageAcquireDispatchSubsystem::HandleAcquireCompleted(FGuid ListingId, FSt
 		return;
 	}
 	AcquiredScene = SceneName;
-	Deliver();
+	ScheduleDelivery();
+}
+
+void UStageAcquireDispatchSubsystem::ScheduleDelivery()
+{
+	DeliveryTimer = GetGameInstance()->GetTimerManager().SetTimerForNextTick(FTimerDelegate::CreateWeakLambda(this, [this]()
+	{
+		DeliveryTimer.Invalidate();
+		// The order may have ended meanwhile (timed out, the subsystem going away).
+		if (Stage == EStageOrderStage::Acquiring && !AcquiredScene.IsEmpty())
+		{
+			Deliver();
+		}
+	}));
+}
+
+void UStageAcquireDispatchSubsystem::HandleOrderTimeout()
+{
+	OrderTimer.Invalidate();
+	if (!IsOrderPending())
+	{
+		return;
+	}
+	// Our own tool hand-off is abandoned; a bridge send ends by its own timeout and its answer is no longer awaited.
+	if (Stage == EStageOrderStage::Delivering && Pending.Target.Kind == EStageDispatchKind::AITool)
+	{
+		UnbindAll();
+		if (UStageAIToolSubsystem* Tools = GetGameInstance()->GetSubsystem<UStageAIToolSubsystem>())
+		{
+			Tools->CancelOperation();
+		}
+	}
+	const FText Seconds = FText::AsNumber(FMath::RoundToInt(GetOrderTimeoutSeconds()));
+	Finish(EStageOrderResult::TimedOut, AcquiredScene.IsEmpty()
+		? FText::Format(LOCTEXT("TimedOutAcquiring", "\"{0}\" did not arrive within {1} seconds. If the purchase goes through later, it will appear in your scenes."), FText::FromString(PendingListing.Title), Seconds)
+		: FText::Format(LOCTEXT("TimedOutDelivering", "\"{0}\" is in your scenes, but {1} did not answer within {2} seconds. You can send it later with File > Send to 3D App."), FText::FromString(AcquiredScene), DescribeTarget(), Seconds));
 }
 
 void UStageAcquireDispatchSubsystem::Deliver()
@@ -187,16 +256,20 @@ void UStageAcquireDispatchSubsystem::Deliver()
 	switch (Pending.Target.Kind)
 	{
 	case EStageDispatchKind::SaveFile:
+	case EStageDispatchKind::AITool:
 	{
-		const FStageBridgeResultInfo Exported = Bridge->ExportSceneToFile(AcquiredScene, Pending.Target.FilePath);
-		if (Exported.IsSuccess())
+		// Both export first, over several frames; the outcome comes back to this order only (HandleExported).
+		if (Pending.Target.Kind == EStageDispatchKind::AITool)
 		{
-			Finish(EStageOrderResult::Success, FText::Format(LOCTEXT("Saved", "\"{0}\" is in your scenes and saved to {1}."),
-				FText::FromString(AcquiredScene), FText::FromString(FPaths::GetCleanFilename(Pending.Target.FilePath))));
+			IFileManager::Get().MakeDirectory(*GetToolOutboxDirectory(), /*Tree*/ true);
+			ToolModelPath = FPaths::Combine(GetToolOutboxDirectory(), StageBridgeProtocol::MakeAssetId() + TEXT(".glb"));
 		}
-		else
+		const FString& Path = Pending.Target.Kind == EStageDispatchKind::AITool ? ToolModelPath : Pending.Target.FilePath;
+		const FStageBridgeResultInfo Started = Bridge->BeginExportSceneToFile(AcquiredScene, Path,
+			FOnStageBridgeExportFinished::CreateUObject(this, &ThisClass::HandleExported, ++DeliverySerial));
+		if (!Started.IsSuccess())
 		{
-			Finish(EStageOrderResult::DeliveryFailed, DescribeDeliveryFailure(Exported.Message));
+			Finish(EStageOrderResult::DeliveryFailed, DescribeDeliveryFailure(Started.Message));
 		}
 		return;
 	}
@@ -208,29 +281,6 @@ void UStageAcquireDispatchSubsystem::Deliver()
 		if (!Sent.IsSuccess())
 		{
 			Finish(EStageOrderResult::DeliveryFailed, DescribeDeliveryFailure(Sent.Message));
-		}
-		return;
-	}
-
-	case EStageDispatchKind::AITool:
-	{
-		IFileManager::Get().MakeDirectory(*GetToolOutboxDirectory(), /*Tree*/ true);
-		ToolModelPath = FPaths::Combine(GetToolOutboxDirectory(), StageBridgeProtocol::MakeAssetId() + TEXT(".glb"));
-		const FStageBridgeResultInfo Exported = Bridge->ExportSceneToFile(AcquiredScene, ToolModelPath);
-		if (!Exported.IsSuccess())
-		{
-			Finish(EStageOrderResult::DeliveryFailed, DescribeDeliveryFailure(Exported.Message));
-			return;
-		}
-		FStageAIToolJob Job;
-		Job.ModelPath = ToolModelPath;
-		Job.Name = AcquiredScene;
-		// Bound before the call: a tool may answer synchronously.
-		Tools->OnJobCompleted.AddUniqueDynamic(this, &ThisClass::HandleToolJobCompleted);
-		const FStageAIToolResultInfo Submitted = Tools->SubmitModel(Pending.Target.ProviderId, Job);
-		if (!Submitted.IsSuccess() && Stage == EStageOrderStage::Delivering)
-		{
-			Finish(EStageOrderResult::DeliveryFailed, DescribeDeliveryFailure(Submitted.Message));
 		}
 		return;
 	}
@@ -256,6 +306,44 @@ void UStageAcquireDispatchSubsystem::HandleSendCompleted(const FStageBridgeResul
 	else
 	{
 		Finish(EStageOrderResult::DeliveryFailed, DescribeDeliveryFailure(Result.Message));
+	}
+}
+
+void UStageAcquireDispatchSubsystem::HandleExported(const FStageBridgeResultInfo& Exported, uint32 Serial)
+{
+	const bool bExporting = Pending.Target.Kind == EStageDispatchKind::SaveFile || Pending.Target.Kind == EStageDispatchKind::AITool;
+	if (Serial != DeliverySerial || Stage != EStageOrderStage::Delivering || !bExporting)
+	{
+		return; // An export for an order that has already ended (timed out).
+	}
+	if (!Exported.IsSuccess())
+	{
+		Finish(EStageOrderResult::DeliveryFailed, DescribeDeliveryFailure(Exported.Message));
+		return;
+	}
+	if (Pending.Target.Kind == EStageDispatchKind::SaveFile)
+	{
+		Finish(EStageOrderResult::Success, FText::Format(LOCTEXT("Saved", "\"{0}\" is in your scenes and saved to {1}."),
+			FText::FromString(AcquiredScene), FText::FromString(FPaths::GetCleanFilename(Pending.Target.FilePath))));
+		return;
+	}
+
+	UStageAIToolSubsystem* Tools = GetGameInstance()->GetSubsystem<UStageAIToolSubsystem>();
+	if (!Tools)
+	{
+		Finish(EStageOrderResult::DeliveryFailed, DescribeDeliveryFailure(StageDispatchRules::Describe(EStageDispatchAvailability::Unavailable)));
+		return;
+	}
+	FStageAIToolJob Job;
+	Job.ModelPath = ToolModelPath;
+	Job.Name = AcquiredScene;
+	// Bound before the call: a tool may answer synchronously. The tool subsystem reads the key from the vault now, so a key removed
+	// during the export is refused here (NeedsKey), not sent.
+	Tools->OnJobCompleted.AddUniqueDynamic(this, &ThisClass::HandleToolJobCompleted);
+	const FStageAIToolResultInfo Submitted = Tools->SubmitModel(Pending.Target.ProviderId, Job);
+	if (!Submitted.IsSuccess() && Stage == EStageOrderStage::Delivering)
+	{
+		Finish(EStageOrderResult::DeliveryFailed, DescribeDeliveryFailure(Submitted.Message));
 	}
 }
 
@@ -317,6 +405,9 @@ FText UStageAcquireDispatchSubsystem::DescribeDeliveryFailure(const FText& Reaso
 
 void UStageAcquireDispatchSubsystem::Finish(EStageOrderResult Code, const FText& Message, EStageDispatchAvailability Availability)
 {
+	// An export still running for this order reports into nothing.
+	++DeliverySerial;
+	ClearTimers();
 	UnbindAll();
 	if (!ToolModelPath.IsEmpty())
 	{

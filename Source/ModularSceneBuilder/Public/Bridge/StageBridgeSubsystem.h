@@ -6,12 +6,16 @@
 #include "Bridge/StageBridgeTypes.h"
 #include "Engine/TimerHandle.h"
 #include "Subsystems/GameInstanceSubsystem.h"
+#include "Templates/Function.h"
+#include "Templates/SharedPointer.h"
 #include "Templates/UniquePtr.h"
 #include "StageBridgeSubsystem.generated.h"
 
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FOnStageBridgeStateChanged, bool, bRunning);
 DECLARE_DYNAMIC_MULTICAST_DELEGATE(FOnStageBridgeClientsChanged);
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FOnStageBridgeSendCompleted, const FStageBridgeResultInfo&, Result);
+/** The outcome of one export to a file, for whoever started it. */
+DECLARE_DELEGATE_OneParam(FOnStageBridgeExportFinished, const FStageBridgeResultInfo& /*Result*/);
 
 /**
  * The DCC bridge (Docs/ADR/0022-dcc-bridge.md): sends the user's saved stages to Blender, 3ds Max and Cinema 4D running on this
@@ -29,15 +33,12 @@ DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FOnStageBridgeSendCompleted, const F
  *
  * Callers in play go through AModularPlayerController (RequestSetBridgeEnabled, RequestExportScene, RequestSendScene).
  */
-UCLASS()
+UCLASS(Config = Game)
 class MODULARSCENEBUILDER_API UStageBridgeSubsystem : public UGameInstanceSubsystem
 {
 	GENERATED_BODY()
 
 public:
-	/** Generous: a large stage takes a while to import into an app that is busy. */
-	static constexpr float SendTimeoutSeconds = 120.f;
-
 	UStageBridgeSubsystem();
 	virtual ~UStageBridgeSubsystem() override;
 
@@ -47,6 +48,14 @@ public:
 
 	/** Starts listening (idempotent). False, with OutError, when the port cannot be opened or the session file cannot be written. */
 	bool StartBridge(FText& OutError);
+
+#if WITH_DEV_AUTOMATION_TESTS
+	/** Tests only: StartBridge on a free port the system picks (GetPort says which), so a test never takes the user's port. */
+	bool StartBridgeOnAnyPortForTests(FText& OutError);
+#endif
+
+	/** The time an app has to answer a send (SendTimeoutSeconds, validated). */
+	float GetSendTimeoutSeconds() const;
 
 	/** Closes every connection, ends a pending send as failed, removes the session file and the outbox. Idempotent. */
 	void StopBridge();
@@ -62,15 +71,26 @@ public:
 	UFUNCTION(BlueprintPure, Category = "StageCraft|Bridge")
 	const TArray<FStageBridgeClientInfo>& GetClients() const { return Clients; }
 
+	/** A send is exporting or waiting for its app. */
 	UFUNCTION(BlueprintPure, Category = "StageCraft|Bridge")
 	bool IsSending() const { return Pending.IsSet(); }
 
-	/** Exports the saved scene SceneName to Path (absolute, .glb). Synchronous; also broadcast on OnSendCompleted. */
-	FStageBridgeResultInfo ExportSceneToFile(const FString& SceneName, const FString& Path);
+	/** An export (to a file, or for a send) is running. One at a time: it builds a private world. */
+	UFUNCTION(BlueprintPure, Category = "StageCraft|Bridge")
+	bool IsExporting() const;
 
 	/**
-	 * Exports the saved scene into the outbox and sends it to the connected app ClientId. Success means sent: the final outcome
-	 * (imported, refused by the app, timed out) arrives on OnSendCompleted. A refusal is returned and not broadcast.
+	 * Starts exporting the saved scene SceneName to Path (absolute, .glb) over several frames (FStageSceneExportJob, ADR 0022 §12),
+	 * so the interface keeps drawing. Success means started: the outcome goes to OnFinished only, exactly once (not if this
+	 * subsystem goes away first). Refused (returned, OnFinished not called): bad request, no renderer, Busy while another export
+	 * or send runs.
+	 */
+	FStageBridgeResultInfo BeginExportSceneToFile(const FString& SceneName, const FString& Path, FOnStageBridgeExportFinished OnFinished);
+
+	/**
+	 * Exports the saved scene into the outbox (over several frames) and sends it to the connected app ClientId. Success means
+	 * started: the final outcome (export failed, imported, refused by the app, timed out) arrives on OnSendCompleted. A refusal is
+	 * returned and not broadcast.
 	 */
 	FStageBridgeResultInfo SendSceneToApp(const FString& SceneName, int32 ClientId);
 
@@ -86,7 +106,7 @@ public:
 	UPROPERTY(BlueprintAssignable, Category = "StageCraft|Bridge")
 	FOnStageBridgeClientsChanged OnClientsChanged;
 
-	/** Every finished export to a file, and every send once the app answered (or did not). */
+	/** Every send once the app answered (or did not, or the export for it failed). File exports report to their requester only. */
 	UPROPERTY(BlueprintAssignable, Category = "StageCraft|Bridge")
 	FOnStageBridgeSendCompleted OnSendCompleted;
 
@@ -95,9 +115,15 @@ private:
 	{
 		FString AssetId;
 		int32 ClientId = 0;
+		/** True once the asset message went out; before that the export is running. */
+		bool bSent = false;
 		FStageBridgeResultInfo Result;
 	};
 
+	bool StartBridgeOn(uint16 Port, FText& OutError);
+	/** Starts the one export job; Busy while one runs. */
+	FStageBridgeResultInfo StartExportJob(const FString& SceneName, const FString& Path, bool bComputeSha1, TFunction<void(const struct FStageSceneExportOutcome&)> OnDone);
+	void HandleSendExported(const struct FStageSceneExportOutcome& Outcome);
 	void ScheduleDrain();
 	void DrainEvents();
 	void FinishSend(EStageBridgeResult Code, const FText& Message);
@@ -111,4 +137,11 @@ private:
 	TArray<FStageBridgeClientInfo> Clients;
 	TOptional<FPendingSend> Pending;
 	FTimerHandle SendTimeout;
+	/** The export running (for a file or a send); null when none. Dropping it cancels the export. */
+	TSharedPtr<class FStageSceneExportJob> ExportJob;
+
+protected:
+	/** Seconds an app has to import a send and answer. Generous: a large stage takes a while in a busy app. Values <= 0 use the default. */
+	UPROPERTY(Config)
+	float SendTimeoutSeconds = 120.f;
 };

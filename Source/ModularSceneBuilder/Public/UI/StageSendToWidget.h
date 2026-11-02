@@ -64,6 +64,10 @@ private:
 	UFUNCTION()
 	void HandleSendCompleted(const FStageBridgeResultInfo& Result);
 
+	/** An export this panel asked for (through the controller) has ended. */
+	UFUNCTION()
+	void HandleExportCompleted(const FStageBridgeResultInfo& Result);
+
 	UFUNCTION()
 	void HandleSceneSelected(FString SelectedItem, ESelectInfo::Type SelectionType);
 
@@ -92,5 +96,6 @@ private:
 	TArray<int32> TargetClients;
 
 	TWeakObjectPtr<class UStageBridgeSubsystem> BoundBridge;
+	TWeakObjectPtr<class AModularPlayerController> BoundController;
 	TWeakObjectPtr<class UStageSceneComponent> BoundScenes;
 };

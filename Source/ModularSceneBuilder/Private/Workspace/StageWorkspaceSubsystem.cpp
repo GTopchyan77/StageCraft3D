@@ -10,6 +10,7 @@
 #include "Framework/Application/SlateApplication.h"
 #include "HAL/PlatformApplicationMisc.h"
 #include "Import/StageMeshImportSubsystem.h"
+#include "IO/StageCraftPaths.h"
 #include "Misc/Paths.h"
 #include "Player/ModularPlayerController.h"
 #include "Scene/StageSceneComponent.h"
@@ -72,7 +73,7 @@ void UStageWorkspaceSubsystem::Initialize(FSubsystemCollectionBase& Collection)
 {
 	Super::Initialize(Collection);
 
-	LayoutStore = MakeShared<FStageLayoutStore>(FPaths::Combine(FPaths::ProjectSavedDir(), TEXT("StageCraft"), TEXT("Workspace")), FStageWorkspaceShell::PanelLayoutVersion);
+	LayoutStore = MakeShared<FStageLayoutStore>(FPaths::Combine(StageCraftPaths::DataRoot(), TEXT("Workspace")), FStageWorkspaceShell::PanelLayoutVersion);
 	UAssetManager::CallOrRegister_OnCompletedInitialScan(FSimpleMulticastDelegate::FDelegate::CreateUObject(this, &ThisClass::LoadPanelCatalog));
 }
 

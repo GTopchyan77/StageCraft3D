@@ -18,6 +18,7 @@
 #include "Misc/Paths.h"
 #include "Misc/ScopeExit.h"
 #include "ModularSceneBuilder.h"
+#include "ProfilingDebugging/CpuProfilerTrace.h"
 #include "Options/GLTFExportOptions.h"
 #include "ProceduralMeshComponent.h"
 #include "ProceduralMeshConversion.h"
@@ -64,6 +65,21 @@ namespace StageSceneExporterImpl
 		Options->BakeMaterialInputs = EGLTFMaterialBakeMode::Disabled;
 		return Options;
 	}
+
+	/** Adds the scope's wall time to a timings field. */
+	struct FPhaseTimer
+	{
+		double& Ms;
+		const double Start = FPlatformTime::Seconds();
+		explicit FPhaseTimer(double& InMs) : Ms(InMs) {}
+		~FPhaseTimer() { Ms += (FPlatformTime::Seconds() - Start) * 1000.0; }
+	};
+}
+
+FString FStageSceneExportTimings::ToString() const
+{
+	return FString::Printf(TEXT("load %.1f, rights %.1f, world %.1f, spawn %.1f, convert %.1f, glTF %.1f, finalize %.1f, teardown %.1f, hash %.1f; total %.1f ms"),
+		LoadMs, RightsMs, WorldMs, SpawnMs, ConvertMs, GltfMs, FinalizeMs, TeardownMs, HashMs, GetTotalMs());
 }
 
 TMap<FSoftObjectPath, UBaseItemData*> FStageSceneExporter::CollectExportableItems(const UStageItemSubsystem& Items, const UStageProfileSubsystem& Profile)
@@ -143,120 +159,260 @@ int32 FStageSceneExporter::ConvertProceduralMeshes(AActor& Actor)
 	return Converted;
 }
 
-FStageBridgeResultInfo FStageSceneExporter::ExportDocument(const FStageSceneDocument& Scene, const TMap<FSoftObjectPath, UBaseItemData*>& Catalog, const FString& Path)
-{
-	using namespace StageSceneExporterImpl;
 
-	// Without a renderer the exporter cannot read mesh data that lives on the GPU only (cooked meshes without CPU access).
-	if (!FApp::CanEverRender() || !GEngine)
-	{
-		return FStageBridgeResultInfo::Fail(EStageBridgeResult::Unavailable, LOCTEXT("NoRenderer", "Exporting needs a renderer; it is not available in this mode."));
-	}
-	const double StartSeconds = FPlatformTime::Seconds();
+// --- Shared decisions and wording ---
 
-	// A world like the marketplace preview's (ADR 0021 §12.3): GamePreview, actors initialized, play never begun, so nothing in it
-	// registers with the stage, the show or the DMX output.
-	UWorld* World = UWorld::CreateWorld(EWorldType::GamePreview, /*bInformEngineOfWorld*/ false, TEXT("StageCraftExportWorld"));
-	FWorldContext& Context = GEngine->CreateNewWorldContext(EWorldType::GamePreview);
-	Context.SetCurrentWorld(World);
-	World->InitializeActorsForPlay(FURL());
-	ON_SCOPE_EXIT
-	{
-		GEngine->DestroyWorldContext(World);
-		World->DestroyWorld(/*bInformEngineOfWorld*/ false);
-	};
-
-	TArray<TObjectPtr<AActor>> Actors;
-	FBox Bounds(ForceInit);
-	const FStageMarketplacePreviewStats Stats = StageMarketplacePreview::SpawnScene(*World, Scene, Catalog, Actors, Bounds);
-
-	FStageBridgeResultInfo Result;
-	Result.SceneName = Scene.Name;
-	Result.ExportedItems = Stats.Placed;
-	Result.SkippedItems = Stats.NotInLibrary;
-	if (Stats.Placed == 0)
-	{
-		Result.Code = EStageBridgeResult::NothingToExport;
-		Result.Message = FText::Format(LOCTEXT("NothingToExport", "\"{0}\" has nothing that can be exported (no items from your Library)."), FText::FromString(Scene.Name));
-		return Result;
-	}
-
-	int32 Converted = 0;
-	TSet<AActor*> Selected;
-	for (AActor* Actor : Actors)
-	{
-		Converted += ConvertProceduralMeshes(*Actor);
-		Selected.Add(Actor);
-	}
-
-	// Written next to the target and moved into place: a reader (the add-on, the user's file browser) never sees a partial file.
-	IFileManager::Get().MakeDirectory(*FPaths::GetPath(Path), /*Tree*/ true);
-	const FString TempPath = FPaths::Combine(FPaths::GetPath(Path), FPaths::GetBaseFilename(Path) + TEXT(".writing") + FileExtension);
-	FGLTFExportMessages Messages;
-	const bool bExported = UGLTFExporter::ExportToGLTF(World, TempPath, MakeOptions(), Selected, Messages);
-	LogMessages(Messages.Errors, ELogVerbosity::Error, TEXT("errors"));
-	LogMessages(Messages.Warnings, ELogVerbosity::Warning, TEXT("warnings"));
-
-	if (!bExported || !IFileManager::Get().FileExists(*TempPath))
-	{
-		IFileManager::Get().Delete(*TempPath, /*RequireExists*/ false, /*EvenReadOnly*/ false, /*Quiet*/ true);
-		Result.Code = EStageBridgeResult::ExportFailed;
-		Result.Message = FText::Format(LOCTEXT("ExportFailed", "\"{0}\" could not be exported: {1}"), FText::FromString(Scene.Name),
-			Messages.Errors.IsEmpty() ? LOCTEXT("SeeLog", "see the log for details.") : FText::FromString(Messages.Errors[0]));
-		return Result;
-	}
-	if (!IFileManager::Get().Move(*Path, *TempPath, /*Replace*/ true, /*EvenIfReadOnly*/ false, /*Attributes*/ false, /*bDoNotRetryOrError*/ true))
-	{
-		IFileManager::Get().Delete(*TempPath, /*RequireExists*/ false, /*EvenReadOnly*/ false, /*Quiet*/ true);
-		Result.Code = EStageBridgeResult::WriteFailed;
-		Result.Message = FText::Format(LOCTEXT("WriteFailed", "Could not write {0}."), FText::FromString(Path));
-		return Result;
-	}
-
-	const int64 Bytes = IFileManager::Get().FileSize(*Path);
-	UE_LOG(LogStageCraft, Log, TEXT("Scene export: \"%s\" -> %s: %d items (%d procedural parts converted, %d left out), %lld bytes, %.2f s."),
-		*Scene.Name, *Path, Stats.Placed, Converted, Stats.NotInLibrary, Bytes, FPlatformTime::Seconds() - StartSeconds);
-
-	Result.Code = EStageBridgeResult::Success;
-	Result.FilePath = Path;
-	Result.Message = Stats.NotInLibrary > 0
-		? FText::Format(LOCTEXT("ExportedSkipped", "Exported \"{0}\": {1} items ({2} left out: not in your Library or not owned)."), FText::FromString(Scene.Name), FText::AsNumber(Stats.Placed), FText::AsNumber(Stats.NotInLibrary))
-		: FText::Format(LOCTEXT("Exported", "Exported \"{0}\": {1} items."), FText::FromString(Scene.Name), FText::AsNumber(Stats.Placed));
-	return Result;
-}
-
-FStageBridgeResultInfo FStageSceneExporter::ExportSavedScene(UGameInstance& GameInstance, const FStageSceneStore& Scenes, const FString& SceneName, const FString& Path)
+FStageBridgeResultInfo FStageSceneExporter::ValidateRequest(const FString& SceneName, const FString& Path)
 {
 	if (!FStageSceneStore::IsValidSceneName(SceneName) || FPaths::IsRelative(Path) || !Path.EndsWith(FileExtension, ESearchCase::IgnoreCase))
 	{
 		return FStageBridgeResultInfo::Fail(EStageBridgeResult::InvalidRequest, LOCTEXT("InvalidRequest", "Pick a saved scene and a .glb file to export to."));
 	}
+	return FStageBridgeResultInfo();
+}
+
+FStageBridgeResultInfo FStageSceneExporter::CheckRenderer()
+{
+	// Without a renderer the exporter cannot read mesh data that lives on the GPU only (cooked meshes without CPU access).
+	if (!FApp::CanEverRender() || !GEngine)
+	{
+		return FStageBridgeResultInfo::Fail(EStageBridgeResult::Unavailable, LOCTEXT("NoRenderer", "Exporting needs a renderer; it is not available in this mode."));
+	}
+	return FStageBridgeResultInfo();
+}
+
+FStageBridgeResultInfo FStageSceneExporter::DescribeLoadFailure(EStageSceneResult LoadResult, const FString& SceneName)
+{
+	if (LoadResult == EStageSceneResult::NotFound || LoadResult == EStageSceneResult::InvalidName)
+	{
+		return FStageBridgeResultInfo::Fail(EStageBridgeResult::NotFound, FText::Format(LOCTEXT("NotFound", "There is no saved scene \"{0}\"."), FText::FromString(SceneName)));
+	}
+	return FStageBridgeResultInfo::Fail(EStageBridgeResult::Unreadable, FText::Format(LOCTEXT("Unreadable", "Scene \"{0}\" could not be read."), FText::FromString(SceneName)));
+}
+
+FStageBridgeResultInfo FStageSceneExporter::DescribeNoRights(const FString& SceneName, const FText& Reason)
+{
+	return FStageBridgeResultInfo::Fail(EStageBridgeResult::NotOriginal, Reason.IsEmpty()
+		? FText::Format(LOCTEXT("NotOriginal", "\"{0}\" came from the Community Marketplace and cannot be exported."), FText::FromString(SceneName))
+		: Reason);
+}
+
+FStageBridgeResultInfo FStageSceneExporter::DescribeNothingToExport(const FString& SceneName)
+{
+	FStageBridgeResultInfo Result = FStageBridgeResultInfo::Fail(EStageBridgeResult::NothingToExport,
+		FText::Format(LOCTEXT("NothingToExport", "\"{0}\" has nothing that can be exported (no items from your Library)."), FText::FromString(SceneName)));
+	Result.SceneName = SceneName;
+	return Result;
+}
+
+FStageBridgeResultInfo FStageSceneExporter::DescribeExportFailed(const FString& SceneName, const TArray<FString>& Errors)
+{
+	FStageBridgeResultInfo Result = FStageBridgeResultInfo::Fail(EStageBridgeResult::ExportFailed,
+		FText::Format(LOCTEXT("ExportFailed", "\"{0}\" could not be exported: {1}"), FText::FromString(SceneName),
+			Errors.IsEmpty() ? LOCTEXT("SeeLog", "see the log for details.") : FText::FromString(Errors[0])));
+	Result.SceneName = SceneName;
+	return Result;
+}
+
+FStageBridgeResultInfo FStageSceneExporter::DescribeWriteFailed(const FString& Path)
+{
+	return FStageBridgeResultInfo::Fail(EStageBridgeResult::WriteFailed, FText::Format(LOCTEXT("WriteFailed", "Could not write {0}."), FText::FromString(Path)));
+}
+
+FStageBridgeResultInfo FStageSceneExporter::DescribeExported(const FString& SceneName, int32 Placed, int32 NotInLibrary, const FString& Path)
+{
+	FStageBridgeResultInfo Result;
+	Result.Message = NotInLibrary > 0
+		? FText::Format(LOCTEXT("ExportedSkipped", "Exported \"{0}\": {1} items ({2} left out: not in your Library or not owned)."), FText::FromString(SceneName), FText::AsNumber(Placed), FText::AsNumber(NotInLibrary))
+		: FText::Format(LOCTEXT("Exported", "Exported \"{0}\": {1} items."), FText::FromString(SceneName), FText::AsNumber(Placed));
+	Result.SceneName = SceneName;
+	Result.FilePath = Path;
+	Result.ExportedItems = Placed;
+	Result.SkippedItems = NotInLibrary;
+	return Result;
+}
+
+UGLTFExportOptions* FStageSceneExporter::MakeExportOptions()
+{
+	return StageSceneExporterImpl::MakeOptions();
+}
+
+void FStageSceneExporter::LogExportMessages(const FGLTFExportMessages& Messages)
+{
+	StageSceneExporterImpl::LogMessages(Messages.Errors, ELogVerbosity::Error, TEXT("errors"));
+	StageSceneExporterImpl::LogMessages(Messages.Warnings, ELogVerbosity::Warning, TEXT("warnings"));
+}
+
+UWorld* FStageSceneExporter::CreateExportWorld()
+{
+	FWorldInitializationValues Values;
+	Values.InitializeScenes(true)
+		.AllowAudioPlayback(false)
+		.RequiresHitProxies(false)
+		.CreatePhysicsScene(false)
+		.CreateNavigation(false)
+		.CreateAISystem(false)
+		.ShouldSimulatePhysics(false)
+		.EnableTraceCollision(false)
+		.SetTransactional(false)
+		.CreateFXSystem(false)
+		.CreateWorldPartition(false);
+	UWorld* World = UWorld::CreateWorld(EWorldType::GamePreview, /*bInformEngineOfWorld*/ false, TEXT("StageCraftExportWorld"), /*InWorldPackage*/ nullptr,
+		/*bAddToRoot*/ true, ERHIFeatureLevel::Num, &Values);
+	FWorldContext& Context = GEngine->CreateNewWorldContext(EWorldType::GamePreview);
+	Context.SetCurrentWorld(World);
+	World->InitializeActorsForPlay(FURL());
+	return World;
+}
+
+void FStageSceneExporter::DestroyExportWorld(UWorld* World)
+{
+	if (!World)
+	{
+		return;
+	}
+	if (GEngine)
+	{
+		GEngine->DestroyWorldContext(World);
+	}
+	// Left to the engine's periodic collection. Each destroyed world kept until then makes the next one slower to create (14 -> 49
+	// ms over ten back-to-back exports), but forcing a full purge here measured worse: a 390 ms frame for the first purge and tens of
+	// ms in the frame after each later one (STATE.md #55).
+	World->DestroyWorld(/*bInformEngineOfWorld*/ false);
+}
+
+FString FStageSceneExporter::GetTempPath(const FString& Path)
+{
+	// Written next to the target and moved into place: a reader (the add-on, the user's file browser) never sees a partial file.
+	return FPaths::Combine(FPaths::GetPath(Path), FPaths::GetBaseFilename(Path) + TEXT(".writing") + FileExtension);
+}
+
+// --- The synchronous export (tests, and the measured baseline of StageCraft.Bench.Export) ---
+
+FStageBridgeResultInfo FStageSceneExporter::ExportDocument(const FStageSceneDocument& Scene, const TMap<FSoftObjectPath, UBaseItemData*>& Catalog, const FString& Path,
+	FStageSceneExportTimings* OutTimings)
+{
+	using namespace StageSceneExporterImpl;
+	TRACE_CPUPROFILER_EVENT_SCOPE(StageSceneExport_Document);
+
+	const FStageBridgeResultInfo Renderer = CheckRenderer();
+	if (!Renderer.IsSuccess())
+	{
+		return Renderer;
+	}
+	FStageSceneExportTimings LocalTimings;
+	FStageSceneExportTimings& Timings = OutTimings ? *OutTimings : LocalTimings;
+
+	// A world like the marketplace preview's (ADR 0021 §12.3): GamePreview, actors initialized, play never begun, so nothing in it
+	// registers with the stage, the show or the DMX output.
+	UWorld* World = nullptr;
+	{
+		TRACE_CPUPROFILER_EVENT_SCOPE(StageSceneExport_World);
+		FPhaseTimer Phase(Timings.WorldMs);
+		World = CreateExportWorld();
+	}
+	ON_SCOPE_EXIT
+	{
+		TRACE_CPUPROFILER_EVENT_SCOPE(StageSceneExport_Teardown);
+		FPhaseTimer Phase(Timings.TeardownMs);
+		DestroyExportWorld(World);
+	};
+
+	TArray<TObjectPtr<AActor>> Actors;
+	FBox Bounds(ForceInit);
+	FStageMarketplacePreviewStats Stats;
+	{
+		TRACE_CPUPROFILER_EVENT_SCOPE(StageSceneExport_Spawn);
+		FPhaseTimer Phase(Timings.SpawnMs);
+		Stats = StageMarketplacePreview::SpawnScene(*World, Scene, Catalog, Actors, Bounds);
+	}
+	if (Stats.Placed == 0)
+	{
+		return DescribeNothingToExport(Scene.Name);
+	}
+
+	int32 Converted = 0;
+	TSet<AActor*> Selected;
+	{
+		TRACE_CPUPROFILER_EVENT_SCOPE(StageSceneExport_Convert);
+		FPhaseTimer Phase(Timings.ConvertMs);
+		for (AActor* Actor : Actors)
+		{
+			Converted += ConvertProceduralMeshes(*Actor);
+			Selected.Add(Actor);
+		}
+	}
+
+	IFileManager::Get().MakeDirectory(*FPaths::GetPath(Path), /*Tree*/ true);
+	const FString TempPath = GetTempPath(Path);
+	FGLTFExportMessages Messages;
+	bool bExported = false;
+	{
+		TRACE_CPUPROFILER_EVENT_SCOPE(StageSceneExport_Gltf);
+		FPhaseTimer Phase(Timings.GltfMs);
+		bExported = UGLTFExporter::ExportToGLTF(World, TempPath, MakeOptions(), Selected, Messages);
+	}
+	LogExportMessages(Messages);
+	if (!bExported || !IFileManager::Get().FileExists(*TempPath))
+	{
+		IFileManager::Get().Delete(*TempPath, /*RequireExists*/ false, /*EvenReadOnly*/ false, /*Quiet*/ true);
+		return DescribeExportFailed(Scene.Name, Messages.Errors);
+	}
+
+	int64 Bytes = 0;
+	{
+		FPhaseTimer Phase(Timings.FinalizeMs);
+		if (!IFileManager::Get().Move(*Path, *TempPath, /*Replace*/ true, /*EvenIfReadOnly*/ false, /*Attributes*/ false, /*bDoNotRetryOrError*/ true))
+		{
+			IFileManager::Get().Delete(*TempPath, /*RequireExists*/ false, /*EvenReadOnly*/ false, /*Quiet*/ true);
+			return DescribeWriteFailed(Path);
+		}
+		Bytes = IFileManager::Get().FileSize(*Path);
+	}
+
+	// Teardown runs after this line (scope exit) and is not in this total.
+	UE_LOG(LogStageCraft, Log, TEXT("Scene export: \"%s\" -> %s: %d items (%d procedural parts converted, %d left out), %lld bytes; %s."),
+		*Scene.Name, *Path, Stats.Placed, Converted, Stats.NotInLibrary, Bytes, *Timings.ToString());
+	return DescribeExported(Scene.Name, Stats.Placed, Stats.NotInLibrary, Path);
+}
+
+FStageBridgeResultInfo FStageSceneExporter::ExportSavedScene(UGameInstance& GameInstance, const FStageSceneStore& Scenes, const FString& SceneName, const FString& Path,
+	FStageSceneExportTimings* OutTimings)
+{
+	using namespace StageSceneExporterImpl;
+	const FStageBridgeResultInfo Request = ValidateRequest(SceneName, Path);
+	if (!Request.IsSuccess())
+	{
+		return Request;
+	}
+	FStageSceneExportTimings LocalTimings;
+	FStageSceneExportTimings& Timings = OutTimings ? *OutTimings : LocalTimings;
 
 	FStageSceneDocument Scene;
 	FStageSceneParseReport Report;
-	switch (Scenes.Load(SceneName, Scene, Report))
+	EStageSceneResult Loaded = EStageSceneResult::NotFound;
 	{
-	case EStageSceneResult::Success:
-		break;
-	case EStageSceneResult::NotFound:
-	case EStageSceneResult::InvalidName:
-		return FStageBridgeResultInfo::Fail(EStageBridgeResult::NotFound, FText::Format(LOCTEXT("NotFound", "There is no saved scene \"{0}\"."), FText::FromString(SceneName)));
-	default:
-		return FStageBridgeResultInfo::Fail(EStageBridgeResult::Unreadable, FText::Format(LOCTEXT("Unreadable", "Scene \"{0}\" could not be read."), FText::FromString(SceneName)));
+		TRACE_CPUPROFILER_EVENT_SCOPE(StageSceneExport_Load);
+		FPhaseTimer Phase(Timings.LoadMs);
+		Loaded = Scenes.Load(SceneName, Scene, Report);
+	}
+	if (Loaded != EStageSceneResult::Success)
+	{
+		return DescribeLoadFailure(Loaded, SceneName);
 	}
 
 	// Deny by default: a marketplace stage, under any name it was saved as, leaves only when its publisher allowed it (ADR 0022 §11.1).
 	if (Scene.IsFromMarketplace())
 	{
+		TRACE_CPUPROFILER_EVENT_SCOPE(StageSceneExport_Rights);
+		FPhaseTimer Phase(Timings.RightsMs);
 		const UStageMarketplaceSubsystem* Marketplace = GameInstance.GetSubsystem<UStageMarketplaceSubsystem>();
 		const FStageMarketplaceResultInfo Rights = Marketplace
 			? Marketplace->CheckExportRights(Scene.OriginListingId)
 			: FStageMarketplaceResultInfo::Fail(EStageMarketplaceResult::NotOriginal, FText::GetEmpty());
 		if (!Rights.IsSuccess())
 		{
-			return FStageBridgeResultInfo::Fail(EStageBridgeResult::NotOriginal, Rights.Message.IsEmpty()
-				? FText::Format(LOCTEXT("NotOriginal", "\"{0}\" came from the Community Marketplace and cannot be exported."), FText::FromString(SceneName))
-				: Rights.Message);
+			return DescribeNoRights(SceneName, Rights.Message);
 		}
 	}
 
@@ -267,7 +423,7 @@ FStageBridgeResultInfo FStageSceneExporter::ExportSavedScene(UGameInstance& Game
 		return FStageBridgeResultInfo::Fail(EStageBridgeResult::Unavailable, LOCTEXT("Unavailable", "The item Library is not available."));
 	}
 
-	FStageBridgeResultInfo Result = ExportDocument(Scene, CollectExportableItems(*Items, *Profile), Path);
+	FStageBridgeResultInfo Result = ExportDocument(Scene, CollectExportableItems(*Items, *Profile), Path, &Timings);
 	Result.SceneName = SceneName;
 	return Result;
 }

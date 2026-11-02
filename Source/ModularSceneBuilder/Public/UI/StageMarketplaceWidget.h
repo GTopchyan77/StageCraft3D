@@ -5,6 +5,7 @@
 #include "CoreMinimal.h"
 #include "Blueprint/UserWidget.h"
 #include "Economy/StageEconomyTypes.h"
+#include "Engine/TimerHandle.h"
 #include "Marketplace/StageDispatchTypes.h"
 #include "Marketplace/StageMarketplaceSubsystem.h"
 #include "Marketplace/StageMarketplaceTypes.h"
@@ -95,6 +96,8 @@ private:
 	void HandlePreviewReady(const FGuid& ListingId, const FStageMarketplaceResultInfo& Result, const FStageMarketplacePreviewScene& Scene);
 	void HandlePreviewOrbit(const FVector2D& DragPixels);
 	void HandlePreviewZoom(float WheelSteps);
+	/** Applies this frame's orbit and zoom input on the next tick, in one capture. */
+	void RequestPreviewMove();
 
 	// --- Publishing ---
 	void RefreshSceneChoices();
@@ -210,6 +213,12 @@ private:
 	TWeakObjectPtr<class UStageProfileSubsystem> BoundProfile;
 	TWeakObjectPtr<class UStageAcquireDispatchSubsystem> BoundDispatch;
 	FDelegateHandle PreviewReadyHandle;
+	/** The deferred removal of the acquire dialog (CloseAcquireDialog); cleared by OpenAcquireDialog and NativeDestruct. */
+	FTimerHandle CloseDialogTimer;
+	/** Preview input waiting for the next frame's capture (RequestPreviewMove); cleared in NativeDestruct. */
+	FTimerHandle PreviewMoveTimer;
+	FVector2D PendingOrbitPixels = FVector2D::ZeroVector;
+	float PendingZoomSteps = 0.f;
 
 	/** Lives as long as this widget: the preview world is destroyed with it. Shared (not unique) because the type is private. */
 	TSharedPtr<class FStageMarketplacePreview> Preview;
