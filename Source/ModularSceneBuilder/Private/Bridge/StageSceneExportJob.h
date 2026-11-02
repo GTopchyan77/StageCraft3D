@@ -101,6 +101,8 @@ private:
 		FStageSceneDocument Scene;
 		bool bHasLibraryManifest = false;
 		FStagePackageManifest LibraryManifest;
+		/** Entries of the file dropped by the parser (damaged), named in the result. */
+		int32 InvalidItems = 0;
 		double LoadMs = 0.0;
 		double RightsMs = 0.0;
 	};
@@ -152,6 +154,8 @@ private:
 	TArray<TObjectPtr<class AActor>> Actors;
 	FBox Bounds = FBox(ForceInit);
 	FStageMarketplacePreviewStats Stats;
+	/** Lights, items without geometry and damaged entries, gathered as the stages run; finished in StepFinalized. */
+	FStageSceneExportCounts Counts;
 	int32 NextItem = 0;
 	int32 NextActor = 0;
 	int32 Converted = 0;

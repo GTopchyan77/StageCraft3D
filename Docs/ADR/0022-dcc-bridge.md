@@ -47,7 +47,7 @@ Findings that shaped the design:
 ## 2. Decision: formats (D1)
 
 - **GLB (glTF 2.0 binary)** is what StageCraft writes, using the engine exporter.
-  - Geometry and materials only. Lights are not exported, because they would arrive at intensities that mean nothing in the other app.
+  - Geometry and materials only. Lights are not exported, because they would arrive at intensities that mean nothing in the other app. **Amended in §13 (STATE.md #57): fixture lights are exported.**
   - Material baking is disabled: it needs the editor.
 - **USD (`.usda`)** comes in D2, from a writer of our own. That gives Maya a native path. The wire protocol already carries `"format"`.
 - **FBX is not offered.** There is no runtime writer, and every target app imports GLB or USD.
@@ -347,3 +347,34 @@ Rows that cannot be used stay visible with the reason, and cannot be picked. Lin
 - Pixel Streaming is not enabled in this project; the numbers are local frame times.
 - Callers that relied on a synchronous `ExportSceneToFile` now pass a callback. The synchronous `ExportDocument` / `ExportSavedScene` remain for tests and as the benchmark's baseline.
 - Tests: `StageCraft.Bridge.ExportJob`, `.LoopbackApps`; `StageCraft.Dispatch.OrderFlow`; `StageCraft.Services.VaultBeforeDispatch` (each runs the job with a renderer, and asserts the refusal without one).
+
+## 13. Addendum: export completeness (2026-11-02, STATE.md #57)
+
+**Problem.** Users reported exports that miss part of the stage. An audit of both export paths (`FStageSceneExporter`, `FStageSceneExportJob`) and a test exporting the whole catalog found that no catalog item is dropped. What was wrong:
+- Items hidden on stage were exported. Visibility is applied in `BeginPlay`, which never runs in the export world.
+- Fixture lights were left out by the §2 decision.
+- Three things went unreported:
+  - entries the scene parser rejected;
+  - items whose meshes did not load, or whose procedural parts failed to convert;
+  - all of the above in the bridge's "imported" message, which named the items only.
+
+**Decisions.**
+- **Lights are exported.** This amends §2. `bExportLights` is on, so each fixture's spot light goes out as a `KHR_lights_punctual` light, with the colour, intensity and cone set by its saved state (`ApplyItemData` applies the outputs at spawn). The engine converts intensity units. Gobos, light functions, prisms and the cell textures have no glTF form and stay behind.
+- **Hidden items are left out.** The export spawns with `EStageHiddenItems::Skip`, which reads the saved `bHiddenOnStage` before the item is finished. The marketplace preview keeps `Spawn`: it shows the file as published.
+- **Every left-out item is named.** `FStageBridgeResultInfo` gets new counts next to `ExportedItems` and `SkippedItems` (not owned or not in the Library):
+  - `HiddenItems`;
+  - `InvalidItems`: entries of the file dropped by the parser;
+  - `ItemsWithoutGeometry`: counted in `ExportedItems`, and logged by name;
+  - `ExportedLights`.
+  The export message and the bridge's "imported" message both list what was left out ("Left out: 1 hidden on stage, 2 not owned or not in your Library, 1 damaged in the scene file").
+- **"Without geometry"** is judged the way the engine exporter judges it (`FGLTFComponentConverter`): only components hidden in game, or a hidden owner, are skipped. Geometry means a static mesh component with a mesh, an instanced one with instances, or a converted procedural part. `bVisible` is not consulted, because the exporter does not consult it either.
+- A catalog item with no loadable actor class, or one that fails to spawn, is still counted with the unavailable items, but is now logged as broken content.
+
+**Consequences.**
+- A `.glb` sent to Blender now carries one light per fixture. The `KHR_lights_punctual` count equals `ExportedLights`.
+- **Test:** `StageCraft.Bridge.ExportCompleteness` exports a stage with one of every catalog item, plus a hidden copy and an entry this build does not have, and reads the file back:
+  - every item has a mesh node;
+  - there are no items without geometry;
+  - the light nodes equal the counted lights.
+  It then saves the stage with a damaged entry and exports it through the bridge job; the damaged entry is named. The 2026-11-02 run gave 23 items and 13 lights.
+- Not covered: glTF has no gobo or light-function equivalent, and materials are still not baked (§2).

@@ -58,6 +58,7 @@ struct FStageTestGameInstanceOptions
  *    directory (FStageScopedDataRoot), deleted afterwards;
  *  - the profile not persisted, so the real save slot is never read or written (Economy security 10);
  *  - UStageTestCommerceBackend as the commerce backend, so the test decides every answer;
+ *  - UStageTestMarketplaceBackend as the marketplace backend (the folder backend, with package fetches the test can hold);
  *  - the timeouts of FStageTestGameInstanceOptions.
  *
  * Time does not pass by itself: Pump runs the game thread's queued tasks and ticks the game instance's timers until a condition

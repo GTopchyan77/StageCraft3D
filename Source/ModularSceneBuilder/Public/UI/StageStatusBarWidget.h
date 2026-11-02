@@ -123,6 +123,9 @@ private:
 	void HandleSceneOperationFinished(const FStageSceneOperationResult& Result);
 
 	UFUNCTION()
+	void HandleDirtyChanged(bool bIsDirty);
+
+	UFUNCTION()
 	void HandleRenderStateChanged(EStageRenderState NewState);
 
 	UFUNCTION()
@@ -155,6 +158,12 @@ private:
 
 	UPROPERTY(Transient)
 	TObjectPtr<class UTextBlock> MessageText = nullptr;
+
+	/** "Unsaved changes", shown while the session is dirty. */
+	UPROPERTY(Transient)
+	TObjectPtr<class UTextBlock> UnsavedText = nullptr;
+
+	TWeakObjectPtr<class UStageSessionSubsystem> Session;
 
 	TWeakObjectPtr<class AModularPlayerController> Controller;
 	TWeakObjectPtr<class UStagePlacementToolComponent> PlacementTool;

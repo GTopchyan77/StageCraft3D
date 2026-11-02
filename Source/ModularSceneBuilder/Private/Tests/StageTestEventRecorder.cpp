@@ -24,6 +24,9 @@ void UStageTestEventRecorder::Bind(UGameInstance& GameInstance)
 	if (UStageMarketplaceSubsystem* Marketplace = GameInstance.GetSubsystem<UStageMarketplaceSubsystem>())
 	{
 		Marketplace->OnAcquireCompleted.AddUniqueDynamic(this, &ThisClass::HandleAcquire);
+		Marketplace->OnPublishCompleted.AddUniqueDynamic(this, &ThisClass::HandlePublish);
+		Marketplace->OnUnpublishCompleted.AddUniqueDynamic(this, &ThisClass::HandleUnpublish);
+		Marketplace->OnLibraryChanged.AddUniqueDynamic(this, &ThisClass::HandleLibraryChanged);
 	}
 	if (UStageAcquireDispatchSubsystem* Dispatch = GameInstance.GetSubsystem<UStageAcquireDispatchSubsystem>())
 	{
@@ -56,6 +59,9 @@ void UStageTestEventRecorder::Unbind()
 	if (UStageMarketplaceSubsystem* Marketplace = GameInstance->GetSubsystem<UStageMarketplaceSubsystem>())
 	{
 		Marketplace->OnAcquireCompleted.RemoveDynamic(this, &ThisClass::HandleAcquire);
+		Marketplace->OnPublishCompleted.RemoveDynamic(this, &ThisClass::HandlePublish);
+		Marketplace->OnUnpublishCompleted.RemoveDynamic(this, &ThisClass::HandleUnpublish);
+		Marketplace->OnLibraryChanged.RemoveDynamic(this, &ThisClass::HandleLibraryChanged);
 	}
 	if (UStageAcquireDispatchSubsystem* Dispatch = GameInstance->GetSubsystem<UStageAcquireDispatchSubsystem>())
 	{
@@ -89,6 +95,21 @@ void UStageTestEventRecorder::HandleTopUp(FGameplayTag Currency, int64 GrantedAm
 void UStageTestEventRecorder::HandleAcquire(FGuid ListingId, FStageMarketplaceResultInfo Result, const FString& SceneName)
 {
 	Acquires.Add({ ListingId, Result, SceneName });
+}
+
+void UStageTestEventRecorder::HandlePublish(FStageMarketplaceResultInfo Result, const FStageMarketplaceListing& Listing)
+{
+	Publishes.Add({ Listing.ListingId, Result, FString() });
+}
+
+void UStageTestEventRecorder::HandleUnpublish(FGuid ListingId, FStageMarketplaceResultInfo Result)
+{
+	Unpublishes.Add({ ListingId, Result, FString() });
+}
+
+void UStageTestEventRecorder::HandleLibraryChanged(FGuid ListingId, FStageMarketplaceResultInfo Result)
+{
+	LibraryChanges.Add({ ListingId, Result, FString() });
 }
 
 void UStageTestEventRecorder::HandleOrder(const FStageOrderResultInfo& Result)

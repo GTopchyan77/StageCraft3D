@@ -80,6 +80,8 @@ private:
 
 	void BeginCapture(const FCaptureTarget& Target);
 	void EndCapture();
+	/** The only writer of Capture: keeps the input preferences' key-capture flag in step with it. */
+	void SetCapture(const TOptional<FCaptureTarget>& Target);
 
 	UFUNCTION()
 	void HandlePreferencesChanged();

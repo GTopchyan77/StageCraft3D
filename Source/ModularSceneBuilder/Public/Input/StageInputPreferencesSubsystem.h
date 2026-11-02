@@ -49,6 +49,13 @@ public:
 
 	void ResetAllKeyBindings();
 
+	/**
+	 * Set by the Preferences panel while it waits for a new shortcut: the app-wide shortcuts (Ctrl+S, Ctrl+Z...) then stand aside,
+	 * so the chord being typed is bound, not run (ADR 0013 addendum). The panel clears it when the capture ends or it closes.
+	 */
+	void SetKeyCaptureActive(bool bActive) { bKeyCaptureActive = bActive; }
+	bool IsKeyCaptureActive() const { return bKeyCaptureActive; }
+
 	/** "Ctrl+Z", "Ctrl+Y or Ctrl+Shift+Z", or empty when unbound. */
 	FText DescribeCommand(EStageInputCommand Command) const { return StageKeyBindings::DescribeCommand(KeyBindings, Command); }
 
@@ -90,4 +97,7 @@ private:
 	void Commit(bool bChanged);
 
 	FStageKeyBindings KeyBindings;
+
+	/** Runtime only: a shortcut is being captured in the Preferences panel (SetKeyCaptureActive). */
+	bool bKeyCaptureActive = false;
 };

@@ -28,6 +28,7 @@
 #include "Report/StagePatchSheetSubsystem.h"
 #include "Scene/StageSceneComponent.h"
 #include "Subsystems/StageEconomySubsystem.h"
+#include "Subsystems/StageSessionSubsystem.h"
 #include "TimerManager.h"
 #include "UI/StageCraftUITheme.h"
 #include "UI/StageCraftWidgetStyle.h"
@@ -229,6 +230,18 @@ void UStageStatusBarWidget::BuildTree()
 		MessageSlot->SetVerticalAlignment(VAlign_Center);
 		MessageSlot->SetHorizontalAlignment(HAlign_Right);
 	}
+
+	// Pushed by the session's OnDirtyChanged: shown while the stage differs from its scene file.
+	UnsavedText = WidgetTree->ConstructWidget<UTextBlock>(UTextBlock::StaticClass(), TEXT("UnsavedText"));
+	UnsavedText->SetFont(MakeFont(8));
+	UnsavedText->SetColorAndOpacity(FSlateColor(Palette.TextSecondary));
+	UnsavedText->SetText(LOCTEXT("Unsaved", "● Unsaved changes"));
+	UnsavedText->SetVisibility(ESlateVisibility::Collapsed);
+	if (UHorizontalBoxSlot* UnsavedSlot = Row->AddChildToHorizontalBox(UnsavedText))
+	{
+		UnsavedSlot->SetVerticalAlignment(VAlign_Center);
+		UnsavedSlot->SetPadding(FMargin(12.f, 0.f, 0.f, 0.f));
+	}
 }
 
 void UStageStatusBarWidget::NativeConstruct()
@@ -292,6 +305,13 @@ void UStageStatusBarWidget::BindSources()
 	{
 		SceneFiles = Scenes;
 		Scenes->OnSceneOperationFinished.AddUniqueDynamic(this, &ThisClass::HandleSceneOperationFinished);
+	}
+
+	if (UStageSessionSubsystem* SessionSubsystem = UWorld::GetSubsystem<UStageSessionSubsystem>(GetWorld()))
+	{
+		Session = SessionSubsystem;
+		SessionSubsystem->OnDirtyChanged.AddUniqueDynamic(this, &ThisClass::HandleDirtyChanged);
+		HandleDirtyChanged(SessionSubsystem->IsDirty());
 	}
 
 	if (UStageRenderSubsystem* RenderSubsystem = UWorld::GetSubsystem<UStageRenderSubsystem>(GetWorld()))
@@ -366,6 +386,11 @@ void UStageStatusBarWidget::UnbindSources()
 	{
 		Scenes->OnSceneOperationFinished.RemoveDynamic(this, &ThisClass::HandleSceneOperationFinished);
 	}
+	if (UStageSessionSubsystem* SessionSubsystem = Session.Get())
+	{
+		SessionSubsystem->OnDirtyChanged.RemoveDynamic(this, &ThisClass::HandleDirtyChanged);
+	}
+	Session.Reset();
 	if (UStageRenderSubsystem* RenderSubsystem = Render.Get())
 	{
 		RenderSubsystem->OnRenderStateChanged.RemoveDynamic(this, &ThisClass::HandleRenderStateChanged);
@@ -570,6 +595,14 @@ void UStageStatusBarWidget::HandleHistoryChanged(EStageHistoryChange Change, con
 void UStageStatusBarWidget::HandleSelectionSetChanged(int32 Count)
 {
 	RefreshMode();
+}
+
+void UStageStatusBarWidget::HandleDirtyChanged(bool bIsDirty)
+{
+	if (UnsavedText)
+	{
+		UnsavedText->SetVisibility(bIsDirty ? ESlateVisibility::HitTestInvisible : ESlateVisibility::Collapsed);
+	}
 }
 
 void UStageStatusBarWidget::HandleSceneOperationFinished(const FStageSceneOperationResult& Result)

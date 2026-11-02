@@ -41,6 +41,9 @@ enum class EStageInputCommand : uint8
 	// Added in STATE.md #45, after the fly keys so saved key maps keep their meaning.
 	FocusSelection,
 	ToggleViewportToolbar,
+	// Added in STATE.md #57 (ADR 0013 addendum), last so saved key maps keep their meaning.
+	Save,
+	Duplicate,
 	Count UMETA(Hidden)
 };
 

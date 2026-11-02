@@ -9,8 +9,10 @@
 
 #if WITH_DEV_AUTOMATION_TESTS
 
+#include "Actors/LightingFixtureActor.h"
 #include "Actors/ModularBaseActor.h"
 #include "Components/SelectionComponent.h"
+#include "Data/BaseItemData.h"
 #include "Components/SpawnSystemComponent.h"
 #include "Engine/Engine.h"
 #include "Engine/World.h"
@@ -21,8 +23,14 @@
 #include "History/StageEditHistoryComponent.h"
 #include "History/StageEditHistorySubsystem.h"
 #include "Interaction/StageParameterInterface.h"
+#include "HAL/FileManager.h"
 #include "Interaction/StageTransformRules.h"
+#include "IO/StageCraftPaths.h"
 #include "Misc/AutomationTest.h"
+#include "Misc/Paths.h"
+#include "Misc/ScopeExit.h"
+#include "Scene/StageSceneComponent.h"
+#include "Scene/StageSceneStore.h"
 #include "Subsystems/ShowControlSubsystem.h"
 #include "Subsystems/StageSessionSubsystem.h"
 
@@ -438,6 +446,148 @@ bool FStageHistoryEnvironmentTest::RunTest(const FString& Parameters)
 		Stage.EditHistory->Undo();
 		TestTrue(TEXT("... undo restores the weather only"), Environment->GetSettings().Equals(After) && Item->GetActorLocation().Equals(FVector(50.0, 0.0, 0.0)));
 	}
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FStageHistoryDuplicateTest, "StageCraft.History.Duplicate", StageHistoryWorldTests::Flags)
+
+bool FStageHistoryDuplicateTest::RunTest(const FString& Parameters)
+{
+	using namespace StageHistoryWorldTests;
+
+	FScopedStage Stage;
+	USpawnSystemComponent* Spawner = Stage.EditHistory->GetOwner()->FindComponentByClass<USpawnSystemComponent>();
+	UBaseItemData* Crate = LoadObject<UBaseItemData>(nullptr, TEXT("/Game/StageCraft/Items/DA_Test_Crate.DA_Test_Crate"));
+	UBaseItemData* Fixture = LoadObject<UBaseItemData>(nullptr, TEXT("/Game/StageCraft/Fixtures/DA_Fixture_Beam.DA_Fixture_Beam"));
+	if (!TestNotNull(TEXT("Spawn system"), Spawner) || !TestNotNull(TEXT("Crate item"), Crate) || !TestNotNull(TEXT("Fixture item"), Fixture))
+	{
+		return false;
+	}
+
+	AModularBaseActor* Box = Spawner->SpawnItem(Crate, FTransform(FVector(0.0, 0.0, 0.0)));
+	ALightingFixtureActor* Light = Cast<ALightingFixtureActor>(Spawner->SpawnItem(Fixture, FTransform(FVector(0.0, 500.0, 0.0))));
+	if (!TestNotNull(TEXT("A crate is placed"), Box) || !TestNotNull(TEXT("A fixture is placed"), Light))
+	{
+		return false;
+	}
+	// A setting that must travel with the copy.
+	IStageParameterInterface::Execute_SetParameterValue(Box, StageCraftTags::Param_Info_Label, FStageParameterValue::MakeText(FText::FromString(TEXT("Stage Left Crate"))));
+	const int32 StepsBefore = Stage.History->GetUndoCount();
+	const int32 ItemsBefore = UWorld::GetSubsystem<UStageSessionSubsystem>(Stage.World)->GetPlacedItems().Num();
+
+	AddInfo(TEXT("Two items duplicate as one step: new identities, the same settings, one grid step aside."));
+	const FVector Offset(100.0, 0.0, 0.0);
+	int32 Refused = 0;
+	const TArray<AModularBaseActor*> Copies = Stage.EditHistory->DuplicateItems({ Box, Light }, Offset, Refused);
+	if (!TestEqual(TEXT("Two copies"), Copies.Num(), 2) || !TestEqual(TEXT("none refused"), Refused, 0))
+	{
+		return false;
+	}
+	TestEqual(TEXT("One undo step"), Stage.History->GetUndoCount(), StepsBefore + 1);
+	TestTrue(TEXT("The crate copy has its own id"), Copies[0]->GetInstanceId().IsValid() && Copies[0]->GetInstanceId() != Box->GetInstanceId());
+	TestTrue(TEXT("and sits one step aside"), Copies[0]->GetActorLocation().Equals(Box->GetActorLocation() + Offset));
+	TestTrue(TEXT("with the same catalog item"), Copies[0]->GetItemData() == Crate);
+	FStageParameterValue Label;
+	TestTrue(TEXT("and the same settings (its label)"), IStageParameterInterface::Execute_GetParameterValue(Copies[0], StageCraftTags::Param_Info_Label, Label)
+		&& Label.Text.ToString() == TEXT("Stage Left Crate"));
+	const ALightingFixtureActor* LightCopy = Cast<ALightingFixtureActor>(Copies[1]);
+	if (TestNotNull(TEXT("The fixture copy is a fixture"), LightCopy))
+	{
+		TestTrue(FString::Printf(TEXT("with its own fixture ID (%d, source %d)"), LightCopy->GetFixtureId(), Light->GetFixtureId()),
+			LightCopy->GetFixtureId() > 0 && LightCopy->GetFixtureId() != Light->GetFixtureId());
+		const FStageDMXPatch SourcePatch = Light->GetPatch();
+		const FStageDMXPatch CopyPatch = LightCopy->GetPatch();
+		const bool bOverlaps = SourcePatch.IsPatched() && CopyPatch.IsPatched() && SourcePatch.Universe == CopyPatch.Universe
+			&& CopyPatch.Address < SourcePatch.Address + Light->GetDMXFootprint() && SourcePatch.Address < CopyPatch.Address + LightCopy->GetDMXFootprint();
+		TestFalse(FString::Printf(TEXT("and a DMX address that does not overlap the source's (%d.%d vs %d.%d)"), CopyPatch.Universe, CopyPatch.Address, SourcePatch.Universe, SourcePatch.Address), bOverlaps);
+	}
+	TestEqual(TEXT("Two more items on stage"), UWorld::GetSubsystem<UStageSessionSubsystem>(Stage.World)->GetPlacedItems().Num(), ItemsBefore + 2);
+
+	const FGuid FirstCopyId = Copies[0]->GetInstanceId();
+	TestEqual(TEXT("Undo removes both copies"), Str(Stage.EditHistory->Undo()), Str(EStageCommandResult::Succeeded));
+	TestEqual(TEXT("leaving the originals"), UWorld::GetSubsystem<UStageSessionSubsystem>(Stage.World)->GetPlacedItems().Num(), ItemsBefore);
+	TestTrue(TEXT("which are untouched"), IsValid(Box) && IsValid(Light) && Box->GetActorLocation().IsNearlyZero());
+	TestEqual(TEXT("Redo places them again"), Str(Stage.EditHistory->Redo()), Str(EStageCommandResult::Succeeded));
+	TestEqual(TEXT("both"), UWorld::GetSubsystem<UStageSessionSubsystem>(Stage.World)->GetPlacedItems().Num(), ItemsBefore + 2);
+	TestTrue(TEXT("with the same identity as before the undo"), UWorld::GetSubsystem<UStageSessionSubsystem>(Stage.World)->GetPlacedItems().ContainsByPredicate(
+		[&FirstCopyId](const AModularBaseActor* Item) { return Item && Item->GetInstanceId() == FirstCopyId; }));
+
+	AddInfo(TEXT("The placement rules refuse the second copy: one placed, one refused, and the step holds only the placed one."));
+	int32 Calls = 0;
+	Spawner->PlacementValidator.BindLambda([&Calls](const UBaseItemData&, int32)
+	{
+		return ++Calls == 2 ? FStageEconomyResultInfo::Fail(EStageEconomyResult::InvalidRequest, FText::FromString(TEXT("Budget reached"))) : FStageEconomyResultInfo::Ok();
+	});
+	const int32 StepsBeforeRefusal = Stage.History->GetUndoCount();
+	const int32 ItemsBeforeRefusal = UWorld::GetSubsystem<UStageSessionSubsystem>(Stage.World)->GetPlacedItems().Num();
+	const TArray<AModularBaseActor*> Partial = Stage.EditHistory->DuplicateItems({ Box, Light }, Offset * 3.0, Refused);
+	Spawner->PlacementValidator.Unbind();
+	TestEqual(TEXT("One copy placed"), Partial.Num(), 1);
+	TestEqual(TEXT("one refused"), Refused, 1);
+	TestEqual(TEXT("One step"), Stage.History->GetUndoCount(), StepsBeforeRefusal + 1);
+	TestEqual(TEXT("Undo removes exactly the placed copy"), Str(Stage.EditHistory->Undo()), Str(EStageCommandResult::Succeeded));
+	TestEqual(TEXT("back to the count before"), UWorld::GetSubsystem<UStageSessionSubsystem>(Stage.World)->GetPlacedItems().Num(), ItemsBeforeRefusal);
+
+	TestEqual(TEXT("Nothing to duplicate: no step"), Stage.EditHistory->DuplicateItems({}, Offset, Refused).Num(), 0);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FStageSceneSaveFlowTest, "StageCraft.Scene.SaveFlow", StageHistoryWorldTests::Flags)
+
+bool FStageSceneSaveFlowTest::RunTest(const FString& Parameters)
+{
+	using namespace StageHistoryWorldTests;
+
+	// Every scene file in a temporary folder, never the user's (the component reads the folder when it begins play).
+	const FString Root = FPaths::ConvertRelativePathToFull(FPaths::Combine(FPaths::AutomationTransientDir(), TEXT("StageSaveFlow"), FGuid::NewGuid().ToString()));
+	ON_SCOPE_EXIT { IFileManager::Get().DeleteDirectory(*Root, /*RequireExists*/ false, /*Tree*/ true); };
+	FStageScopedDataRoot DataRoot(Root);
+
+	FScopedStage Stage;
+	AActor* Owner = Stage.EditHistory->GetOwner();
+	UStageSceneComponent* Scenes = NewObject<UStageSceneComponent>(Owner);
+	Scenes->RegisterComponent();
+	USpawnSystemComponent* Spawner = Owner->FindComponentByClass<USpawnSystemComponent>();
+	UStageSessionSubsystem* Session = UWorld::GetSubsystem<UStageSessionSubsystem>(Stage.World);
+	UBaseItemData* Crate = LoadObject<UBaseItemData>(nullptr, TEXT("/Game/StageCraft/Items/DA_Test_Crate.DA_Test_Crate"));
+	if (!TestNotNull(TEXT("Session"), Session) || !TestNotNull(TEXT("Spawn system"), Spawner) || !TestNotNull(TEXT("Crate item"), Crate))
+	{
+		return false;
+	}
+	const auto WaitForSave = [Scenes]()
+	{
+		const double Deadline = FPlatformTime::Seconds() + 10.0;
+		while (Scenes->IsBusy() && FPlatformTime::Seconds() < Deadline)
+		{
+			FTaskGraphInterface::Get().ProcessThreadUntilIdle(ENamedThreads::GameThread);
+			FPlatformProcess::Sleep(0.005f);
+		}
+		return !Scenes->IsBusy();
+	};
+
+	Spawner->SpawnItem(Crate, FTransform(FVector::ZeroVector));
+	TestTrue(TEXT("A placement makes the stage unsaved"), Session->IsDirty());
+	TestEqual(TEXT("A save needs a valid name"), UEnum::GetValueAsString(Scenes->SaveScene(TEXT(""))), UEnum::GetValueAsString(EStageSceneResult::InvalidName));
+
+	AddInfo(TEXT("Saved: written in the background, then the stage is clean and named."));
+	const FString Name = TEXT("Quick Save Flow");
+	TestEqual(TEXT("The save starts"), UEnum::GetValueAsString(Scenes->SaveScene(Name)), UEnum::GetValueAsString(EStageSceneResult::Success));
+	TestEqual(TEXT("A second save meanwhile is Busy"), UEnum::GetValueAsString(Scenes->SaveScene(Name)), UEnum::GetValueAsString(EStageSceneResult::Busy));
+	TestTrue(TEXT("The save finishes"), WaitForSave());
+	TestTrue(TEXT("The file is there"), FStageSceneStore(FStageSceneStore::GetDefaultDirectory()).SceneExists(Name));
+	TestFalse(TEXT("The stage is clean"), Session->IsDirty());
+	TestEqual(TEXT("and carries the scene name"), Session->GetSceneName(), Name);
+
+	AddInfo(TEXT("An edit while the file is being written keeps the stage unsaved: the file has the stage as it was."));
+	Spawner->SpawnItem(Crate, FTransform(FVector(200.0, 0.0, 0.0)));
+	TestEqual(TEXT("The save starts"), UEnum::GetValueAsString(Scenes->SaveScene(Name)), UEnum::GetValueAsString(EStageSceneResult::Success));
+	Spawner->SpawnItem(Crate, FTransform(FVector(400.0, 0.0, 0.0)));
+	TestTrue(TEXT("The save finishes"), WaitForSave());
+	TestTrue(TEXT("The stage is still unsaved"), Session->IsDirty());
+	FStageSceneDocument Written;
+	FStageSceneParseReport Report;
+	TestTrue(TEXT("The file reads back"), FStageSceneStore(FStageSceneStore::GetDefaultDirectory()).Load(Name, Written, Report) == EStageSceneResult::Success);
+	TestEqual(TEXT("with the two items placed before the save, not the third"), Written.Items.Num(), 2);
 	return true;
 }
 

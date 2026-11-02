@@ -248,6 +248,14 @@ void ALightingFixtureActor::NotifyPatchSubsystem()
 	}
 }
 
+void ALightingFixtureActor::PrepareAsDuplicate()
+{
+	Super::PrepareAsDuplicate();
+	// Not registered yet (play has not begun), so plain writes: registration then assigns them (ShowControl, DMX patch).
+	FixtureId = 0;
+	Patch = FStageDMXPatch();
+}
+
 void ALightingFixtureActor::BeginPlay()
 {
 	Super::BeginPlay();

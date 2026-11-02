@@ -78,6 +78,10 @@ namespace StageKeyBindings
 				// Appended because the order must follow the enum; the Preferences panel still lists them under VIEW.
 				Make(C::FocusSelection, G::View, LOCTEXT("FocusSelection", "Focus Selection"), LOCTEXT("FocusSelectionTip", "Frame the selected items in the view, as F does in the Unreal Editor."), Plain(EKeys::F)),
 				Make(C::ToggleViewportToolbar, G::View, LOCTEXT("ToggleToolbar", "Show / Hide Viewport Toolbar"), LOCTEXT("ToggleToolbarTip", "Collapse the toolbar above the viewport to a small button, or bring it back."), CtrlShift(EKeys::T)),
+
+				// Appended (STATE.md #57); listed under EDITING. Both work wherever the keyboard focus is, except in a text field.
+				Make(C::Save, G::Editing, LOCTEXT("Save", "Save Stage"), LOCTEXT("SaveTip", "Save the stage under its name; a stage that was never saved asks for one."), Ctrl(EKeys::S)),
+				Make(C::Duplicate, G::Editing, LOCTEXT("Duplicate", "Duplicate Selection"), LOCTEXT("DuplicateTip", "Copy the selected items one grid step to the side, as one step to undo."), Ctrl(EKeys::D)),
 			};
 			check(Commands.Num() == Index(C::Count));
 			for (int32 Position = 0; Position < Commands.Num(); ++Position)

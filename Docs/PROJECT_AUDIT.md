@@ -221,7 +221,7 @@ Status values are those required by the audit brief. "Tests" names the automatio
 | Selection: click, Ctrl-toggle, Select All, outliner and patch selection | IMPLEMENTED — STATIC INSPECTION ONLY. **No tests.** | `Private/Components/SelectionComponent.cpp:124-164`; `ModularPlayerController.cpp:584-605, 1140, 1162-1186` |
 | Hover highlight | NOT FOUND. `OnHoverBegin` and `OnHoverEnd` are declared but never called. | `Public/Interaction/InteractableInterface.h` |
 | Marquee / box select | NOT FOUND | — |
-| Input and shortcuts | IMPLEMENTED — STATIC INSPECTION ONLY. Mappings are built in code, so there are no IMC or IA assets (`ModularPlayerController.cpp:276-399`). No shortcuts for Save, Select All, hide/lock, view modes or projections. | — |
+| Input and shortcuts | IMPLEMENTED — STATIC INSPECTION ONLY. Mappings are built in code, so there are no IMC or IA assets (`ModularPlayerController.cpp:276-399`). No shortcuts for Save, Select All, hide/lock, view modes or projections. *Since then:* the key map has Select All (Ctrl+A) and the view projections, and Save (Ctrl+S) and Duplicate (Ctrl+D) work from any panel (STATE.md #57). | — |
 | Preferences panel, key-binding editor (ADR 0001 phases 3–4) | NOT FOUND | `tasks/todo.md:151-152` |
 | Shop UI (wallet, buy buttons, lock badges) | NOT FOUND. The back end exists (§4.6). | `STATE.md:1182-1183` |
 
@@ -231,7 +231,7 @@ Status values are those required by the audit brief. "Tests" names the automatio
 | Placement: ghost, landing, stamping, rules-validated deferred spawn | IMPLEMENTED — STATIC INSPECTION ONLY. Math VERIFIED. | `Private/Placement/StagePlacementToolComponent.cpp:92-189`; `Private/Components/SpawnSystemComponent.cpp:56-92`; tests `StageCraft.Placement.Math`, `.ToolModes` |
 | Delete and multi-delete (one undo step) | IMPLEMENTED — STATIC INSPECTION ONLY | `Private/History/StageEditHistoryComponent.cpp:199-252` |
 | Clear Stage (one undo step) | IMPLEMENTED — STATIC INSPECTION ONLY | `StageEditHistoryComponent.cpp:207-222` |
-| Duplicate / copy-paste | NOT FOUND | — |
+| Duplicate / copy-paste | Duplicate IMPLEMENTED (STATE.md #57, ADR 0013 §5): Ctrl+D, Edit > Duplicate Selected, one undo step, through the placement rules. Copy-paste NOT FOUND. | — |
 | Gizmo move, rotate, scale (world space) | IMPLEMENTED — STATIC INSPECTION ONLY. Scale rules VERIFIED. | `Private/Actors/ModularTransformGizmo.cpp:269-436`; test `StageCraft.Gizmo.ScaleRules` |
 | Local-space gizmo, scale snapping | NOT FOUND | `ModularTransformGizmo.cpp:223` forces a zero rotation |
 | Group (multi-selection) transform | IMPLEMENTED. Leader math VERIFIED; drag STATIC. | `Public/Interaction/StageGroupTransform.h:20`; test `StageCraft.Selection.GroupTransform` |

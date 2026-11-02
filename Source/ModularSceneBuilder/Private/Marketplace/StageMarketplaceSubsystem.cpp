@@ -7,7 +7,9 @@
 #include "Data/BaseItemData.h"
 #include "Engine/GameInstance.h"
 #include "HAL/FileManager.h"
+#include "Dom/JsonObject.h"
 #include "IO/StageAtomicFile.h"
+#include "Marketplace/StageAcquireDispatchSubsystem.h"
 #include "Marketplace/StageMarketplaceRules.h"
 #include "Marketplace/StagePackage.h"
 #include "Misc/FileHelper.h"
@@ -15,6 +17,8 @@
 #include "Misc/Paths.h"
 #include "ModularSceneBuilder.h"
 #include "Scene/StageSceneStore.h"
+#include "Serialization/JsonReader.h"
+#include "Serialization/JsonSerializer.h"
 #include "Subsystems/StageEconomySubsystem.h"
 #include "Subsystems/StageItemSubsystem.h"
 #include "Subsystems/StageProfileSubsystem.h"
@@ -48,6 +52,8 @@ namespace StageMarketplace
 		case EStageMarketplaceResult::ServerRequired: return LOCTEXT("Result_ServerRequired", "Real-money sales need an online store; they are not available offline.");
 		case EStageMarketplaceResult::NotOriginal: return LOCTEXT("Result_NotOriginal", "This stage came from the marketplace; only your own stages can be published.");
 		case EStageMarketplaceResult::TimedOut: return LOCTEXT("Result_TimedOut", "The marketplace did not deliver the package in time. If you bought it, get it again: it costs nothing.");
+		case EStageMarketplaceResult::NotYours: return LOCTEXT("Result_NotYours", "Only listings published from this computer can be unpublished here.");
+		case EStageMarketplaceResult::InUse: return LOCTEXT("Result_InUse", "This listing is being downloaded or delivered right now; try again when that has finished.");
 		}
 		return FText::GetEmpty();
 	}
@@ -158,6 +164,7 @@ void UStageMarketplaceSubsystem::Initialize(FSubsystemCollectionBase& Collection
 		BackendClass = UStageLocalMarketplaceBackend::StaticClass();
 	}
 	Backend = NewObject<UStageMarketplaceBackend>(this, BackendClass);
+	LoadLocalRecords();
 
 	if (UStageEconomySubsystem* Economy = GetEconomy())
 	{
@@ -183,12 +190,17 @@ void UStageMarketplaceSubsystem::Deinitialize()
 	OnListingsUpdated.Clear();
 	OnAcquireCompleted.Clear();
 	OnPublishCompleted.Clear();
+	OnUnpublishCompleted.Clear();
+	OnLibraryChanged.Clear();
 	OnPreviewReady.Clear();
 	Listings.Reset();
 	PendingAcquires.Reset();
+	PublishedByMe.Reset();
+	LibraryListings.Reset();
 	bQueryInFlight = false;
 	bPreviewLoading = false;
 	bPublishing = false;
+	bUnpublishing = false;
 	Backend = nullptr;
 
 	Super::Deinitialize();
@@ -458,7 +470,16 @@ void UStageMarketplaceSubsystem::FinishAcquire(const FGuid& ListingId, const FSt
 		Final.Message = FText::Format(LOCTEXT("Imported", "Added to your scenes as \"{0}\"."), FText::FromString(SceneName));
 	}
 	UE_LOG(LogStageCraft, Log, TEXT("Marketplace acquire %s: %s %s"), *ListingId.ToString(), *UEnum::GetValueAsString(Final.Code), *Final.Message.ToString());
+	if (Final.IsSuccess())
+	{
+		// The import keeps the library copy (a failed write is logged there, and export rights then say so).
+		LibraryListings.Add(ListingId);
+	}
 	OnAcquireCompleted.Broadcast(ListingId, Final, Final.IsSuccess() ? SceneName : FString());
+	if (Final.IsSuccess())
+	{
+		OnLibraryChanged.Broadcast(ListingId, FStageMarketplaceResultInfo::Ok());
+	}
 }
 
 // --- Read-only preview ---
@@ -637,8 +658,193 @@ void UStageMarketplaceSubsystem::HandlePublished(EStageMarketplaceResult Result,
 void UStageMarketplaceSubsystem::FinishPublish(const FStageMarketplaceResultInfo& Result, const FStageMarketplaceListing& Listing)
 {
 	bPublishing = false;
+	if (Result.IsSuccess() && Listing.ListingId.IsValid())
+	{
+		PublishedByMe.Add(Listing.ListingId);
+		SavePublishRecord();
+	}
 	UE_LOG(LogStageCraft, Log, TEXT("Marketplace publish: %s %s (listing %s)"), *UEnum::GetValueAsString(Result.Code), *Result.Message.ToString(), *Listing.ListingId.ToString());
 	OnPublishCompleted.Broadcast(Result, Listing);
+}
+
+// --- Removing what was put in (ADR 0021 §15) ---
+
+namespace StageMarketplacePublishRecord
+{
+	constexpr int32 Version = 1;
+	const TCHAR* VersionField = TEXT("version");
+	const TCHAR* ListingsField = TEXT("listings");
+}
+
+FString UStageMarketplaceSubsystem::GetPublishRecordPath()
+{
+	return FPaths::Combine(StageCraftPaths::DataRoot(), TEXT("Marketplace"), TEXT("Published.json"));
+}
+
+void UStageMarketplaceSubsystem::LoadLocalRecords()
+{
+	using namespace StageMarketplacePublishRecord;
+	PublishedByMe.Reset();
+	LibraryListings.Reset();
+
+	// Bounded start-up reads (one small file and one folder listing), done once so every later question is answered from memory.
+	FString Contents;
+	TSharedPtr<FJsonObject> Root;
+	const FString RecordPath = GetPublishRecordPath();
+	if (FFileHelper::LoadFileToString(Contents, *RecordPath, FFileHelper::EHashOptions::None, FILEREAD_Silent))
+	{
+		const TArray<TSharedPtr<FJsonValue>>* Ids = nullptr;
+		if (FJsonSerializer::Deserialize(TJsonReaderFactory<TCHAR>::Create(Contents), Root) && Root.IsValid() && Root->TryGetArrayField(ListingsField, Ids))
+		{
+			for (const TSharedPtr<FJsonValue>& Value : *Ids)
+			{
+				FGuid Id;
+				if (Value.IsValid() && Value->Type == EJson::String && FGuid::Parse(Value->AsString(), Id) && Id.IsValid())
+				{
+					PublishedByMe.Add(Id);
+				}
+			}
+		}
+		else
+		{
+			// Unreadable: nothing can be unpublished from here until the next publish rewrites it. Never a reason to fail start-up.
+			UE_LOG(LogStageCraft, Warning, TEXT("Marketplace: the publish record %s could not be read; treating it as empty."), *RecordPath);
+		}
+	}
+
+	TArray<FString> Files;
+	IFileManager::Get().FindFiles(Files, *FPaths::Combine(GetLibraryDirectory(), FString(TEXT("*")) + StagePackage::FileExtension), /*Files*/ true, /*Directories*/ false);
+	for (const FString& File : Files)
+	{
+		FGuid Id;
+		if (FGuid::Parse(FPaths::GetBaseFilename(File), Id) && Id.IsValid())
+		{
+			LibraryListings.Add(Id);
+		}
+	}
+}
+
+void UStageMarketplaceSubsystem::SavePublishRecord()
+{
+	using namespace StageMarketplacePublishRecord;
+	const TSharedRef<FJsonObject> Root = MakeShared<FJsonObject>();
+	Root->SetNumberField(VersionField, Version);
+	TArray<TSharedPtr<FJsonValue>> Ids;
+	for (const FGuid& Id : PublishedByMe)
+	{
+		Ids.Add(MakeShared<FJsonValueString>(Id.ToString(EGuidFormats::Digits)));
+	}
+	Root->SetArrayField(ListingsField, Ids);
+	FString Contents;
+	FJsonSerializer::Serialize(Root, TJsonWriterFactory<TCHAR>::Create(&Contents));
+
+	// On the work pipe, after the imports and builds before it; only strings cross (Rules §29).
+	WorkPipe.Launch(UE_SOURCE_LOCATION, [Path = GetPublishRecordPath(), Contents = MoveTemp(Contents)]()
+	{
+		IFileManager::Get().MakeDirectory(*FPaths::GetPath(Path), /*Tree*/ true);
+		if (!StageAtomicFile::WriteText(Path, Contents))
+		{
+			UE_LOG(LogStageCraft, Warning, TEXT("Marketplace: could not write the publish record %s."), *Path);
+		}
+	});
+}
+
+FStageMarketplaceResultInfo UStageMarketplaceSubsystem::RequestUnpublish(FGuid ListingId)
+{
+	if (!Backend)
+	{
+		return StageMarketplace::Info(EStageMarketplaceResult::BackendUnavailable);
+	}
+	if (!ListingId.IsValid())
+	{
+		return StageMarketplace::Info(EStageMarketplaceResult::InvalidRequest);
+	}
+	// Deny by default: only listings this install published. The folder itself cannot tell who published what.
+	if (!PublishedByMe.Contains(ListingId))
+	{
+		return StageMarketplace::Info(EStageMarketplaceResult::NotYours);
+	}
+	if (bUnpublishing)
+	{
+		return StageMarketplace::Info(EStageMarketplaceResult::Busy);
+	}
+	if (PendingAcquires.Contains(ListingId))
+	{
+		return StageMarketplace::Info(EStageMarketplaceResult::InUse);
+	}
+	bUnpublishing = true;
+	Backend->Unpublish(ListingId, FOnStageMarketplaceUnpublished::CreateUObject(this, &ThisClass::HandleUnpublished, ListingId));
+	return FStageMarketplaceResultInfo::Ok();
+}
+
+void UStageMarketplaceSubsystem::HandleUnpublished(EStageMarketplaceResult Result, FGuid ListingId)
+{
+	bUnpublishing = false;
+	FStageMarketplaceResultInfo Info = StageMarketplace::Info(Result);
+	// Already gone from the folder (removed by hand, or by another machine): the record catches up, as after a success.
+	if (Result == EStageMarketplaceResult::Success || Result == EStageMarketplaceResult::NotFound)
+	{
+		const FStageMarketplaceListing* Listing = FindListing(ListingId);
+		Info = FStageMarketplaceResultInfo::Ok(Listing
+			? FText::Format(LOCTEXT("Unpublished", "Unpublished \"{0}\". People who already got it keep their copy."), FText::FromString(Listing->Title))
+			: LOCTEXT("UnpublishedNoTitle", "Unpublished. People who already got it keep their copy."));
+		PublishedByMe.Remove(ListingId);
+		SavePublishRecord();
+		Listings.RemoveAll([&ListingId](const FStageMarketplaceListing& Candidate) { return Candidate.ListingId == ListingId; });
+	}
+	UE_LOG(LogStageCraft, Log, TEXT("Marketplace unpublish %s: %s %s"), *ListingId.ToString(), *UEnum::GetValueAsString(Result), *Info.Message.ToString());
+	OnUnpublishCompleted.Broadcast(ListingId, Info);
+	if (Info.IsSuccess())
+	{
+		RequestQuery(RequestedQuery);
+	}
+}
+
+FStageMarketplaceResultInfo UStageMarketplaceSubsystem::RequestRemoveFromLibrary(FGuid ListingId)
+{
+	if (!ListingId.IsValid())
+	{
+		return StageMarketplace::Info(EStageMarketplaceResult::InvalidRequest);
+	}
+	if (!LibraryListings.Contains(ListingId))
+	{
+		return StageMarketplace::Info(EStageMarketplaceResult::NotFound);
+	}
+	// An acquire writes the copy and an order's delivery reads it (export rights): neither may lose it half-way.
+	const UStageAcquireDispatchSubsystem* Dispatch = GetGameInstance()->GetSubsystem<UStageAcquireDispatchSubsystem>();
+	if (PendingAcquires.Contains(ListingId) || (Dispatch && Dispatch->IsOrderPending() && Dispatch->GetPendingOrder().ListingId == ListingId))
+	{
+		return StageMarketplace::Info(EStageMarketplaceResult::InUse);
+	}
+	// Taken out of the set now, so a second request is NotFound rather than a second delete.
+	LibraryListings.Remove(ListingId);
+	WorkPipe.Launch(UE_SOURCE_LOCATION, [WeakThis = TWeakObjectPtr<ThisClass>(this), ListingId, Path = FPaths::Combine(GetLibraryDirectory(), ListingId.ToString(EGuidFormats::Digits) + StagePackage::FileExtension)]()
+	{
+		const bool bDeleted = IFileManager::Get().Delete(*Path, /*RequireExists*/ false, /*EvenReadOnly*/ false, /*Quiet*/ true) && !IFileManager::Get().FileExists(*Path);
+		AsyncTask(ENamedThreads::GameThread, [WeakThis, ListingId, bDeleted]()
+		{
+			if (ThisClass* This = WeakThis.Get())
+			{
+				This->FinishRemoveFromLibrary(ListingId, bDeleted ? EStageMarketplaceResult::Success : EStageMarketplaceResult::WriteFailed);
+			}
+		});
+	});
+	return FStageMarketplaceResultInfo::Ok();
+}
+
+void UStageMarketplaceSubsystem::FinishRemoveFromLibrary(const FGuid& ListingId, EStageMarketplaceResult Result)
+{
+	FStageMarketplaceResultInfo Info = StageMarketplace::Info(Result);
+	if (Info.IsSuccess())
+	{
+		Info.Message = LOCTEXT("RemovedFromLibrary", "Removed from your library. Scenes made from it stay; get the listing again to export them.");
+	}
+	else
+	{
+		LibraryListings.Add(ListingId); // Still on disk: still in the library.
+	}
+	UE_LOG(LogStageCraft, Log, TEXT("Marketplace remove from library %s: %s"), *ListingId.ToString(), *UEnum::GetValueAsString(Result));
+	OnLibraryChanged.Broadcast(ListingId, Info);
 }
 
 #undef LOCTEXT_NAMESPACE

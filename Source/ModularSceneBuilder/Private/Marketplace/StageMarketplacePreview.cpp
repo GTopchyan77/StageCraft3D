@@ -38,23 +38,30 @@ namespace StageMarketplacePreviewImpl
 }
 
 FStageMarketplacePreviewStats StageMarketplacePreview::SpawnScene(UWorld& World, const FStageSceneDocument& Scene, const TMap<FSoftObjectPath, UBaseItemData*>& Catalog,
-	TArray<TObjectPtr<AActor>>& OutActors, FBox& OutBounds)
+	TArray<TObjectPtr<AActor>>& OutActors, FBox& OutBounds, EStageHiddenItems HiddenItems)
 {
 	FStageMarketplacePreviewStats Stats;
 	for (const FStageItemSnapshot& Snapshot : Scene.Items)
 	{
-		SpawnItem(World, Snapshot, Catalog, OutActors, OutBounds, Stats);
+		SpawnItem(World, Snapshot, Catalog, OutActors, OutBounds, Stats, HiddenItems);
 	}
 	return Stats;
 }
 
 void StageMarketplacePreview::SpawnItem(UWorld& World, const FStageItemSnapshot& Snapshot, const TMap<FSoftObjectPath, UBaseItemData*>& Catalog,
-	TArray<TObjectPtr<AActor>>& OutActors, FBox& OutBounds, FStageMarketplacePreviewStats& Stats)
+	TArray<TObjectPtr<AActor>>& OutActors, FBox& OutBounds, FStageMarketplacePreviewStats& Stats, EStageHiddenItems HiddenItems)
 {
 	UBaseItemData* Item = Catalog.FindRef(Snapshot.Item.ToSoftObjectPath());
-	UClass* ActorClass = Item ? Item->ActorClass.LoadSynchronous() : nullptr;
+	if (!Item)
+	{
+		++Stats.NotInLibrary;
+		return;
+	}
+	UClass* ActorClass = Item->ActorClass.LoadSynchronous();
 	if (!ActorClass)
 	{
+		// A catalog item without an actor class is broken content, not a missing purchase: worth a line in the log.
+		UE_LOG(LogStageCraft, Warning, TEXT("Scene spawn: %s has no loadable actor class; the item is left out."), *Item->GetName());
 		++Stats.NotInLibrary;
 		return;
 	}
@@ -64,10 +71,18 @@ void StageMarketplacePreview::SpawnItem(UWorld& World, const FStageItemSnapshot&
 		ESpawnActorCollisionHandlingMethod::AlwaysSpawn);
 	if (!Actor)
 	{
+		UE_LOG(LogStageCraft, Warning, TEXT("Scene spawn: %s could not be spawned as %s; the item is left out."), *Item->GetName(), *ActorClass->GetName());
 		++Stats.NotInLibrary;
 		return;
 	}
 	Actor->RestoreSnapshotState(Snapshot);
+	// Play never begins in these worlds, so ApplyStageVisibility never runs: the saved flag is read here.
+	if (HiddenItems == EStageHiddenItems::Skip && Actor->IsHiddenOnStage())
+	{
+		Actor->Destroy();
+		++Stats.Hidden;
+		return;
+	}
 	Actor->InitializeFromItemData(Item);
 	Actor->FinishSpawning(Snapshot.Transform);
 	OutActors.Add(Actor);

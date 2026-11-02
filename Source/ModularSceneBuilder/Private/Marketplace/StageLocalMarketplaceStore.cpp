@@ -146,6 +146,36 @@ EStageMarketplaceResult FStageLocalMarketplaceStore::Publish(TConstArrayView<uin
 	return EStageMarketplaceResult::Success;
 }
 
+EStageMarketplaceResult FStageLocalMarketplaceStore::Remove(const FGuid& ListingId) const
+{
+	if (!ListingId.IsValid())
+	{
+		return EStageMarketplaceResult::InvalidRequest;
+	}
+	// Only the package this id names: a stray file under that name that holds another listing is left alone, as Query skips it.
+	const FString Path = GetPackagePath(ListingId);
+	TArray<uint8> Bytes;
+	FStagePackageManifest Manifest;
+	bool bHasThumbnail = false;
+	if (StageLocalMarketplace::LoadPackageFile(Path, Bytes) != EStageMarketplaceResult::Success
+		|| StagePackage::ReadManifest(Bytes, Manifest, bHasThumbnail) != EStageMarketplaceResult::Success || Manifest.PackageId != ListingId)
+	{
+		return EStageMarketplaceResult::NotFound;
+	}
+	if (!IFileManager::Get().Delete(*Path, /*RequireExists*/ true, /*EvenReadOnly*/ false, /*Quiet*/ true))
+	{
+		return EStageMarketplaceResult::WriteFailed;
+	}
+
+	TMap<FGuid, int64> Downloads = LoadDownloads();
+	if (Downloads.Remove(ListingId) > 0 && !SaveDownloads(Downloads))
+	{
+		// Popularity is a convenience; a leftover entry is matched by id and harmless.
+		UE_LOG(LogStageCraft, Warning, TEXT("Marketplace: could not update %s in %s."), StageLocalMarketplace::DownloadsFile, *Directory);
+	}
+	return EStageMarketplaceResult::Success;
+}
+
 int64 FStageLocalMarketplaceStore::GetDownloads(const FGuid& ListingId) const
 {
 	const int64* Count = LoadDownloads().Find(ListingId);

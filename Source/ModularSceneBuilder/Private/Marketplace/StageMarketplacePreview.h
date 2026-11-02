@@ -10,8 +10,19 @@
 struct FStageMarketplacePreviewStats
 {
 	int32 Placed = 0;
-	/** Items whose catalog entry this build does not have: counted, never spawned. */
+	/** Items whose catalog entry this build does not have (or whose actor could not be made): counted, never spawned. */
 	int32 NotInLibrary = 0;
+	/** Items hidden on stage by their owner, left out because the caller asked for EStageHiddenItems::Skip. */
+	int32 Hidden = 0;
+};
+
+/** Whether items hidden on stage (AModularBaseActor::IsHiddenOnStage) are spawned. */
+enum class EStageHiddenItems : uint8
+{
+	/** Spawned as saved (the marketplace preview shows the stage as its file has it). */
+	Spawn,
+	/** Counted in Hidden and not spawned: an export carries what the user sees (ADR 0022 §13). */
+	Skip,
 };
 
 namespace StageMarketplacePreview
@@ -23,11 +34,11 @@ namespace StageMarketplacePreview
 	 * in a GamePreview world without a renderer.
 	 */
 	FStageMarketplacePreviewStats SpawnScene(class UWorld& World, const FStageSceneDocument& Scene, const TMap<FSoftObjectPath, class UBaseItemData*>& Catalog,
-		TArray<TObjectPtr<class AActor>>& OutActors, FBox& OutBounds);
+		TArray<TObjectPtr<class AActor>>& OutActors, FBox& OutBounds, EStageHiddenItems HiddenItems = EStageHiddenItems::Spawn);
 
 	/** One item of SpawnScene, for callers that spread a scene over several frames (the export job). Adds to Stats. */
 	void SpawnItem(class UWorld& World, const FStageItemSnapshot& Snapshot, const TMap<FSoftObjectPath, class UBaseItemData*>& Catalog,
-		TArray<TObjectPtr<class AActor>>& OutActors, FBox& OutBounds, FStageMarketplacePreviewStats& Stats);
+		TArray<TObjectPtr<class AActor>>& OutActors, FBox& OutBounds, FStageMarketplacePreviewStats& Stats, EStageHiddenItems HiddenItems = EStageHiddenItems::Spawn);
 }
 
 /**

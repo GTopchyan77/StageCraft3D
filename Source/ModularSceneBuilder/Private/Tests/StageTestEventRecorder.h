@@ -35,6 +35,10 @@ public:
 	TArray<FStageEconomyResultInfo> ProductPurchases;
 	TArray<FTopUp> TopUps;
 	TArray<FAcquire> Acquires;
+	/** Marketplace publish, unpublish and library results (SceneName unused). */
+	TArray<FAcquire> Publishes;
+	TArray<FAcquire> Unpublishes;
+	TArray<FAcquire> LibraryChanges;
 	TArray<FStageOrderResultInfo> Orders;
 	TArray<FStageBridgeResultInfo> Sends;
 	TArray<FStageAIToolResultInfo> ToolJobs;
@@ -48,6 +52,12 @@ private:
 	void HandleTopUp(FGameplayTag Currency, int64 GrantedAmount, FStageEconomyResultInfo Result);
 	UFUNCTION()
 	void HandleAcquire(FGuid ListingId, FStageMarketplaceResultInfo Result, const FString& SceneName);
+	UFUNCTION()
+	void HandlePublish(FStageMarketplaceResultInfo Result, const FStageMarketplaceListing& Listing);
+	UFUNCTION()
+	void HandleUnpublish(FGuid ListingId, FStageMarketplaceResultInfo Result);
+	UFUNCTION()
+	void HandleLibraryChanged(FGuid ListingId, FStageMarketplaceResultInfo Result);
 	UFUNCTION()
 	void HandleOrder(const FStageOrderResultInfo& Result);
 	UFUNCTION()

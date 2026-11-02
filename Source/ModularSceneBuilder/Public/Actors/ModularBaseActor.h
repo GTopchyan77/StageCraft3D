@@ -125,6 +125,13 @@ public:
 	 */
 	void AssignInstanceId(const FGuid& RestoredId);
 
+	/**
+	 * Duplicate support (USpawnSystemComponent::DuplicateItem): called on a copy after the source's state was restored onto it and
+	 * before its item data is applied and it begins play. A subclass clears what must be unique per item (a fixture's ID and DMX
+	 * address), so registration gives the copy its own. The base keeps everything.
+	 */
+	virtual void PrepareAsDuplicate() {}
+
 	/** Captures id, catalog item, transform and the SaveGame properties, for restoring this item later. */
 	struct FStageItemSnapshot CaptureSnapshot() const;
 

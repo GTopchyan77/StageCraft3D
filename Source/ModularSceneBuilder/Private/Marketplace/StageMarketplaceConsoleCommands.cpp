@@ -97,6 +97,47 @@ namespace StageMarketplaceCommands
 		UE_LOG(LogStageCraft, Display, TEXT("StageCraft.Marketplace.Get %s: %s %s"), *Args[0], *UEnum::GetValueAsString(Result.Code), *Result.Message.ToString());
 	}
 
+	/** A listing id, or a number from Status. Invalid when neither. */
+	FGuid ParseListing(const UStageMarketplaceSubsystem& Marketplace, const FString& Arg)
+	{
+		FGuid ListingId;
+		if (!FGuid::Parse(Arg, ListingId))
+		{
+			const int32 Number = FCString::Atoi(*Arg);
+			if (Marketplace.GetListings().IsValidIndex(Number - 1))
+			{
+				ListingId = Marketplace.GetListings()[Number - 1].ListingId;
+			}
+		}
+		return ListingId;
+	}
+
+	/** <listing number from Status | id>: the panel's UNPUBLISH (ADR 0021 §15). */
+	void Unpublish(const TArray<FString>& Args, UWorld* World)
+	{
+		UStageMarketplaceSubsystem* Marketplace = GetMarketplace(World);
+		if (!Marketplace || Args.IsEmpty())
+		{
+			UE_LOG(LogStageCraft, Display, TEXT("Usage: StageCraft.Marketplace.Unpublish <listing number from Status | listing id>"));
+			return;
+		}
+		const FStageMarketplaceResultInfo Result = Marketplace->RequestUnpublish(ParseListing(*Marketplace, Args[0]));
+		UE_LOG(LogStageCraft, Display, TEXT("StageCraft.Marketplace.Unpublish %s: %s %s"), *Args[0], *UEnum::GetValueAsString(Result.Code), *Result.Message.ToString());
+	}
+
+	/** <listing number from Status | id>: the panel's REMOVE FROM LIBRARY (ADR 0021 §15). */
+	void RemoveFromLibrary(const TArray<FString>& Args, UWorld* World)
+	{
+		UStageMarketplaceSubsystem* Marketplace = GetMarketplace(World);
+		if (!Marketplace || Args.IsEmpty())
+		{
+			UE_LOG(LogStageCraft, Display, TEXT("Usage: StageCraft.Marketplace.RemoveFromLibrary <listing number from Status | listing id>"));
+			return;
+		}
+		const FStageMarketplaceResultInfo Result = Marketplace->RequestRemoveFromLibrary(ParseListing(*Marketplace, Args[0]));
+		UE_LOG(LogStageCraft, Display, TEXT("StageCraft.Marketplace.RemoveFromLibrary %s: %s %s"), *Args[0], *UEnum::GetValueAsString(Result.Code), *Result.Message.ToString());
+	}
+
 	/** <listing number from Status | id>: loads the read-only preview; an open Marketplace panel shows it (ADR 0021 §12.3). */
 	void Preview(const TArray<FString>& Args, UWorld* World)
 	{
@@ -261,6 +302,10 @@ namespace StageMarketplaceCommands
 	FAutoConsoleCommandWithWorldAndArgs OrderCommand(TEXT("StageCraft.Marketplace.Order"),
 		TEXT("<number | id> <open | glb <path> | app <client id | first> | tool <tool id>> Gets a listing and sends it to a target, like the acquire dialog."),
 		FConsoleCommandWithWorldAndArgsDelegate::CreateStatic(&Order));
+	FAutoConsoleCommandWithWorldAndArgs UnpublishCommand(TEXT("StageCraft.Marketplace.Unpublish"), TEXT("<number | id> Unpublishes a listing published from this install."),
+		FConsoleCommandWithWorldAndArgsDelegate::CreateStatic(&Unpublish));
+	FAutoConsoleCommandWithWorldAndArgs RemoveFromLibraryCommand(TEXT("StageCraft.Marketplace.RemoveFromLibrary"), TEXT("<number | id> Deletes the library copy of an acquired listing (ownership stays)."),
+		FConsoleCommandWithWorldAndArgsDelegate::CreateStatic(&RemoveFromLibrary));
 	FAutoConsoleCommandWithWorldAndArgs DialogCommand(TEXT("StageCraft.Marketplace.Dialog"), TEXT("<number | id> Opens the acquire dialog in an open Marketplace panel."),
 		FConsoleCommandWithWorldAndArgsDelegate::CreateStatic(&Dialog));
 }

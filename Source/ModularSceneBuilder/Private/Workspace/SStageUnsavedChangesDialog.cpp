@@ -30,7 +30,10 @@ void SStageUnsavedChangesDialog::Construct(const FArguments& InArgs)
 	OnCancel = InArgs._OnCancel;
 
 	const bool bUntitled = SceneName.IsEmpty();
-	const FText Message = bUntitled
+	const bool bClosing = InArgs._Purpose == EStageSavePromptPurpose::CloseApp;
+	const FText Message = !bClosing
+		? LOCTEXT("NameMessage", "This stage has never been saved. Give it a name to save it.")
+		: bUntitled
 		? LOCTEXT("UntitledMessage", "This stage has never been saved. Name it to save it, or close without saving.")
 		: FText::Format(LOCTEXT("NamedMessage", "\"{0}\" has unsaved changes."), FText::FromString(SceneName));
 
@@ -39,7 +42,7 @@ void SStageUnsavedChangesDialog::Construct(const FArguments& InArgs)
 		.AutoHeight()
 		[
 			SNew(STextBlock)
-			.Text(LOCTEXT("Title", "Save changes before closing?"))
+			.Text(bClosing ? LOCTEXT("Title", "Save changes before closing?") : LOCTEXT("NameTitle", "Save Stage"))
 			.Font(FAppStyle::GetFontStyle("HeadingExtraSmall"))
 		]
 		+ SVerticalBox::Slot()
@@ -84,6 +87,7 @@ void SStageUnsavedChangesDialog::Construct(const FArguments& InArgs)
 			.Padding(ButtonGap, 0.f, 0.f, 0.f)
 			[
 				SNew(SButton)
+				.Visibility(bClosing ? EVisibility::Visible : EVisibility::Collapsed)
 				.Text(LOCTEXT("Discard", "Don't Save"))
 				.ToolTipText(LOCTEXT("DiscardTip", "Close StageCraft and lose the unsaved changes."))
 				.IsEnabled(this, &SStageUnsavedChangesDialog::AreButtonsEnabled)
@@ -95,7 +99,7 @@ void SStageUnsavedChangesDialog::Construct(const FArguments& InArgs)
 			[
 				SNew(SButton)
 				.Text(LOCTEXT("Cancel", "Cancel"))
-				.ToolTipText(LOCTEXT("CancelTip", "Keep StageCraft open."))
+				.ToolTipText(bClosing ? LOCTEXT("CancelTip", "Keep StageCraft open.") : LOCTEXT("CancelNameTip", "Do not save now."))
 				.IsEnabled(this, &SStageUnsavedChangesDialog::AreButtonsEnabled)
 				.OnClicked(this, &SStageUnsavedChangesDialog::HandleCancel)
 			]

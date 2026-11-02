@@ -116,12 +116,14 @@ void SStageWorkspaceMenuBar::FillFileMenu(FMenuBuilder& MenuBuilder)
 		? (Session->IsDirty() ? LOCTEXT("UntitledDirty", "Untitled stage  (unsaved)") : LOCTEXT("Untitled", "Untitled stage"))
 		: FText::Format(Session->IsDirty() ? LOCTEXT("SceneDirty", "{0}  (unsaved changes)") : LOCTEXT("SceneClean", "{0}"), FText::FromString(CurrentScene));
 	MenuBuilder.BeginSection(TEXT("Scene"), Heading);
+	// The same request as Ctrl+S: a named stage saves under its name, an untitled one asks for a name.
 	MenuBuilder.AddMenuEntry(
-		CurrentScene.IsEmpty() ? LOCTEXT("SaveScene", "Save Scene") : FText::Format(LOCTEXT("SaveSceneNamed", "Save \"{0}\""), FText::FromString(CurrentScene)),
-		LOCTEXT("SaveSceneTip", "Write the stage to its scene file. A stage that was never saved needs Save Scene As first."), FSlateIcon(),
+		StageWorkspaceMenuBar::WithKeys(CurrentScene.IsEmpty() ? LOCTEXT("SaveSceneEllipsis", "Save Scene...") : FText::Format(LOCTEXT("SaveSceneNamed", "Save \"{0}\""), FText::FromString(CurrentScene)),
+			StageWorkspaceMenuBar::GetKeys(*WeakController), EStageInputCommand::Save),
+		LOCTEXT("SaveSceneTipQuick", "Write the stage to its scene file. A stage that was never saved asks for a name first."), FSlateIcon(),
 		FUIAction(
-			FExecuteAction::CreateLambda([WeakController, CurrentScene]() { if (WeakController.IsValid()) { WeakController->RequestSaveScene(CurrentScene); } }),
-			FCanExecuteAction::CreateLambda([bCanSave = !CurrentScene.IsEmpty() && !bBusy]() { return bCanSave; })));
+			FExecuteAction::CreateLambda([WeakController]() { if (WeakController.IsValid()) { WeakController->RequestQuickSave(); } }),
+			FCanExecuteAction::CreateLambda([bCanSave = !bBusy]() { return bCanSave; })));
 	MenuBuilder.AddSubMenu(LOCTEXT("SaveSceneAs", "Save Scene As..."),
 		LOCTEXT("SaveSceneAsTip", "Save every placed item (position, rotation, scale, settings) under a name."),
 		FNewMenuDelegate::CreateSP(this, &SStageWorkspaceMenuBar::FillSaveSceneAsMenu));
@@ -530,6 +532,13 @@ void SStageWorkspaceMenuBar::FillSelectionSection(FMenuBuilder& MenuBuilder, con
 					Target->ClearSelection();
 				}
 			}),
+			FCanExecuteAction::CreateLambda([SelectedCount]() { return SelectedCount > 0; })));
+	MenuBuilder.AddMenuEntry(
+		WithKeys(SelectedCount > 1 ? FText::Format(LOCTEXT("DuplicateSelectedN", "Duplicate {0} Selected Items"), FText::AsNumber(SelectedCount))
+			: LOCTEXT("DuplicateSelected", "Duplicate Selected"), Keys, EStageInputCommand::Duplicate),
+		LOCTEXT("DuplicateSelectedTip", "Copy the selected items one grid step to the side as one step; Undo removes the copies."), FSlateIcon(),
+		FUIAction(
+			FExecuteAction::CreateLambda([WeakController]() { if (WeakController.IsValid()) { WeakController->RequestDuplicateSelection(); } }),
 			FCanExecuteAction::CreateLambda([SelectedCount]() { return SelectedCount > 0; })));
 	MenuBuilder.AddMenuEntry(
 		WithKeys(SelectedCount > 1 ? FText::Format(LOCTEXT("DeleteSelectedN", "Delete {0} Selected Items"), FText::AsNumber(SelectedCount))

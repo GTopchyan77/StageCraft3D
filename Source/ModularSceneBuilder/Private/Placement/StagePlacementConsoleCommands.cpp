@@ -123,6 +123,23 @@ namespace StagePlacementCommands
 		}
 	}
 
+	void Duplicate(const TArray<FString>& Args, UWorld* World)
+	{
+		if (AModularPlayerController* Controller = GetController(World))
+		{
+			const int32 Copies = Controller->RequestDuplicateSelection();
+			UE_LOG(LogStageCraft, Display, TEXT("StageCraft.Edit.Duplicate: %d copies placed and selected."), Copies);
+		}
+	}
+
+	void QuickSave(const TArray<FString>& Args, UWorld* World)
+	{
+		if (AModularPlayerController* Controller = GetController(World))
+		{
+			UE_LOG(LogStageCraft, Display, TEXT("StageCraft.Edit.Save: %s."), *UEnum::GetValueAsString(Controller->RequestQuickSave()));
+		}
+	}
+
 	void ClearStage(const TArray<FString>& Args, UWorld* World)
 	{
 		AModularPlayerController* Controller = GetController(World);
@@ -536,6 +553,10 @@ namespace StagePlacementCommands
 		FConsoleCommandWithWorldAndArgsDelegate::CreateStatic(&ListItems));
 	FAutoConsoleCommandWithWorldAndArgs SelectAllCommand(TEXT("StageCraft.Edit.SelectAll"), TEXT("Same as Edit > Select All."),
 		FConsoleCommandWithWorldAndArgsDelegate::CreateStatic(&SelectAll));
+	FAutoConsoleCommandWithWorldAndArgs DuplicateCommand(TEXT("StageCraft.Edit.Duplicate"), TEXT("Same as Edit > Duplicate Selected (Ctrl+D): one undoable step."),
+		FConsoleCommandWithWorldAndArgsDelegate::CreateStatic(&Duplicate));
+	FAutoConsoleCommandWithWorldAndArgs QuickSaveCommand(TEXT("StageCraft.Edit.Save"), TEXT("Same as Ctrl+S: saves under the stage's name, or asks for one."),
+		FConsoleCommandWithWorldAndArgsDelegate::CreateStatic(&QuickSave));
 	FAutoConsoleCommandWithWorldAndArgs ClearStageCommand(TEXT("StageCraft.Edit.ClearStage"), TEXT("confirm  Same as Edit > Clear Stage (one undoable step)."),
 		FConsoleCommandWithWorldAndArgsDelegate::CreateStatic(&ClearStage));
 	FAutoConsoleCommandWithWorldAndArgs HoldCommand(TEXT("StageCraft.Edit.Hold"), TEXT("[Frames=60] Holds the left button at the simulated cursor, then releases."),

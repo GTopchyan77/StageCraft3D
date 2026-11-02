@@ -51,6 +51,30 @@ struct FStageSceneExportTimings
 	FString ToString() const;
 };
 
+/** What one spawned actor contributes to the file (FStageSceneExporter::InspectActor). */
+struct FStageActorExportContent
+{
+	bool bHasGeometry = false;
+	int32 Lights = 0;
+};
+
+/** Everything an export counts, for its result and message (ADR 0022 §13). */
+struct FStageSceneExportCounts
+{
+	/** Items spawned and written to the file. */
+	int32 Exported = 0;
+	/** Not owned, not in this Library, or broken content (no actor class): never spawned. */
+	int32 NotInLibrary = 0;
+	/** Hidden on stage by the user. */
+	int32 Hidden = 0;
+	/** Damaged entries of the scene file, dropped when it was read. */
+	int32 InvalidInFile = 0;
+	/** Exported items that produced no geometry. */
+	int32 WithoutGeometry = 0;
+	/** Lights written (fixture beams). */
+	int32 Lights = 0;
+};
+
 class FStageSceneExporter
 {
 public:
@@ -65,9 +89,21 @@ public:
 	 */
 	static int32 ConvertProceduralMeshes(class AActor& Actor);
 
-	/** Steps 3-6 for a scene already read (tests and the saved-scene path). Needs a renderer; without one, Unavailable. */
+	/**
+	 * What Actor will put into the file, judged as the glTF exporter will: visible, not hidden in game, static meshes with a mesh
+	 * (instanced ones with instances) and lights. Run after ConvertProceduralMeshes, whose copies count as geometry.
+	 */
+	static FStageActorExportContent InspectActor(const class AActor& Actor);
+
+	/** Adds Actor's lights to Counts, and counts and logs it when it produced no geometry. Shared by both export paths. */
+	static void AddActorContent(const class AActor& Actor, FStageSceneExportCounts& Counts);
+
+	/**
+	 * Steps 3-6 for a scene already read (tests and the saved-scene path). Needs a renderer; without one, Unavailable.
+	 * InvalidItemsInFile is the parse report's count of entries dropped when the file was read, so the result can name them.
+	 */
 	static FStageBridgeResultInfo ExportDocument(const FStageSceneDocument& Scene, const TMap<FSoftObjectPath, class UBaseItemData*>& Catalog, const FString& Path,
-		FStageSceneExportTimings* OutTimings = nullptr);
+		FStageSceneExportTimings* OutTimings = nullptr, int32 InvalidItemsInFile = 0);
 
 	/**
 	 * Steps 1-6: the scene SceneName saved in Scenes, for the profile and library of GameInstance, to Path (absolute, ending in
@@ -89,9 +125,12 @@ public:
 	static FStageBridgeResultInfo DescribeNothingToExport(const FString& SceneName);
 	static FStageBridgeResultInfo DescribeExportFailed(const FString& SceneName, const TArray<FString>& Errors);
 	static FStageBridgeResultInfo DescribeWriteFailed(const FString& Path);
-	static FStageBridgeResultInfo DescribeExported(const FString& SceneName, int32 Placed, int32 NotInLibrary, const FString& Path);
+	/** Success with every count of Counts, and a message naming each thing left out (ADR 0022 §13). */
+	static FStageBridgeResultInfo DescribeExported(const FString& SceneName, const FStageSceneExportCounts& Counts, const FString& Path);
+	/** " Left out: 2 hidden on stage, 1 not owned or not in your Library." for the counts in Result; empty when nothing was left out. */
+	static FText DescribeLeftOut(const FStageBridgeResultInfo& Result);
 
-	/** The glTF options: geometry only (ADR 0022 §1). A transient object; use it within the frame. */
+	/** The glTF options: geometry and fixture lights (ADR 0022 §2, §13). A transient object; use it within the frame. */
 	static class UGLTFExportOptions* MakeExportOptions();
 	/** Logs the engine exporter's errors and warnings, capped. */
 	static void LogExportMessages(const struct FGLTFExportMessages& Messages);

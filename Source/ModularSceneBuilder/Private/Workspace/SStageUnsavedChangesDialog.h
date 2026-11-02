@@ -4,6 +4,7 @@
 
 #include "CoreMinimal.h"
 #include "Widgets/SCompoundWidget.h"
+#include "Workspace/StageWorkspaceSubsystem.h"
 
 DECLARE_DELEGATE_OneParam(FOnStageDialogSave, const FString& /*SceneName*/);
 
@@ -21,6 +22,8 @@ public:
 	SLATE_BEGIN_ARGS(SStageUnsavedChangesDialog) {}
 		/** The stage's scene name; empty for a stage that was never saved (a name field is shown). */
 		SLATE_ARGUMENT(FString, SceneName)
+		/** CloseApp: the exit prompt. NameAndSave: Ctrl+S on a new stage (no Don't Save; the app stays open). */
+		SLATE_ARGUMENT_DEFAULT(EStageSavePromptPurpose, Purpose) = EStageSavePromptPurpose::CloseApp;
 		SLATE_EVENT(FOnStageDialogSave, OnSave)
 		SLATE_EVENT(FSimpleDelegate, OnDiscard)
 		SLATE_EVENT(FSimpleDelegate, OnCancel)

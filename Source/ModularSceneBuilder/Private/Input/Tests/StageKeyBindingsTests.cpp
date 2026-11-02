@@ -65,6 +65,9 @@ bool FStageKeyBindingRulesTest::RunTest(const FString& Parameters)
 		TestFalse(TEXT("Lookup: Shift+P is not Place mode"), Defaults.FindCommand(FStageKeyChord(EKeys::P, false, true)).IsSet());
 		TestTrue(TEXT("Lookup: W is the Move tool (flying is not a key-press command)"), Defaults.FindCommand(Plain(EKeys::W)) == TOptional<C>(C::MoveTool));
 		TestFalse(TEXT("Lookup: S is nothing outside flying"), Defaults.FindCommand(Plain(EKeys::S)).IsSet());
+		TestTrue(TEXT("Lookup: Ctrl+S is Save"), Defaults.FindCommand(Ctrl(EKeys::S)) == TOptional<C>(C::Save));
+		TestTrue(TEXT("Lookup: Ctrl+D is Duplicate"), Defaults.FindCommand(Ctrl(EKeys::D)) == TOptional<C>(C::Duplicate));
+		TestFalse(TEXT("Lookup: D is nothing outside flying"), Defaults.FindCommand(Plain(EKeys::D)).IsSet());
 		TestFalse(TEXT("Lookup: an unset chord is nothing"), Defaults.FindCommand(FStageKeyChord()).IsSet());
 		TestTrue(TEXT("Lookup: Alt+J is the top view"), Defaults.FindCommand(FStageKeyChord(EKeys::J, false, false, true)) == TOptional<C>(C::ViewTop));
 	}

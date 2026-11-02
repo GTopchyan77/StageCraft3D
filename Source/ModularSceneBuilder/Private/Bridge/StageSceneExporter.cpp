@@ -2,6 +2,9 @@
 
 #include "Bridge/StageSceneExporter.h"
 
+#include "Actors/ModularBaseActor.h"
+#include "Components/InstancedStaticMeshComponent.h"
+#include "Components/LightComponent.h"
 #include "Components/StaticMeshComponent.h"
 #include "Data/BaseItemData.h"
 #include "Engine/Engine.h"
@@ -52,11 +55,14 @@ namespace StageSceneExporterImpl
 		}
 	}
 
-	/** Geometry only: lights would arrive in other apps at unrelated intensities, and material baking needs the editor (ADR 0022 §1). */
+	/**
+	 * Geometry and the fixtures' lights (KHR_lights_punctual; ADR 0022 §2 as amended in §13). Gobos and light functions have no glTF
+	 * form and stay behind. Material baking needs the editor (ADR 0022 §1).
+	 */
 	UGLTFExportOptions* MakeOptions()
 	{
 		UGLTFExportOptions* Options = NewObject<UGLTFExportOptions>(GetTransientPackage(), NAME_None, RF_Transient);
-		Options->bExportLights = false;
+		Options->bExportLights = true;
 		Options->bExportCameras = false;
 		Options->bExportHiddenInGame = false;
 		Options->bExportLevelSequences = false;
@@ -94,6 +100,51 @@ TMap<FSoftObjectPath, UBaseItemData*> FStageSceneExporter::CollectExportableItem
 		}
 	}
 	return Catalog;
+}
+
+FStageActorExportContent FStageSceneExporter::InspectActor(const AActor& Actor)
+{
+	FStageActorExportContent Content;
+	// The glTF exporter's own filter (FGLTFComponentConverter): only components hidden in game, or a hidden owner, are left out.
+	if (Actor.IsHidden())
+	{
+		return Content;
+	}
+	TInlineComponentArray<USceneComponent*> Components(&Actor);
+	for (const USceneComponent* Component : Components)
+	{
+		if (!Component || Component->bHiddenInGame)
+		{
+			continue;
+		}
+		if (const UInstancedStaticMeshComponent* Instanced = Cast<UInstancedStaticMeshComponent>(Component))
+		{
+			Content.bHasGeometry |= Instanced->GetStaticMesh() != nullptr && Instanced->GetInstanceCount() > 0;
+		}
+		else if (const UStaticMeshComponent* Mesh = Cast<UStaticMeshComponent>(Component))
+		{
+			Content.bHasGeometry |= Mesh->GetStaticMesh() != nullptr;
+		}
+		else if (Component->IsA<ULightComponent>())
+		{
+			++Content.Lights;
+		}
+	}
+	return Content;
+}
+
+void FStageSceneExporter::AddActorContent(const AActor& Actor, FStageSceneExportCounts& Counts)
+{
+	const FStageActorExportContent Content = InspectActor(Actor);
+	Counts.Lights += Content.Lights;
+	if (!Content.bHasGeometry)
+	{
+		// Kept in the file (its lights may still count), but named: a part that did not load is a content problem to fix.
+		++Counts.WithoutGeometry;
+		const AModularBaseActor* Item = Cast<AModularBaseActor>(&Actor);
+		const UBaseItemData* Data = Item ? Item->GetItemData() : nullptr;
+		UE_LOG(LogStageCraft, Warning, TEXT("Scene export: %s (%s) produced no geometry."), *Actor.GetName(), *GetNameSafe(Data));
+	}
 }
 
 int32 FStageSceneExporter::ConvertProceduralMeshes(AActor& Actor)
@@ -219,17 +270,44 @@ FStageBridgeResultInfo FStageSceneExporter::DescribeWriteFailed(const FString& P
 	return FStageBridgeResultInfo::Fail(EStageBridgeResult::WriteFailed, FText::Format(LOCTEXT("WriteFailed", "Could not write {0}."), FText::FromString(Path)));
 }
 
-FStageBridgeResultInfo FStageSceneExporter::DescribeExported(const FString& SceneName, int32 Placed, int32 NotInLibrary, const FString& Path)
+FStageBridgeResultInfo FStageSceneExporter::DescribeExported(const FString& SceneName, const FStageSceneExportCounts& Counts, const FString& Path)
 {
 	FStageBridgeResultInfo Result;
-	Result.Message = NotInLibrary > 0
-		? FText::Format(LOCTEXT("ExportedSkipped", "Exported \"{0}\": {1} items ({2} left out: not in your Library or not owned)."), FText::FromString(SceneName), FText::AsNumber(Placed), FText::AsNumber(NotInLibrary))
-		: FText::Format(LOCTEXT("Exported", "Exported \"{0}\": {1} items."), FText::FromString(SceneName), FText::AsNumber(Placed));
 	Result.SceneName = SceneName;
 	Result.FilePath = Path;
-	Result.ExportedItems = Placed;
-	Result.SkippedItems = NotInLibrary;
+	Result.ExportedItems = Counts.Exported;
+	Result.SkippedItems = Counts.NotInLibrary;
+	Result.HiddenItems = Counts.Hidden;
+	Result.InvalidItems = Counts.InvalidInFile;
+	Result.ItemsWithoutGeometry = Counts.WithoutGeometry;
+	Result.ExportedLights = Counts.Lights;
+
+	const FText Exported = Counts.Lights > 0
+		? FText::Format(LOCTEXT("ExportedWithLights", "Exported \"{0}\": {1} items and {2} lights."), FText::FromString(SceneName), FText::AsNumber(Counts.Exported), FText::AsNumber(Counts.Lights))
+		: FText::Format(LOCTEXT("Exported", "Exported \"{0}\": {1} items."), FText::FromString(SceneName), FText::AsNumber(Counts.Exported));
+	const FText NoGeometry = Counts.WithoutGeometry > 0
+		? FText::Format(LOCTEXT("NoGeometry", " {0} of them have no geometry (a part that did not load; see the log)."), FText::AsNumber(Counts.WithoutGeometry))
+		: FText::GetEmpty();
+	Result.Message = FText::Format(LOCTEXT("ExportedSummary", "{0}{1}{2}"), Exported, DescribeLeftOut(Result), NoGeometry);
 	return Result;
+}
+
+FText FStageSceneExporter::DescribeLeftOut(const FStageBridgeResultInfo& Result)
+{
+	TArray<FText> Parts;
+	if (Result.HiddenItems > 0)
+	{
+		Parts.Add(FText::Format(LOCTEXT("LeftOutHidden", "{0} hidden on stage"), FText::AsNumber(Result.HiddenItems)));
+	}
+	if (Result.SkippedItems > 0)
+	{
+		Parts.Add(FText::Format(LOCTEXT("LeftOutNotOwned", "{0} not owned or not in your Library"), FText::AsNumber(Result.SkippedItems)));
+	}
+	if (Result.InvalidItems > 0)
+	{
+		Parts.Add(FText::Format(LOCTEXT("LeftOutDamaged", "{0} damaged in the scene file"), FText::AsNumber(Result.InvalidItems)));
+	}
+	return Parts.IsEmpty() ? FText::GetEmpty() : FText::Format(LOCTEXT("LeftOut", " Left out: {0}."), FText::Join(LOCTEXT("LeftOutSeparator", ", "), Parts));
 }
 
 UGLTFExportOptions* FStageSceneExporter::MakeExportOptions()
@@ -290,7 +368,7 @@ FString FStageSceneExporter::GetTempPath(const FString& Path)
 // --- The synchronous export (tests, and the measured baseline of StageCraft.Bench.Export) ---
 
 FStageBridgeResultInfo FStageSceneExporter::ExportDocument(const FStageSceneDocument& Scene, const TMap<FSoftObjectPath, UBaseItemData*>& Catalog, const FString& Path,
-	FStageSceneExportTimings* OutTimings)
+	FStageSceneExportTimings* OutTimings, int32 InvalidItemsInFile)
 {
 	using namespace StageSceneExporterImpl;
 	TRACE_CPUPROFILER_EVENT_SCOPE(StageSceneExport_Document);
@@ -324,7 +402,7 @@ FStageBridgeResultInfo FStageSceneExporter::ExportDocument(const FStageSceneDocu
 	{
 		TRACE_CPUPROFILER_EVENT_SCOPE(StageSceneExport_Spawn);
 		FPhaseTimer Phase(Timings.SpawnMs);
-		Stats = StageMarketplacePreview::SpawnScene(*World, Scene, Catalog, Actors, Bounds);
+		Stats = StageMarketplacePreview::SpawnScene(*World, Scene, Catalog, Actors, Bounds, EStageHiddenItems::Skip);
 	}
 	if (Stats.Placed == 0)
 	{
@@ -333,6 +411,7 @@ FStageBridgeResultInfo FStageSceneExporter::ExportDocument(const FStageSceneDocu
 
 	int32 Converted = 0;
 	TSet<AActor*> Selected;
+	FStageSceneExportCounts Counts;
 	{
 		TRACE_CPUPROFILER_EVENT_SCOPE(StageSceneExport_Convert);
 		FPhaseTimer Phase(Timings.ConvertMs);
@@ -340,8 +419,13 @@ FStageBridgeResultInfo FStageSceneExporter::ExportDocument(const FStageSceneDocu
 		{
 			Converted += ConvertProceduralMeshes(*Actor);
 			Selected.Add(Actor);
+			AddActorContent(*Actor, Counts);
 		}
 	}
+	Counts.Exported = Stats.Placed;
+	Counts.NotInLibrary = Stats.NotInLibrary;
+	Counts.Hidden = Stats.Hidden;
+	Counts.InvalidInFile = InvalidItemsInFile;
 
 	IFileManager::Get().MakeDirectory(*FPaths::GetPath(Path), /*Tree*/ true);
 	const FString TempPath = GetTempPath(Path);
@@ -371,9 +455,9 @@ FStageBridgeResultInfo FStageSceneExporter::ExportDocument(const FStageSceneDocu
 	}
 
 	// Teardown runs after this line (scope exit) and is not in this total.
-	UE_LOG(LogStageCraft, Log, TEXT("Scene export: \"%s\" -> %s: %d items (%d procedural parts converted, %d left out), %lld bytes; %s."),
-		*Scene.Name, *Path, Stats.Placed, Converted, Stats.NotInLibrary, Bytes, *Timings.ToString());
-	return DescribeExported(Scene.Name, Stats.Placed, Stats.NotInLibrary, Path);
+	UE_LOG(LogStageCraft, Log, TEXT("Scene export: \"%s\" -> %s: %d items, %d lights (%d procedural parts converted; left out: %d unavailable, %d hidden, %d damaged), %lld bytes; %s."),
+		*Scene.Name, *Path, Counts.Exported, Counts.Lights, Converted, Counts.NotInLibrary, Counts.Hidden, Counts.InvalidInFile, Bytes, *Timings.ToString());
+	return DescribeExported(Scene.Name, Counts, Path);
 }
 
 FStageBridgeResultInfo FStageSceneExporter::ExportSavedScene(UGameInstance& GameInstance, const FStageSceneStore& Scenes, const FString& SceneName, const FString& Path,
@@ -423,7 +507,7 @@ FStageBridgeResultInfo FStageSceneExporter::ExportSavedScene(UGameInstance& Game
 		return FStageBridgeResultInfo::Fail(EStageBridgeResult::Unavailable, LOCTEXT("Unavailable", "The item Library is not available."));
 	}
 
-	FStageBridgeResultInfo Result = ExportDocument(Scene, CollectExportableItems(*Items, *Profile), Path, &Timings);
+	FStageBridgeResultInfo Result = ExportDocument(Scene, CollectExportableItems(*Items, *Profile), Path, &Timings, Report.InvalidItems);
 	Result.SceneName = SceneName;
 	return Result;
 }

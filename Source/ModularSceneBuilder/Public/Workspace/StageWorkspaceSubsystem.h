@@ -21,6 +21,15 @@ enum class EStageExitChoice : uint8
 	Cancel,
 };
 
+/** Why the save prompt (SStageUnsavedChangesDialog) is showing, which decides its wording, its buttons and what a save leads to. */
+enum class EStageSavePromptPurpose : uint8
+{
+	/** "Save changes before closing?": Save, Don't Save, Cancel; a save closes the app once written. */
+	CloseApp,
+	/** Ctrl+S on a stage that was never saved (ADR 0013 addendum): a name, Save, Cancel; the app stays open. */
+	NameAndSave,
+};
+
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_ThreeParams(FOnStagePanelHostChanged, FGameplayTag, PanelTag, EStagePanelHost, NewHost, EStagePanelHost, PreviousHost);
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FOnStageLayoutApplied, const FString&, LayoutName);
 DECLARE_DYNAMIC_MULTICAST_DELEGATE(FOnStageLayoutsChanged);
@@ -155,7 +164,16 @@ public:
 #endif
 
 	/** Whether "Save changes before closing?" is showing (or saving before it quits). */
-	bool IsExitPromptOpen() const { return ExitPromptState != EExitPromptState::Closed; }
+	bool IsExitPromptOpen() const { return ExitPromptState != EExitPromptState::Closed && PromptPurpose == EStageSavePromptPurpose::CloseApp; }
+
+	/** Whether any save prompt is showing (the exit prompt, or Ctrl+S naming a new stage). Shortcuts stand aside meanwhile. */
+	bool IsSavePromptOpen() const { return ExitPromptState != EExitPromptState::Closed; }
+
+	/**
+	 * Ctrl+S on a stage that was never saved: asks for a name over the workspace and saves under it; the app stays open.
+	 * False (nothing shown) without the workspace or while a prompt is already open; the caller then reports how to save instead.
+	 */
+	bool ShowNameAndSavePrompt();
 
 	/**
 	 * Answers the open exit prompt, exactly as its buttons do. SceneName is the name to save an untitled stage under; it is
@@ -198,6 +216,8 @@ private:
 	 */
 	bool ConfirmMainWindowClose();
 	void ShowExitPrompt(const FString& SceneName);
+	/** Shows the save prompt for Purpose; the exit prompt and Ctrl+S's naming prompt share its state, answers and save handling. */
+	void ShowSavePrompt(const FString& SceneName, EStageSavePromptPurpose Purpose);
 	void CloseExitPrompt();
 
 	UFUNCTION()
@@ -213,6 +233,8 @@ private:
 	};
 
 	EExitPromptState ExitPromptState = EExitPromptState::Closed;
+	/** What the open prompt is for; meaningful only while ExitPromptState is not Closed. */
+	EStageSavePromptPurpose PromptPurpose = EStageSavePromptPurpose::CloseApp;
 
 	TSharedPtr<class SStageUnsavedChangesDialog> ExitDialog;
 

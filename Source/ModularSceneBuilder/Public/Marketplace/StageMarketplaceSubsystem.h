@@ -15,6 +15,8 @@
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FOnStageMarketplaceListingsUpdated, FStageMarketplaceResultInfo, Result);
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_ThreeParams(FOnStageMarketplaceAcquireCompleted, FGuid, ListingId, FStageMarketplaceResultInfo, Result, const FString&, SceneName);
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_TwoParams(FOnStageMarketplacePublishCompleted, FStageMarketplaceResultInfo, Result, const FStageMarketplaceListing&, Listing);
+DECLARE_DYNAMIC_MULTICAST_DELEGATE_TwoParams(FOnStageMarketplaceUnpublishCompleted, FGuid, ListingId, FStageMarketplaceResultInfo, Result);
+DECLARE_DYNAMIC_MULTICAST_DELEGATE_TwoParams(FOnStageMarketplaceLibraryChanged, FGuid, ListingId, FStageMarketplaceResultInfo, Result);
 
 using FStageMarketplacePreviewScene = TSharedPtr<const FStageSceneDocument, ESPMode::ThreadSafe>;
 /** Native (C++ views only): the verified scene of a previewed listing, or null with a failure. */
@@ -106,6 +108,40 @@ public:
 	UFUNCTION(BlueprintPure, Category = "StageCraft|Marketplace")
 	bool IsPublishing() const { return bPublishing; }
 
+	// --- Removing what was put in (Docs/ADR/0021-community-marketplace.md §15) ---
+
+	/**
+	 * Takes a listing this install published out of the marketplace. NotYours for any other listing (the local publish record
+	 * decides: a folder has no accounts), Busy while another unpublish runs, InUse while it is being acquired here. People who
+	 * already got it keep their copy. Completion arrives on OnUnpublishCompleted; the listings are queried again after a success.
+	 * Prefer AModularPlayerController's request from UI.
+	 */
+	FStageMarketplaceResultInfo RequestUnpublish(FGuid ListingId);
+
+	/** Whether this install published ListingId (its local publish record). Memory only. */
+	bool IsPublishedByMe(const FGuid& ListingId) const { return PublishedByMe.Contains(ListingId); }
+
+	/**
+	 * Deletes the library copy of an acquired listing (Marketplace/Library/<id>.stage). Ownership and purchase history stay
+	 * (they are the economy's; a paid listing can be got again for free while it is published). Scenes imported from it stay too,
+	 * but cannot be exported until the listing is got again (ADR 0022 §11.1). NotFound without a copy, InUse while it is being
+	 * acquired or ordered. Completion arrives on OnLibraryChanged.
+	 */
+	FStageMarketplaceResultInfo RequestRemoveFromLibrary(FGuid ListingId);
+
+	/** Whether the library holds a copy of ListingId. Memory only (kept in step with imports and removals). */
+	bool HasLibraryCopy(const FGuid& ListingId) const { return LibraryListings.Contains(ListingId); }
+
+	/** Where this install records the listings it published (Saved/StageCraft/Marketplace/Published.json). */
+	static FString GetPublishRecordPath();
+
+	UPROPERTY(BlueprintAssignable, Category = "StageCraft|Marketplace")
+	FOnStageMarketplaceUnpublishCompleted OnUnpublishCompleted;
+
+	/** A library copy was added (acquire) or removed. */
+	UPROPERTY(BlueprintAssignable, Category = "StageCraft|Marketplace")
+	FOnStageMarketplaceLibraryChanged OnLibraryChanged;
+
 	/** User-facing name of the backend ("Community folder"). */
 	UFUNCTION(BlueprintPure, Category = "StageCraft|Marketplace")
 	FText GetBackendName() const;
@@ -170,6 +206,20 @@ private:
 	void HandlePackageBuilt(EStageMarketplaceResult Result, const FStageMarketplacePackageBytes& Bytes);
 	void HandlePublished(EStageMarketplaceResult Result, const FStageMarketplaceListing& Listing);
 	void FinishPublish(const FStageMarketplaceResultInfo& Result, const FStageMarketplaceListing& Listing);
+
+	void HandleUnpublished(EStageMarketplaceResult Result, FGuid ListingId);
+	void FinishRemoveFromLibrary(const FGuid& ListingId, EStageMarketplaceResult Result);
+
+	/** Reads the publish record and lists the library at start: one small file and one folder listing. */
+	void LoadLocalRecords();
+	/** Writes the publish record on the work pipe (after the writes before it). */
+	void SavePublishRecord();
+
+	/** Listings this install published (ADR 0021 §15). Loaded at Initialize, saved after each publish and unpublish. */
+	TSet<FGuid> PublishedByMe;
+	/** Listings with a copy in the library. Filled at Initialize, kept in step with imports and removals. */
+	TSet<FGuid> LibraryListings;
+	bool bUnpublishing = false;
 
 	class UStageEconomySubsystem* GetEconomy() const;
 	class UStageProfileSubsystem* GetProfile() const;

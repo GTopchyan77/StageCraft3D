@@ -80,6 +80,13 @@ public:
 	int32 DeleteItems(const TArray<AActor*>& Targets);
 
 	/**
+	 * Copies every stage item in Sources, moved by Offset, as ONE undoable step ("Duplicate 3 items"): undo removes the copies,
+	 * redo places them again. Each copy is a new item through USpawnSystemComponent::DuplicateItem, so the placement rules decide;
+	 * refused copies are left out and counted in OutRefused. Returns the copies placed, in the order of Sources.
+	 */
+	TArray<class AModularBaseActor*> DuplicateItems(const TArray<AActor*>& Sources, const FVector& Offset, int32& OutRefused);
+
+	/**
 	 * Removes every placed item from the stage as one undoable step ("Clear Stage (12 items)"). Callers confirm
 	 * with the user first (the Edit menu's Clear Stage asks); Ctrl+Z restores the whole stage. Returns the count removed.
 	 */

@@ -33,7 +33,7 @@ Paths are relative to `Source/ModularSceneBuilder/` (`Public/` and `Private/` sh
 | Placement: ghost, stamping, rules-checked spawn | ✅ math / 🟢 tool | `Placement/StagePlacementToolComponent`, `Components/SpawnSystemComponent` |
 | Selection: click, Ctrl, all, from Outliner or Patch. No tests. | 🟢 | `Components/SelectionComponent` |
 | Delete, Clear Stage | 🟢 | `History/StageEditHistoryComponent` |
-| Duplicate / copy-paste | ⚪ | — |
+| Duplicate / copy-paste | 🟢 Duplicate (Ctrl+D, STATE.md #57); copy-paste ⚪ | ADR 0013 §5 |
 | Gizmo move, rotate, scale. World space only. | ✅ scale rules / 🟢 drag | `Actors/ModularTransformGizmo` |
 | Group transform | ✅ math | `Interaction/StageGroupTransform`, `StageGroupTransformComponent` |
 | Numeric transform in the Inspector (a spin-box drag is one undo step, STATE.md #37) | 🟢 drag needs a mouse check; transaction ✅ | `UI/StageParameterRowWidget`, `UI/StageParameterViewWidget`, `History/StageEditHistoryComponent` (BeginTransaction) |

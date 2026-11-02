@@ -298,6 +298,41 @@ int32 UStageEditHistoryComponent::DeleteItems(const TArray<AActor*>& Targets)
 	});
 }
 
+TArray<AModularBaseActor*> UStageEditHistoryComponent::DuplicateItems(const TArray<AActor*>& Sources, const FVector& Offset, int32& OutRefused)
+{
+	OutRefused = 0;
+	TArray<AModularBaseActor*> Copies;
+	if (!SpawnSystem)
+	{
+		return Copies;
+	}
+	Copies.Reserve(Sources.Num());
+	for (AActor* Source : Sources)
+	{
+		const AModularBaseActor* Item = Cast<AModularBaseActor>(Source);
+		if (!IsValid(Item) || Item->IsActorBeingDestroyed())
+		{
+			continue;
+		}
+		const FStageItemSnapshot Snapshot = Item->CaptureSnapshot();
+		FTransform Transform = Snapshot.Transform;
+		Transform.AddToTranslation(Offset);
+		if (AModularBaseActor* Copy = SpawnSystem->DuplicateItem(Snapshot, Transform))
+		{
+			Copies.Add(Copy);
+		}
+		else
+		{
+			++OutRefused;
+		}
+	}
+	if (!Copies.IsEmpty())
+	{
+		RecordPlacements(Copies, FText::Format(NSLOCTEXT("StageEditHistory", "DuplicateItems", "Duplicate {0} items"), FText::AsNumber(Copies.Num())));
+	}
+	return Copies;
+}
+
 int32 UStageEditHistoryComponent::ClearStage()
 {
 	const UStageSessionSubsystem* Session = UWorld::GetSubsystem<UStageSessionSubsystem>(GetWorld());

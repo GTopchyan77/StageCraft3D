@@ -223,6 +223,29 @@ public:
 	 */
 	FStageEconomyResultInfo RequestMoveItems(const TArray<class AModularBaseActor*>& Items, const FVector& Offset);
 
+	/**
+	 * Copies every selected item one grid step to the side (+X, the largest X grid of the selection, 100 cm without one), as ONE
+	 * undoable step (Ctrl+D, Edit menu). Each copy is a new item: a fresh instance id, the source's settings and parameters, and
+	 * through the GameMode's placement rules like any placement, so a copy the rules refuse is reported and left out. A copied
+	 * fixture gets the next free fixture ID and DMX address. The copies become the selection. Ignored during a gizmo drag or camera
+	 * navigation. Returns how many copies were placed.
+	 */
+	UFUNCTION(BlueprintCallable, Category = "StageCraft|Requests")
+	int32 RequestDuplicateSelection();
+
+	/**
+	 * Ctrl+S: saves the stage under its scene name. A stage that was never saved asks for a name (the workspace's save prompt), or,
+	 * without the workspace, is reported with how to save it. Returns Success when a save started, InvalidName when a name is
+	 * needed first, Busy during a gizmo drag or camera navigation (reported), or the save's own refusal.
+	 */
+	EStageSceneResult RequestQuickSave();
+
+	/**
+	 * Runs one of the app-wide shortcut commands (Save, Undo, Redo, Duplicate) for the focus-independent shortcut route
+	 * (FStageShortcutInputProcessor, ADR 0013 addendum). False, and nothing done, for any other command.
+	 */
+	bool RequestAppWideCommand(EStageInputCommand Command);
+
 	/** Selects every visible placed item (Edit > Select All). Leaves Place mode first, like any selection. Same guards as delete. */
 	UFUNCTION(BlueprintCallable, Category = "StageCraft|Requests")
 	void RequestSelectAll();
@@ -413,6 +436,14 @@ public:
 	/** Publishes a saved scene to the marketplace. Reported like RequestMarketplaceAcquire; completion on OnPublishCompleted. */
 	UFUNCTION(BlueprintCallable, Category = "StageCraft|Requests")
 	bool RequestMarketplacePublish(const FStageMarketplacePublishRequest& Request);
+
+	/** Unpublishes a listing published from this install (ADR 0021 §15). Reported like RequestMarketplaceAcquire; completion on OnUnpublishCompleted. */
+	UFUNCTION(BlueprintCallable, Category = "StageCraft|Requests")
+	bool RequestMarketplaceUnpublish(FGuid ListingId);
+
+	/** Deletes the library copy of an acquired listing; ownership stays (ADR 0021 §15). Reported likewise; completion on OnLibraryChanged. */
+	UFUNCTION(BlueprintCallable, Category = "StageCraft|Requests")
+	bool RequestMarketplaceRemoveFromLibrary(FGuid ListingId);
 
 	/**
 	 * Switches the DCC bridge on or off (Docs/ADR/0022-dcc-bridge.md): while on, 3D app add-ons on this computer can connect.
@@ -615,6 +646,12 @@ private:
 
 	/** The preferences this controller is bound to, for unbinding in EndPlay. */
 	TWeakObjectPtr<class UStageInputPreferencesSubsystem> BoundInputPreferences;
+
+	/**
+	 * Routes the app-wide shortcuts when the keyboard focus is outside the viewport (StageShortcutRouting). Registered with Slate in
+	 * BeginPlay for a local controller, unregistered in EndPlay. Shared because Slate takes shared ownership of preprocessors.
+	 */
+	TSharedPtr<class FStageShortcutInputProcessor> ShortcutProcessor;
 
 	UFUNCTION()
 	void HandleSelectionChanged(AActor* NewSelection, AActor* PreviousSelection);

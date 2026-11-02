@@ -43,6 +43,10 @@ enum class EStageMarketplaceResult : uint8
 	NotOriginal,
 	/** The marketplace backend did not deliver the package within UStageMarketplaceSubsystem::FetchTimeoutSeconds (ADR 0021 §14). */
 	TimedOut,
+	/** Unpublish of a listing this install did not publish (ADR 0021 §15). */
+	NotYours,
+	/** The listing is being acquired or ordered right now; try again when that has finished. */
+	InUse,
 };
 
 /** Result of a marketplace request. Message is user-facing; Code is for logic. */

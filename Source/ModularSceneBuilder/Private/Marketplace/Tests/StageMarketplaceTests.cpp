@@ -607,8 +607,8 @@ bool FStageMarketplaceLocalStoreTest::RunTest(const FString& Parameters)
 	// Files the store did not write: garbage, and a copy renamed to another id (it would be bought under one id and owned under another).
 	FFileHelper::SaveStringToFile(TEXT("not a package"), *FPaths::Combine(Directory, FGuid::NewGuid().ToString(EGuidFormats::Digits) + TEXT(".stage")));
 	IFileManager::Get().Copy(*FPaths::Combine(Directory, FGuid::NewGuid().ToString(EGuidFormats::Digits) + TEXT(".stage")), *Store.GetPackagePath(Package.Manifest.PackageId));
-	// Two skipped files, seen by each of the two queries below.
-	AddExpectedMessage(TEXT("Marketplace: skipped"), EAutomationExpectedMessageFlags::Contains, 4);
+	// Two skipped files, seen by each of the two queries below (4), then three by the query after the removals (one more stray copy).
+	AddExpectedMessage(TEXT("Marketplace: skipped"), EAutomationExpectedMessageFlags::Contains, 7);
 
 	TestEqual(TEXT("Query"), Str(Store.Query(FStageMarketplaceQuery(), Page)), Str(EStageMarketplaceResult::Success));
 	TestEqual(TEXT("Only the two real listings"), Page.TotalMatches, 2);
@@ -630,6 +630,20 @@ bool FStageMarketplaceLocalStoreTest::RunTest(const FString& Parameters)
 		TestTrue(TEXT("Thumbnail flagged"), Page.Listings[0].bHasThumbnail);
 		TestEqual(TEXT("Package size shown"), Page.Listings[0].PackageBytes, int64(Bytes.Num()));
 	}
+
+	// Unpublishing (ADR 0021 §15).
+	TestEqual(TEXT("Remove: an unknown listing"), Str(Store.Remove(FGuid::NewGuid())), Str(EStageMarketplaceResult::NotFound));
+	TestEqual(TEXT("Remove: an invalid id"), Str(Store.Remove(FGuid())), Str(EStageMarketplaceResult::InvalidRequest));
+	const FGuid Renamed = FGuid::NewGuid();
+	IFileManager::Get().Copy(*Store.GetPackagePath(Renamed), *Store.GetPackagePath(Second.Manifest.PackageId));
+	TestEqual(TEXT("Remove: a file under that name holding another listing is not touched"), Str(Store.Remove(Renamed)), Str(EStageMarketplaceResult::NotFound));
+	TestTrue(TEXT("... and stays"), IFileManager::Get().FileExists(*Store.GetPackagePath(Renamed)));
+	TestEqual(TEXT("Remove: the listing"), Str(Store.Remove(Package.Manifest.PackageId)), Str(EStageMarketplaceResult::Success));
+	TestFalse(TEXT("... its file is gone"), IFileManager::Get().FileExists(*Store.GetPackagePath(Package.Manifest.PackageId)));
+	TestEqual(TEXT("... and its downloads"), Store.GetDownloads(Package.Manifest.PackageId), int64(0));
+	TestEqual(TEXT("Remove again"), Str(Store.Remove(Package.Manifest.PackageId)), Str(EStageMarketplaceResult::NotFound));
+	Store.Query(FStageMarketplaceQuery(), Page);
+	TestEqual(TEXT("One real listing left"), Page.TotalMatches, 1);
 
 	IFileManager::Get().DeleteDirectory(*Directory, /*RequireExists*/ false, /*Tree*/ true);
 	return true;

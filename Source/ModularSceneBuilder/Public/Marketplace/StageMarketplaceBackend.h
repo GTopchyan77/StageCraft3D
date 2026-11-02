@@ -14,6 +14,7 @@ DECLARE_DELEGATE_TwoParams(FOnStageMarketplaceQueried, EStageMarketplaceResult /
 /** Bytes are null unless Result is Success. They are unverified: the caller reads them through StagePackage::Read. */
 DECLARE_DELEGATE_TwoParams(FOnStageMarketplacePackageFetched, EStageMarketplaceResult /*Result*/, const FStageMarketplacePackageBytes& /*Bytes*/);
 DECLARE_DELEGATE_TwoParams(FOnStageMarketplacePublished, EStageMarketplaceResult /*Result*/, const FStageMarketplaceListing& /*Listing*/);
+DECLARE_DELEGATE_OneParam(FOnStageMarketplaceUnpublished, EStageMarketplaceResult /*Result*/);
 
 /** Why a package is fetched; only acquisitions count towards popularity. */
 UENUM()
@@ -49,6 +50,13 @@ public:
 	virtual void Publish(const FStageMarketplacePackageBytes& PackageBytes, FOnStageMarketplacePublished OnPublished)
 		PURE_VIRTUAL(UStageMarketplaceBackend::Publish, );
 
+	/**
+	 * Takes ListingId out of the marketplace (ADR 0021 §15). Copies already acquired stay with their owners. The subsystem only
+	 * asks for listings this install published; a server backend must also check that the caller is the authenticated publisher.
+	 */
+	virtual void Unpublish(const FGuid& ListingId, FOnStageMarketplaceUnpublished OnUnpublished)
+		PURE_VIRTUAL(UStageMarketplaceBackend::Unpublish, );
+
 	/** User-facing name, for the status line ("Community folder"). */
 	virtual FText GetDisplayName() const PURE_VIRTUAL(UStageMarketplaceBackend::GetDisplayName, return FText::GetEmpty(););
 };
@@ -67,6 +75,7 @@ public:
 	virtual void Query(const FStageMarketplaceQuery& Query, FOnStageMarketplaceQueried OnQueried) override;
 	virtual void FetchPackage(const FGuid& ListingId, EStageMarketplaceFetchPurpose Purpose, FOnStageMarketplacePackageFetched OnFetched) override;
 	virtual void Publish(const FStageMarketplacePackageBytes& PackageBytes, FOnStageMarketplacePublished OnPublished) override;
+	virtual void Unpublish(const FGuid& ListingId, FOnStageMarketplaceUnpublished OnUnpublished) override;
 	virtual FText GetDisplayName() const override;
 
 	// UObject: waits for folder operations still on the pipe (bounded file reads and writes), because the pipe must be empty when destroyed.

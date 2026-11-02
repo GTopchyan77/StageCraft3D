@@ -32,6 +32,13 @@ public:
 	/** Verifies the whole package and writes it as a new listing. AlreadyExists when its id is published. */
 	EStageMarketplaceResult Publish(TConstArrayView<uint8> PackageBytes, FStageMarketplaceListing& OutListing) const;
 
+	/**
+	 * Unpublishes ListingId (ADR 0021 §15): deletes its package file and its popularity entry. NotFound when no readable package
+	 * of that id is in the folder (including a file whose manifest names another id, which is not touched); WriteFailed when the
+	 * file could not be deleted. Who may remove is decided by the caller: a folder has no authorization of its own.
+	 */
+	EStageMarketplaceResult Remove(const FGuid& ListingId) const;
+
 	int64 GetDownloads(const FGuid& ListingId) const;
 
 	FString GetPackagePath(const FGuid& ListingId) const;

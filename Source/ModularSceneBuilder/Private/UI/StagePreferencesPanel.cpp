@@ -426,7 +426,7 @@ void UStagePreferencesPanel::NativeConstruct()
 
 void UStagePreferencesPanel::NativeDestruct()
 {
-	Capture.Reset();
+	SetCapture(NullOpt);
 	if (UStageInputPreferencesSubsystem* Preferences = BoundPreferences.Get())
 	{
 		Preferences->OnInputPreferencesChanged.RemoveDynamic(this, &ThisClass::HandlePreferencesChanged);
@@ -683,7 +683,7 @@ void UStagePreferencesPanel::HandleBindingPicked(int32 Index)
 
 void UStagePreferencesPanel::BeginCapture(const FCaptureTarget& Target)
 {
-	Capture = Target;
+	SetCapture(Target);
 	const FStageInputCommandInfo& Info = StageKeyBindings::GetInfo(Target.Command);
 	SetNotice(StageKeyBindings::IsNavigationCommand(Target.Command)
 		? FText::Format(LOCTEXT("CaptureFly", "{0}: press a key (no Ctrl, Shift or Alt). CLEAR removes it; clicking elsewhere cancels."), Info.Label)
@@ -695,8 +695,18 @@ void UStagePreferencesPanel::BeginCapture(const FCaptureTarget& Target)
 
 void UStagePreferencesPanel::EndCapture()
 {
-	Capture.Reset();
+	SetCapture(NullOpt);
 	Refresh();
+}
+
+void UStagePreferencesPanel::SetCapture(const TOptional<FCaptureTarget>& Target)
+{
+	Capture = Target;
+	// The app-wide shortcuts stand aside while a chord is being captured (ADR 0013 addendum).
+	if (UStageInputPreferencesSubsystem* Preferences = BoundPreferences.Get())
+	{
+		Preferences->SetKeyCaptureActive(Capture.IsSet());
+	}
 }
 
 FReply UStagePreferencesPanel::NativeOnKeyDown(const FGeometry& InGeometry, const FKeyEvent& InKeyEvent)
@@ -716,7 +726,7 @@ FReply UStagePreferencesPanel::NativeOnKeyDown(const FGeometry& InGeometry, cons
 	EStageInputCommand Conflict = EStageInputCommand::Count;
 	UStageInputPreferencesSubsystem* Preferences = BoundPreferences.Get();
 	const EStageKeyBindingResult Result = Preferences ? Preferences->SetKeyBinding(Target.Command, Target.Slot, Chord, Conflict) : EStageKeyBindingResult::UnsupportedKey;
-	Capture.Reset();
+	SetCapture(NullOpt);
 
 	const FText Label = StageKeyBindings::GetInfo(Target.Command).Label;
 	if (Result == EStageKeyBindingResult::Success || Result == EStageKeyBindingResult::Unchanged)
@@ -764,7 +774,7 @@ void UStagePreferencesPanel::HandleResetPicked(int32 CommandIndex)
 	{
 		return;
 	}
-	Capture.Reset();
+	SetCapture(NullOpt);
 	const FText Label = StageKeyBindings::GetInfo(Command).Label;
 	SetNotice(Preferences->ResetKeyBinding(Command)
 		? FText::Format(LOCTEXT("ResetDone", "{0}: default keys again."), Label)
@@ -777,7 +787,7 @@ void UStagePreferencesPanel::HandleResetAllPicked(int32 Unused)
 {
 	if (UStageInputPreferencesSubsystem* Preferences = BoundPreferences.Get())
 	{
-		Capture.Reset();
+		SetCapture(NullOpt);
 		Preferences->ResetAllKeyBindings();
 		SetNotice(LOCTEXT("ResetAllDone", "Every shortcut uses its default key again."), false);
 		Refresh();

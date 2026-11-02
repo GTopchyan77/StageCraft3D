@@ -86,6 +86,7 @@ TSharedPtr<FStageSceneExportJob> FStageSceneExportJob::Start(UGameInstance& Game
 			double Start = FPlatformTime::Seconds();
 			FStageSceneParseReport Report;
 			Loaded.SceneResult = FStageSceneStore(Directory).Load(SceneName, Loaded.Scene, Report);
+			Loaded.InvalidItems = Report.InvalidItems;
 			Loaded.LoadMs = StageSceneExportJobImpl::MillisecondsSince(Start);
 			if (Loaded.SceneResult == EStageSceneResult::Success && Loaded.Scene.IsFromMarketplace())
 			{
@@ -225,6 +226,7 @@ void FStageSceneExportJob::StepLoaded()
 		return;
 	}
 	Scene = MoveTemp(Loaded.Scene);
+	Counts.InvalidInFile = Loaded.InvalidItems;
 
 	// Deny by default: a marketplace stage leaves only when its publisher allowed it (ADR 0022 §11.1). The file was read on the
 	// worker; the decision needs the profile, so it is made here.
@@ -263,7 +265,7 @@ void FStageSceneExportJob::StepSpawn(double SliceEndSeconds)
 		{
 			break;
 		}
-		StageMarketplacePreview::SpawnItem(*World, Scene.Items[NextItem++], Catalog, Actors, Bounds, Stats);
+		StageMarketplacePreview::SpawnItem(*World, Scene.Items[NextItem++], Catalog, Actors, Bounds, Stats, EStageHiddenItems::Skip);
 	}
 	while (FPlatformTime::Seconds() < SliceEndSeconds);
 	Outcome.Timings.SpawnMs += StageSceneExportJobImpl::MillisecondsSince(Start);
@@ -293,6 +295,7 @@ void FStageSceneExportJob::StepConvert(double SliceEndSeconds)
 		if (AActor* Actor = Actors[NextActor++])
 		{
 			Converted += FStageSceneExporter::ConvertProceduralMeshes(*Actor);
+			FStageSceneExporter::AddActorContent(*Actor, Counts);
 		}
 	}
 	while (FPlatformTime::Seconds() < SliceEndSeconds);
@@ -386,10 +389,13 @@ void FStageSceneExportJob::StepFinalized()
 		Fail(FStageSceneExporter::DescribeWriteFailed(Params.Path));
 		return;
 	}
-	Outcome.Result = FStageSceneExporter::DescribeExported(Outcome.Result.SceneName, Stats.Placed, Stats.NotInLibrary, Params.Path);
+	Counts.Exported = Stats.Placed;
+	Counts.NotInLibrary = Stats.NotInLibrary;
+	Counts.Hidden = Stats.Hidden;
+	Outcome.Result = FStageSceneExporter::DescribeExported(Outcome.Result.SceneName, Counts, Params.Path);
 	Outcome.Sha1 = Finalized.Sha1;
-	UE_LOG(LogStageCraft, Log, TEXT("Scene export: \"%s\" -> %s: %d items (%d procedural parts converted, %d left out), %lld bytes."),
-		*Outcome.Result.SceneName, *Params.Path, Stats.Placed, Converted, Stats.NotInLibrary, Finalized.Bytes);
+	UE_LOG(LogStageCraft, Log, TEXT("Scene export: \"%s\" -> %s: %d items, %d lights (%d procedural parts converted; left out: %d unavailable, %d hidden, %d damaged), %lld bytes."),
+		*Outcome.Result.SceneName, *Params.Path, Counts.Exported, Counts.Lights, Converted, Counts.NotInLibrary, Counts.Hidden, Counts.InvalidInFile, Finalized.Bytes);
 	Stage = EStage::Done;
 }
 

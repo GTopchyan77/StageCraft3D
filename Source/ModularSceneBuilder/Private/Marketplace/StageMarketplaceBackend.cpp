@@ -68,6 +68,21 @@ void UStageLocalMarketplaceBackend::FetchPackage(const FGuid& ListingId, EStageM
 	});
 }
 
+void UStageLocalMarketplaceBackend::Unpublish(const FGuid& ListingId, FOnStageMarketplaceUnpublished OnUnpublished)
+{
+	Pipe.Launch(UE_SOURCE_LOCATION, [WeakThis = TWeakObjectPtr<ThisClass>(this), FolderStore = GetStore(), ListingId, OnUnpublished = MoveTemp(OnUnpublished)]() mutable
+	{
+		const EStageMarketplaceResult Result = FolderStore->Remove(ListingId);
+		AsyncTask(ENamedThreads::GameThread, [WeakThis, Result, OnUnpublished = MoveTemp(OnUnpublished)]()
+		{
+			if (WeakThis.IsValid())
+			{
+				OnUnpublished.ExecuteIfBound(Result);
+			}
+		});
+	});
+}
+
 void UStageLocalMarketplaceBackend::Publish(const FStageMarketplacePackageBytes& PackageBytes, FOnStageMarketplacePublished OnPublished)
 {
 	Pipe.Launch(UE_SOURCE_LOCATION, [WeakThis = TWeakObjectPtr<ThisClass>(this), FolderStore = GetStore(), PackageBytes, OnPublished = MoveTemp(OnPublished)]() mutable

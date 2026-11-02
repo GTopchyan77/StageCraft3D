@@ -12,7 +12,9 @@
 #include "Engine/World.h"
 #include "HAL/FileManager.h"
 #include "Marketplace/StageAcquireDispatchSubsystem.h"
+#include "Marketplace/StageMarketplaceBackend.h"
 #include "Marketplace/StageMarketplaceSubsystem.h"
+#include "Marketplace/Tests/StageTestMarketplaceBackend.h"
 #include "Misc/Paths.h"
 #include "ModularSceneBuilder.h"
 #include "Services/StageAIToolSubsystem.h"
@@ -66,6 +68,9 @@ FStageTestGameInstance::FStageTestGameInstance(const FStageTestGameInstanceOptio
 	Defaults.Add(FStageScopedDefault::Make(UStageEconomySubsystem::StaticClass(), TEXT("CommerceBackendClass"),
 		TSoftClassPtr<UStageCommerceBackend>(UStageTestCommerceBackend::StaticClass())));
 	Defaults.Add(FStageScopedDefault::Make(UStageEconomySubsystem::StaticClass(), TEXT("BackendTimeoutSeconds"), Options.BackendTimeoutSeconds));
+	// The folder backend with fetches the test can hold (it behaves as the local backend unless told to).
+	Defaults.Add(FStageScopedDefault::Make(UStageMarketplaceSubsystem::StaticClass(), TEXT("MarketplaceBackendClass"),
+		TSoftClassPtr<UStageMarketplaceBackend>(UStageTestMarketplaceBackend::StaticClass())));
 	Defaults.Add(FStageScopedDefault::Make(UStageMarketplaceSubsystem::StaticClass(), TEXT("FetchTimeoutSeconds"), Options.FetchTimeoutSeconds));
 	Defaults.Add(FStageScopedDefault::Make(UStageAcquireDispatchSubsystem::StaticClass(), TEXT("OrderTimeoutSeconds"), Options.OrderTimeoutSeconds));
 	Defaults.Add(FStageScopedDefault::Make(UStageAIToolSubsystem::StaticClass(), TEXT("OperationTimeoutSeconds"), Options.ToolTimeoutSeconds));

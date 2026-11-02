@@ -535,3 +535,12 @@ Gevor's choices: automation tests on a harness game instance (not AFunctionalTes
 - [ ] Manual verification (Gevor): export from Send to 3D App on a large stage (the panel keeps drawing, "Exporting..." shows), the acquire dialog during a .glb order, Services & Keys SAVE/CHECK
 - [ ] Follow-up: GameMode consultation for the marketplace/dispatch/key requests (audit #19; its own ADR)
 - [ ] Follow-up: world creation and glTF stay single-frame steps; a reusable export world would remove the first (memory cost while idle)
+- [x] #56: StageCraft.Marketplace.FetchTimeout + UStageTestMarketplaceBackend; Editor/Game/Shipping 0 warnings; 150/150 with and without -NullRHI
+
+## Phase 32 - Export completeness, Ctrl+S, Duplicate, marketplace removal (STATE.md #57)
+- [x] M1 export: hidden items left out, fixture lights exported, every left-out item counted and named; StageCraft.Bridge.ExportCompleteness
+- [x] M2 Save: Ctrl+S / Ctrl+D commands, focus-independent shortcut preprocessor, quick save with name prompt, unsaved mark; StageCraft.Input.ShortcutRouting, StageCraft.Scene.SaveFlow
+- [x] M3 Duplicate: DuplicateItem + PrepareAsDuplicate, one undo step; StageCraft.History.Duplicate
+- [x] M4 Marketplace: Unpublish (local publish record) and Remove from Library; StageCraft.Marketplace.UnpublishFlow
+- [x] Tests 155/155 with and without a renderer; Editor/Game/Shipping 0 warnings
+- [ ] Manual verification (Gevor): shortcuts from each kind of panel and in text fields, untitled Ctrl+S prompt, unsaved mark, UNPUBLISH / REMOVE FROM LIBRARY, lights in Blender

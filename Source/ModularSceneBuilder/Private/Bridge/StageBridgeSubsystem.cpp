@@ -239,9 +239,9 @@ void UStageBridgeSubsystem::DrainEvents()
 			if (Event.Ack.bOk)
 			{
 				const FStageBridgeClientInfo* Client = FindClient(Event.ClientId);
-				FinishSend(EStageBridgeResult::Success, FText::Format(LOCTEXT("Imported", "{0} imported \"{1}\" ({2} items)."),
+				FinishSend(EStageBridgeResult::Success, FText::Format(LOCTEXT("ImportedCounts", "{0} imported \"{1}\" ({2} items, {3} lights).{4}"),
 					StageBridgeProtocol::GetAppDisplayName(Client ? Client->App : EStageBridgeApp::Unknown), FText::FromString(Pending->Result.SceneName),
-					FText::AsNumber(Pending->Result.ExportedItems)));
+					FText::AsNumber(Pending->Result.ExportedItems), FText::AsNumber(Pending->Result.ExportedLights), FStageSceneExporter::DescribeLeftOut(Pending->Result)));
 			}
 			else
 			{
@@ -389,6 +389,10 @@ void UStageBridgeSubsystem::HandleSendExported(const FStageSceneExportOutcome& O
 	Pending->bSent = true;
 	Pending->Result.ExportedItems = Outcome.Result.ExportedItems;
 	Pending->Result.SkippedItems = Outcome.Result.SkippedItems;
+	Pending->Result.HiddenItems = Outcome.Result.HiddenItems;
+	Pending->Result.InvalidItems = Outcome.Result.InvalidItems;
+	Pending->Result.ItemsWithoutGeometry = Outcome.Result.ItemsWithoutGeometry;
+	Pending->Result.ExportedLights = Outcome.Result.ExportedLights;
 	GameInstance->GetTimerManager().SetTimer(SendTimeout, FTimerDelegate::CreateUObject(this, &ThisClass::HandleSendTimeout), GetSendTimeoutSeconds(), /*bLoop*/ false);
 	UE_LOG(LogStageCraft, Log, TEXT("Bridge: sent \"%s\" to client %d as %s (%lld bytes)."), *Asset.Name, Pending->ClientId, *Asset.Id, Asset.Bytes);
 }

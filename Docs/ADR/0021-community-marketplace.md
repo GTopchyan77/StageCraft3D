@@ -368,3 +368,40 @@ Search, preview and acquire answer later. The runner returns a Pending outcome (
 - A purchase that times out and is approved later is owned, but its download may not have run (the acquire ended). Getting the listing again downloads it for free.
 - Unresolved transactions are lost on restart; reconciling them is the server's job.
 - Tests: `StageCraft.Economy.BackendTimeout`, `.ListingPurchaseFlow`, `StageCraft.Dispatch.OrderTimeout`, `StageCraft.Services.VaultBeforeDispatch`.
+
+## 15. Addendum: unpublishing and removing from the library (2026-11-02, STATE.md #57)
+
+**Problem.** Users could publish and acquire, but could not take anything out again. The marketplace knows nothing about who published what: a listing carries only a free-text `AuthorName` (the profile's display name, changeable at will), and there are no accounts (§1).
+
+**Decisions (Gevor, 2026-11-02).**
+- **A local publish record decides "mine".**
+  - `UStageMarketplaceSubsystem` keeps the ids this install published in `Saved/StageCraft/Marketplace/Published.json` (`{ "version": 1, "listings": [...] }`).
+  - The record is read at start and written on the work pipe after each publish and each unpublish. An unreadable record counts as empty, with a warning.
+  - It is the subsystem's own file. It is not part of the profile, because ownership, money and history stay with the economy as their single writer, and stay in the integrity hash.
+- **`RequestUnpublish(ListingId)`:**
+  - refuses with `NotYours` unless the record has the id;
+  - refuses with `Busy` while another unpublish runs, and with `InUse` while the listing is being acquired here;
+  - otherwise asks the backend through the new `UStageMarketplaceBackend::Unpublish`, which answers exactly once.
+  - The local backend runs `FStageLocalMarketplaceStore::Remove` on its pipe. Remove deletes only a package whose manifest id matches the file name, and also drops the listing's `downloads.json` entry. `NotFound` (already gone) also clears the record.
+  - After success the listings are queried again.
+  - People who already got the listing keep their scenes and library copies.
+- **`RequestRemoveFromLibrary(ListingId)`:**
+  - deletes `Library/<id>.stage` on the work pipe;
+  - returns `NotFound` without a copy, and `InUse` while the listing is being acquired or ordered.
+  - **Ownership and purchase history are not touched.** A paid listing can be got again for free while it is published.
+  - Scenes imported from the listing stay, but cannot be exported until it is got again (the library copy is the export-rights record, ADR 0022 §11.1). The confirmation text and the tooltip say so.
+- **The panel's view of these is pushed, not polled:** `IsPublishedByMe` and `HasLibraryCopy` answer from memory. The library set is listed once at start and kept in step on import and removal. Results arrive on `OnUnpublishCompleted` and `OnLibraryChanged`.
+- **UI.** The Marketplace details pane shows UNPUBLISH only on this install's listings ("published by you" in the byline) and REMOVE FROM LIBRARY only where a copy exists. Each needs a second click on the same listing.
+  - No "my listings" filter was added: `FStageMarketplaceQuery` has no publisher field, and filtering one page on the client would hide the rest.
+- **Controller requests and dev commands:**
+  - `AModularPlayerController::RequestMarketplaceUnpublish` / `RequestMarketplaceRemoveFromLibrary`;
+  - `StageCraft.Marketplace.Unpublish` / `.RemoveFromLibrary` (not in Shipping).
+
+**Honest limit.** A shared LAN folder has no authorization. Anyone with write access can delete any file in it, and the record only scopes what this app offers and requests. A server backend must authenticate the publisher in `Unpublish` (§11).
+
+**Consequences.**
+- Listings published before this change are in no record and cannot be unpublished from the app. They can be removed by hand from the community folder.
+- Reinstalling, or clearing `Saved/StageCraft`, loses the record.
+- Tests:
+  - `StageCraft.Marketplace.UnpublishFlow`: record, `NotYours`, `Busy`, the re-query, removal from the library with ownership kept and export rights gone and back, `InUse` during an acquire, and the record on disk;
+  - `StageCraft.Marketplace.LocalStore`: `Remove` with a wrong id, a missing file, a renamed copy and the downloads entry.

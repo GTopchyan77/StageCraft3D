@@ -5262,7 +5262,7 @@ Plan approved in plan mode.
 - **Scripted Standalone `-game` run with headless Blender 5.2.2** (R55, the R54 harness): every step behaved as in R54, now through the export job. Refused "kept inside" `.glb` and export; bought and opened; bought and saved `R38.glb` (66,428 bytes); tool refused without a key, then handed over; sent to Blender, imported and acked (8 meshes, 3,136 triangles); all 12 Blender checks passed. Scenes removed, profile restored (same hash), workspace and GameUserSettings.ini restored.
 - **Not verified:** by hand in the editor. The Send-To panel during a large export (the window should keep drawing and show "Exporting..."), the acquire dialog during a `.glb` order, Services & Keys SAVE and CHECK.
 
-**Commit:** uncommitted (working tree).
+**Commit:** `c882249`.
 
 **Known issues / follow-ups**
 - World creation (14–49 ms) and the glTF write (~10 ms here, scaling with the stage) remain single game-thread frames. A reusable export world would remove the first at a memory cost while idle.
@@ -5270,4 +5270,148 @@ Plan approved in plan mode.
 - The marketplace, dispatch and key requests on the controller do not consult the GameMode (audit #19; follows the existing marketplace requests; needs its own ADR).
 - Unresolved transactions after a timeout are kept for the run only; reconciliation after a restart is the server's job.
 - Test classes ship as unreachable UCLASSes (`UStageTestCommerceBackend`, `UStageTestAIToolProvider`, `UStageTestEventRecorder`), like the mock tool.
-- The marketplace fetch timeout has no automated test (needs a test marketplace backend); it is covered by review only.
+- The marketplace fetch timeout has no automated test (needs a test marketplace backend); it is covered by review only. Addressed in #56.
+
+## #56 — Automated test of the marketplace download deadline (2026-11-02)
+
+**Status: done** (test-only change, verified by Claude; nothing to check by hand). The first build attempt was refused because the editor was open with Live Coding. Gevor closed it and the build was run again.
+
+**What & why:** #55 left the marketplace fetch timeout (`UStageMarketplaceSubsystem::FetchTimeoutSeconds`, ADR 0021 §14) covered by review only, because the folder backend always answers. A test backend now lets a test hold package fetches.
+- **New test-only backend.** `UStageTestMarketplaceBackend` subclasses `UStageLocalMarketplaceBackend`. It behaves exactly like the folder backend unless `bHoldFetches` is set. Held fetches are delivered later with `DeliverHeldFetch`, which does a real folder read, or never.
+- **Harness.** `FStageTestGameInstance` now selects the test backend through the marketplace CDO (`MarketplaceBackendClass`), as it already does for the commerce backend. Every existing integration test therefore runs on it, unchanged in behaviour.
+- **New test `StageCraft.Marketplace.FetchTimeout`** (timeout 0.3 s). It covers:
+  - Bought, then no package in time: `TimedOut`, charged once, owned, no longer acquiring.
+  - The late package is dropped: no second result and nothing kept in the library.
+  - Get again: downloaded without a second store request or charge, the scene is imported and the package is kept in the library.
+  - A game instance stopped while a download is awaited shuts down cleanly with no result.
+
+**Files changed**
+- New:
+  - `Source/ModularSceneBuilder/Private/Marketplace/Tests/StageTestMarketplaceBackend.h`, `StageTestMarketplaceBackend.cpp`
+  - `Source/ModularSceneBuilder/Private/Marketplace/Tests/StageMarketplaceFetchTests.cpp`
+- Changed:
+  - `Source/ModularSceneBuilder/Private/Tests/StageTestGameInstance.h`, `StageTestGameInstance.cpp`
+  - STATE.md (#55 commit hash `c882249` recorded; this entry)
+  - `tasks/todo.md`
+
+**Verification**
+- **Builds:** Editor, Game and Shipping (`-DisableAdaptiveUnity`), all 0 warnings.
+- **Tests:** the new test passes alone. `Scripts/Tests/RunAutomation.ps1 -ExpectedCount 150` passes 150/150 with an offscreen renderer and 150/150 with `-NullRHI`, with user data unchanged (65 files checked).
+
+**Commit:** uncommitted (working tree).
+
+**Known issues / follow-ups**
+- `UStageTestMarketplaceBackend` ships as an unreachable class, like the other test backends.
+
+## #57 — Phase E1: export completeness, Ctrl+S from any panel, Duplicate (Ctrl+D), marketplace Unpublish and Remove from Library (2026-11-02)
+
+**Status: implemented, awaiting manual verification.** Claude verified it with builds and automated tests (see Verification). The focus behaviour of the shortcuts and the new Marketplace buttons still need a hand test.
+
+**Request (Gevor, 2026-11-02, pasted brief):**
+1. Fix exports that silently drop items.
+2. Make Ctrl+S reliable and focus-independent.
+3. Add Duplicate / Ctrl+D (spawn rules, parameters, transforms, unique ids, one undo step).
+4. Add marketplace delete/unpublish for what the user put in.
+5. 0 warnings on every target, plus tests.
+
+**What the audit found** (three read-only explorations before planning). The brief's premises were partly wrong:
+- **Ctrl+S and Duplicate did not exist.** They were not unreliable: there was no Save command in the key map and no duplicate anywhere.
+- **No shortcut fired with the focus in a panel or a floating window.** Keys reached `AModularPlayerController::InputKey` only through the scene viewport, and there was no Slate preprocessor.
+- **Export lost no catalog item** (proved by the new completeness test: 23 of 23 with geometry). The real problems:
+  - items hidden on stage were exported, because `BeginPlay`, which applies visibility, never runs in the export world;
+  - fixture lights were excluded by the ADR 0022 §2 decision;
+  - parser-dropped entries, geometry-less items and the bridge "imported" message were all silent.
+- **The marketplace had no delete,** and nothing records who published a listing: there is only a free-text `AuthorName` and the profile has no id.
+
+**Gevor's decisions (AskUserQuestion):**
+- export the lights;
+- a local publish record decides "mine";
+- removing an acquired package deletes the library copy only (ownership and history stay);
+- duplicates go one grid step beside the original.
+
+**What changed**
+- **M1, export completeness** (ADR 0022 §13, §2 amended):
+  - `EStageHiddenItems` on `StageMarketplacePreview::SpawnScene` / `SpawnItem`. Exports skip hidden items and count them; the preview still shows them.
+  - Broken catalog content (no actor class, spawn failure) is logged.
+  - `FStageBridgeResultInfo` gains `HiddenItems`, `InvalidItems`, `ItemsWithoutGeometry` and `ExportedLights`, filled by the shared helpers (`FStageSceneExportCounts`, `InspectActor`, `AddActorContent`, `DescribeExported`, `DescribeLeftOut`) used by both the synchronous export and `FStageSceneExportJob`. The job carries the parser's `InvalidItems`.
+  - `bExportLights=true` (KHR_lights_punctual).
+  - The bridge "imported" message adds the lights and "Left out: ...".
+- **M2, Save and focus-independent shortcuts** (ADR 0013 §5):
+  - `EStageInputCommand::Save` (Ctrl+S) and `::Duplicate` (Ctrl+D) are appended.
+  - New `StageShortcutRouting` + `FStageShortcutInputProcessor` (Private/Input), registered by the controller. It runs Save, Undo, Redo and Duplicate when the focus is outside the viewport. It stands aside for the viewport, text fields, modal windows and save prompts, key capture in Preferences (new `UStageInputPreferencesSubsystem::SetKeyCaptureActive`, kept in step by `UStagePreferencesPanel::SetCapture`), and flying.
+  - `RequestQuickSave` and `RequestAppWideCommand` on the controller. `RequestSaveScene` is now refused during a drag or camera move.
+  - An untitled stage gets the workspace save prompt in its new `EStageSavePromptPurpose::NameAndSave` mode (`ShowNameAndSavePrompt`, shared state machine with the exit prompt; `SStageUnsavedChangesDialog` takes a `Purpose`).
+  - Status bar: "● Unsaved changes" via `OnDirtyChanged`.
+  - File > Save uses the quick save and shows its keys. Edit > Duplicate Selected is new.
+  - Dev commands `StageCraft.Edit.Save` and `StageCraft.Edit.Duplicate`.
+- **M3, Duplicate:**
+  - `USpawnSystemComponent::DuplicateItem`: fresh id, the source's state, `PlacementValidator`.
+  - Virtual `AModularBaseActor::PrepareAsDuplicate`; `ALightingFixtureActor` clears its fixture ID and DMX patch, so registration assigns free ones.
+  - `UStageEditHistoryComponent::DuplicateItems` records one "Duplicate N items" step through `RecordPlacements`.
+  - `AModularPlayerController::RequestDuplicateSelection` offsets by the widest X grid (100 cm fallback) and selects the copies.
+- **M4, marketplace removal** (ADR 0021 §15):
+  - The backend gains `Unpublish`. `FStageLocalMarketplaceStore::Remove` deletes only a package whose manifest id matches, and its downloads entry.
+  - `UStageMarketplaceSubsystem`:
+    - the publish record `Marketplace/Published.json`, plus a library set (read at start);
+    - `RequestUnpublish` (`NotYours`, `Busy`, `InUse`) and `RequestRemoveFromLibrary` (`NotFound`, `InUse`);
+    - `IsPublishedByMe`, `HasLibraryCopy`, `OnUnpublishCompleted`, `OnLibraryChanged`.
+  - New results `NotYours` and `InUse`.
+  - Controller requests and dev commands `StageCraft.Marketplace.Unpublish` / `.RemoveFromLibrary`.
+  - The Marketplace details pane gets UNPUBLISH and REMOVE FROM LIBRARY: shown only where they apply, confirmed by a second click, with "published by you" in the byline.
+  - The planned "MY LISTINGS" filter was not built: the query has no publisher field, and filtering one page on the client would hide results.
+
+**Files changed**
+- New:
+  - `Source/ModularSceneBuilder/Private/Input/StageShortcutRouting.h`, `StageShortcutRouting.cpp`
+  - `Private/Input/Tests/StageShortcutRoutingTests.cpp`, `Private/Bridge/Tests/StageExportCompletenessTests.cpp`
+- Export:
+  - `Public/Bridge/StageBridgeTypes.h`
+  - `Private/Bridge/StageSceneExporter.h/.cpp`, `StageSceneExportJob.h/.cpp`, `StageBridgeSubsystem.cpp`
+  - `Private/Marketplace/StageMarketplacePreview.h/.cpp`
+- Input and save:
+  - `Public/Input/StageKeyBindings.h`, `Private/Input/StageKeyBindings.cpp`, `Public/Input/StageInputPreferencesSubsystem.h`
+  - `Public/UI/StagePreferencesPanel.h`, `Private/UI/StagePreferencesPanel.cpp`
+  - `Public/Workspace/StageWorkspaceSubsystem.h`, `Private/Workspace/StageWorkspaceSubsystem.cpp`, `SStageUnsavedChangesDialog.h/.cpp`, `SStageWorkspaceMenuBar.cpp`
+  - `Public/UI/StageStatusBarWidget.h`, `Private/UI/StageStatusBarWidget.cpp`
+- Duplicate:
+  - `Public/Actors/ModularBaseActor.h`, `Public/Actors/LightingFixtureActor.h`, `Private/Actors/LightingFixtureActor.cpp`
+  - `Public/Components/SpawnSystemComponent.h`, `Private/Components/SpawnSystemComponent.cpp`
+  - `Public/History/StageEditHistoryComponent.h`, `Private/History/StageEditHistoryComponent.cpp`
+  - `Private/Placement/StagePlacementConsoleCommands.cpp`
+- Controller: `Public/Player/ModularPlayerController.h`, `Private/Player/ModularPlayerController.cpp`
+- Marketplace:
+  - `Public/Marketplace/StageMarketplaceTypes.h`, `StageMarketplaceBackend.h`, `StageMarketplaceSubsystem.h`
+  - `Private/Marketplace/StageMarketplaceBackend.cpp`, `StageMarketplaceSubsystem.cpp`, `StageLocalMarketplaceStore.h/.cpp`, `StageMarketplaceConsoleCommands.cpp`
+  - `Public/UI/StageMarketplaceWidget.h`, `Private/UI/StageMarketplaceWidget.cpp`
+- Tests:
+  - `Private/History/Tests/StageHistoryWorldTests.cpp` (`History.Duplicate`, `Scene.SaveFlow`)
+  - `Private/Input/Tests/StageKeyBindingsTests.cpp`
+  - `Private/Marketplace/Tests/StageMarketplaceTests.cpp` (`LocalStore` + Remove), `StageMarketplaceFetchTests.cpp` (`UnpublishFlow`)
+  - `Private/Tests/StageTestEventRecorder.h/.cpp` (publish, unpublish and library events)
+- Docs:
+  - `Docs/ADR/0022-dcc-bridge.md` (§2 amended, §13), `Docs/ADR/0021-community-marketplace.md` (§15), `Docs/ADR/0013-preferences-key-bindings-and-audit-fixes.md` (§5)
+  - `Docs/PROJECT_AUDIT.md`, `Docs/CURRENT_SYSTEMS.md`, `tasks/todo.md` (Phase 32)
+
+**Verification**
+- **Builds:** Editor (incremental builds throughout), Game and Shipping (`-DisableAdaptiveUnity`), 0 warnings on Game and Shipping, which compile every changed runtime file.
+- **Shipping binary** (UTF-16 and ASCII scan): `StageCraft.Edit.Duplicate`, `StageCraft.Edit.Save`, `StageCraft.Marketplace.Unpublish` and `.RemoveFromLibrary` are absent; the user-facing "CLICK AGAIN TO UNPUBLISH" and "Unsaved changes" are present (control).
+- **Automation:** `Scripts/Tests/RunAutomation.ps1 -ExpectedCount 155` gives 155/155 with an offscreen renderer and 155/155 with `-NullRHI`; user data unchanged (65 files checked). The 5 new tests are `StageCraft.Bridge.ExportCompleteness`, `StageCraft.Input.ShortcutRouting`, `StageCraft.History.Duplicate`, `StageCraft.Scene.SaveFlow` and `StageCraft.Marketplace.UnpublishFlow`; `StageCraft.Input.KeyBindings` and `StageCraft.Marketplace.LocalStore` are extended.
+  - ExportCompleteness with a renderer: the whole catalog exports as 23 items and 13 lights, every item with a mesh node, the light nodes in the file matching `ExportedLights`; the hidden copy, the unknown entry and (through the bridge job) a damaged entry are each named in the message.
+  - On its first run the test failed only because its own fixture gave the captured snapshots no instance id (the parser rightly drops those); fixed in the test.
+- **Not verified:** nothing has been checked by hand in the running app. What needs a hand check:
+  - Ctrl+S and Ctrl+D with the focus in the outliner, the inspector, a floating window (Marketplace, Assistant) and the viewport;
+  - typing in a text field must not trigger them;
+  - Ctrl+S on an untitled stage shows the name prompt;
+  - the "Unsaved changes" mark;
+  - the Marketplace UNPUBLISH and REMOVE FROM LIBRARY buttons;
+  - a real Blender import of the exported lights.
+
+**Commit:** uncommitted (working tree).
+
+**Known issues / follow-ups**
+- **Shortcut routing in the running app is unverified:** whether Slate gives the preprocessor the key with the focus in every kind of panel (dock tab, floating window, the assistant field) has not been checked. There is no Slate focus automation, so this is a manual check.
+- **Listings published before #57** are in no publish record and cannot be unpublished from the app (remove the file from the community folder by hand). The record is lost if `Saved/StageCraft` is cleared.
+- **The local folder has no authorization:** anyone with write access can delete files. The record only scopes the app's own requests; a server backend must authenticate (ADR 0021 §15).
+- **Exported lights** carry colour, intensity and cone only. Gobos, light functions, prisms and pixel cells do not travel, and materials are still not baked.
+- **Duplicate** offsets along +X only. Copy-paste across stages does not exist.
+- **The Marketplace preview** still shows hidden items (it shows the file as published).

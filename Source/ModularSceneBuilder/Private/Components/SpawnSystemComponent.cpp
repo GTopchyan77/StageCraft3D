@@ -53,6 +53,23 @@ AModularBaseActor* USpawnSystemComponent::RestoreItem(const FStageItemSnapshot& 
 	}, TEXT("Restored"));
 }
 
+AModularBaseActor* USpawnSystemComponent::DuplicateItem(const FStageItemSnapshot& Source, const FTransform& Transform)
+{
+	UBaseItemData* Item = Source.Item.LoadSynchronous();
+	if (!Item)
+	{
+		UE_LOG(LogStageCraft, Warning, TEXT("%s: cannot duplicate %s: its catalog item %s is gone."), *GetNameSafe(GetOwner()),
+			*Source.DisplayName.ToString(), *Source.Item.ToString());
+		return nullptr;
+	}
+	return SpawnValidated(*Item, Transform, [&Source](AModularBaseActor& Actor)
+	{
+		Actor.AssignInstanceId(FGuid::NewGuid());
+		Actor.RestoreSnapshotState(Source);
+		Actor.PrepareAsDuplicate();
+	}, TEXT("Duplicated"));
+}
+
 AModularBaseActor* USpawnSystemComponent::SpawnValidated(UBaseItemData& Item, const FTransform& Transform, TFunctionRef<void(AModularBaseActor&)> Prepare, const TCHAR* LogVerb)
 {
 	UWorld* World = GetWorld();

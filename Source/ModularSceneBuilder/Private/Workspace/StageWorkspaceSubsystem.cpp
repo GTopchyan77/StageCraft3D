@@ -643,21 +643,45 @@ bool UStageWorkspaceSubsystem::ConfirmMainWindowClose()
 
 void UStageWorkspaceSubsystem::ShowExitPrompt(const FString& SceneName)
 {
+	ShowSavePrompt(SceneName, EStageSavePromptPurpose::CloseApp);
+}
+
+bool UStageWorkspaceSubsystem::ShowNameAndSavePrompt()
+{
+	if (!Shell.IsValid() || ExitPromptState != EExitPromptState::Closed || !LocalController.IsValid())
+	{
+		return false;
+	}
+	ShowSavePrompt(FString(), EStageSavePromptPurpose::NameAndSave);
+	return true;
+}
+
+void UStageWorkspaceSubsystem::ShowSavePrompt(const FString& SceneName, EStageSavePromptPurpose Purpose)
+{
 	if (!Shell.IsValid())
 	{
 		return;
 	}
 
 	const TWeakObjectPtr<UStageWorkspaceSubsystem> WeakThis(this);
+	PromptPurpose = Purpose;
 	ExitDialog = SNew(SStageUnsavedChangesDialog)
 		.SceneName(SceneName)
+		.Purpose(Purpose)
 		.OnSave_Lambda([WeakThis](const FString& Name) { if (WeakThis.IsValid()) { WeakThis->AnswerExitPrompt(EStageExitChoice::Save, Name); } })
 		.OnDiscard_Lambda([WeakThis]() { if (WeakThis.IsValid()) { WeakThis->AnswerExitPrompt(EStageExitChoice::Discard, FString()); } })
 		.OnCancel_Lambda([WeakThis]() { if (WeakThis.IsValid()) { WeakThis->AnswerExitPrompt(EStageExitChoice::Cancel, FString()); } });
 	ExitPromptState = EExitPromptState::Asking;
 	PendingExitOverwrite.Reset();
 	Shell->ShowDialog(ExitDialog.ToSharedRef(), ExitDialog->GetInitialFocus());
-	UE_LOG(LogStageWorkspace, Log, TEXT("Close requested with unsaved changes; asking whether to save \"%s\"."), *SceneName);
+	if (Purpose == EStageSavePromptPurpose::CloseApp)
+	{
+		UE_LOG(LogStageWorkspace, Log, TEXT("Close requested with unsaved changes; asking whether to save \"%s\"."), *SceneName);
+	}
+	else
+	{
+		UE_LOG(LogStageWorkspace, Log, TEXT("Save requested for a stage that was never saved; asking for a name."));
+	}
 }
 
 void UStageWorkspaceSubsystem::AnswerExitPrompt(EStageExitChoice Choice, const FString& SceneName)
@@ -679,6 +703,10 @@ void UStageWorkspaceSubsystem::AnswerExitPrompt(EStageExitChoice Choice, const F
 		return;
 
 	case EStageExitChoice::Discard:
+		if (PromptPurpose != EStageSavePromptPurpose::CloseApp)
+		{
+			return; // Only the exit prompt offers Don't Save.
+		}
 		UE_LOG(LogStageWorkspace, Log, TEXT("Exit prompt: closing without saving."));
 		if (Scenes)
 		{
@@ -695,8 +723,12 @@ void UStageWorkspaceSubsystem::AnswerExitPrompt(EStageExitChoice Choice, const F
 	if (!Scenes || !Session)
 	{
 		// The stage went away while the prompt was up (level change): nothing is left to save.
+		const bool bClose = PromptPurpose == EStageSavePromptPurpose::CloseApp;
 		CloseExitPrompt();
-		Shell->CloseMainWindow();
+		if (bClose)
+		{
+			Shell->CloseMainWindow();
+		}
 		return;
 	}
 
@@ -755,9 +787,10 @@ void UStageWorkspaceSubsystem::HandleExitSaveFinished(const FStageSceneOperation
 		return;
 	}
 
-	UE_LOG(LogStageWorkspace, Log, TEXT("Exit prompt: saved \"%s\"; closing."), *Result.SceneName);
+	const bool bClose = PromptPurpose == EStageSavePromptPurpose::CloseApp;
+	UE_LOG(LogStageWorkspace, Log, TEXT("Save prompt: saved \"%s\"%s."), *Result.SceneName, bClose ? TEXT("; closing") : TEXT(""));
 	CloseExitPrompt();
-	if (Shell.IsValid())
+	if (bClose && Shell.IsValid())
 	{
 		Shell->CloseMainWindow();
 	}

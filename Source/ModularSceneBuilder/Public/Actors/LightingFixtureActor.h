@@ -41,6 +41,9 @@ class MODULARSCENEBUILDER_API ALightingFixtureActor : public AModularBaseActor
 public:
 	ALightingFixtureActor();
 
+	/** A copy gets the next free fixture ID and (with auto-patch on) the next free DMX address instead of sharing the source's. */
+	virtual void PrepareAsDuplicate() override;
+
 	UFUNCTION(BlueprintPure, Category = "StageCraft|Fixture")
 	class ULightingFixtureData* GetFixtureData() const;
 

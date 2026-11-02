@@ -53,6 +53,13 @@ public:
 	class AModularBaseActor* RestoreItem(const struct FStageItemSnapshot& Snapshot);
 
 	/**
+	 * Duplicate support: a NEW item made from Source's catalog item and SaveGame state, at Transform, with a fresh instance id;
+	 * AModularBaseActor::PrepareAsDuplicate then clears what must stay unique. Validated by PlacementValidator exactly like
+	 * SpawnItem, so a copy can be refused (budget, entitlement, session limit). Returns null if refused or the item is gone.
+	 */
+	class AModularBaseActor* DuplicateItem(const struct FStageItemSnapshot& Source, const FTransform& Transform);
+
+	/**
 	 * Destroys the target if it is a stage item (implements IInteractableInterface).
 	 * Returns false for anything else, so level geometry can never be deleted by mistake.
 	 */

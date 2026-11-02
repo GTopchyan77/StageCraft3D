@@ -160,3 +160,43 @@ The Edit menu labels and the status bar hints read the current bindings: "Undo (
 - **Damaged saved values** are repaired with a log line per value, instead of reaching the lights and the mixer.
 - **A damaged import list** is set aside instead of being overwritten.
 - **Rollback:** the input change is self-contained, in the controller dispatch, the subsystem and the settings fields. The audit fixes are independent of it and of each other.
+
+## 5. Addendum: Save, Duplicate and focus-independent shortcuts (2026-11-02, STATE.md #57)
+
+**Problem.**
+- There was no Save shortcut and no duplicate at all.
+- No shortcut fired while the keyboard focus was in a docked panel or a floating window. `AModularPlayerController::InputKey` only sees keys when the scene viewport is on the focus path, and the workspace panels are sibling dock tabs or separate windows.
+
+**Decisions.**
+- **New commands.** `EStageInputCommand::Save` (default Ctrl+S) and `::Duplicate` (default Ctrl+D) are appended before `Count`, so saved key maps keep their meaning. They are listed under EDITING and can be rebound like the others. S and D alone stay fly keys (right mouse button only).
+- **Routing.** `FStageShortcutInputProcessor`, a Slate input preprocessor, is registered by the local controller in BeginPlay and unregistered in EndPlay.
+  - It looks up the chord in the same key map and runs only the app-wide commands (Save, Undo, Redo, Duplicate) through `AModularPlayerController::RequestAppWideCommand`.
+  - The decision is the pure function `StageShortcutRouting::ShouldRoute`. It stands aside:
+    - with the viewport focused (`InputKey` runs the command there, so it never runs twice);
+    - in a text field (`SEditableText` / `SMultiLineEditableText`: the field's own undo and typing);
+    - while a modal window or a workspace save prompt is open;
+    - while the Preferences panel is capturing a shortcut (`UStageInputPreferencesSubsystem::IsKeyCaptureActive`);
+    - while flying.
+  - Every other command keeps its focus-bound meaning. For example, Delete in a panel is the panel's.
+- **Ctrl+S** calls `RequestQuickSave`:
+  - a named stage saves under its name, through the existing asynchronous `UStageSceneComponent::SaveScene` (a background write; clean only if nothing changed meanwhile);
+  - a stage that was never saved shows the workspace's save prompt in its `NameAndSave` purpose (a name, Save, Cancel; no "Don't Save", and the app stays open);
+  - in HUD mode it reports "Name the stage first: File > Save Scene As".
+  - Saving is now refused, and reported, during a gizmo drag or camera move, so a drag in progress is never saved half-way.
+  - The status bar shows "● Unsaved changes", pushed by the session's `OnDirtyChanged`.
+  - File > Save shows the shortcut and uses the same request.
+- **Ctrl+D** calls `RequestDuplicateSelection`, which leads to `UStageEditHistoryComponent::DuplicateItems` and then `USpawnSystemComponent::DuplicateItem` for each item.
+  - **Placement:** the copies are placed one grid step along +X (the widest X grid of the selection, 100 cm without one).
+  - **Rules and identity:** each copy goes through `PlacementValidator` (the GameMode's placement rules: budget, entitlement, limits) and gets a fresh instance id. It copies the source's SaveGame state.
+  - **Fixtures:** the new hook `AModularBaseActor::PrepareAsDuplicate` clears what must stay unique. A fixture copy gets the next free fixture ID and, with auto-patch, the next free DMX address.
+  - **Undo:** all the copies are recorded as one undo step ("Duplicate N items"). Refused copies are reported by the rules and left out of the step.
+  - **Groups and selection:** groups are not persisted, so a multi-selection duplicates as a whole with its layout. The copies become the selection.
+  - **Entry points:** the Edit menu ("Duplicate Selected") and `StageCraft.Edit.Duplicate` / `StageCraft.Edit.Save` (development commands).
+
+**Consequences.**
+- Tests:
+  - `StageCraft.Input.KeyBindings` (Ctrl+S, Ctrl+D, plain D);
+  - `StageCraft.Input.ShortcutRouting` (the decision table);
+  - `StageCraft.History.Duplicate` (ids, settings, offset, fixture ID and patch, one undo step, redo, a refused copy);
+  - `StageCraft.Scene.SaveFlow` (the save writes and cleans, Busy, an edit during the write keeps the stage dirty, an invalid name).
+- Whether the shortcuts really fire with the focus in each kind of panel depends on Slate routing in the packaged app. That is checked by hand, because there is no Slate focus automation here.

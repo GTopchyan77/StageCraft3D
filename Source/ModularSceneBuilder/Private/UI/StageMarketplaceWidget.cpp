@@ -399,7 +399,7 @@ UWidget* UStageMarketplaceWidget::BuildDetailColumn()
 
 	PreviewText = MakeText(LOCTEXT("PreviewIdle", "Select a listing and press PREVIEW 3D to inspect it here, read-only, before you get it."), 7, TEXT("Italic"), Palette.TextSecondary);
 	PreviewText->SetAutoWrapText(true);
-	ActionButtons.SetNum(4);
+	ActionButtons.SetNum(int32(EAction::Count));
 	ActionButtons[int32(EAction::Frame)] = MakeButton(LOCTEXT("Frame", "FRAME"), LOCTEXT("FrameTip", "Back to the view of the whole stage."), int32(EAction::Frame), &ThisClass::HandleActionPicked);
 	UHorizontalBox* PreviewRow = WidgetTree->ConstructWidget<UHorizontalBox>(UHorizontalBox::StaticClass());
 	PreviewRow->AddChildToHorizontalBox(PreviewText)->SetSize(FSlateChildSize(ESlateSizeRule::Fill));
@@ -432,6 +432,15 @@ UWidget* UStageMarketplaceWidget::BuildDetailColumn()
 	ActionButtons[int32(EAction::Open)] = MakeButton(LOCTEXT("Open", "OPEN IN STAGE"),
 		LOCTEXT("OpenTip", "Open the scene you got from this listing, replacing the stage (like File > Open)."), int32(EAction::Open), &ThisClass::HandleActionPicked);
 	Add(BuildRow({ ActionButtons[int32(EAction::Preview)], ActionButtons[int32(EAction::Acquire)], ActionButtons[int32(EAction::Open)] }));
+
+	// Taking things out again (ADR 0021 §15): shown only where they apply, each confirmed by a second click.
+	ActionButtons[int32(EAction::Unpublish)] = MakeButton(LOCTEXT("Unpublish", "UNPUBLISH"),
+		LOCTEXT("UnpublishTip", "Take this listing, which you published from this computer, out of the marketplace. People who already got it keep their copy."),
+		int32(EAction::Unpublish), &ThisClass::HandleActionPicked);
+	ActionButtons[int32(EAction::RemoveFromLibrary)] = MakeButton(LOCTEXT("RemoveFromLibrary", "REMOVE FROM LIBRARY"),
+		LOCTEXT("RemoveFromLibraryTip", "Delete the copy of this listing kept in your library. You still own it and can get it again; scenes made from it stay, but cannot be exported until you do."),
+		int32(EAction::RemoveFromLibrary), &ThisClass::HandleActionPicked);
+	Add(BuildRow({ ActionButtons[int32(EAction::Unpublish)], ActionButtons[int32(EAction::RemoveFromLibrary)] }));
 
 	StatusText = MakeText(FText::GetEmpty(), 8, TEXT("Regular"), Palette.TextSecondary);
 	StatusText->SetAutoWrapText(true);
@@ -530,6 +539,8 @@ void UStageMarketplaceWidget::NativeConstruct()
 		Marketplace->OnListingsUpdated.AddUniqueDynamic(this, &ThisClass::HandleListingsUpdated);
 		Marketplace->OnAcquireCompleted.AddUniqueDynamic(this, &ThisClass::HandleAcquireCompleted);
 		Marketplace->OnPublishCompleted.AddUniqueDynamic(this, &ThisClass::HandlePublishCompleted);
+		Marketplace->OnUnpublishCompleted.AddUniqueDynamic(this, &ThisClass::HandleUnpublishCompleted);
+		Marketplace->OnLibraryChanged.AddUniqueDynamic(this, &ThisClass::HandleLibraryChanged);
 		PreviewReadyHandle = Marketplace->OnPreviewReady.AddUObject(this, &ThisClass::HandlePreviewReady);
 	}
 	if (UStageProfileSubsystem* Profile = GameInstance ? GameInstance->GetSubsystem<UStageProfileSubsystem>() : nullptr)
@@ -564,6 +575,8 @@ void UStageMarketplaceWidget::NativeDestruct()
 		Marketplace->OnListingsUpdated.RemoveDynamic(this, &ThisClass::HandleListingsUpdated);
 		Marketplace->OnAcquireCompleted.RemoveDynamic(this, &ThisClass::HandleAcquireCompleted);
 		Marketplace->OnPublishCompleted.RemoveDynamic(this, &ThisClass::HandlePublishCompleted);
+		Marketplace->OnUnpublishCompleted.RemoveDynamic(this, &ThisClass::HandleUnpublishCompleted);
+		Marketplace->OnLibraryChanged.RemoveDynamic(this, &ThisClass::HandleLibraryChanged);
 		Marketplace->OnPreviewReady.Remove(PreviewReadyHandle);
 	}
 	if (UStageProfileSubsystem* Profile = BoundProfile.Get())
@@ -762,6 +775,18 @@ void UStageMarketplaceWidget::RefreshDetails()
 		Button->SetIsEnabled(Listing != nullptr && Marketplace != nullptr);
 	}
 	ActionButtons[int32(EAction::Frame)]->SetIsEnabled(Preview.IsValid() && PreviewListing.IsValid());
+	const bool bMine = Listing && Marketplace && Marketplace->IsPublishedByMe(Listing->ListingId);
+	const bool bInLibrary = Listing && Marketplace && Marketplace->HasLibraryCopy(Listing->ListingId);
+	const auto ShowRemoval = [this, Listing](EAction Action, bool bApplies, const FText& Label, const FText& ConfirmLabel)
+	{
+		UStageChoiceButton* Button = ActionButtons[int32(Action)];
+		Button->SetVisibility(bApplies ? ESlateVisibility::Visible : ESlateVisibility::Collapsed);
+		const bool bConfirming = Listing && ConfirmRemovalListing == Listing->ListingId && ConfirmRemovalAction == Action;
+		StageMarketplacePanel::SetLabel(Button, bConfirming ? ConfirmLabel : Label);
+		StyleChoice(*Button, bConfirming);
+	};
+	ShowRemoval(EAction::Unpublish, bMine, LOCTEXT("Unpublish", "UNPUBLISH"), LOCTEXT("UnpublishConfirm", "CLICK AGAIN TO UNPUBLISH"));
+	ShowRemoval(EAction::RemoveFromLibrary, bInLibrary, LOCTEXT("RemoveFromLibrary", "REMOVE FROM LIBRARY"), LOCTEXT("RemoveConfirm", "CLICK AGAIN TO REMOVE"));
 	if (!Listing || !Marketplace)
 	{
 		DetailTitle->SetText(LOCTEXT("NoSelection", "Select a listing"));
@@ -775,8 +800,9 @@ void UStageMarketplaceWidget::RefreshDetails()
 
 	const EStageOwnershipState Ownership = Marketplace->GetListingOwnership(Listing->ListingId);
 	DetailTitle->SetText(FText::FromString(Listing->Title));
-	DetailByline->SetText(FText::Format(LOCTEXT("DetailByline", "by {0}  ·  {1}  ·  {2}  ·  published {3}"), FText::FromString(Listing->AuthorName),
-		StageMarketplacePanel::KindName(Listing->Kind), StageMarketplacePanel::CategoryName(Listing->Category), FText::AsDate(Listing->PublishedAtUtc)));
+	DetailByline->SetText(FText::Format(LOCTEXT("DetailBylineMine", "by {0}{4}  ·  {1}  ·  {2}  ·  published {3}"), FText::FromString(Listing->AuthorName),
+		StageMarketplacePanel::KindName(Listing->Kind), StageMarketplacePanel::CategoryName(Listing->Category), FText::AsDate(Listing->PublishedAtUtc),
+		bMine ? LOCTEXT("PublishedByYou", " (published by you)") : FText::GetEmpty()));
 	DetailStats->SetText(FText::Format(LOCTEXT("DetailStats", "{0} items  ·  {1} fixtures  ·  {2} cues  ·  {3} downloads  ·  {4}{5}"),
 		Listing->ItemCount, Listing->FixtureCount, Listing->CueCount, FText::AsNumber(Listing->Downloads), FText::AsMemory(Listing->PackageBytes),
 		Listing->Keywords.IsEmpty() ? FText::GetEmpty() : FText::FromString(TEXT("  ·  #") + FString::Join(Listing->Keywords, TEXT("  #")))));
@@ -890,6 +916,7 @@ void UStageMarketplaceWidget::HandleCardPicked(int32 Index)
 	}
 	SelectedListing = ShownListings[Index].ListingId;
 	ConfirmOpenListing.Invalidate();
+	ConfirmRemovalListing.Invalidate();
 	// Only restyled here: the cards are rebuilt by query answers, never inside a card's own click.
 	RefreshCardStyles();
 	RefreshDetails();
@@ -925,7 +952,71 @@ void UStageMarketplaceWidget::HandleActionPicked(int32 Index)
 			Preview->Frame();
 		}
 		break;
+
+	case EAction::Unpublish:
+	case EAction::RemoveFromLibrary:
+		if (Listing)
+		{
+			HandleRemovalPicked(static_cast<EAction>(Index), Listing->ListingId);
+		}
+		break;
+
+	case EAction::Count:
+		break;
 	}
+}
+
+void UStageMarketplaceWidget::HandleRemovalPicked(EAction Action, const FGuid& ListingId)
+{
+	AModularPlayerController* Controller = GetStageController();
+	if (!Controller)
+	{
+		return;
+	}
+	// Nothing is removed on a single click: the first one turns the button into its confirmation.
+	if (ConfirmRemovalListing != ListingId || ConfirmRemovalAction != Action)
+	{
+		ConfirmRemovalListing = ListingId;
+		ConfirmRemovalAction = Action;
+		ShowStatus(Action == EAction::Unpublish
+			? LOCTEXT("UnpublishAsk", "Unpublish? It leaves the marketplace for everyone; people who already got it keep their copy. Click again to confirm.")
+			: LOCTEXT("RemoveAsk", "Remove the library copy? You keep ownership and can get it again for free. Click again to confirm."), true);
+		RefreshDetails();
+		return;
+	}
+	ConfirmRemovalListing.Invalidate();
+	ConfirmRemovalAction = EAction::Count;
+	// The status is set first: an answer that arrives at once must not be overwritten by "Working...".
+	ShowStatus(Action == EAction::Unpublish ? LOCTEXT("Unpublishing", "Unpublishing...") : LOCTEXT("Removing", "Removing from your library..."), false);
+	if (Action == EAction::Unpublish)
+	{
+		Controller->RequestMarketplaceUnpublish(ListingId);
+	}
+	else
+	{
+		Controller->RequestMarketplaceRemoveFromLibrary(ListingId);
+	}
+	RefreshDetails();
+}
+
+void UStageMarketplaceWidget::HandleUnpublishCompleted(FGuid ListingId, FStageMarketplaceResultInfo Result)
+{
+	ShowStatus(Result.Message, !Result.IsSuccess());
+	if (Result.IsSuccess() && SelectedListing == ListingId)
+	{
+		SelectedListing.Invalidate();
+	}
+	// The subsystem queries again after a success; the cards follow its answer (HandleListingsUpdated).
+	RefreshDetails();
+}
+
+void UStageMarketplaceWidget::HandleLibraryChanged(FGuid ListingId, FStageMarketplaceResultInfo Result)
+{
+	if (!Result.Message.IsEmpty())
+	{
+		ShowStatus(Result.Message, !Result.IsSuccess());
+	}
+	RefreshDetails();
 }
 
 void UStageMarketplaceWidget::OpenImportedScene(const FGuid& ListingId)

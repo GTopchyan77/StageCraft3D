@@ -15,6 +15,7 @@
 #include "Components/SelectionComponent.h"
 #include "Components/SpawnSystemComponent.h"
 #include "Components/StageGroupTransformComponent.h"
+#include "Data/BaseItemData.h"
 #include "EnhancedInputComponent.h"
 #include "EnhancedInputSubsystems.h"
 #include "Framework/Application/SlateApplication.h"
@@ -37,6 +38,7 @@
 #include "Import/StageFileDialog.h"
 #include "Import/StageMeshImportSubsystem.h"
 #include "Input/StageInputPreferencesSubsystem.h"
+#include "Input/StageShortcutRouting.h"
 #include "Interaction/StageCraftCollision.h"
 #include "ModularSceneBuilder.h"
 #include "Placement/StagePlacementToolComponent.h"
@@ -195,10 +197,25 @@ void AModularPlayerController::BeginPlay()
 			HUDWidget->AddToViewport();
 		}
 	}
+
+	// Ctrl+S, Ctrl+Z, Ctrl+Y and Ctrl+D from any panel, not only with the viewport focused (ADR 0013 addendum).
+	if (IsLocalController() && FSlateApplication::IsInitialized())
+	{
+		ShortcutProcessor = MakeShared<FStageShortcutInputProcessor>(*this);
+		FSlateApplication::Get().RegisterInputPreProcessor(ShortcutProcessor);
+	}
 }
 
 void AModularPlayerController::EndPlay(const EEndPlayReason::Type EndPlayReason)
 {
+	if (ShortcutProcessor.IsValid())
+	{
+		if (FSlateApplication::IsInitialized())
+		{
+			FSlateApplication::Get().UnregisterInputPreProcessor(ShortcutProcessor);
+		}
+		ShortcutProcessor.Reset();
+	}
 	CameraNavigation->CancelAll();
 
 	UnbindPreviewRefreshSources();
@@ -492,6 +509,8 @@ void AModularPlayerController::ExecuteCommand(EStageInputCommand Command)
 	case EStageInputCommand::ToggleGrid:			ViewportView->SetGridVisible(!ViewportView->IsGridVisible()); break;
 	case EStageInputCommand::FocusSelection:		CameraNavigation->FocusSelection(); break;
 	case EStageInputCommand::ToggleViewportToolbar:	ViewportView->SetToolbarCollapsed(!ViewportView->IsToolbarCollapsed()); break;
+	case EStageInputCommand::Save:					RequestQuickSave(); break;
+	case EStageInputCommand::Duplicate:				RequestDuplicateSelection(); break;
 	default:
 		// Navigation commands are fly-axis mappings (RebuildCameraMapping); FindCommand never returns them.
 		break;
@@ -1538,6 +1557,40 @@ FStageEconomyResultInfo AModularPlayerController::RequestSetDMXInput(bool bEnabl
 	return FStageEconomyResultInfo::Ok();
 }
 
+int32 AModularPlayerController::RequestDuplicateSelection()
+{
+	if (IsBusyWithPointer() || !Selection->HasSelection())
+	{
+		return 0;
+	}
+
+	// One grid step to the side: the widest X grid among the selected items, so copies land on the grid their sources use.
+	constexpr double FallbackStepCm = 100.0;
+	double StepCm = 0.0;
+	const TArray<AActor*> Sources = Selection->GetSelectedActors();
+	for (const AActor* Source : Sources)
+	{
+		const AModularBaseActor* Item = Cast<AModularBaseActor>(Source);
+		if (const UBaseItemData* Data = Item ? Item->GetItemData() : nullptr)
+		{
+			StepCm = FMath::Max(StepCm, Data->PlacementRules.GridSize.X);
+		}
+	}
+	const FVector Offset(StepCm > 0.0 ? StepCm : FallbackStepCm, 0.0, 0.0);
+
+	// The placement rules (bound to the GameMode) report each refused copy themselves, as for any placement.
+	int32 Refused = 0;
+	const TArray<AModularBaseActor*> Copies = EditHistory->DuplicateItems(Sources, Offset, Refused);
+	if (!Copies.IsEmpty())
+	{
+		PlacementTool->EnterSelectMode();
+		Selection->SelectActors(TArray<AActor*>(Copies));
+	}
+	UE_LOG(LogStageCraft, Log, TEXT("Duplicate: %d of %d selected items copied (%d refused), offset %s."), Copies.Num(), Sources.Num(), Refused, *Offset.ToCompactString());
+	RequestPreviewRefresh();
+	return Copies.Num();
+}
+
 void AModularPlayerController::RequestSelectAll()
 {
 	const UStageSessionSubsystem* Session = UWorld::GetSubsystem<UStageSessionSubsystem>(GetWorld());
@@ -2094,7 +2147,43 @@ int32 AModularPlayerController::RequestClearStage()
 
 EStageSceneResult AModularPlayerController::RequestSaveScene(const FString& Name)
 {
+	// A save captures every item's transform; mid-drag that would be a transform the user has not let go of yet.
+	if (IsBusyWithPointer())
+	{
+		ReportRejection(FStageEconomyResultInfo::Fail(EStageEconomyResult::InvalidRequest, LOCTEXT("SaveBusy", "Finish the drag or camera move first, then save.")));
+		return EStageSceneResult::Busy;
+	}
 	return ReportSceneRefusal(EStageSceneOperation::Save, SceneFiles->SaveScene(Name.TrimStartAndEnd()), Name);
+}
+
+EStageSceneResult AModularPlayerController::RequestQuickSave()
+{
+	const UStageSessionSubsystem* Session = UWorld::GetSubsystem<UStageSessionSubsystem>(GetWorld());
+	if (!Session)
+	{
+		return EStageSceneResult::Busy;
+	}
+	if (!Session->GetSceneName().IsEmpty())
+	{
+		return RequestSaveScene(Session->GetSceneName());
+	}
+	// Never saved: it needs a name first. The workspace asks for one; the HUD has no prompt, so it says where to give one.
+	UStageWorkspaceSubsystem* Workspace = GetGameInstance() ? GetGameInstance()->GetSubsystem<UStageWorkspaceSubsystem>() : nullptr;
+	if (!Workspace || !Workspace->ShowNameAndSavePrompt())
+	{
+		ReportRejection(FStageEconomyResultInfo::Fail(EStageEconomyResult::InvalidRequest, LOCTEXT("SaveNeedsName", "Name the stage first: File > Save Scene As.")));
+	}
+	return EStageSceneResult::InvalidName;
+}
+
+bool AModularPlayerController::RequestAppWideCommand(EStageInputCommand Command)
+{
+	if (!StageShortcutRouting::IsAppWideCommand(Command))
+	{
+		return false;
+	}
+	ExecuteCommand(Command);
+	return true;
 }
 
 EStageSceneResult AModularPlayerController::RequestLoadScene(const FString& Name)
@@ -2153,6 +2242,30 @@ bool AModularPlayerController::RequestMarketplacePublish(const FStageMarketplace
 {
 	UStageMarketplaceSubsystem* Marketplace = GetGameInstance() ? GetGameInstance()->GetSubsystem<UStageMarketplaceSubsystem>() : nullptr;
 	const FStageMarketplaceResultInfo Result = Marketplace ? Marketplace->RequestPublish(Request)
+		: FStageMarketplaceResultInfo::Fail(EStageMarketplaceResult::BackendUnavailable, LOCTEXT("NoMarketplace", "The marketplace is not available."));
+	if (!Result.IsSuccess())
+	{
+		ReportRejection(StageMarketplaceRequests::ToRejection(Result));
+	}
+	return Result.IsSuccess();
+}
+
+bool AModularPlayerController::RequestMarketplaceUnpublish(FGuid ListingId)
+{
+	UStageMarketplaceSubsystem* Marketplace = GetGameInstance() ? GetGameInstance()->GetSubsystem<UStageMarketplaceSubsystem>() : nullptr;
+	const FStageMarketplaceResultInfo Result = Marketplace ? Marketplace->RequestUnpublish(ListingId)
+		: FStageMarketplaceResultInfo::Fail(EStageMarketplaceResult::BackendUnavailable, LOCTEXT("NoMarketplace", "The marketplace is not available."));
+	if (!Result.IsSuccess())
+	{
+		ReportRejection(StageMarketplaceRequests::ToRejection(Result));
+	}
+	return Result.IsSuccess();
+}
+
+bool AModularPlayerController::RequestMarketplaceRemoveFromLibrary(FGuid ListingId)
+{
+	UStageMarketplaceSubsystem* Marketplace = GetGameInstance() ? GetGameInstance()->GetSubsystem<UStageMarketplaceSubsystem>() : nullptr;
+	const FStageMarketplaceResultInfo Result = Marketplace ? Marketplace->RequestRemoveFromLibrary(ListingId)
 		: FStageMarketplaceResultInfo::Fail(EStageMarketplaceResult::BackendUnavailable, LOCTEXT("NoMarketplace", "The marketplace is not available."));
 	if (!Result.IsSuccess())
 	{

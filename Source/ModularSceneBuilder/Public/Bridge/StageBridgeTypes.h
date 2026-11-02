@@ -97,6 +97,22 @@ struct MODULARSCENEBUILDER_API FStageBridgeResultInfo
 	UPROPERTY(BlueprintReadOnly, Category = "StageCraft|Bridge")
 	int32 SkippedItems = 0;
 
+	/** Items left out because they are hidden on stage (ADR 0022 §13). */
+	UPROPERTY(BlueprintReadOnly, Category = "StageCraft|Bridge")
+	int32 HiddenItems = 0;
+
+	/** Items left out because their entry in the scene file was damaged (dropped when the file was read). */
+	UPROPERTY(BlueprintReadOnly, Category = "StageCraft|Bridge")
+	int32 InvalidItems = 0;
+
+	/** Exported items that produced no geometry (a mesh that did not load, a part that could not be converted). Counted in ExportedItems. */
+	UPROPERTY(BlueprintReadOnly, Category = "StageCraft|Bridge")
+	int32 ItemsWithoutGeometry = 0;
+
+	/** Fixture lights written to the file (glTF punctual lights). */
+	UPROPERTY(BlueprintReadOnly, Category = "StageCraft|Bridge")
+	int32 ExportedLights = 0;
+
 	bool IsSuccess() const { return Code == EStageBridgeResult::Success; }
 
 	static FStageBridgeResultInfo Fail(EStageBridgeResult InCode, const FText& InMessage)

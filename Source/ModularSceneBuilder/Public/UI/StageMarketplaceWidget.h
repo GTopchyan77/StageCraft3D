@@ -49,7 +49,7 @@ protected:
 
 private:
 	/** Listing details actions, in button order. */
-	enum class EAction : int32 { Preview, Acquire, Open, Frame };
+	enum class EAction : int32 { Preview, Acquire, Open, Frame, Unpublish, RemoveFromLibrary, Count };
 
 	void BuildTree();
 	class UWidget* BuildHeader();
@@ -126,6 +126,15 @@ private:
 	void HandleOwnershipChanged();
 	UFUNCTION()
 	void HandleOrderCompleted(const FStageOrderResultInfo& Result);
+
+	UFUNCTION()
+	void HandleUnpublishCompleted(FGuid ListingId, FStageMarketplaceResultInfo Result);
+
+	UFUNCTION()
+	void HandleLibraryChanged(FGuid ListingId, FStageMarketplaceResultInfo Result);
+
+	/** UNPUBLISH and REMOVE FROM LIBRARY ask for a second click on the same listing (ConfirmRemoval*); this runs the first. */
+	void HandleRemovalPicked(EAction Action, const FGuid& ListingId);
 
 	class UStageMarketplaceSubsystem* GetMarketplace() const { return BoundMarketplace.Get(); }
 	class AModularPlayerController* GetStageController() const;
@@ -234,6 +243,9 @@ private:
 	TMap<FGuid, FString> ImportedScenes;
 	/** Set by a first OPEN click on a dirty stage; the second click on the same listing discards and opens. */
 	FGuid ConfirmOpenListing;
+	/** Set by a first UNPUBLISH or REMOVE FROM LIBRARY click (which of the two in ConfirmRemovalAction); the second click on the same listing does it. */
+	FGuid ConfirmRemovalListing;
+	EAction ConfirmRemovalAction = EAction::Count;
 	EStagePackageKind PublishKind = EStagePackageKind::StageDesign;
 	/** Off by default: a publisher opts in to letting buyers export (ADR 0022 §11.1). */
 	bool bPublishAllowExport = false;
