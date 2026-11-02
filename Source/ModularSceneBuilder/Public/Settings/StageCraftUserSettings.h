@@ -113,6 +113,12 @@ public:
 	/** Returns true if the stored value changed. Does not save. */
 	bool SetViewportToolbarCollapsed(bool bCollapsed);
 
+	/** Whether the welcome screen with the starter stages opens after startup (Docs/ADR/0024 §6). The welcome screen is the only writer. */
+	bool IsWelcomeShownAtStartup() const { return bShowWelcomeAtStartup; }
+
+	/** Returns true if the stored value changed. Does not save. */
+	bool SetWelcomeShownAtStartup(bool bShow);
+
 	/** Art-Net / sACN input of this PC (UStageDMXNetworkSubsystem is the only writer), always sanitized. */
 	const FStageDMXInputSettings& GetDMXInputSettings() const { return DMXInput; }
 
@@ -160,6 +166,9 @@ private:
 
 	UPROPERTY(Config)
 	bool bViewportToolbarCollapsed = false;
+
+	UPROPERTY(Config)
+	bool bShowWelcomeAtStartup = true;
 
 	UPROPERTY(Config)
 	FStageDMXInputSettings DMXInput;

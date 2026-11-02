@@ -72,6 +72,7 @@ void UStageEconomySubsystem::Initialize(FSubsystemCollectionBase& Collection)
 
 void UStageEconomySubsystem::Deinitialize()
 {
+	OnProductCatalogLoadProgress.Clear();
 	OnProductCatalogLoaded.Clear();
 	OnPurchaseCompleted.Clear();
 	OnListingPurchaseCompleted.Clear();
@@ -91,6 +92,11 @@ void UStageEconomySubsystem::Deinitialize()
 	UnresolvedProducts.Reset();
 	UnresolvedListingOffers.Reset();
 	UnresolvedTopUps.Reset();
+	if (ProductCatalogHandle.IsValid())
+	{
+		ProductCatalogHandle->CancelHandle();
+		ProductCatalogHandle.Reset();
+	}
 	Products.Reset();
 	Backend = nullptr;
 	bCatalogLoaded = false;
@@ -182,8 +188,19 @@ void UStageEconomySubsystem::LoadProductCatalog()
 	AssetManager.GetPrimaryAssetIdList(UStageProductData::ProductAssetType, ProductIds);
 
 	// No products is a valid setup (everything free), so this is not a warning.
-	AssetManager.LoadPrimaryAssets(ProductIds, { FName(TEXT("UI")) },
+	ProductCatalogHandle = AssetManager.LoadPrimaryAssets(ProductIds, { FName(TEXT("UI")) },
 		FStreamableDelegate::CreateUObject(this, &ThisClass::HandleProductCatalogLoaded));
+	if (bCatalogLoaded)
+	{
+		ProductCatalogHandle.Reset(); // Already loaded: the delegate ran inside LoadPrimaryAssets.
+	}
+	else if (ProductCatalogHandle.IsValid())
+	{
+		ProductCatalogHandle->BindUpdateDelegate(FStreamableUpdateDelegate::CreateWeakLambda(this, [this](TSharedRef<FStreamableHandle> Handle)
+		{
+			OnProductCatalogLoadProgress.Broadcast(Handle->GetLoadProgress());
+		}));
+	}
 }
 
 void UStageEconomySubsystem::HandleProductCatalogLoaded()
@@ -201,9 +218,19 @@ void UStageEconomySubsystem::HandleProductCatalogLoaded()
 	}
 	Products.Sort([](const UStageProductData& A, const UStageProductData& B) { return A.DisplayName.CompareTo(B.DisplayName) < 0; });
 
+	ProductCatalogHandle.Reset(); // The Asset Manager keeps the loaded bundle; the handle was only for progress.
 	bCatalogLoaded = true;
 	UE_LOG(LogStageCraft, Log, TEXT("Product catalog loaded: %d products."), Products.Num());
 	OnProductCatalogLoaded.Broadcast();
+}
+
+float UStageEconomySubsystem::GetProductCatalogLoadProgress() const
+{
+	if (bCatalogLoaded)
+	{
+		return 1.f;
+	}
+	return ProductCatalogHandle.IsValid() ? ProductCatalogHandle->GetLoadProgress() : 0.f;
 }
 
 UStageProductData* UStageEconomySubsystem::FindProduct(FPrimaryAssetId ProductId) const

@@ -8,6 +8,7 @@
 #include "Data/StageParameterTypes.h"
 #include "Economy/StageEconomyTypes.h"
 #include "Marketplace/StageMarketplaceTypes.h"
+#include "Startup/StageStartupTypes.h"
 #include "StageEconomySubsystem.generated.h"
 
 DECLARE_DYNAMIC_MULTICAST_DELEGATE(FOnStageProductCatalogLoaded);
@@ -49,6 +50,12 @@ public:
 
 	UFUNCTION(BlueprintPure, Category = "StageCraft|Economy")
 	bool IsProductCatalogLoaded() const { return bCatalogLoaded; }
+
+	/** Load progress of the product catalog in [0, 1]: 1 once loaded. For the startup loader (Docs/ADR/0024 §2). */
+	float GetProductCatalogLoadProgress() const;
+
+	/** Pushed while the product catalog streams in. Not fired after OnProductCatalogLoaded. */
+	FOnStageLoadProgress OnProductCatalogLoadProgress;
 
 	/** Sorted by display name. Empty until OnProductCatalogLoaded. */
 	UFUNCTION(BlueprintPure, Category = "StageCraft|Economy")
@@ -236,6 +243,9 @@ private:
 	TMap<FGuid, TWeakObjectPtr<class UStageProductData>> UnresolvedProducts;
 	TMap<FGuid, FStageMarketplaceListing> UnresolvedListingOffers;
 	TMap<FGuid, FStageTopUpRequest> UnresolvedTopUps;
+
+	/** The product catalog load in flight; reset once it completes. */
+	TSharedPtr<struct FStreamableHandle> ProductCatalogHandle;
 
 	bool bCatalogLoaded = false;
 };

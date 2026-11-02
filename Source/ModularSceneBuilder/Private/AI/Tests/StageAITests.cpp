@@ -421,7 +421,7 @@ bool FStageAIAnswersTest::RunTest(const FString& Parameters)
 	TestTrue(TEXT("Cue list"), Cues.Contains(TEXT("2 cues")) && Cues.Contains(TEXT("Q1 Walk-in (3 s)")) && Cues.Contains(TEXT("Q2.5 (2 s)")));
 	TestTrue(TEXT("Active cue"), Cues.Contains(TEXT("Cue 2.5 is on stage")));
 	TestTrue(TEXT("Indoor environment"), Answer(EStageAIIntent::EnvironmentStatus).Contains(TEXT("Indoor stage")));
-	Scene.Environment.bSkyEnabled = true;
+	Scene.Environment.Lighting = EStageLightingSource::OutdoorSky;
 	Scene.Environment = StageEnvironment::ApplyWeatherPreset(Scene.Environment, EStageWeatherPreset::Rain);
 	Scene.Environment.TimeOfDay = 18.5f;
 	TestTrue(TEXT("Outdoor environment"), Answer(EStageAIIntent::EnvironmentStatus).Contains(TEXT("18:30")) && Answer(EStageAIIntent::EnvironmentStatus).Contains(TEXT("rain")));

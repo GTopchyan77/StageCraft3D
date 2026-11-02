@@ -11,10 +11,15 @@
 #include "Components/ScrollBox.h"
 #include "Components/SizeBox.h"
 #include "Components/TextBlock.h"
+#include "Components/UniformGridPanel.h"
+#include "Components/UniformGridSlot.h"
 #include "Components/VerticalBox.h"
 #include "Components/VerticalBoxSlot.h"
 #include "Engine/World.h"
+#include "Environment/StageAtmospherePreset.h"
+#include "Environment/StageAtmosphereSubsystem.h"
 #include "Environment/StageEnvironmentSubsystem.h"
+#include "Player/ModularPlayerController.h"
 #include "UI/StageCraftUITheme.h"
 #include "UI/StageCraftWidgetStyle.h"
 #include "UI/StageToolButton.h"
@@ -48,6 +53,9 @@ namespace StageEnvironmentPanel
 		Rain,
 		Snow,
 		Fog,
+		Exposure,
+		Bloom,
+		WhiteBalance,
 		Count
 	};
 
@@ -71,6 +79,9 @@ namespace StageEnvironmentPanel
 			{ LOCTEXT("Rain", "Rain"), LOCTEXT("RainTip", "Rain intensity. Surfaces get wet with it."), 0.f, 1.f },
 			{ LOCTEXT("Snow", "Snow"), LOCTEXT("SnowTip", "Snowfall intensity."), 0.f, 1.f },
 			{ LOCTEXT("Fog", "Fog"), LOCTEXT("FogTip", "Atmospheric fog, from light haze to a few tens of metres of visibility."), 0.f, 1.f },
+			{ LOCTEXT("Exposure", "Exposure"), LOCTEXT("ExposureTip", "Brightens or darkens the whole picture, in stops (EV)."), -4.f, 4.f },
+			{ LOCTEXT("Bloom", "Bloom"), LOCTEXT("BloomTip", "Glow around bright lights and beams."), 0.f, 4.f },
+			{ LOCTEXT("WhiteBalance", "White balance"), LOCTEXT("WhiteBalanceTip", "The colour temperature the camera treats as white: lower renders the scene cooler (bluer), higher warmer."), 2000.f, 15000.f },
 		};
 		static_assert(UE_ARRAY_COUNT(Specs) == int32(ESlider::Count), "One spec per slider, in ESlider order.");
 		return Specs[int32(Slider)];
@@ -87,6 +98,9 @@ namespace StageEnvironmentPanel
 		case ESlider::Rain:			return Settings.Rain;
 		case ESlider::Snow:			return Settings.Snow;
 		case ESlider::Fog:			return Settings.Fog;
+		case ESlider::Exposure:	return Settings.Look.ExposureCompensation;
+		case ESlider::Bloom:		return Settings.Look.BloomIntensity;
+		case ESlider::WhiteBalance:	return Settings.Look.WhiteBalanceTemp;
 		default:					return 0.f;
 		}
 	}
@@ -102,6 +116,9 @@ namespace StageEnvironmentPanel
 		case ESlider::Rain:			Settings.Rain = Value; break;
 		case ESlider::Snow:			Settings.Snow = Value; break;
 		case ESlider::Fog:			Settings.Fog = Value; break;
+		case ESlider::Exposure:	Settings.Look.ExposureCompensation = Value; break;
+		case ESlider::Bloom:		Settings.Look.BloomIntensity = Value; break;
+		case ESlider::WhiteBalance:	Settings.Look.WhiteBalanceTemp = Value; break;
 		default:					break;
 		}
 	}
@@ -121,6 +138,20 @@ namespace StageEnvironmentPanel
 		case ESlider::SunElevation:
 		case ESlider::SunAzimuth:
 			return FText::Format(LOCTEXT("Degrees", "{0}°"), FText::AsNumber(FMath::RoundToInt(Value)));
+		case ESlider::Exposure:
+		{
+			FNumberFormattingOptions OneDecimal;
+			OneDecimal.SetMinimumFractionalDigits(1).SetMaximumFractionalDigits(1).SetAlwaysSign(true);
+			return FText::Format(LOCTEXT("Stops", "{0} EV"), FText::AsNumber(Value, &OneDecimal));
+		}
+		case ESlider::Bloom:
+			return FText::AsNumber(FMath::RoundToFloat(Value * 100.f) / 100.f);
+		case ESlider::WhiteBalance:
+		{
+			FNumberFormattingOptions NoGrouping;
+			NoGrouping.SetUseGrouping(false);
+			return FText::Format(LOCTEXT("Kelvin", "{0} K"), FText::AsNumber(FMath::RoundToInt(Value / 50.f) * 50, &NoGrouping));
+		}
 		default:
 			return FText::AsPercent(Value);
 		}
@@ -191,11 +222,25 @@ void UStageEnvironmentPanel::BuildTree()
 		}
 	};
 
-	AddSection(BuildChoiceRow(LOCTEXT("OutdoorSky", "OUTDOOR SKY"),
-		{ LOCTEXT("SkyOff", "Off"), LOCTEXT("SkyOn", "On") },
-		{ LOCTEXT("SkyOffTip", "Indoor stage: the level's own lights, sky light and fog."),
-		  LOCTEXT("SkyOnTip", "Outdoor stage: a real sky with sun, moon, clouds, rain, snow and fog. The level's own sun, sky light and fog are hidden meanwhile.") },
-		SkyButtons, &ThisClass::HandleSkyPicked));
+	// Atmospheres: one card per preset, filled when the presets have loaded (RebuildAtmosphereCards).
+	{
+		UVerticalBox* Section = WidgetTree->ConstructWidget<UVerticalBox>(UVerticalBox::StaticClass(), TEXT("Atmospheres"));
+		if (UVerticalBoxSlot* TitleSlot = Section->AddChildToVerticalBox(MakeText(LOCTEXT("AtmosphereTitle", "ATMOSPHERE"), 7, TEXT("Bold"), Palette.TextSecondary)))
+		{
+			TitleSlot->SetPadding(FMargin(0.f, 0.f, 0.f, 4.f));
+		}
+		AtmosphereGrid = WidgetTree->ConstructWidget<UUniformGridPanel>(UUniformGridPanel::StaticClass(), TEXT("AtmosphereGrid"));
+		AtmosphereGrid->SetSlotPadding(FMargin(ChoiceGap * 0.5f));
+		Section->AddChildToVerticalBox(AtmosphereGrid);
+		AddSection(Section);
+	}
+
+	AddSection(BuildChoiceRow(LOCTEXT("Lighting", "LIGHTING"),
+		{ LOCTEXT("LightingLevel", "Venue"), LOCTEXT("LightingOutdoor", "Outdoor"), LOCTEXT("LightingStudio", "Studio") },
+		{ LOCTEXT("LightingLevelTip", "The venue's own lights, sky light and fog, as the level was built."),
+		  LOCTEXT("LightingOutdoorTip", "Outdoor stage: a real sky with sun, moon, clouds, rain, snow and fog. The venue's own lights are hidden meanwhile."),
+		  LOCTEXT("LightingStudioTip", "Photo studio: soft even light from every side, a key light and a seamless light-grey backdrop. The venue's own lights are hidden meanwhile.") },
+		LightingButtons, &ThisClass::HandleLightingPicked));
 
 	NoticeText = MakeText(FText::GetEmpty(), 8, TEXT("Regular"), Palette.TextSecondary);
 	NoticeText->SetAutoWrapText(true);
@@ -212,6 +257,7 @@ void UStageEnvironmentPanel::BuildTree()
 	ValueTexts.Reset(int32(ESlider::Count));
 	AddSection(BuildSliderSection(LOCTEXT("Sun", "SUN"), int32(ESlider::TimeOfDay), 3));
 	AddSection(BuildSliderSection(LOCTEXT("Conditions", "CONDITIONS"), int32(ESlider::Clouds), 4));
+	AddSection(BuildSliderSection(LOCTEXT("Look", "CAMERA LOOK"), int32(ESlider::Exposure), 3));
 	check(Sliders.Num() == int32(ESlider::Count));
 }
 
@@ -224,7 +270,7 @@ UWidget* UStageEnvironmentPanel::BuildHeader()
 	Header->SetBrush(MakeBox(Palette.PanelHeader));
 	Header->SetPadding(FMargin(10.f, 8.f));
 	UTextBlock* Title = MakeText(LOCTEXT("Title", "ENVIRONMENT"), 9, TEXT("Bold"), Palette.TextPrimary);
-	Title->SetToolTipText(LOCTEXT("TitleTip", "Outdoor sky, time of day and weather for open-air stages."));
+	Title->SetToolTipText(LOCTEXT("TitleTip", "Atmosphere, lighting, time of day, weather and the camera look of the stage."));
 	Header->SetContent(Title);
 	return Header;
 }
@@ -343,6 +389,14 @@ void UStageEnvironmentPanel::NativeConstruct()
 	{
 		Subsystem->OnEnvironmentChanged.AddUniqueDynamic(this, &ThisClass::HandleEnvironmentChanged);
 	}
+
+	UStageAtmosphereSubsystem* Catalog = GetGameInstance() ? GetGameInstance()->GetSubsystem<UStageAtmosphereSubsystem>() : nullptr;
+	AtmosphereCatalog = Catalog;
+	if (Catalog && !Catalog->IsLoaded())
+	{
+		AtmospheresLoadedHandle = Catalog->OnAtmospheresLoaded.AddUObject(this, &ThisClass::RebuildAtmosphereCards);
+	}
+	RebuildAtmosphereCards();
 	Refresh();
 }
 
@@ -352,8 +406,75 @@ void UStageEnvironmentPanel::NativeDestruct()
 	{
 		Subsystem->OnEnvironmentChanged.RemoveDynamic(this, &ThisClass::HandleEnvironmentChanged);
 	}
+	if (UStageAtmosphereSubsystem* Catalog = AtmosphereCatalog.Get())
+	{
+		Catalog->OnAtmospheresLoaded.Remove(AtmospheresLoadedHandle);
+	}
+	AtmospheresLoadedHandle.Reset();
+	AtmosphereCatalog.Reset();
 	Environment.Reset();
 	Super::NativeDestruct();
+}
+
+void UStageEnvironmentPanel::RebuildAtmosphereCards()
+{
+	using namespace StageCraftWidgetStyle;
+	if (!AtmosphereGrid)
+	{
+		return;
+	}
+	const UStageCraftUITheme& Palette = GetTheme();
+	AtmosphereGrid->ClearChildren();
+	AtmosphereButtons.Reset();
+	AtmospherePresets.Reset();
+
+	const UStageAtmosphereSubsystem* Catalog = AtmosphereCatalog.Get();
+	if (!Catalog || !Catalog->IsLoaded())
+	{
+		AtmosphereGrid->AddChildToUniformGrid(MakeText(LOCTEXT("AtmospheresLoading", "Loading atmospheres…"), 8, TEXT("Regular"), Palette.TextSecondary), 0, 0);
+		return;
+	}
+
+	constexpr int32 Columns = 2;
+	for (UStageAtmospherePreset* Preset : Catalog->GetAtmospheres())
+	{
+		if (!Preset)
+		{
+			continue;
+		}
+		const int32 Index = AtmospherePresets.Add(Preset);
+		UStageChoiceButton* Card = WidgetTree->ConstructWidget<UStageChoiceButton>(UStageChoiceButton::StaticClass());
+		Card->SetChoiceIndex(Index);
+		Card->OnPicked.BindUObject(this, &ThisClass::HandleAtmospherePicked);
+		Card->SetToolTipText(Preset->Description);
+
+		// A strip of the mood's colour over its name.
+		UVerticalBox* Content = WidgetTree->ConstructWidget<UVerticalBox>(UVerticalBox::StaticClass());
+		UImage* Swatch = WidgetTree->ConstructWidget<UImage>(UImage::StaticClass());
+		Swatch->SetBrush(MakeBox(Preset->SwatchColor, CornerRadius));
+		USizeBox* SwatchBox = WidgetTree->ConstructWidget<USizeBox>(USizeBox::StaticClass());
+		SwatchBox->SetHeightOverride(18.f);
+		SwatchBox->SetContent(Swatch);
+		Content->AddChildToVerticalBox(SwatchBox);
+		UTextBlock* Name = MakeText(Preset->DisplayName, 8, TEXT("Bold"), Palette.TextPrimary);
+		Name->SetTextOverflowPolicy(ETextOverflowPolicy::Ellipsis);
+		if (UVerticalBoxSlot* NameSlot = Content->AddChildToVerticalBox(Name))
+		{
+			NameSlot->SetPadding(FMargin(0.f, 4.f, 0.f, 0.f));
+			NameSlot->SetHorizontalAlignment(HAlign_Center);
+		}
+		if (UButtonSlot* ContentSlot = Cast<UButtonSlot>(Card->AddChild(Content)))
+		{
+			ContentSlot->SetPadding(FMargin(4.f));
+			ContentSlot->SetHorizontalAlignment(HAlign_Fill);
+		}
+		if (UUniformGridSlot* GridSlot = AtmosphereGrid->AddChildToUniformGrid(Card, Index / Columns, Index % Columns))
+		{
+			GridSlot->SetHorizontalAlignment(HAlign_Fill);
+		}
+		AtmosphereButtons.Add(Card);
+	}
+	Refresh();
 }
 
 void UStageEnvironmentPanel::StyleChoice(UStageChoiceButton& Button, bool bSelected) const
@@ -376,20 +497,46 @@ void UStageEnvironmentPanel::StyleChoice(UStageChoiceButton& Button, bool bSelec
 	}
 }
 
+void UStageEnvironmentPanel::StyleCard(UStageChoiceButton& Button, bool bSelected) const
+{
+	using namespace StageCraftWidgetStyle;
+	const UStageCraftUITheme& Palette = GetTheme();
+	// Lit card: an accent outline round it, so the mood's own colour stays readable.
+	FButtonStyle Style = MakeFlatButton(Palette.RowBackground, Palette.RowHover, Palette.Divider);
+	Style.SetNormal(MakeBox(Palette.RowBackground, CornerRadius, bSelected ? Palette.AccentColor : Palette.Divider, bSelected ? 2.f : 1.f));
+	Style.SetHovered(MakeBox(Palette.RowHover, CornerRadius, bSelected ? Palette.AccentColor : Palette.TextSecondary, bSelected ? 2.f : 1.f));
+	Button.SetStyle(Style);
+}
+
 void UStageEnvironmentPanel::Refresh()
 {
 	using namespace StageEnvironmentPanel;
 	const UStageEnvironmentSubsystem* Subsystem = Environment.Get();
 	const FStageEnvironmentSettings Settings = Subsystem ? Subsystem->GetSettings() : FStageEnvironmentSettings();
 	const bool bAvailable = Subsystem && Subsystem->IsSkyAvailable();
-	const bool bLive = bAvailable && Settings.bSkyEnabled;
+	const bool bOutdoor = bAvailable && Settings.IsOutdoorSky();
 
-	for (UStageChoiceButton* Button : SkyButtons)
+	const UStageAtmosphereSubsystem* Catalog = AtmosphereCatalog.Get();
+	const UStageAtmospherePreset* Matching = Catalog ? Catalog->FindMatchingAtmosphere(Settings) : nullptr;
+	for (UStageChoiceButton* Card : AtmosphereButtons)
+	{
+		if (Card)
+		{
+			const int32 Index = Card->GetChoiceIndex();
+			const UStageAtmospherePreset* Preset = AtmospherePresets.IsValidIndex(Index) ? AtmospherePresets[Index].Get() : nullptr;
+			StyleCard(*Card, Preset && Preset == Matching);
+			// An outdoor atmosphere needs the sky system.
+			Card->SetIsEnabled(Subsystem && Preset && (bAvailable || !Preset->Settings.IsOutdoorSky()));
+		}
+	}
+
+	for (UStageChoiceButton* Button : LightingButtons)
 	{
 		if (Button)
 		{
-			StyleChoice(*Button, Button->GetChoiceIndex() == (Settings.bSkyEnabled ? 1 : 0));
-			Button->SetIsEnabled(bAvailable);
+			const EStageLightingSource Source = EStageLightingSource(Button->GetChoiceIndex());
+			StyleChoice(*Button, Source == Settings.Lighting);
+			Button->SetIsEnabled(Subsystem && (Source != EStageLightingSource::OutdoorSky || bAvailable));
 		}
 	}
 	const EStageWeatherPreset Preset = StageEnvironment::FindWeatherPreset(Settings);
@@ -398,41 +545,83 @@ void UStageEnvironmentPanel::Refresh()
 		if (Button)
 		{
 			StyleChoice(*Button, Button->GetChoiceIndex() == int32(Preset));
-			Button->SetIsEnabled(bLive);
+			Button->SetIsEnabled(bOutdoor);
 		}
 	}
 	for (int32 Index = 0; Index < Sliders.Num(); ++Index)
 	{
-		const float Value = GetValue(Settings, static_cast<ESlider>(Index));
-		if (UStageValueSlider* Slider = Sliders[Index])
+		const ESlider Slider = static_cast<ESlider>(Index);
+		const float Value = GetValue(Settings, Slider);
+		const bool bLookSlider = Index >= int32(ESlider::Exposure);
+		if (UStageValueSlider* SliderWidget = Sliders[Index])
 		{
-			Slider->SetValue(Value);
-			Slider->SetIsEnabled(bLive);
+			SliderWidget->SetValue(Value);
+			// Time and weather only show under the outdoor sky; the camera look works with any lighting.
+			SliderWidget->SetIsEnabled(bLookSlider ? Subsystem != nullptr : bOutdoor);
 		}
 		if (ValueTexts.IsValidIndex(Index) && ValueTexts[Index])
 		{
-			ValueTexts[Index]->SetText(FormatValue(static_cast<ESlider>(Index), Value));
+			ValueTexts[Index]->SetText(FormatValue(Slider, Value));
 		}
 	}
 
 	if (NoticeText)
 	{
 		const UStageCraftUITheme& Palette = GetTheme();
-		NoticeText->SetText(!Subsystem ? LOCTEXT("NoStage", "The environment is available while a stage is open.")
-			: !bAvailable ? LOCTEXT("NoBackend", "No sky system is installed, so the outdoor sky is unavailable.")
-			: bLive ? FText::Format(LOCTEXT("SkyOnNotice", "{0} sky. The level's own sun, sky light and fog are hidden while it is on."), Subsystem->GetSkySystemName())
-			: LOCTEXT("SkyOffNotice", "Indoor stage: the level's own lighting. Turn the outdoor sky on to set time and weather."));
+		FText Notice;
+		if (!Subsystem)
+		{
+			Notice = LOCTEXT("NoStage", "The environment is available while a stage is open.");
+		}
+		else if (Settings.Lighting == EStageLightingSource::Studio)
+		{
+			Notice = Subsystem->IsStudioHdriAvailable()
+				? LOCTEXT("StudioNotice", "Studio lighting. The venue's own lights are hidden while it is on.")
+				: LOCTEXT("StudioFlatNotice", "Studio lighting with a flat fill: the studio HDRI is unavailable. The venue's own lights are hidden while it is on.");
+		}
+		else if (!bAvailable)
+		{
+			Notice = LOCTEXT("NoBackend", "No sky system is installed, so the outdoor sky is unavailable.");
+		}
+		else if (bOutdoor)
+		{
+			Notice = FText::Format(LOCTEXT("SkyOnNotice", "{0} sky. The venue's own sun, sky light and fog are hidden while it is on."), Subsystem->GetSkySystemName());
+		}
+		else
+		{
+			Notice = LOCTEXT("SkyOffNotice", "The venue's own lighting. Pick Outdoor to set time and weather.");
+		}
+		NoticeText->SetText(Notice);
 		NoticeText->SetColorAndOpacity(FSlateColor(bAvailable || !Subsystem ? Palette.TextSecondary : Palette.WarningColor));
 	}
 }
 
-void UStageEnvironmentPanel::HandleSkyPicked(int32 Index)
+void UStageEnvironmentPanel::HandleAtmospherePicked(int32 Index)
+{
+	UStageAtmospherePreset* Preset = AtmospherePresets.IsValidIndex(Index) ? AtmospherePresets[Index].Get() : nullptr;
+	if (!Preset)
+	{
+		return;
+	}
+	// Through the request bridge: one undo step, blended in. The card lights from OnEnvironmentChanged.
+	if (AModularPlayerController* Controller = Cast<AModularPlayerController>(GetOwningPlayer()))
+	{
+		Controller->RequestApplyAtmosphere(Preset->GetPrimaryAssetId());
+	}
+	else if (UStageEnvironmentSubsystem* Subsystem = Environment.Get())
+	{
+		// A view not owned by a StageCraft controller (an editor utility) writes directly.
+		Subsystem->SetSettings(Preset->Settings, EStageEnvironmentTransition::Blend);
+	}
+}
+
+void UStageEnvironmentPanel::HandleLightingPicked(int32 Index)
 {
 	// The single write path; the panel updates from OnEnvironmentChanged, not from what it asked for.
 	if (UStageEnvironmentSubsystem* Subsystem = Environment.Get())
 	{
 		FStageEnvironmentSettings Settings = Subsystem->GetSettings();
-		Settings.bSkyEnabled = Index == 1;
+		Settings.Lighting = EStageLightingSource(FMath::Clamp(Index, 0, int32(EStageLightingSource::Studio)));
 		Subsystem->SetSettings(Settings);
 	}
 }

@@ -265,7 +265,7 @@ Status values are those required by the audit brief. "Tests" names the automatio
 | Still render (resolution presets, AA, Clean/Standard/Cinematic, follows projection and framing, async PNG) | IMPLEMENTED. Rules and framing VERIFIED; capture STATIC. | `Private/Render/StageRenderSubsystem.cpp`; tests `StageCraft.Render.Rules`, `.Framing` |
 | Render reproduces the viewport view mode | NOT FOUND (INFERRED). The capture sets only its own AA and motion-blur flags. | `StageRenderSubsystem.cpp:279, 305-309` |
 | Render cancel | PARTIALLY IMPLEMENTED. `CancelJob` is private and has no UI. | `Public/Render/StageRenderSubsystem.h:128` |
-| Path tracing, scalability or exposure controls | NOT FOUND | — |
+| Path tracing, scalability or exposure controls | Exposure and the camera look: IMPLEMENTED (#58, ADR 0024 §4: exposure, bloom, AO, white balance, saturation, contrast, vignette in the Environment panel and atmospheres; renders follow it). Path tracing and scalability: NOT FOUND | `Private/Environment/StageEnvironmentSubsystem.cpp` |
 | Outdoor environment (sky on/off, time, sun, clouds, rain, snow, fog) | IMPLEMENTED AND VERIFIED (sanitize, presets, mapping, world spawn and teardown). Screenshot-checked in #35 (DOC). | `Private/Environment/*`, `Source/StageCraftSkyCreator/*`; tests `StageCraft.Environment.Sanitize`, `.Presets`, `.SkyCreatorMapping`, `.SkyCreatorWorld` |
 
 ### 4.4 Timeline and show control
@@ -566,7 +566,7 @@ Solid arrows are calls. Dotted arrows are delegate notifications. The dashed `SH
 - **Rendering.** The render subsystem is a clean state machine with async encode. Gaps:
   - it does not mirror viewport view modes;
   - no path tracer;
-  - no scalability or exposure controls;
+  - no scalability controls (exposure and the camera look were added in #58);
   - cancel is not exposed.
 - **Timeline.** A cue-only crossfade engine exists, but it is unreachable and unsaved. A real timeline is absent:
   - per-attribute times, follows, effects or tracking;

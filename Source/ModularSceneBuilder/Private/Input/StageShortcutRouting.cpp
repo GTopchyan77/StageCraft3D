@@ -101,7 +101,7 @@ bool FStageShortcutInputProcessor::HandleKeyDownEvent(FSlateApplication& SlateAp
 	FStageShortcutContext Context;
 	const UGameInstance* GameInstance = Owner->GetGameInstance();
 	const UStageWorkspaceSubsystem* Workspace = GameInstance ? GameInstance->GetSubsystem<UStageWorkspaceSubsystem>() : nullptr;
-	Context.bDialogOpen = SlateApp.GetActiveModalWindow().IsValid() || (Workspace && Workspace->IsSavePromptOpen());
+	Context.bDialogOpen = SlateApp.GetActiveModalWindow().IsValid() || (Workspace && Workspace->IsModalOverlayOpen());
 	Context.bCapturingKey = Preferences->IsKeyCaptureActive();
 	Context.bFlying = Owner->IsNavigatingCamera();
 	if (!StageShortcutRouting::ShouldRoute(Command.GetValue(), ClassifyFocus(SlateApp, InKeyEvent.GetUserIndex()), Context))

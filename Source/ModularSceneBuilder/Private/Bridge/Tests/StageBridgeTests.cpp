@@ -166,7 +166,7 @@ bool FStageBridgeSceneOriginTest::RunTest(const FString& Parameters)
 	TestTrue(TEXT("It counts as from the marketplace"), Parsed.IsFromMarketplace());
 
 	// Older files are the user's own, even with a field a version 3 file could not have meant.
-	const FString Version3 = FStageSceneStore::Serialize(Bought).Replace(TEXT("\"version\": 4"), TEXT("\"version\": 3"));
+	const FString Version3 = FStageSceneStore::Serialize(Bought).Replace(*FString::Printf(TEXT("\"version\": %d"), FStageSceneStore::FormatVersion), TEXT("\"version\": 3"));
 	TestEqual(TEXT("A version 3 file loads"), Str(FStageSceneStore::Parse(Version3, Parsed, Report)), Str(EStageSceneResult::Success));
 	TestFalse(TEXT("A version 3 file is the user's own"), Parsed.IsFromMarketplace());
 

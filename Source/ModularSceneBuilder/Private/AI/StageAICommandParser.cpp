@@ -2148,7 +2148,7 @@ namespace StageAIAnswers
 			}
 			const FStageEnvironmentSettings& Settings = Scene.Environment;
 			const FText Time = FText::FromString(FormatHour(Settings.TimeOfDay));
-			if (!Settings.bSkyEnabled)
+			if (!Settings.IsOutdoorSky())
 			{
 				return Scene.bSkyAvailable
 					? FText::Format(Pick(Language, LOCTEXT("Indoor", "Indoor stage: the outdoor sky is off (its clock stands at {0}). Say \"go outdoors\" to turn it on."),

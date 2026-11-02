@@ -4,6 +4,7 @@
 
 #include "CoreMinimal.h"
 #include "Environment/StageEnvironmentBackend.h"
+#include "Environment/StageLevelLighting.h"
 #include "StageSkyCreatorWeather.h"
 #include "StageSkyCreatorBackend.generated.h"
 
@@ -33,7 +34,6 @@ public:
 
 private:
 	class ASkyCreator* SpawnSky(UWorld& World);
-	void HideLevelSky(UWorld& World, const AActor& SkyActor);
 	void RemoveSky();
 
 	/** The sky actor's own default weather, read once when it is spawned: the base StageSkyCreator::MakeWeather maps onto. */
@@ -43,6 +43,6 @@ private:
 	/** The sky actor this backend spawned; owned by the world, destroyed by RemoveSky. */
 	TWeakObjectPtr<class ASkyCreator> Sky;
 
-	/** Level components hidden while the sky is on, made visible again when it goes. Weak: the level may unload first. */
-	TArray<TWeakObjectPtr<class USceneComponent>> HiddenLevelComponents;
+	/** The level's own lighting, hidden while the sky is on and shown again when it goes. */
+	FStageHiddenLevelLighting HiddenLevel;
 };

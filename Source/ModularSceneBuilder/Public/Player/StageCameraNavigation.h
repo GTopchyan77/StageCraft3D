@@ -73,6 +73,9 @@ namespace StageCameraNavigation
 	inline constexpr float WheelDollyCm = 96.f;
 	inline constexpr double MinimumFocusRadius = 10.0;
 	inline constexpr float FocusTransitionSeconds = 0.25f;
+
+	/** The glide that presents an opened starter stage (Docs/ADR/0024 §6): slow enough to read as a camera move. */
+	inline constexpr float FrameStageSeconds = 1.2f;
 	/** Mouse travel (counts) before a left press counts as a camera drag rather than a click. */
 	inline constexpr float ClickDragThreshold = 3.f;
 	/** Closest the orbit / dolly may bring the camera to its pivot. */

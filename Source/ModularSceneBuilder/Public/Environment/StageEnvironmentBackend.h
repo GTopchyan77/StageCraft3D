@@ -15,8 +15,9 @@
  *
  * Contract:
  *  - Called on the game thread only, by the owning UStageEnvironmentSubsystem, after the world has begun play.
- *  - Apply receives sanitized settings, and only when they changed. bSkyEnabled false means: remove everything the backend
- *    added and restore everything it changed, so the indoor stage is exactly as the level made it.
+ *  - Apply receives sanitized settings, when they changed, or every frame of a blend (ADR 0024 §5). A lighting source other
+ *    than OutdoorSky (Settings.IsOutdoorSky() false) means: remove everything the backend added and restore everything it
+ *    changed, so the level (or the studio rig) lights the stage exactly as it would without a sky.
  *  - Shutdown is called once when the world ends; it must tolerate a world that is already tearing down, and a second call.
  *  - A backend reports failures by logging; it never throws away the subsystem's settings.
  */

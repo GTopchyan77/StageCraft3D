@@ -24,6 +24,8 @@
 #include "Engine/LocalPlayer.h"
 #include "Engine/World.h"
 #include "Economy/StageProductData.h"
+#include "Environment/StageAtmospherePreset.h"
+#include "Environment/StageAtmosphereSubsystem.h"
 #include "Environment/StageEnvironmentSubsystem.h"
 #include "Game/StageCraftGameModeBase.h"
 #include "Interaction/StageParameterInterface.h"
@@ -189,7 +191,7 @@ void AModularPlayerController::BeginPlay()
 	{
 		Workspace->RegisterLocalController(this);
 	}
-	if (HUDWidgetClass && !(Workspace && Workspace->IsWorkspaceActive()))
+	if (HUDWidgetClass && !(Workspace && Workspace->WillHostPanels()))
 	{
 		HUDWidget = CreateWidget<UUserWidget>(this, HUDWidgetClass);
 		if (HUDWidget)
@@ -1877,7 +1879,7 @@ FStageEconomyResultInfo AModularPlayerController::RequestReplaceItems(const TArr
 	return FStageEconomyResultInfo::Ok();
 }
 
-bool AModularPlayerController::RequestSetEnvironment(const FStageEnvironmentSettings& Settings, const FText& StepName)
+bool AModularPlayerController::RequestSetEnvironment(const FStageEnvironmentSettings& Settings, const FText& StepName, EStageEnvironmentTransition Transition)
 {
 	UStageEnvironmentSubsystem* Environment = UWorld::GetSubsystem<UStageEnvironmentSubsystem>(GetWorld());
 	if (!Environment)
@@ -1886,13 +1888,27 @@ bool AModularPlayerController::RequestSetEnvironment(const FStageEnvironmentSett
 		return false;
 	}
 	const FStageEnvironmentSettings Before = Environment->GetSettings();
-	Environment->SetSettings(Settings);
+	Environment->SetSettings(Settings, Transition);
 	if (EditHistory)
 	{
 		// What the environment stored (sanitized, sky refused without a sky system) is the "after", never what was asked for.
 		EditHistory->RecordEnvironmentChange(StepName, Before, Environment->GetSettings());
 	}
 	return true;
+}
+
+bool AModularPlayerController::RequestApplyAtmosphere(const FPrimaryAssetId& AtmosphereId)
+{
+	const UStageAtmosphereSubsystem* Atmospheres = GetGameInstance() ? GetGameInstance()->GetSubsystem<UStageAtmosphereSubsystem>() : nullptr;
+	const UStageAtmospherePreset* Preset = Atmospheres ? Atmospheres->FindAtmosphere(AtmosphereId) : nullptr;
+	if (!Preset)
+	{
+		ReportRejection(FStageEconomyResultInfo::Fail(EStageEconomyResult::InvalidRequest, Atmospheres && !Atmospheres->IsLoaded()
+			? LOCTEXT("AtmospheresLoading", "The atmospheres are still loading.")
+			: LOCTEXT("UnknownAtmosphere", "That atmosphere doesn't exist.")));
+		return false;
+	}
+	return RequestSetEnvironment(Preset->Settings, FText::Format(LOCTEXT("AtmosphereStep", "Atmosphere: {0}"), Preset->DisplayName), EStageEnvironmentTransition::Blend);
 }
 
 bool AModularPlayerController::RequestAssistantPrompt(const FString& Prompt)
@@ -2196,6 +2212,20 @@ EStageSceneResult AModularPlayerController::RequestLoadScene(const FString& Name
 	return ReportSceneRefusal(EStageSceneOperation::Load, SceneFiles->LoadScene(Name), Name);
 }
 
+EStageSceneResult AModularPlayerController::RequestNewFromTemplate(const FString& TemplateName)
+{
+	if (IsBusyWithPointer())
+	{
+		return EStageSceneResult::Busy;
+	}
+	return ReportSceneRefusal(EStageSceneOperation::OpenTemplate, SceneFiles->LoadTemplate(TemplateName), TemplateName);
+}
+
+TArray<FString> AModularPlayerController::GetTemplateNames() const
+{
+	return SceneFiles ? SceneFiles->GetTemplateNames() : TArray<FString>();
+}
+
 EStageSceneResult AModularPlayerController::RequestRecoverAutosave(const FString& Name)
 {
 	if (IsBusyWithPointer())
@@ -2464,9 +2494,26 @@ void AModularPlayerController::HandleSceneOperationFinished(const FStageSceneOpe
 		ReportRejection(FStageEconomyResultInfo::Fail(EStageEconomyResult::InvalidRequest, Result.Message));
 		return;
 	}
-	if (Result.Operation == EStageSceneOperation::Load)
+	if (Result.Operation == EStageSceneOperation::Load || Result.Operation == EStageSceneOperation::OpenTemplate)
 	{
 		RequestPreviewRefresh();
+	}
+	// A starter stage is presented: the camera glides to a three-quarter view of everything on it.
+	if (Result.Operation == EStageSceneOperation::OpenTemplate && CameraNavigation)
+	{
+		FBox Bounds(ForceInit);
+		if (const UStageSessionSubsystem* Session = UWorld::GetSubsystem<UStageSessionSubsystem>(GetWorld()))
+		{
+			for (const AModularBaseActor* Item : Session->GetPlacedItems())
+			{
+				if (Item)
+				{
+					Bounds += Item->GetComponentsBoundingBox(/*bNonColliding*/ false);
+				}
+			}
+		}
+		// An empty starter stage frames the standard 12 x 8 m stage area around the origin.
+		CameraNavigation->FrameStage(Bounds.IsValid ? Bounds : FBox(FVector(-400.0, -600.0, 0.0), FVector(400.0, 600.0, 300.0)));
 	}
 }
 

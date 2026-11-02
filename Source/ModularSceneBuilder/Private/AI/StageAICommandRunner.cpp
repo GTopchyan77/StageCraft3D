@@ -247,7 +247,7 @@ namespace StageAICommandRunner
 				return Refused(Pick(Language, LOCTEXT("NoEnvironment", "This level has no outdoor environment."), INVTEXT("Այս մակարդակում բացօթյա միջավայր չկա։")));
 			}
 			const bool bSkyAvailable = Environment->IsSkyAvailable();
-			const bool bSkyWasOn = Environment->GetSettings().bSkyEnabled;
+			const bool bSkyWasOn = Environment->GetSettings().IsOutdoorSky();
 			FStageEnvironmentSettings Settings = Environment->GetSettings();
 			FText StepName;
 			switch (Command.Intent)
@@ -255,7 +255,10 @@ namespace StageAICommandRunner
 			case EStageAIIntent::SetWeather:
 				Settings = StageEnvironment::ApplyWeatherPreset(Settings, Command.Weather);
 				// Weather is only visible under the outdoor sky.
-				Settings.bSkyEnabled = Settings.bSkyEnabled || bSkyAvailable;
+				if (bSkyAvailable)
+				{
+					Settings.Lighting = EStageLightingSource::OutdoorSky;
+				}
 				StepName = FText::Format(LOCTEXT("WeatherStep", "Assistant: weather {0}"), StageAIAnswers::DescribeWeather(Command.Weather));
 				break;
 			case EStageAIIntent::SetTimeOfDay:
@@ -268,7 +271,7 @@ namespace StageAICommandRunner
 					return Refused(Pick(Language, LOCTEXT("NoSkySystem", "No sky system is installed in this build, so the stage stays indoors."),
 						INVTEXT("Այս տարբերակում երկնքի համակարգ տեղադրված չէ, ուստի բեմը մնում է փակ։")));
 				}
-				Settings.bSkyEnabled = Command.bSkyOn;
+				Settings.Lighting = Command.bSkyOn ? EStageLightingSource::OutdoorSky : EStageLightingSource::Level;
 				StepName = Command.bSkyOn ? LOCTEXT("SkyOnStep", "Assistant: outdoor sky on") : LOCTEXT("SkyOffStep", "Assistant: outdoor sky off");
 				break;
 			}
@@ -282,7 +285,7 @@ namespace StageAICommandRunner
 
 			// Describe what was stored, not what was asked for.
 			const FStageEnvironmentSettings Stored = Environment->GetSettings();
-			const FText SkyNote = !Stored.bSkyEnabled
+			const FText SkyNote = !Stored.IsOutdoorSky()
 				? (bSkyAvailable
 					? Pick(Language, LOCTEXT("SkyOffNote", " The outdoor sky is off, so say \"go outdoors\" to see it."), INVTEXT(" Բացօթյա երկինքն անջատված է. գրեք «բացօթյա»՝ այն տեսնելու համար։"))
 					: Pick(Language, LOCTEXT("NoSkyNote", " No sky system is installed in this build, so it is stored but not shown."),
@@ -299,7 +302,7 @@ namespace StageAICommandRunner
 						INVTEXT("Օրվա ժամը՝ {0}։{1} Ctrl+Z-ը կվերադարձնի նախորդ միջավայրը։")),
 					FText::FromString(StageAIAnswers::FormatHour(Stored.TimeOfDay)), SkyNote));
 			default:
-				return Done(Stored.bSkyEnabled
+				return Done(Stored.IsOutdoorSky()
 					? Pick(Language, LOCTEXT("SkyOn", "The outdoor sky is on: the sun, sky and weather replace the indoor lighting. Ctrl+Z turns it off again."),
 						INVTEXT("Բացօթյա երկինքը միացված է. արևը, երկինքը և եղանակը փոխարինում են ներքին լուսավորությանը։ Ctrl+Z-ը կանջատի այն։"))
 					: Pick(Language, LOCTEXT("SkyOff", "Indoor stage: the outdoor sky is off. Ctrl+Z turns it back on."),

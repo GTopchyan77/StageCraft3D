@@ -19,12 +19,18 @@ void UStageItemSubsystem::Initialize(FSubsystemCollectionBase& Collection)
 void UStageItemSubsystem::Deinitialize()
 {
 	OnCatalogLoaded.Clear();
+	OnCatalogLoadProgress.Clear();
 	OnCatalogChanged.Clear();
 	OnSelectedItemChanged.Clear();
 	Catalog.Reset();
 	RuntimeItems.Reset();
 	SelectedItem = nullptr;
 	PendingSelection = nullptr;
+	if (CatalogHandle.IsValid())
+	{
+		CatalogHandle->CancelHandle();
+		CatalogHandle.Reset();
+	}
 	bCatalogLoaded = false;
 
 	Super::Deinitialize();
@@ -99,8 +105,20 @@ void UStageItemSubsystem::LoadCatalog()
 	}
 
 	// Only the UI bundle: icons and metadata for the catalog, without pulling every mesh into memory.
-	AssetManager.LoadPrimaryAssets(ItemIds, { UBaseItemData::UIBundle },
+	CatalogHandle = AssetManager.LoadPrimaryAssets(ItemIds, { UBaseItemData::UIBundle },
 		FStreamableDelegate::CreateUObject(this, &ThisClass::HandleCatalogLoaded));
+	if (bCatalogLoaded)
+	{
+		CatalogHandle.Reset(); // Everything was already loaded: the delegate ran inside LoadPrimaryAssets.
+	}
+	else if (CatalogHandle.IsValid())
+	{
+		// Pushes progress to the startup loader; the handle calls it as each asset arrives.
+		CatalogHandle->BindUpdateDelegate(FStreamableUpdateDelegate::CreateWeakLambda(this, [this](TSharedRef<FStreamableHandle> Handle)
+		{
+			OnCatalogLoadProgress.Broadcast(Handle->GetLoadProgress());
+		}));
+	}
 }
 
 void UStageItemSubsystem::HandleCatalogLoaded()
@@ -122,10 +140,20 @@ void UStageItemSubsystem::HandleCatalogLoaded()
 	Catalog.Append(RuntimeItems);
 	SortCatalog();
 
+	CatalogHandle.Reset(); // The Asset Manager keeps the loaded bundle; the handle was only for progress.
 	bCatalogLoaded = true;
 	UE_LOG(LogStageCraft, Log, TEXT("Stage item catalog loaded: %d items."), Catalog.Num());
 
 	OnCatalogLoaded.Broadcast();
+}
+
+float UStageItemSubsystem::GetCatalogLoadProgress() const
+{
+	if (bCatalogLoaded)
+	{
+		return 1.f;
+	}
+	return CatalogHandle.IsValid() ? CatalogHandle->GetLoadProgress() : 0.f;
 }
 
 void UStageItemSubsystem::AddRuntimeItem(UBaseItemData& Item)

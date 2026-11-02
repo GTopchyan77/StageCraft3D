@@ -6,6 +6,8 @@
 #include "GameplayTagContainer.h"
 #include "Subsystems/GameInstanceSubsystem.h"
 #include "Scene/StageSceneTypes.h"
+#include "Startup/StageStartupTypes.h"
+#include "Engine/TimerHandle.h"
 #include "Tasks/Task.h"
 #include "Workspace/StageWorkspaceTypes.h"
 #include "StageWorkspaceSubsystem.generated.h"
@@ -90,7 +92,23 @@ public:
 	UFUNCTION(BlueprintPure, Category = "StageCraft|Workspace")
 	bool IsWorkspaceActive() const { return State == EStageWorkspaceState::Ready; }
 
+	/** True when panels are, or are about to be, hosted in dock tabs (the install may wait for the engine's loading screen). */
+	bool WillHostPanels() const { return State == EStageWorkspaceState::Ready || State == EStageWorkspaceState::WaitingForLoadingScreen; }
+
 	// --- Panels ---
+
+	/** Whether every panel definition and its UI bundle has loaded (also true when there are none). */
+	bool IsPanelCatalogLoaded() const { return bPanelCatalogLoaded; }
+
+	/** Load progress of the panel definitions in [0, 1]: 1 once loaded. For the startup loader (Docs/ADR/0024 §2). */
+	float GetPanelCatalogLoadProgress() const;
+
+	/** Pushed while the panel definitions stream in. */
+	FOnStageLoadProgress OnPanelCatalogLoadProgress;
+
+	/** Fires once the panel definitions have loaded. */
+	FSimpleMulticastDelegate OnPanelCatalogLoaded;
+
 
 	/** The viewport first, then every panel found by the Asset Manager (StagePanel), sorted by tag. Valid in any state. */
 	UFUNCTION(BlueprintCallable, Category = "StageCraft|Workspace")
@@ -169,6 +187,9 @@ public:
 	/** Whether any save prompt is showing (the exit prompt, or Ctrl+S naming a new stage). Shortcuts stand aside meanwhile. */
 	bool IsSavePromptOpen() const { return ExitPromptState != EExitPromptState::Closed; }
 
+	/** True while anything covers the workspace and owns the keys: a save prompt, the welcome screen or the startup loader. */
+	bool IsModalOverlayOpen() const { return IsSavePromptOpen() || WelcomeDialog.IsValid() || StartupLoader.IsValid(); }
+
 	/**
 	 * Ctrl+S on a stage that was never saved: asks for a name over the workspace and saves under it; the app stays open.
 	 * False (nothing shown) without the workspace or while a prompt is already open; the caller then reports how to save instead.
@@ -185,6 +206,18 @@ public:
 private:
 	/** Uninitialized -> Ready or Unsupported. No-op in any other state. */
 	void InstallIfSupported();
+
+	/** Covers the freshly installed workspace with the startup loader until the catalogs are ready (Docs/ADR/0024 §2). */
+	/** The engine's loading screen has handed the main window back: install now (WaitingForLoadingScreen). */
+	void HandleLoadingScreenFinished();
+	void ShowStartupLoader();
+	void HandleStartupSettled(EStageStartupState NewState);
+	/** Fades the loader out and removes it. Idempotent. */
+	void DismissStartupLoader();
+	void HandleStartupLoaderClosed();
+	/** The welcome screen with the starter stages (Docs/ADR/0024 §6), unless switched off or another prompt is up. */
+	void ShowWelcome();
+	void CloseWelcome();
 
 	void LoadPanelCatalog();
 	void HandlePanelCatalogLoaded();
@@ -258,6 +291,17 @@ private:
 
 	/** Keeps the definitions and their UI bundle loaded for the run. */
 	TSharedPtr<struct FStreamableHandle> PanelCatalogHandle;
+
+	bool bPanelCatalogLoaded = false;
+
+	/** The startup loader over the workspace, while it is shown. */
+	TSharedPtr<class SStageBrandedLoader> StartupLoader;
+	FDelegateHandle StartupSettledHandle;
+	FDelegateHandle LoadingScreenFinishedHandle;
+
+	/** The welcome screen while it is shown. */
+	TSharedPtr<class SStageWelcomeDialog> WelcomeDialog;
+	FTimerHandle WelcomeTimer;
 
 	/** The local UI bridge the panels are built against. Owned by the world; null between levels. */
 	TWeakObjectPtr<class AModularPlayerController> LocalController;

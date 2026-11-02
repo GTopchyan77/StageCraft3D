@@ -201,6 +201,7 @@ void FStageWorkspaceShell::Shutdown()
 	MenuBarWidget.Reset();
 	StatusBarSlot.Reset();
 	ViewportToolbarSlot.Reset();
+	StartupSlot.Reset();
 	DialogSlot.Reset();
 	ReportedHosts.Reset();
 }
@@ -318,6 +319,11 @@ TSharedRef<SWidget> FStageWorkspaceShell::BuildWorkspaceContent(const TSharedRef
 		[
 			SAssignNew(DialogSlot, SBox)
 			.Visibility(EVisibility::Collapsed)
+		]
+		+ SOverlay::Slot()
+		[
+			SAssignNew(StartupSlot, SBox)
+			.Visibility(EVisibility::Collapsed)
 		];
 }
 
@@ -354,6 +360,31 @@ void FStageWorkspaceShell::CloseDialog()
 	DialogSlot->SetVisibility(EVisibility::Collapsed);
 	// Back to the viewport, where the editor's keys work.
 	HandleViewportMoved();
+}
+
+void FStageWorkspaceShell::ShowStartupOverlay(const TSharedRef<SWidget>& Overlay)
+{
+	if (!StartupSlot.IsValid())
+	{
+		return;
+	}
+	StartupSlot->SetContent(Overlay);
+	StartupSlot->SetVisibility(EVisibility::Visible);
+}
+
+void FStageWorkspaceShell::CloseStartupOverlay()
+{
+	if (!StartupSlot.IsValid() || StartupSlot->GetVisibility() == EVisibility::Collapsed)
+	{
+		return;
+	}
+	StartupSlot->SetContent(SNullWidget::NullWidget);
+	StartupSlot->SetVisibility(EVisibility::Collapsed);
+}
+
+bool FStageWorkspaceShell::IsStartupOverlayShown() const
+{
+	return StartupSlot.IsValid() && StartupSlot->GetVisibility() != EVisibility::Collapsed;
 }
 
 void FStageWorkspaceShell::CloseMainWindow()

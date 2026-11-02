@@ -44,6 +44,7 @@ void UStageSceneComponent::BeginPlay()
 	Store = MakeShared<FStageSceneStore, ESPMode::ThreadSafe>(ScenesDirectory);
 	// A folder of its own: autosaves never appear among, or overwrite, the scenes the user saved.
 	AutosaveStore = MakeShared<FStageSceneStore, ESPMode::ThreadSafe>(FPaths::Combine(ScenesDirectory, TEXT("Autosave")));
+	TemplateStore = MakeShared<FStageSceneStore, ESPMode::ThreadSafe>(GetTemplatesDirectory());
 
 	if (UStageSessionSubsystem* Session = GetSession())
 	{
@@ -224,6 +225,21 @@ EStageSceneResult UStageSceneComponent::LoadScene(const FString& Name)
 	return StartLoad(ELoadSource::SavedScene, Name);
 }
 
+EStageSceneResult UStageSceneComponent::LoadTemplate(const FString& TemplateName)
+{
+	return StartLoad(ELoadSource::Template, TemplateName);
+}
+
+TArray<FString> UStageSceneComponent::GetTemplateNames() const
+{
+	return TemplateStore.IsValid() ? TemplateStore->ListScenes() : TArray<FString>();
+}
+
+FString UStageSceneComponent::GetTemplatesDirectory()
+{
+	return FPaths::Combine(FPaths::ProjectContentDir(), TEXT("StageCraft"), TEXT("Templates"));
+}
+
 EStageSceneResult UStageSceneComponent::RecoverAutosave(const FString& Name)
 {
 	return StartLoad(ELoadSource::Autosave, Name);
@@ -239,7 +255,8 @@ EStageSceneResult UStageSceneComponent::StartLoad(ELoadSource Source, const FStr
 	{
 		return EStageSceneResult::InvalidName;
 	}
-	const TSharedPtr<const FStageSceneStore, ESPMode::ThreadSafe> SourceStore = Source == ELoadSource::Autosave ? AutosaveStore : Store;
+	const TSharedPtr<const FStageSceneStore, ESPMode::ThreadSafe> SourceStore = Source == ELoadSource::Autosave ? AutosaveStore
+		: Source == ELoadSource::Template ? TemplateStore : Store;
 	const UGameInstance* GameInstance = GetWorld() ? GetWorld()->GetGameInstance() : nullptr;
 	const UStageItemSubsystem* Items = GameInstance ? GameInstance->GetSubsystem<UStageItemSubsystem>() : nullptr;
 	if (!GetSession() || !SpawnSystem || !Selection || !Items || !SourceStore.IsValid())
@@ -286,18 +303,31 @@ void UStageSceneComponent::FinishLoad(EStageSceneResult Result, const FStageScen
 	if (Result != EStageSceneResult::Success)
 	{
 		FStageSceneOperationResult Outcome;
-		Outcome.Operation = EStageSceneOperation::Load;
+		Outcome.Operation = Source == ELoadSource::Template ? EStageSceneOperation::OpenTemplate : EStageSceneOperation::Load;
 		Outcome.Result = Result;
 		Outcome.SceneName = Document.Name;
-		Outcome.Message = DescribeFailure(EStageSceneOperation::Load, Result, Document.Name);
+		Outcome.Message = DescribeFailure(Outcome.Operation, Result, Document.Name);
 		Broadcast(Outcome);
 		return;
 	}
 	Broadcast(ApplyDocument(Document, Report, Source));
 }
 
-FStageSceneOperationResult UStageSceneComponent::ApplyDocument(const FStageSceneDocument& Document, const FStageSceneParseReport& Report, ELoadSource Source)
+FStageSceneOperationResult UStageSceneComponent::ApplyDocument(const FStageSceneDocument& InDocument, const FStageSceneParseReport& Report, ELoadSource Source)
 {
+	// A starter stage becomes a new stage: its items get ids of their own, so two stages started from it never share one.
+	FStageSceneDocument TemplateCopy;
+	if (Source == ELoadSource::Template)
+	{
+		TemplateCopy = InDocument;
+		for (FStageItemSnapshot& Item : TemplateCopy.Items)
+		{
+			Item.InstanceId = FGuid::NewGuid();
+		}
+		TemplateCopy.OriginListingId.Invalidate();
+	}
+	const FStageSceneDocument& Document = Source == ELoadSource::Template ? TemplateCopy : InDocument;
+
 	FStageSceneOperationResult Outcome;
 	Outcome.Operation = EStageSceneOperation::Load;
 	Outcome.SceneName = Document.Name;
@@ -398,6 +428,22 @@ FStageSceneOperationResult UStageSceneComponent::ApplyDocument(const FStageScene
 		History->ClearHistory();
 	}
 	LastAutosaveSerial = Session->GetEditSerial();
+
+	if (Source == ELoadSource::Template)
+	{
+		// Untitled: Ctrl+S asks for a name, so the starter stage itself is never written. Nothing to lose yet, so it starts clean.
+		Session->SetSceneName(FString());
+		SceneWithDroppedEntries.Reset();
+		Outcome.Operation = EStageSceneOperation::OpenTemplate;
+		Outcome.Result = EStageSceneResult::Success;
+		Outcome.SkippedCount = Report.InvalidItems + UnknownItems + RefusedItems;
+		Session->MarkClean();
+		Outcome.Message = Outcome.SkippedCount == 0
+			? FText::Format(LOCTEXT("TemplateOpened", "Started a new stage from \"{0}\" ({1} items). Save it to keep your changes."), FText::FromString(Document.Name), FText::AsNumber(Outcome.ItemCount))
+			: FText::Format(LOCTEXT("TemplatePartial", "Started a new stage from \"{0}\": {1} items placed, {2} not available."), FText::FromString(Document.Name), FText::AsNumber(Outcome.ItemCount), FText::AsNumber(Outcome.SkippedCount));
+		UE_LOG(LogStageCraft, Log, TEXT("Starter stage \"%s\" opened: %d placed, %d refused, %d unknown, %d invalid."), *Document.Name, Outcome.ItemCount, RefusedItems, UnknownItems, Report.InvalidItems);
+		return Outcome;
+	}
 
 	if (Source == ELoadSource::Autosave)
 	{
@@ -612,7 +658,9 @@ FText UStageSceneComponent::DescribeFailure(EStageSceneOperation Operation, ESta
 	case EStageSceneResult::InvalidName:
 		return LOCTEXT("InvalidName", "Use 1-64 letters, digits, spaces, '-', '_' or brackets for a scene name.");
 	case EStageSceneResult::NotFound:
-		return FText::Format(LOCTEXT("NotFound", "There is no saved scene \"{0}\"."), SceneName);
+		return Operation == EStageSceneOperation::OpenTemplate
+			? FText::Format(LOCTEXT("TemplateNotFound", "There is no starter stage \"{0}\"."), SceneName)
+			: FText::Format(LOCTEXT("NotFound", "There is no saved scene \"{0}\"."), SceneName);
 	case EStageSceneResult::Corrupt:
 		return FText::Format(LOCTEXT("Corrupt", "Scene \"{0}\" could not be read: the file is damaged or not a StageCraft scene. It was left unchanged."), SceneName);
 	case EStageSceneResult::VersionMismatch:

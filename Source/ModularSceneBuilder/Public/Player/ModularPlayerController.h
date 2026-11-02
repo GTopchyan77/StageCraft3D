@@ -311,7 +311,13 @@ public:
 	 * StepName (Docs/ADR/0016-ai-assistant.md §2.4). The environment sanitizes the values and refuses the sky without a sky system,
 	 * so callers read the stored settings back. False, reported on OnRequestRejected, when the level has no environment.
 	 */
-	bool RequestSetEnvironment(const FStageEnvironmentSettings& Settings, const FText& StepName);
+	bool RequestSetEnvironment(const FStageEnvironmentSettings& Settings, const FText& StepName, EStageEnvironmentTransition Transition = EStageEnvironmentTransition::Instant);
+
+	/**
+	 * Applies an atmosphere preset (Docs/ADR/0024 §3, §5): its whole environment, blended in, as one undo step named after it.
+	 * Refused, and reported on OnRequestRejected, when the preset is unknown or the presets have not loaded yet.
+	 */
+	bool RequestApplyAtmosphere(const FPrimaryAssetId& AtmosphereId);
 
 	/**
 	 * The AI Assistant panel's single entry point (Docs/ADR/0016-ai-assistant.md §2.2): hands Prompt to UStageAICommandSubsystem,
@@ -414,6 +420,15 @@ public:
 	 */
 	UFUNCTION(BlueprintCallable, Category = "StageCraft|Requests")
 	EStageSceneResult RequestLoadScene(const FString& Name);
+
+	/**
+	 * Starts a new untitled stage from the starter stage TemplateName (Docs/ADR/0024 §6), like RequestLoadScene (the caller
+	 * confirms unsaved changes first), then glides the camera to present it. Reported like Load.
+	 */
+	EStageSceneResult RequestNewFromTemplate(const FString& TemplateName);
+
+	/** The starter stages that ship with the app, sorted. */
+	TArray<FString> GetTemplateNames() const;
 
 	/**
 	 * Replaces the stage with the autosave Name (File > Recover Autosave), for after a crash. The stage keeps its scene name and

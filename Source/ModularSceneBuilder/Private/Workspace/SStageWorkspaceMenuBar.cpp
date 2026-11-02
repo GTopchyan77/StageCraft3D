@@ -124,6 +124,11 @@ void SStageWorkspaceMenuBar::FillFileMenu(FMenuBuilder& MenuBuilder)
 		FUIAction(
 			FExecuteAction::CreateLambda([WeakController]() { if (WeakController.IsValid()) { WeakController->RequestQuickSave(); } }),
 			FCanExecuteAction::CreateLambda([bCanSave = !bBusy]() { return bCanSave; })));
+	MenuBuilder.AddSubMenu(LOCTEXT("NewFromTemplate", "New from Template"),
+		LOCTEXT("NewFromTemplateTip", "Start a new untitled stage from a ready-made starter stage, with its atmosphere."),
+		FNewMenuDelegate::CreateSP(this, &SStageWorkspaceMenuBar::FillNewFromTemplateMenu),
+		FUIAction(FExecuteAction(), FCanExecuteAction::CreateLambda([bCanOpen = !bBusy && !WeakController->GetTemplateNames().IsEmpty()]() { return bCanOpen; })),
+		NAME_None, EUserInterfaceActionType::Button);
 	MenuBuilder.AddSubMenu(LOCTEXT("SaveSceneAs", "Save Scene As..."),
 		LOCTEXT("SaveSceneAsTip", "Save every placed item (position, rotation, scale, settings) under a name."),
 		FNewMenuDelegate::CreateSP(this, &SStageWorkspaceMenuBar::FillSaveSceneAsMenu));
@@ -290,6 +295,35 @@ void SStageWorkspaceMenuBar::FillOpenSceneMenu(FMenuBuilder& MenuBuilder)
 			FNewMenuDelegate::CreateLambda([Name, Open](FMenuBuilder& ConfirmMenu)
 			{
 				ConfirmMenu.AddMenuEntry(FText::Format(LOCTEXT("DiscardAndOpen", "Discard unsaved changes and open \"{0}\""), FText::FromString(Name)),
+					FText::GetEmpty(), FSlateIcon(), FUIAction(Open));
+			}));
+	}
+}
+
+void SStageWorkspaceMenuBar::FillNewFromTemplateMenu(FMenuBuilder& MenuBuilder)
+{
+	const TWeakObjectPtr<AModularPlayerController> WeakController = GetStageController();
+	const UStageSessionSubsystem* Session = WeakController.IsValid() ? UWorld::GetSubsystem<UStageSessionSubsystem>(WeakController->GetWorld()) : nullptr;
+	if (!WeakController.IsValid() || !Session)
+	{
+		return;
+	}
+
+	const bool bDirty = Session->IsDirty();
+	for (const FString& Name : WeakController->GetTemplateNames())
+	{
+		const FExecuteAction Open = FExecuteAction::CreateLambda([WeakController, Name]() { if (WeakController.IsValid()) { WeakController->RequestNewFromTemplate(Name); } });
+		if (!bDirty)
+		{
+			MenuBuilder.AddMenuEntry(FText::FromString(Name), FText::Format(LOCTEXT("TemplateEntryTip", "Start a new stage from \"{0}\"."), FText::FromString(Name)),
+				FSlateIcon(), FUIAction(Open));
+			continue;
+		}
+		// As Open Scene: unsaved changes would be lost, so it asks for one more, explicit click.
+		MenuBuilder.AddSubMenu(FText::FromString(Name), FText::Format(LOCTEXT("TemplateDirtyTip", "The stage has unsaved changes. Starting from \"{0}\" discards them."), FText::FromString(Name)),
+			FNewMenuDelegate::CreateLambda([Name, Open](FMenuBuilder& ConfirmMenu)
+			{
+				ConfirmMenu.AddMenuEntry(FText::Format(LOCTEXT("DiscardAndStart", "Discard unsaved changes and start from \"{0}\""), FText::FromString(Name)),
 					FText::GetEmpty(), FSlateIcon(), FUIAction(Open));
 			}));
 	}

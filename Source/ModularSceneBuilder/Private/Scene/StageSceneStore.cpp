@@ -52,6 +52,19 @@ namespace StageSceneStore
 		const TCHAR* Snow = TEXT("snow");
 		const TCHAR* Fog = TEXT("fog");
 
+		// Version 5: what lights the stage and the camera look (Docs/ADR/0024 §4). "skyEnabled" is still read from older files.
+		const TCHAR* Lighting = TEXT("lighting");
+		const TCHAR* Look = TEXT("look");
+		const TCHAR* Exposure = TEXT("exposure");
+		const TCHAR* Bloom = TEXT("bloom");
+		const TCHAR* AmbientOcclusion = TEXT("ambientOcclusion");
+		const TCHAR* WhiteBalance = TEXT("whiteBalance");
+		const TCHAR* Saturation = TEXT("saturation");
+		const TCHAR* Contrast = TEXT("contrast");
+		const TCHAR* Vignette = TEXT("vignette");
+		const TCHAR* StudioKeyIntensity = TEXT("studioKeyIntensity");
+		const TCHAR* StudioKeyColor = TEXT("studioKeyColor");
+
 		// Version 3: the cue list.
 		const TCHAR* Cues = TEXT("cues");
 		const TCHAR* Number = TEXT("number");
@@ -191,7 +204,7 @@ namespace StageSceneStore
 	TSharedRef<FJsonObject> WriteEnvironment(const FStageEnvironmentSettings& Settings)
 	{
 		const TSharedRef<FJsonObject> Object = MakeShared<FJsonObject>();
-		Object->SetBoolField(Field::SkyEnabled, Settings.bSkyEnabled);
+		Object->SetStringField(Field::Lighting, StaticEnum<EStageLightingSource>()->GetNameStringByValue(int64(Settings.Lighting)));
 		Object->SetNumberField(Field::TimeOfDay, Settings.TimeOfDay);
 		Object->SetNumberField(Field::SunElevation, Settings.SunElevation);
 		Object->SetNumberField(Field::SunAzimuth, Settings.SunAzimuth);
@@ -199,6 +212,20 @@ namespace StageSceneStore
 		Object->SetNumberField(Field::Rain, Settings.Rain);
 		Object->SetNumberField(Field::Snow, Settings.Snow);
 		Object->SetNumberField(Field::Fog, Settings.Fog);
+
+		const FStageEnvironmentLook& Look = Settings.Look;
+		const TSharedRef<FJsonObject> LookObject = MakeShared<FJsonObject>();
+		LookObject->SetNumberField(Field::Exposure, Look.ExposureCompensation);
+		LookObject->SetNumberField(Field::Bloom, Look.BloomIntensity);
+		LookObject->SetNumberField(Field::AmbientOcclusion, Look.AmbientOcclusionIntensity);
+		LookObject->SetNumberField(Field::WhiteBalance, Look.WhiteBalanceTemp);
+		LookObject->SetNumberField(Field::Saturation, Look.Saturation);
+		LookObject->SetNumberField(Field::Contrast, Look.Contrast);
+		LookObject->SetNumberField(Field::Vignette, Look.VignetteIntensity);
+		LookObject->SetNumberField(Field::StudioKeyIntensity, Look.StudioKeyIntensity);
+		LookObject->SetArrayField(Field::StudioKeyColor, {
+			MakeShared<FJsonValueNumber>(Look.StudioKeyColor.R), MakeShared<FJsonValueNumber>(Look.StudioKeyColor.G), MakeShared<FJsonValueNumber>(Look.StudioKeyColor.B) });
+		Object->SetObjectField(Field::Look, LookObject);
 		return Object;
 	}
 
@@ -216,7 +243,18 @@ namespace StageSceneStore
 		}
 
 		const FJsonObject& Environment = **Object;
-		Environment.TryGetBoolField(Field::SkyEnabled, Settings.bSkyEnabled);
+		// Version 5 names the lighting source; older files only had the outdoor sky switch. An unknown name is the level's lighting.
+		FString LightingName;
+		bool bSkyEnabled = false;
+		if (Environment.TryGetStringField(Field::Lighting, LightingName))
+		{
+			const int64 Source = StaticEnum<EStageLightingSource>()->GetValueByNameString(LightingName, EGetByNameFlags::None);
+			Settings.Lighting = Source == INDEX_NONE ? EStageLightingSource::Level : EStageLightingSource(Source);
+		}
+		else if (Environment.TryGetBoolField(Field::SkyEnabled, bSkyEnabled))
+		{
+			Settings.Lighting = bSkyEnabled ? EStageLightingSource::OutdoorSky : EStageLightingSource::Level;
+		}
 		Environment.TryGetNumberField(Field::TimeOfDay, Settings.TimeOfDay);
 		Environment.TryGetNumberField(Field::SunElevation, Settings.SunElevation);
 		Environment.TryGetNumberField(Field::SunAzimuth, Settings.SunAzimuth);
@@ -224,6 +262,30 @@ namespace StageSceneStore
 		Environment.TryGetNumberField(Field::Rain, Settings.Rain);
 		Environment.TryGetNumberField(Field::Snow, Settings.Snow);
 		Environment.TryGetNumberField(Field::Fog, Settings.Fog);
+
+		const TSharedPtr<FJsonObject>* LookObject = nullptr;
+		if (Environment.TryGetObjectField(Field::Look, LookObject) && LookObject->IsValid())
+		{
+			const FJsonObject& Look = **LookObject;
+			Look.TryGetNumberField(Field::Exposure, Settings.Look.ExposureCompensation);
+			Look.TryGetNumberField(Field::Bloom, Settings.Look.BloomIntensity);
+			Look.TryGetNumberField(Field::AmbientOcclusion, Settings.Look.AmbientOcclusionIntensity);
+			Look.TryGetNumberField(Field::WhiteBalance, Settings.Look.WhiteBalanceTemp);
+			Look.TryGetNumberField(Field::Saturation, Settings.Look.Saturation);
+			Look.TryGetNumberField(Field::Contrast, Settings.Look.Contrast);
+			Look.TryGetNumberField(Field::Vignette, Settings.Look.VignetteIntensity);
+			Look.TryGetNumberField(Field::StudioKeyIntensity, Settings.Look.StudioKeyIntensity);
+			const TArray<TSharedPtr<FJsonValue>>* Color = nullptr;
+			if (Look.TryGetArrayField(Field::StudioKeyColor, Color) && Color->Num() == 3)
+			{
+				double Channels[3] = { 1.0, 1.0, 1.0 };
+				for (int32 Index = 0; Index < 3; ++Index)
+				{
+					(*Color)[Index]->TryGetNumber(Channels[Index]);
+				}
+				Settings.Look.StudioKeyColor = FLinearColor(float(Channels[0]), float(Channels[1]), float(Channels[2]), 1.f);
+			}
+		}
 		return StageEnvironment::Sanitize(Settings);
 	}
 

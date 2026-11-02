@@ -5298,7 +5298,7 @@ Plan approved in plan mode.
 - **Builds:** Editor, Game and Shipping (`-DisableAdaptiveUnity`), all 0 warnings.
 - **Tests:** the new test passes alone. `Scripts/Tests/RunAutomation.ps1 -ExpectedCount 150` passes 150/150 with an offscreen renderer and 150/150 with `-NullRHI`, with user data unchanged (65 files checked).
 
-**Commit:** `d1cc206` (together with #57). The R57 game-run results and the `blender_receive.py` light check came in a follow-up commit.
+**Commit:** `d1cc206` (together with #57). The R57 game-run results and the `blender_receive.py` light check came in the follow-up commit `958b1ee`.
 
 **Known issues / follow-ups**
 - `UStageTestMarketplaceBackend` ships as an unreachable class, like the other test backends.
@@ -5415,7 +5415,7 @@ Plan approved in plan mode.
   - the Marketplace UNPUBLISH and REMOVE FROM LIBRARY buttons;
   - a real Blender import of the exported lights.
 
-**Commit:** `d1cc206` (together with #56). The R57 game-run results and the `blender_receive.py` light check came in a follow-up commit.
+**Commit:** `d1cc206` (together with #56). The R57 game-run results and the `blender_receive.py` light check came in the follow-up commit `958b1ee`.
 
 **Known issues / follow-ups**
 - **Shortcut routing in the running app is unverified:** whether Slate gives the preprocessor the key with the focus in every kind of panel (dock tab, floating window, the assistant field) has not been checked. There is no Slate focus automation, so this is a manual check.
@@ -5424,3 +5424,84 @@ Plan approved in plan mode.
 - **Exported lights** carry colour, intensity and cone only. Gobos, light functions, prisms and pixel cells do not travel, and materials are still not baked.
 - **Duplicate** offsets along +X only. Copy-paste across stages does not exist.
 - **The Marketplace preview** still shows hidden items (it shows the file as published).
+
+## #58 — Phase E2: branded startup loader, atmospheres with blended transitions and a studio rig, starter stages (2026-11-02)
+
+**Status: implemented, awaiting manual verification.** Claude verified it with builds, the automated suite and scripted -game runs (see Verification). The cold-start look in a packaged build and the new cards and sliders by mouse still need a hand check.
+
+**Request (Gevor, 2026-11-02, pasted brief):** a 3D app that looks professional the second it loads: a branded loader instead of a blank screen; asynchronous asset streaming; studio-grade lighting and post-processing (shadows, AO, ACES tone mapping, bloom); a switcher for stage presets and atmospheres (Clear Daytime, Dramatic Sunset, Cyberpunk Night, Minimalist Studio); smooth transitions and camera moves; fallbacks for failed assets; clean teardown; 0 warnings and STATE.md upkeep. The brief was written in web-app terms; ADR 0024 maps it onto the app.
+
+**What the audit found** (three read-only explorations):
+- No loading screen of any kind: the bare game viewport while the map loaded, then panels saying "Loading…" while three catalogs streamed. Readiness was separate flags, no combined signal, no percentage.
+- The environment (ADR 0009) snapped on every change, had no camera look on the live view and no studio lighting ("sky off" = the level's dark lights). Lumen, VSM and the engine's ACES-based filmic tonemapper were already in use; nothing set bloom or AO.
+- No stage presets or templates; the camera only had a 0.25 s location-only focus glide.
+
+**Gevor's decisions (AskUserQuestion):** a StageCraft studio rig (HDRI sky light with a flat fallback, key light); the camera stays put on an atmosphere switch; ship starter stages with a start screen and a camera glide; the loader covers engine start and the catalogs.
+
+**What changed**
+- **M1, startup** (ADR 0024 §2):
+  - `SStageBrandedLoader` (wordmark, bar, status; animated from the paint time so it also moves on the MoviePlayer thread).
+  - The game module (now `FModularSceneBuilderModule`) gives the engine's loading screen this loader during the map load (`OnPrepareLoadingScreen`; `MoviePlayer` dependency).
+  - `UStageWorkspaceSubsystem` waits in the new state `WaitingForLoadingScreen` and installs on `OnMoviePlaybackFinished`: installing during the loading screen made the engine register our host as the game viewport (ensure, first run). The controller uses `WillHostPanels` to keep the HUD out meanwhile.
+  - `UStageStartupSubsystem`: weighted progress from the item, panel, product and atmosphere loaders, each pushing its streamable handle's progress (`BindUpdateDelegate`); states Loading → Ready / Failed / TimedOut (30 s, Continue). The shell shows the loader on its own overlay layer and fades it out.
+  - New public signals: `GetCatalogLoadProgress` / `OnCatalogLoadProgress` (items), `GetProductCatalogLoadProgress` (products), `IsPanelCatalogLoaded` / `OnPanelCatalogLoaded` (panels; also fixed: with no panel definitions it never reported loaded).
+  - Dev: `StageCraft.Startup.PreviewLoader [s]`, `StageCraft.Workspace.ScreenshotWindow`.
+- **M2, atmospheres** (ADR 0024 §3–5, ADR 0009 §8):
+  - `EStageLightingSource { Level, OutdoorSky, Studio }` replaces `bSkyEnabled` (all callers: backend, AI runner/parser/schema, console, panel, tests).
+  - `FStageEnvironmentLook` (exposure, bloom, AO, white balance, saturation, contrast, vignette, studio key) on an unbound post-process component; defaults equal the engine's, so old stages render as before.
+  - `AStageStudioRig` (HDRI sky light from `StudioCubemap`, loaded asynchronously; key light; light-grey backdrop haze; flat fallback). `FStageHiddenLevelLighting` shared with the Sky Creator backend (moved out of it).
+  - Blends: `SetSettings(..., EStageEnvironmentTransition)`; `UTickableWorldSubsystem` ticking only while blending; `StageEnvironment::BlendForDisplay` (time forward through a sunset, short way round for the azimuth, source switch at the midpoint inside a 6 EV dip).
+  - `UStageAtmospherePreset` assets (`StageAtmosphere`, AlwaysCook) and `UStageAtmosphereSubsystem`; four presets built by `Scripts/Content/create_atmosphere_content.py`. Cyberpunk Night (first values blown out: −1.2 EV, bloom 1.1, fog 0.3) and the studio (haze too thick, key too dim: density 0.004 from 30 m, key 8 lux) were tuned from screenshots.
+  - `RequestApplyAtmosphere` (one undo step, blended); `RequestSetEnvironment` gains the transition.
+  - Environment panel: an ATMOSPHERE card grid (lit when the stored settings match), LIGHTING Venue / Outdoor / Studio, CAMERA LOOK sliders (exposure, bloom, white balance).
+  - Scene format v5 (`"lighting"`, `"look"`); v2–v4 read `skyEnabled`.
+  - Dev: `StageCraft.Environment.Atmosphere <name>`, `StageCraft.Bench.AtmosphereBlend`, `Environment.Set Lighting|Exposure|Bloom|WhiteBalance`.
+- **M3, starter stages** (ADR 0024 §6):
+  - `Content/StageCraft/Templates`: Empty Stage (Clear Daytime), Concert (thrust, two truss runs at 7 m, 9 fixtures, Cyberpunk Night), Theatre (deck, three bars, 10 fixtures, the venue's lighting), Conference (riser, front truss, 4 fixtures, Minimalist Studio). Built through Sketch to Stage by `Scripts/Content/build_starter_stages.ps1`; staged as UFS.
+  - `UStageSceneComponent::LoadTemplate` / `GetTemplateNames` (fresh ids, untitled, no origin, clean), `EStageSceneOperation::OpenTemplate`.
+  - The controller frames the opened stage: `UStageCameraNavigationComponent::FrameStage`, `AStageCameraPawn::GlideTo` (location and rotation, 1.2 s).
+  - File > New from Template (discard confirmation as Open Scene); `StageCraft.Scene.NewFromTemplate` (dev).
+  - `SStageWelcomeDialog` after startup (cards, Continue / Escape, Show at startup in `UStageCraftUserSettings::bShowWelcomeAtStartup`), opened 0.25 s after the loader (never from inside the install), `-StageNoWelcome` (non-Shipping). The shortcut router stands aside while any overlay is up (`IsModalOverlayOpen`).
+- **Tooling:** `Scripts/Tests/RunGameScripted.ps1` (scripted -game run that backs up and restores the profile, scenes, workspace, user settings, marketplace folder and import list; `-CollectScenes`, `-WithoutUserImports`; game output to files).
+
+**Files changed**
+- New:
+  - `Source/ModularSceneBuilder/Public/Startup/StageStartupTypes.h`, `StageStartupSubsystem.h`; `Private/Startup/StageStartupSubsystem.cpp`, `SStageBrandedLoader.h/.cpp`, `Tests/StageStartupTests.cpp`
+  - `Public/Environment/StageAtmospherePreset.h`, `StageAtmosphereSubsystem.h`, `StageLevelLighting.h`, `StageStudioRig.h`; `Private/Environment/StageAtmosphereSubsystem.cpp`, `StageLevelLighting.cpp`, `StageStudioRig.cpp`, `Tests/StageAtmosphereTests.cpp`
+  - `Private/Workspace/SStageWelcomeDialog.h/.cpp`, `Private/Scene/Tests/StageTemplateTests.cpp`
+  - `Content/StageCraft/Atmospheres/DA_Atmosphere_*.uasset` (4), `Content/StageCraft/Templates/*.json` (4)
+  - `Scripts/Content/create_atmosphere_content.py`, `Scripts/Content/build_starter_stages.ps1`, `Scripts/Tests/RunGameScripted.ps1`
+  - `Docs/ADR/0024-startup-atmospheres-starter-stages.md`
+- Modified:
+  - `ModularSceneBuilder.Build.cs`, `Private/ModularSceneBuilder.cpp`, `Config/DefaultGame.ini` (StageAtmosphere scan, StudioCubemap, BlendSeconds, cook and stage paths)
+  - Environment: `Public/Environment/StageEnvironmentTypes.h`, `StageEnvironmentSubsystem.h`, `StageEnvironmentBackend.h`; `Private/Environment/StageEnvironmentTypes.cpp`, `StageEnvironmentSubsystem.cpp`, `StageEnvironmentConsoleCommands.cpp`, `Tests/StageEnvironmentTests.cpp`; `Source/StageCraftSkyCreator/Private/StageSkyCreatorBackend.h/.cpp`, `Tests/StageSkyCreatorTests.cpp`
+  - UI: `Public/UI/StageEnvironmentPanel.h`, `Private/UI/StageEnvironmentPanel.cpp`
+  - Catalogs: `Public/Subsystems/StageItemSubsystem.h`, `StageEconomySubsystem.h`; `Private/Subsystems/StageItemSubsystem.cpp`, `StageEconomySubsystem.cpp`
+  - Workspace: `Public/Workspace/StageWorkspaceSubsystem.h`, `StageWorkspaceTypes.h`; `Private/Workspace/StageWorkspaceSubsystem.cpp`, `StageWorkspaceShell.h/.cpp`, `SStageWorkspaceMenuBar.h/.cpp`, `StageWorkspaceConsoleCommands.cpp`; `Private/Input/StageShortcutRouting.cpp`
+  - Scene: `Public/Scene/StageSceneComponent.h`, `StageSceneTypes.h`; `Private/Scene/StageSceneComponent.cpp`, `StageSceneStore.h/.cpp`, `StageSceneConsoleCommands.cpp`, `Tests/StageSceneStoreTests.cpp`
+  - Camera and controller: `Public/Player/ModularPlayerController.h`, `StageCameraPawn.h`, `StageCameraNavigation.h`, `StageCameraNavigationComponent.h`; `Private/Player/ModularPlayerController.cpp`, `StageCameraPawn.cpp`, `StageCameraNavigationComponent.cpp`
+  - Settings: `Public/Settings/StageCraftUserSettings.h`, `Private/Settings/StageCraftUserSettings.cpp`
+  - AI: `Private/AI/StageAICommandParser.cpp`, `StageAICommandRunner.cpp`, `StageAICommandSchema.cpp`, `Tests/StageAITests.cpp`; `Private/Bridge/Tests/StageBridgeTests.cpp` (version-3 file built from the current version, not a hard-coded 4)
+  - Docs: `Docs/ADR/0009-outdoor-environment.md` (§8), `Docs/CURRENT_SYSTEMS.md`, `Docs/PROJECT_AUDIT.md`, `tasks/todo.md` (Phase 33); STATE.md #56/#57 commit lines (follow-up commit `958b1ee`)
+
+**Verification**
+- **Builds:** Editor 0 warnings (one C4701 in the new ScreenshotWindow command was fixed). Game and Shipping (`-DisableAdaptiveUnity`): 0 warnings, both succeeded.
+- **Shipping binary:** UTF-16 and ASCII scan of `ModularSceneBuilder-Win64-Shipping.exe`: `StageCraft.Bench.AtmosphereBlend`, `StageCraft.Scene.NewFromTemplate`, `StageCraft.Startup.PreviewLoader`, `StageCraft.Workspace.ScreenshotWindow`, `StageCraft.Environment.Atmosphere` and `StageNoWelcome` are absent; the user-facing "Start a stage", "Show at startup" and "Opening the stage…" are present (control).
+- **Automation:** `Scripts/Tests/RunAutomation.ps1 -ExpectedCount 160` gives 160/160 with an offscreen renderer and 160/160 with `-NullRHI` on the final code, user data unchanged (65 files). New: `StageCraft.Startup.Readiness`, `StageCraft.Environment.AtmosphereBlend`, `.AtmospherePresets`, `.StudioWorld`, `StageCraft.Scene.Templates`; `Scene.Format` gained v5 and hostile-look cases. The first full run failed `Bridge.SceneOrigin` (it turned a file into v3 by replacing a hard-coded `"version": 4`) and `Scene.Templates` (Theatre deliberately uses the venue's lighting, not a preset); both tests were corrected. That run also reported `GameUserSettings.ini` changed: an existing test saves user settings, and the bytes only differed because the new `bShowWelcomeAtStartup=True` default was written; the next runs reported user data unchanged (follow-up below).
+- **Scripted -game runs** (`RunGameScripted.ps1`, user data restored and hash-checked every time):
+  - The MoviePlayer loader played during the map load; the workspace installed after it with no ensure (the first attempt, before the wait, hit `RegisterViewport`'s ensure).
+  - Loader preview and welcome screen captured with `ScreenshotWindow` (cards Concert, Conference, Empty Stage, Theatre; Show at startup; Continue).
+  - Each atmosphere applied through the controller and screenshot mid-blend and after; the four starter stages opened with every item placed (13, 14, 6, 0), untitled and clean, with the three-quarter camera glide; Ctrl+S on an opened starter stage shows the "Save Stage" name prompt.
+  - `StageCraft.Bench.AtmosphereBlend` (all four atmospheres, Development editor binaries, 1600×900): frame 8.37 ms average / 20.0 ms worst while blending (715 frames) against 7.64 / 11.9 ms at rest (401 frames); game thread 4.64 / 8.95 ms against 4.34 / 7.44 ms.
+- **Not verified by hand:** a cold start in a packaged build (the loader is visible longest there); the welcome and atmosphere cards, the Lighting choice and look sliders by mouse; fixture beams under Cyberpunk Night in a full show.
+
+**Commit:** uncommitted (working tree).
+
+**Known issues / follow-ups**
+- **An existing automated test saves `GameUserSettings.ini`** during the suite (same bytes before #58, so the runner never noticed). Find it and make it use a scoped settings object.
+- **Gevor's imported FBX models re-import at every start** and block the game thread for about 50 s (`AG1.FBX`); loads, including starter stages, are refused as ImportsPending meanwhile. Pre-existing; the startup loader does not wait for imports.
+- **Scripted runs** stalled when the runner was started through a nested `powershell -File` from the tool shell (clean with `&`); not a product issue, recorded in the tooling notes.
+- The Environment panel's sliders and Lighting choice still write the environment directly, not through the controller (pre-existing, PROJECT_AUDIT); only atmosphere cards are undoable.
+- No scalability or quality settings; the main window title is still the project name.
+- Starter stages use one fixture type (the Sketch tool's Beam 280).
+- v5 scene files are refused by builds older than #58 (VersionMismatch), as with every format bump.

@@ -37,6 +37,8 @@ enum class EStageSceneOperation : uint8
 	Save,
 	Load,
 	Delete,
+	/** A starter stage was opened as a new untitled stage (Docs/ADR/0024 §6). */
+	OpenTemplate,
 };
 
 /** Reported once per finished scene operation, for the status bar and menus. */

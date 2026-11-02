@@ -142,12 +142,12 @@ bool FStageSkyCreatorWorldTest::RunTest(const FString& Parameters)
 		return false;
 	}
 	TestTrue(TEXT("The Sky Creator backend is configured and created"), Environment->IsSkyAvailable());
-	TestFalse(TEXT("The sky starts off"), Environment->GetSettings().bSkyEnabled);
+	TestFalse(TEXT("The sky starts off"), Environment->GetSettings().IsOutdoorSky());
 	TestEqual(TEXT("No sky actor while the sky is off"), FindSkies(World).Num(), 0);
 
 	// On: one sky, the level's own sun and fog hidden.
 	FStageEnvironmentSettings Settings = Environment->GetSettings();
-	Settings.bSkyEnabled = true;
+	Settings.Lighting = EStageLightingSource::OutdoorSky;
 	Settings.TimeOfDay = 18.f;
 	Settings.Rain = 0.5f;
 	Environment->SetSettings(Settings);
@@ -175,7 +175,7 @@ bool FStageSkyCreatorWorldTest::RunTest(const FString& Parameters)
 
 	// Off: the sky goes, the level's sun and fog come back.
 	Settings = Environment->GetSettings();
-	Settings.bSkyEnabled = false;
+	Settings.Lighting = EStageLightingSource::Level;
 	Environment->SetSettings(Settings);
 	TestEqual(TEXT("Sky off removes the sky actor"), FindSkies(World).Num(), 0);
 	TestTrue(TEXT("Level sun is restored"), Scope.LevelSun->GetLightComponent()->IsVisible());
@@ -183,7 +183,7 @@ bool FStageSkyCreatorWorldTest::RunTest(const FString& Parameters)
 	TestEqual(TEXT("Weather values are kept while off"), Environment->GetSettings().Snow, Settings.Snow);
 
 	// On again: a fresh sky, values re-applied.
-	Settings.bSkyEnabled = true;
+	Settings.Lighting = EStageLightingSource::OutdoorSky;
 	Environment->SetSettings(Settings);
 	TestEqual(TEXT("Sky on again spawns one sky actor"), FindSkies(World).Num(), 1);
 	return true;

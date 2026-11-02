@@ -119,6 +119,17 @@ public:
 	/** Removes the dialog and gives keyboard focus back to the viewport. Safe without a dialog. */
 	void CloseDialog();
 
+	/**
+	 * Covers the whole workspace with the startup loader (Docs/ADR/0024 §2), above any dialog, until CloseStartupOverlay.
+	 * It takes every click, so nothing half-loaded can be used. Floating panel windows are not covered.
+	 */
+	void ShowStartupOverlay(const TSharedRef<class SWidget>& Overlay);
+
+	/** Removes the startup loader. Safe when none is shown. */
+	void CloseStartupOverlay();
+
+	bool IsStartupOverlayShown() const;
+
 	/** Closes the main window, which quits the app, without asking ConfirmMainWindowClose again. */
 	void CloseMainWindow();
 
@@ -191,6 +202,9 @@ private:
 
 	/** The dialog layer over the workspace content (ShowDialog). Collapsed while no dialog is shown. */
 	TSharedPtr<class SBox> DialogSlot;
+
+	/** The startup loader's layer, above the dialog layer (ShowStartupOverlay). Collapsed once it is closed. */
+	TSharedPtr<class SBox> StartupSlot;
 
 	/** The major tab in the main window. Owns PanelTabManager. */
 	TWeakPtr<class SDockTab> WorkspaceTab;

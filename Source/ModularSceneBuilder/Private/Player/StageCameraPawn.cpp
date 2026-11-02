@@ -214,6 +214,26 @@ void AStageCameraPawn::FocusOn(const FVector& NewLocation)
 	FocusStart = GetActorLocation();
 	FocusTarget = NewLocation;
 	FocusElapsed = 0.f;
+	FocusDuration = StageCameraNavigation::FocusTransitionSeconds;
+	FocusStartRotation.Reset();
+	FocusTargetRotation.Reset();
+	StartTicking();
+}
+
+void AStageCameraPawn::GlideTo(const FVector& NewLocation, const FRotator& NewRotation, float Seconds)
+{
+	if (bFixedView || NewLocation.ContainsNaN() || NewRotation.ContainsNaN())
+	{
+		return;
+	}
+	EndOrbit();
+	Velocity = FVector::ZeroVector;
+	FocusStart = GetActorLocation();
+	FocusTarget = NewLocation;
+	FocusStartRotation = GetViewRotation().Quaternion();
+	FocusTargetRotation = NewRotation.Quaternion();
+	FocusElapsed = 0.f;
+	FocusDuration = FMath::Max(Seconds, StageCameraNavigation::FocusTransitionSeconds);
 	StartTicking();
 }
 
@@ -329,12 +349,19 @@ bool AStageCameraPawn::TickFocus(float DeltaSeconds)
 	{
 		return false;
 	}
-	FocusElapsed = FMath::Min(FocusElapsed + DeltaSeconds, StageCameraNavigation::FocusTransitionSeconds);
-	const float Alpha = StageCameraNavigation::EaseFocus(FocusElapsed / StageCameraNavigation::FocusTransitionSeconds);
+	const float Duration = FocusDuration > 0.f ? FocusDuration : StageCameraNavigation::FocusTransitionSeconds;
+	FocusElapsed = FMath::Min(FocusElapsed + DeltaSeconds, Duration);
+	const float Alpha = StageCameraNavigation::EaseFocus(FocusElapsed / Duration);
 	SetActorLocation(FMath::Lerp(FocusStart, FocusTarget, static_cast<double>(Alpha)), /*bSweep*/ false);
-	if (FocusElapsed >= StageCameraNavigation::FocusTransitionSeconds)
+	if (FocusStartRotation.IsSet() && FocusTargetRotation.IsSet())
+	{
+		ApplyViewRotation(FQuat::Slerp(FocusStartRotation.GetValue(), FocusTargetRotation.GetValue(), Alpha).Rotator());
+	}
+	if (FocusElapsed >= Duration)
 	{
 		FocusElapsed = -1.f;
+		FocusStartRotation.Reset();
+		FocusTargetRotation.Reset();
 		return false;
 	}
 	return true;

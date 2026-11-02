@@ -22,11 +22,15 @@
 #include "Framework/Application/SlateApplication.h"
 #include "GameFramework/GameUserSettings.h"
 #include "HAL/IConsoleManager.h"
+#include "ImageUtils.h"
+#include "Misc/FileHelper.h"
+#include "Misc/Paths.h"
 #include "Player/ModularPlayerController.h"
 #include "Slate/SceneViewport.h"
 #include "UObject/UObjectIterator.h"
 #include "UnrealClient.h"
 #include "Widgets/SWindow.h"
+#include "Startup/SStageBrandedLoader.h"
 #include "Workspace/StageWorkspaceShell.h"
 #include "Workspace/StageWorkspaceSubsystem.h"
 
@@ -158,6 +162,31 @@ namespace StageWorkspaceCommands
 		UE_LOG(LogStageWorkspace, Display, TEXT("Screenshot requested (next frame, Saved/Screenshots)."));
 	}
 
+	/**
+	 * The main window exactly as Slate draws it, overlays and dialogs included (the startup loader, the welcome screen), to
+	 * Saved/Screenshots/Window_<time>.png. Screenshot captures through the game viewport, which a dialog over the workspace hides.
+	 */
+	void ScreenshotWindow(const TArray<FString>& Args, UWorld* World)
+	{
+		const UGameEngine* GameEngine = Cast<UGameEngine>(GEngine);
+		const TSharedPtr<SWindow> Window = GameEngine ? GameEngine->GameViewportWindow.Pin() : nullptr;
+		TArray<FColor> Pixels;
+		FIntVector Size(0, 0, 0);
+		if (!Window.IsValid() || !FSlateApplication::Get().TakeScreenshot(Window.ToSharedRef(), Pixels, Size) || Pixels.IsEmpty())
+		{
+			UE_LOG(LogStageWorkspace, Display, TEXT("ScreenshotWindow: capture failed."));
+			return;
+		}
+		for (FColor& Pixel : Pixels)
+		{
+			Pixel.A = 255;
+		}
+		TArray64<uint8> Png;
+		FImageUtils::PNGCompressImageArray(Size.X, Size.Y, Pixels, Png);
+		const FString File = FPaths::ProjectSavedDir() / TEXT("Screenshots") / FString::Printf(TEXT("Window_%s.png"), *FDateTime::Now().ToString(TEXT("%H%M%S")));
+		UE_LOG(LogStageWorkspace, Display, TEXT("ScreenshotWindow: %dx%d %s %s."), Size.X, Size.Y, FFileHelper::SaveArrayToFile(Png, *File) ? TEXT("saved") : TEXT("NOT saved"), *File);
+	}
+
 	/** Logs the widget tree of the first live user widget whose class name contains the argument: names, classes and slot types, for layout debugging. */
 	void DumpWidget(const TArray<FString>& Args, UWorld* World)
 	{
@@ -285,6 +314,44 @@ namespace StageWorkspaceCommands
 	}
 
 	/** Runs a console command after a delay, so one -ExecCmds line can script a timed test sequence. */
+	/**
+	 * Shows the startup loader over the workspace for a few seconds, filling as if catalogs were loading, then fades it out.
+	 * A real start is usually too quick to look at or screenshot (Docs/ADR/0024 §2).
+	 */
+	void PreviewLoader(const TArray<FString>& Args, UWorld* World)
+	{
+		const TSharedPtr<FStageWorkspaceShell> Shell = GetActiveShell(World);
+		if (!Shell.IsValid())
+		{
+			return;
+		}
+		const float Seconds = Args.Num() > 0 ? FMath::Clamp(FCString::Atof(*Args[0]), 0.5f, 60.f) : 4.f;
+		const double Start = FSlateApplication::Get().GetCurrentTime();
+		auto Elapsed = [Start, Seconds]() { return float((FSlateApplication::Get().GetCurrentTime() - Start) / Seconds); };
+		const TSharedRef<SStageBrandedLoader> Loader = SNew(SStageBrandedLoader)
+			.Progress_Lambda([Elapsed]() { return TOptional<float>(FMath::Clamp(Elapsed(), 0.f, 1.f)); })
+			.Status_Lambda([Elapsed]() { return FText::FromString(Elapsed() < 0.6f ? TEXT("Loading the library…") : Elapsed() < 0.9f ? TEXT("Loading the panels…") : TEXT("Loading the atmospheres…")); });
+		Shell->ShowStartupOverlay(Loader);
+		UE_LOG(LogStageWorkspace, Display, TEXT("PreviewLoader: shown for %.1f s."), Seconds);
+
+		const TWeakPtr<FStageWorkspaceShell> WeakShell = Shell;
+		const TWeakPtr<SStageBrandedLoader> WeakLoader = Loader;
+		FTSTicker::GetCoreTicker().AddTicker(FTickerDelegate::CreateLambda([WeakShell, WeakLoader](float)
+		{
+			if (const TSharedPtr<SStageBrandedLoader> Pinned = WeakLoader.Pin())
+			{
+				Pinned->FadeOut(0.35f, FSimpleDelegate::CreateLambda([WeakShell]()
+				{
+					if (const TSharedPtr<FStageWorkspaceShell> PinnedShell = WeakShell.Pin())
+					{
+						PinnedShell->CloseStartupOverlay();
+					}
+				}));
+			}
+			return false;
+		}), Seconds + 0.25f);
+	}
+
 	void Delay(const TArray<FString>& Args, UWorld* World)
 	{
 		if (Args.Num() < 2)
@@ -415,6 +482,8 @@ namespace StageWorkspaceCommands
 		FConsoleCommandWithWorldAndArgsDelegate::CreateStatic(&DeleteLayout));
 	FAutoConsoleCommandWithWorldAndArgs ListLayoutsCommand(TEXT("StageCraft.Workspace.ListLayouts"), TEXT("Logs the active, built-in and user layouts."),
 		FConsoleCommandWithWorldAndArgsDelegate::CreateStatic(&ListLayouts));
+	FAutoConsoleCommandWithWorldAndArgs PreviewLoaderCommand(TEXT("StageCraft.Startup.PreviewLoader"), TEXT("[Seconds] Shows the startup loader over the workspace for a few seconds (default 4), for a look or a screenshot."),
+		FConsoleCommandWithWorldAndArgsDelegate::CreateStatic(&PreviewLoader));
 	FAutoConsoleCommandWithWorldAndArgs DelayCommand(TEXT("StageCraft.Workspace.Delay"), TEXT("<Seconds> <Command...> Runs a console command later (test scripting)."),
 		FConsoleCommandWithWorldAndArgsDelegate::CreateStatic(&Delay));
 	FAutoConsoleCommandWithWorldAndArgs StatusCommand(TEXT("StageCraft.Workspace.Status"), TEXT("Logs workspace state, windows, viewport size and saved resolution."),
@@ -425,6 +494,8 @@ namespace StageWorkspaceCommands
 		FConsoleCommandWithWorldAndArgsDelegate::CreateStatic(&Reset));
 	FAutoConsoleCommandWithWorldAndArgs ScreenshotCommand(TEXT("StageCraft.Workspace.Screenshot"), TEXT("Saves the main window, with all panels, to Saved/Screenshots."),
 		FConsoleCommandWithWorldAndArgsDelegate::CreateStatic(&Screenshot));
+	FAutoConsoleCommandWithWorldAndArgs ScreenshotWindowCommand(TEXT("StageCraft.Workspace.ScreenshotWindow"), TEXT("Saves the main window as Slate draws it, dialogs and overlays included, to Saved/Screenshots."),
+		FConsoleCommandWithWorldAndArgsDelegate::CreateStatic(&ScreenshotWindow));
 	FAutoConsoleCommandWithWorldAndArgs DumpWidgetCommand(TEXT("StageCraft.Workspace.DumpWidget"), TEXT("<ClassNamePart> Logs a live widget's tree (names, classes, slot types)."),
 		FConsoleCommandWithWorldAndArgsDelegate::CreateStatic(&DumpWidget));
 	FAutoConsoleCommandWithWorldAndArgs ScrollPanelsCommand(TEXT("StageCraft.Workspace.ScrollPanels"), TEXT("[end|start] Scrolls every vertical panel list to its end (default) or start, for screenshots."),

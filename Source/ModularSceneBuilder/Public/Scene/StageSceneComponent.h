@@ -65,6 +65,20 @@ public:
 	 */
 	EStageSceneResult LoadScene(const FString& Name);
 
+	/**
+	 * Starts opening the starter stage TemplateName (Docs/ADR/0024 §6) in place of the current stage, like LoadScene, but as a
+	 * new untitled stage: fresh item ids, no scene name (so Ctrl+S asks for one and the starter stage is never overwritten), no
+	 * marketplace origin. Starter stages ship read-only under Content/StageCraft/Templates and go through the same parser as any
+	 * scene file. The outcome arrives on OnSceneOperationFinished as EStageSceneOperation::OpenTemplate.
+	 */
+	EStageSceneResult LoadTemplate(const FString& TemplateName);
+
+	/** The starter stages that ship with the app, sorted. Reads the folder; meant for menus when they open. */
+	TArray<FString> GetTemplateNames() const;
+
+	/** Content/StageCraft/Templates: where starter stages ship. */
+	static FString GetTemplatesDirectory();
+
 	/** Deletes the saved scene Name from disk. The stage on screen is not changed. Broadcasts the outcome. */
 	EStageSceneResult DeleteScene(const FString& Name);
 
@@ -131,6 +145,8 @@ private:
 	{
 		SavedScene,
 		Autosave,
+		/** A starter stage: opened untitled, with fresh ids. */
+		Template,
 	};
 
 	FStageSceneDocument CaptureStage(const FString& Name) const;
@@ -201,6 +217,9 @@ private:
 
 	/** Immutable after construction and shared with background tasks, which may outlive this component. */
 	TSharedPtr<const class FStageSceneStore, ESPMode::ThreadSafe> Store;
+
+	/** The shipped starter stages (read only). Immutable and shared with background tasks, like Store. */
+	TSharedPtr<const class FStageSceneStore, ESPMode::ThreadSafe> TemplateStore;
 
 	bool bOperationInFlight = false;
 };

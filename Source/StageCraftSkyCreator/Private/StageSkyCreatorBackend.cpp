@@ -2,13 +2,7 @@
 
 #include "StageSkyCreatorBackend.h"
 
-#include "Components/DirectionalLightComponent.h"
-#include "Components/ExponentialHeightFogComponent.h"
-#include "Components/SkyAtmosphereComponent.h"
-#include "Components/SkyLightComponent.h"
-#include "Components/VolumetricCloudComponent.h"
 #include "Engine/World.h"
-#include "EngineUtils.h"
 
 #ifdef _MSC_VER
 #pragma warning(push)
@@ -27,7 +21,8 @@ DEFINE_LOG_CATEGORY_STATIC(LogStageSkyCreator, Log, All);
 
 void UStageSkyCreatorBackend::Apply(UWorld& World, const FStageEnvironmentSettings& Settings)
 {
-	if (!Settings.bSkyEnabled)
+	// The level's lights or the studio rig (UStageEnvironmentSubsystem) light the stage: no sky.
+	if (!Settings.IsOutdoorSky())
 	{
 		RemoveSky();
 		return;
@@ -56,7 +51,7 @@ void UStageSkyCreatorBackend::Shutdown()
 	if (SkyWorld && SkyWorld->bIsTearingDown)
 	{
 		Sky.Reset();
-		HiddenLevelComponents.Reset();
+		HiddenLevel.Forget();
 		return;
 	}
 	RemoveSky();
@@ -84,34 +79,10 @@ ASkyCreator* UStageSkyCreatorBackend::SpawnSky(UWorld& World)
 	}
 	Sky = SkyActor;
 	BaseWeather = SkyActor->GetWeatherSettings();
-	HideLevelSky(World, *SkyActor);
-	UE_LOG(LogStageSkyCreator, Log, TEXT("Environment: outdoor sky on (Sky Creator); %d level sky component(s) hidden."), HiddenLevelComponents.Num());
+	// The level's sun, sky light, atmosphere, clouds and fog would otherwise light and fog the stage a second time.
+	HiddenLevel.Hide(World, *SkyActor);
+	UE_LOG(LogStageSkyCreator, Log, TEXT("Environment: outdoor sky on (Sky Creator); %d level sky component(s) hidden."), HiddenLevel.Num());
 	return SkyActor;
-}
-
-void UStageSkyCreatorBackend::HideLevelSky(UWorld& World, const AActor& SkyActor)
-{
-	// One pass when the sky turns on, not a poll: the level's sun, sky light, atmosphere, clouds and fog would otherwise
-	// light and fog the stage a second time on top of the sky's own.
-	for (TActorIterator<AActor> It(&World); It; ++It)
-	{
-		if (*It == &SkyActor)
-		{
-			continue;
-		}
-		for (UActorComponent* Component : It->GetComponents())
-		{
-			USceneComponent* SceneComponent = Cast<USceneComponent>(Component);
-			const bool bLevelSky = Component && (Component->IsA<UDirectionalLightComponent>() || Component->IsA<USkyLightComponent>()
-				|| Component->IsA<USkyAtmosphereComponent>() || Component->IsA<UVolumetricCloudComponent>()
-				|| Component->IsA<UExponentialHeightFogComponent>());
-			if (bLevelSky && SceneComponent && SceneComponent->IsVisible())
-			{
-				SceneComponent->SetVisibility(false);
-				HiddenLevelComponents.Add(SceneComponent);
-			}
-		}
-	}
 }
 
 void UStageSkyCreatorBackend::RemoveSky()
@@ -123,14 +94,7 @@ void UStageSkyCreatorBackend::RemoveSky()
 	}
 	Sky.Reset();
 
-	for (const TWeakObjectPtr<USceneComponent>& Hidden : HiddenLevelComponents)
-	{
-		if (USceneComponent* Component = Hidden.Get())
-		{
-			Component->SetVisibility(true);
-		}
-	}
-	HiddenLevelComponents.Reset();
+	HiddenLevel.Restore();
 }
 
 #undef LOCTEXT_NAMESPACE

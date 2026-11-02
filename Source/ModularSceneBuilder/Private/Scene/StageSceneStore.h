@@ -46,8 +46,10 @@ public:
 	 *  - 3: adds "cues" (Docs/ADR/0011-cue-list-and-patch-sheet-export.md §2.5). Version 1 and 2 files load with no cues.
 	 *  - 4: adds "originListingId" when the stage came from the community marketplace (Docs/ADR/0022-dcc-bridge.md §4). Older
 	 *    files load as the user's own stage. A present but unreadable id makes the file Corrupt: never read as "own".
+	 *  - 5: "environment" names its "lighting" source (Level, OutdoorSky, Studio) instead of "skyEnabled", and adds the camera
+	 *    "look" (Docs/ADR/0024 §4). Older files read "skyEnabled" as OutdoorSky or Level, with the default look.
 	 */
-	static constexpr int32 FormatVersion = 4;
+	static constexpr int32 FormatVersion = 5;
 	/** The oldest version Parse still migrates. Older or newer files are refused as VersionMismatch and left untouched. */
 	static constexpr int32 MinReadableVersion = 1;
 	static constexpr int32 MaxItems = 10000;

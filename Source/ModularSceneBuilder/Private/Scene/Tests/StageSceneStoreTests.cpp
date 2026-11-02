@@ -153,7 +153,12 @@ bool FStageSceneMigrationTest::RunTest(const FString& Parameters)
 	FStageSceneDocument Document;
 	Document.Name = TEXT("Open Air");
 	Document.Items.Add(MakeItem(TEXT("Crate"), FTransform(FVector(1, 2, 3))));
-	Document.Environment.bSkyEnabled = true;
+	Document.Environment.Lighting = EStageLightingSource::Studio;
+	Document.Environment.Look.ExposureCompensation = 1.25f;
+	Document.Environment.Look.BloomIntensity = 1.5f;
+	Document.Environment.Look.WhiteBalanceTemp = 5200.f;
+	Document.Environment.Look.Saturation = 0.8f;
+	Document.Environment.Look.StudioKeyColor = FLinearColor(1.f, 0.9f, 0.8f);
 	Document.Environment.TimeOfDay = 19.5f;
 	Document.Environment.SunElevation = 30.f;
 	Document.Environment.SunAzimuth = 120.f;
@@ -171,12 +176,12 @@ bool FStageSceneMigrationTest::RunTest(const FString& Parameters)
 	TestEqual(TEXT("Version 1 parses"), Str(FStageSceneStore::Parse(MakeSceneJson(ValidItemFields, 1), Parsed, Report)), Str(EStageSceneResult::Success));
 	TestEqual(TEXT("... with its item"), Parsed.Items.Num(), 1);
 	TestTrue(TEXT("... and the default environment"), Parsed.Environment.Equals(Defaults));
-	TestFalse(TEXT("... sky off"), Parsed.Environment.bSkyEnabled);
+	TestTrue(TEXT("... lit by the level"), Parsed.Environment.Lighting == EStageLightingSource::Level);
 
 	// A version 1 file never had an environment; one found in it is not trusted to mean anything.
 	const FString V1WithEnvironment = TEXT("{\"format\":\"StageCraftScene\",\"version\":1,\"items\":[],\"environment\":{\"skyEnabled\":true}}");
 	TestEqual(TEXT("Version 1 with a stray environment parses"), Str(FStageSceneStore::Parse(V1WithEnvironment, Parsed, Report)), Str(EStageSceneResult::Success));
-	TestFalse(TEXT("... and ignores it"), Parsed.Environment.bSkyEnabled);
+	TestTrue(TEXT("... and ignores it"), Parsed.Environment.Lighting == EStageLightingSource::Level);
 
 	// Versions outside [MinReadableVersion, FormatVersion] are refused whole, never half-read.
 	TestEqual(TEXT("Version 0"), Str(FStageSceneStore::Parse(MakeSceneJson(ValidItemFields, FStageSceneStore::MinReadableVersion - 1), Parsed, Report)), Str(EStageSceneResult::VersionMismatch));
@@ -197,7 +202,18 @@ bool FStageSceneMigrationTest::RunTest(const FString& Parameters)
 	TestEqual(TEXT("Fog clamped"), Parsed.Environment.Fog, 0.f);
 	TestEqual(TEXT("A value of the wrong type keeps its default"), Parsed.Environment.CloudCoverage, Defaults.CloudCoverage);
 	TestEqual(TEXT("A missing value keeps its default"), Parsed.Environment.Snow, Defaults.Snow);
-	TestTrue(TEXT("The sky switch is read"), Parsed.Environment.bSkyEnabled);
+	TestTrue(TEXT("The old sky switch reads as the outdoor sky"), Parsed.Environment.Lighting == EStageLightingSource::OutdoorSky);
+	TestTrue(TEXT("... with the default look"), Parsed.Environment.Look.Equals(FStageEnvironmentLook()));
+
+	// Version 5 (ADR 0024 §4): an unknown lighting name is the level's lighting; the look is clamped like everything else.
+	const FString HostileV5 = TEXT("{\"format\":\"StageCraftScene\",\"version\":5,\"items\":[],\"environment\":"
+		"{\"lighting\":\"Disco\",\"skyEnabled\":true,\"look\":{\"exposure\":99,\"whiteBalance\":1,\"bloom\":\"lots\",\"studioKeyColor\":[2,-1,0.5]}}}");
+	TestEqual(TEXT("Version 5 with a hostile environment parses"), Str(FStageSceneStore::Parse(HostileV5, Parsed, Report)), Str(EStageSceneResult::Success));
+	TestTrue(TEXT("An unknown lighting name is the level's lighting, not the old switch"), Parsed.Environment.Lighting == EStageLightingSource::Level);
+	TestEqual(TEXT("Exposure clamped"), Parsed.Environment.Look.ExposureCompensation, 4.f);
+	TestEqual(TEXT("White balance clamped"), Parsed.Environment.Look.WhiteBalanceTemp, 2000.f);
+	TestEqual(TEXT("A look value of the wrong type keeps its default"), Parsed.Environment.Look.BloomIntensity, FStageEnvironmentLook().BloomIntensity);
+	TestTrue(TEXT("Key colour clamped and opaque"), Parsed.Environment.Look.StudioKeyColor.Equals(FLinearColor(1.f, 0.f, 0.5f, 1.f)));
 
 	// On disk: a version 1 file loads, and saving it again upgrades it to the current version.
 	const FString Directory = FPaths::Combine(FPaths::AutomationTransientDir(), TEXT("StageCraftScenes"), FGuid::NewGuid().ToString());

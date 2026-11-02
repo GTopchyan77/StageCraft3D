@@ -27,8 +27,8 @@ bool FStageEnvironmentSanitizeTest::RunTest(const FString& Parameters)
 	TestTrue(TEXT("Defaults are already sanitized"), Sanitize(Defaults).Equals(Defaults));
 
 	FStageEnvironmentSettings Settings;
-	Settings.bSkyEnabled = true;
-	TestTrue(TEXT("Sky switch is kept"), Sanitize(Settings).bSkyEnabled);
+	Settings.Lighting = EStageLightingSource::Studio;
+	TestTrue(TEXT("Lighting source is kept"), Sanitize(Settings).Lighting == EStageLightingSource::Studio);
 
 	// Time and sun direction wrap; the result is always in [0, period).
 	const auto Time = [&Settings](float Hours) { FStageEnvironmentSettings Copy = Settings; Copy.TimeOfDay = Hours; return Sanitize(Copy).TimeOfDay; };
@@ -84,7 +84,7 @@ bool FStageEnvironmentPresetTest::RunTest(const FString& Parameters)
 	using namespace StageEnvironment;
 
 	FStageEnvironmentSettings Base;
-	Base.bSkyEnabled = true;
+	Base.Lighting = EStageLightingSource::OutdoorSky;
 	Base.TimeOfDay = 18.25f;
 	Base.SunElevation = 30.f;
 	Base.SunAzimuth = 120.f;
@@ -96,7 +96,7 @@ bool FStageEnvironmentPresetTest::RunTest(const FString& Parameters)
 		const FString Name = Enum->GetNameStringByValue(Index);
 		const FStageEnvironmentSettings Applied = ApplyWeatherPreset(Base, Preset);
 		TestEqual(*FString::Printf(TEXT("%s is recognised after applying it"), *Name), FindWeatherPreset(Applied), Preset);
-		TestTrue(*FString::Printf(TEXT("%s keeps time, sun path and the sky switch"), *Name), Applied.bSkyEnabled == Base.bSkyEnabled
+		TestTrue(*FString::Printf(TEXT("%s keeps time, sun path and the lighting"), *Name), Applied.Lighting == Base.Lighting
 			&& Applied.TimeOfDay == Base.TimeOfDay && Applied.SunElevation == Base.SunElevation && Applied.SunAzimuth == Base.SunAzimuth);
 		TestTrue(*FString::Printf(TEXT("%s values are inside their ranges"), *Name), Sanitize(Applied).Equals(Applied));
 	}

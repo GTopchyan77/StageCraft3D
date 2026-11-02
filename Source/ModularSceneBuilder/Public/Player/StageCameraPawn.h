@@ -71,6 +71,9 @@ public:
 	/** Glides to NewLocation in StageCameraNavigation::FocusTransitionSeconds, keeping the view direction. */
 	void FocusOn(const FVector& NewLocation);
 
+	/** Glides to NewLocation and NewRotation together over Seconds, eased; framing an opened starter stage (Docs/ADR/0024 §6). */
+	void GlideTo(const FVector& NewLocation, const FRotator& NewRotation, float Seconds);
+
 	/** Camera speed (editor units, 1 = 20 m/s flight), clamped. Broadcasts OnCameraSpeedChanged when it changes. */
 	UFUNCTION(BlueprintCallable, Category = "StageCraft|Camera")
 	void SetCameraSpeed(float NewCameraSpeed);
@@ -191,4 +194,9 @@ private:
 	FVector FocusStart = FVector::ZeroVector;
 	FVector FocusTarget = FVector::ZeroVector;
 	float FocusElapsed = -1.f;
+	/** Length of the running glide: FocusTransitionSeconds for a focus, longer for GlideTo. */
+	float FocusDuration = 0.f;
+	/** Set only for GlideTo: the view rotation glides too. */
+	TOptional<FQuat> FocusStartRotation;
+	TOptional<FQuat> FocusTargetRotation;
 };

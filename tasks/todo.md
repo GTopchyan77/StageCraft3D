@@ -544,3 +544,12 @@ Gevor's choices: automation tests on a harness game instance (not AFunctionalTes
 - [x] M4 Marketplace: Unpublish (local publish record) and Remove from Library; StageCraft.Marketplace.UnpublishFlow
 - [x] Tests 155/155 with and without a renderer; Editor/Game/Shipping 0 warnings
 - [ ] Manual verification (Gevor): shortcuts from each kind of panel and in text fields, untitled Ctrl+S prompt, unsaved mark, UNPUBLISH / REMOVE FROM LIBRARY, lights in Blender
+
+## Phase 33 - Branded startup, atmospheres, starter stages (STATE.md #58, ADR 0024)
+- [x] M1 startup: SStageBrandedLoader as the engine's loading screen and as the in-app overlay; UStageStartupSubsystem with real catalog progress, failure and timeout; workspace waits for the loading screen (F12); StageCraft.Startup.Readiness
+- [x] M2 atmospheres: EStageLightingSource, FStageEnvironmentLook, studio rig with HDRI and flat fallback, blended transitions, four preset assets, Environment panel cards and look sliders, scene format v5; StageCraft.Environment.AtmosphereBlend / AtmospherePresets / StudioWorld
+- [x] M3 starter stages: four templates built through Sketch to Stage, LoadTemplate (untitled, fresh ids), camera glide, File > New from Template, welcome screen; StageCraft.Scene.Templates
+- [x] M4 measured: StageCraft.Bench.AtmosphereBlend (blend 8.4 ms vs rest 7.6 ms a frame)
+- [x] Tests 160/160 with and without a renderer; Editor/Game/Shipping builds
+- [ ] Manual verification (Gevor): cold start in a packaged build (loader), welcome cards and Show at startup, atmosphere cards and look sliders by mouse, studio look, beams under Cyberpunk Night
+- [ ] Find the existing test that saves GameUserSettings during the suite (its bytes only changed because #58 added a setting)

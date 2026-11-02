@@ -1,0 +1,36 @@
+{
+	"format": "StageCraftScene",
+	"version": 5,
+	"name": "Empty Stage",
+	"level": "L_StageTest",
+	"savedAt": "2026-11-02T15:44:13.375Z",
+	"items": [],
+	"environment":
+	{
+		"lighting": "OutdoorSky",
+		"timeOfDay": 13,
+		"sunElevation": 60,
+		"sunAzimuth": 250,
+		"cloudCoverage": 0.11999999731779099,
+		"rain": 0,
+		"snow": 0,
+		"fog": 0.05000000074505806,
+		"look":
+		{
+			"exposure": 0,
+			"bloom": 0.67500001192092896,
+			"ambientOcclusion": 0.5,
+			"whiteBalance": 6500,
+			"saturation": 1.0499999523162842,
+			"contrast": 1,
+			"vignette": 0.30000001192092896,
+			"studioKeyIntensity": 3,
+			"studioKeyColor": [
+				1,
+				1,
+				1
+			]
+		}
+	},
+	"cues": []
+}

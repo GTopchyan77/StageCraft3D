@@ -97,3 +97,11 @@ Closed by STATE.md #37 (ADR 0010):
   - Sky on, Rain preset: GPU 9.0–9.6 ms (+4.8 ms), +285 MB.
 - The packaged build contains all six Sky Creator content folders (259 assets). One engine cook dependency was added: `/Engine/EngineSky/VolumetricClouds`, which the cloud component loads as its default.
 - Sky Creator's `MF_SC_BlueNoiseDithering` references `/Engine/EngineMaterials/STBlueNoise_scalar_128x128x64`, which no longer exists in 5.8. Only `MF_SC_Triplanar_SingleSample` uses that function, and no asset uses that one, so nothing that renders is affected. The plugin content is left unchanged.
+
+## 8. Amendment (STATE.md #58, ADR 0024 §4–5)
+
+- `bool bSkyEnabled` is replaced by `EStageLightingSource { Level, OutdoorSky, Studio }`. A backend's `Apply` builds its sky only for `OutdoorSky` (`IsOutdoorSky()`); any other source means "remove the sky and give the level its lighting back", as "sky off" did.
+- The settings gain a camera look (`FStageEnvironmentLook`), applied by the environment subsystem to an unbound post-process component, not by the backend.
+- Hiding and restoring the level's sun, sky light, atmosphere, clouds and fog moved from `UStageSkyCreatorBackend` into `FStageHiddenLevelLighting` (ModularSceneBuilder), shared with the studio rig.
+- Changes can blend (`EStageEnvironmentTransition::Blend`): the subsystem then calls the backend's `Apply` every frame for the 2 s of a blend with interpolated settings (measured affordable, ADR 0024 §5). It still never ticks at rest.
+- Scene format v5 saves the source by name and the look; v2–v4 `skyEnabled` reads as OutdoorSky or Level.

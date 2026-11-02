@@ -17,6 +17,9 @@ public class ModularSceneBuilder : ModuleRules
 		// HTTP: the AI assistant's optional online model (Claude Messages API, ADR 0016).
 		PrivateDependencyModuleNames.AddRange(new string[] { "ProceduralMeshComponent", "Slate", "SlateCore", "ApplicationCore", "Json", "DeveloperSettings", "RenderCore", "RHI", "ImageCore", "HTTP" });
 
+		// MoviePlayer: StageCraft's loader as the engine's loading screen while the map loads (ADR 0024 §1).
+		PrivateDependencyModuleNames.Add("MoviePlayer");
+
 		// ADR 0017: AudioCaptureCore records voice prompts (the AudioCapture plugin registers the platform microphone backend);
 		// ImageWrapper decodes the PNG / JPEG drawings imported into Sketch to Stage.
 		PrivateDependencyModuleNames.AddRange(new string[] { "AudioCaptureCore", "ImageWrapper" });

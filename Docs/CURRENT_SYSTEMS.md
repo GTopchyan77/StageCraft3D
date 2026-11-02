@@ -21,6 +21,7 @@ Paths are relative to `Source/ModularSceneBuilder/` (`Public/` and `Private/` sh
 |---|---|---|
 | Docked workspace: tabs, floating windows, detachable viewport. Standalone and packaged only; PIE uses `WBP_StageCraftHUD`. | 🟢 | `Workspace/StageWorkspaceSubsystem`, `StageWorkspaceShell`, `SStageWorkspaceMenuBar`; `Player/StageCraftGameEngine` |
 | Layouts and `Session.json` | ✅ store / 🟢 shell | `Workspace/StageLayoutStore` |
+| Startup (#58, ADR 0024): StageCraft's loader as the engine's loading screen during the map load, then an in-app overlay with real progress from the catalogs' streamable handles (Ready, Failed or Timed out with Continue); welcome screen with the starter stages | ✅ progress rules / 🟢 screens (scripted runs; cold start needs a hand check) | `Startup/*`, `Workspace/SStageWelcomeDialog` |
 | Panels: Library, Inspector, Fader Bank, Outliner, Patch, BOM, Render, Environment, Cues, Preferences, Sketch to Stage, AI Assistant | 🟢 | `UI/*Panel*`, `Content/StageCraft/UI/Panels/DA_Panel_*` |
 | Status bar, viewport toolbar (6 sections, the last opens Sketch to Stage and the AI Assistant; collapses to a strip with « / », Ctrl+Shift+T, remembered, #45) | 🟢 | `UI/StageStatusBarWidget`, `UI/StageViewportToolbar` |
 | Input. Mouse buttons and fly axes use Enhanced Input, built in code (no IMC or IA assets). Keyboard shortcuts come from the user's key map: exact chords, looked up on key press (#40). | ✅ key map rules / 🟢 dispatch (scripted run R40_RunC) | `Player/ModularPlayerController` (`InputKey`, `ExecuteCommand`, `RebuildCameraMapping`), `Input/StageKeyBindings` |
@@ -68,6 +69,7 @@ Paths are relative to `Source/ModularSceneBuilder/` (`Public/` and `Private/` sh
 | Still renders | ✅ rules and framing / 🟢 capture | `Render/StageRenderSubsystem`, `UI/StageRenderPanel` |
 | Render cancel, view-mode match, path tracing, scalability | ⚪ | — |
 | Outdoor sky and weather (Sky Creator backend); packaged and measured (ADR 0010 §7) | ✅ | `Environment/*`, `Source/StageCraftSkyCreator/*` |
+| Atmospheres (#58, ADR 0024): four presets (Clear Daytime, Dramatic Sunset, Cyberpunk Night, Minimalist Studio) as data assets; lighting source Venue / Outdoor / Studio; studio rig (HDRI sky light, key light, backdrop haze, flat fallback); camera look (exposure, bloom, AO, white balance, saturation, contrast, vignette) on the live view and renders; 2 s blends, source switch inside an exposure dip; measured | ✅ blend rules / 🟢 world | `Environment/*`, `UI/StageEnvironmentPanel` |
 
 ## Show control and DMX
 | System | Status | Where |
@@ -86,9 +88,10 @@ Paths are relative to `Source/ModularSceneBuilder/` (`Public/` and `Private/` sh
 | Runtime model import (glb, gltf, obj; fbx in editor only). A damaged import list is moved to .bak; an unreadable one is never overwritten (#40). | ✅ rules and list file / 🟢 import | `Import/StageMeshImportSubsystem` |
 | Crash-safe saves: every scene, layout, import list, report and render is flushed to disk before the rename (#40) | ✅ | `IO/StageAtomicFile` |
 | Remove an import, release its memory | ⚪ | — |
-| Scene save/load (JSON v3 with environment and cues; v1 and v2 migrate; atomic, async). #40 (R2): a partial load keeps skipped items and stays unsaved, damaged entries are backed up before a save, and loads wait for imports. #40 (R6): restored values are sanitized. | ✅ store, migration, kept items, sanitizing / 🟢 apply (scripted run R40_RunA) | `Scene/StageSceneStore`, `Scene/StageSceneComponent` |
+| Scene save/load (JSON v5: environment v2, cues v3, origin v4, lighting source and camera look v5 (#58); older versions migrate; atomic, async). #40 (R2): a partial load keeps skipped items and stays unsaved, damaged entries are backed up before a save, and loads wait for imports. #40 (R6): restored values are sanitized. | ✅ store, migration, kept items, sanitizing / 🟢 apply (scripted run R40_RunA) | `Scene/StageSceneStore`, `Scene/StageSceneComponent` |
 | Saved in scenes | Transforms, label, hide, lock, fixture state, the DMX patch (only since #40; it was silently dropped before), spans, loudspeakers, environment (v2), cues (v3) | — |
 | Not saved in scenes | Camera | — |
+| Starter stages (#58): Empty Stage, Concert, Theatre, Conference in `Content/StageCraft/Templates`, built through the app by `Scripts/Content/build_starter_stages.ps1`; open untitled with fresh ids and a camera glide (File > New from Template, welcome screen) | ✅ files / 🟢 open | `Scene/StageSceneComponent::LoadTemplate` |
 | Autosave (while unsaved, every 120 s), File > Recover Autosave, exit prompt Save / Don't Save / Cancel | 🟢 scripted Standalone runs (#37); buttons need a mouse check | `Scene/StageSceneComponent`, `Workspace/SStageUnsavedChangesDialog`, `Workspace/StageWorkspaceSubsystem` |
 | Bill of materials as PDF + CSV (File > Production, BOM panel EXPORT PDF) | ✅ model and PDF / 🟢 export (scripted run, #39) | `Report/StageBillOfMaterials*`, `Report/StageReportPdfComposer`, `UI/StageBillOfMaterialsPanel` |
 | Cable schedule and power plan as PDF + CSV: loads balanced over phases, circuits and distros, power home-runs and DMX chains measured along floor and truss with a safety margin, warnings (File > Production) | ✅ model and PDF / 🟢 export (scripted run, #39, #41) | `Report/StageCableSchedule*`, `Report/StagePowerDistributionSettings` (Project Settings) |
@@ -103,7 +106,7 @@ Paths are relative to `Source/ModularSceneBuilder/` (`Public/` and `Private/` sh
 ## State owners
 | Scope | Owner |
 |---|---|
-| GameInstance | `UStageProfileSubsystem`, `UStageEconomySubsystem`, `UStageItemSubsystem`, `UStageMeshImportSubsystem`, `UStageWorkspaceSubsystem`, `UStageAudioSubsystem` |
+| GameInstance | `UStageProfileSubsystem`, `UStageEconomySubsystem`, `UStageItemSubsystem`, `UStageMeshImportSubsystem`, `UStageWorkspaceSubsystem`, `UStageAudioSubsystem`, `UStageStartupSubsystem` (startup progress, #58), `UStageAtmosphereSubsystem` (atmosphere presets, #58) |
 | World (Game and PIE) | `UStageSketchSubsystem` (the sketch, #42), `UStageAICommandSubsystem` (the assistant conversation, #43), `UStageSessionSubsystem`, `UStageEditHistorySubsystem`, `UShowControlSubsystem` (ticks only while busy), `UStageRenderSubsystem`, `UStageBillOfMaterialsSubsystem`, `UStagePatchSheetSubsystem`, `UStageCableScheduleSubsystem`, `UStageEnvironmentSubsystem` |
 | Controller components | Selection, SpawnSystem, PlacementTool, SpanTool, Snapping, GroupTransform, EditHistory, Scene, Viewport, EditorAudioFeedback, VoiceInput (#44) |
 | Per-user preferences | `UStageCraftUserSettings` (`GameUserSettings`, storage); `UStageInputPreferencesSubsystem` (local player: key map, look) |
@@ -117,6 +120,6 @@ Paths are relative to `Source/ModularSceneBuilder/` (`Public/` and `Private/` sh
 | Engine | UE 5.8 |
 | Plugins enabled | Interchange, SkyCreatorPlugin, AudioCapture (plus Python and ModelingTools in the editor only) |
 | Plugins tracked but disabled | 19 |
-| Tests | 117 `StageCraft.*` automation tests (#49): pure logic (colour science, gel library, fixture capabilities and cells, assistant fixture commands, camera rules and the mouse input config, DMX patching and protocol, shadow budget, stage shape geometry, assistant edits and shapes, assistant grammar in English and Armenian, command schema, voice audio and upload format, photo tracing and the online photo reading, sketch strokes, deck geometry, sketch plans, reports, PDF composer, cable schedule, shopping list, frame statistics, key bindings, crash-safe files, import list file, kept scene items) plus world tests for Sky Creator, sketch generation (all or nothing, one undo step), stairs / curved truss / round riser placement and a replacement step (#45), undo/redo rules and transactions, cues, the fixture output path and restored-state sanitizing |
+| Tests | 160 `StageCraft.*` automation tests (#58; `Scripts/Tests/RunAutomation.ps1`); at #49 there were 117: pure logic (colour science, gel library, fixture capabilities and cells, assistant fixture commands, camera rules and the mouse input config, DMX patching and protocol, shadow budget, stage shape geometry, assistant edits and shapes, assistant grammar in English and Armenian, command schema, voice audio and upload format, photo tracing and the online photo reading, sketch strokes, deck geometry, sketch plans, reports, PDF composer, cable schedule, shopping list, frame statistics, key bindings, crash-safe files, import list file, kept scene items) plus world tests for Sky Creator, sketch generation (all or nothing, one undo step), stairs / curved truss / round riser placement and a replacement step (#45), undo/redo rules and transactions, cues, the fixture output path and restored-state sanitizing |
 | Areas with no tests | Request bridge, selection, session, economy/profile, patch conflicts, fixture playback (scripted runs only) |
 | Console commands | About 88, all inside `#if !UE_BUILD_SHIPPING` |

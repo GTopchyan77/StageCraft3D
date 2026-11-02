@@ -378,6 +378,34 @@ bool UStageCameraNavigationComponent::FocusBounds(const FBox& Bounds)
 	return true;
 }
 
+bool UStageCameraNavigationComponent::FrameStage(const FBox& Bounds)
+{
+	AStageCameraPawn* Pawn = GetCameraPawn();
+	const APlayerController* Controller = Cast<APlayerController>(GetOwner());
+	if (!Pawn || !Controller || !Bounds.IsValid || Bounds.ContainsNaN())
+	{
+		return false;
+	}
+	if (UStageViewportComponent* Viewport = GetViewport(); Viewport && Viewport->IsOrthographic())
+	{
+		return Viewport->FocusOrtho(Bounds);
+	}
+
+	// From the audience, a little to the side and above: the view a designer presents a stage from.
+	const FRotator View(-22.0, 28.0, 0.0);
+	int32 SizeX = 0;
+	int32 SizeY = 0;
+	Controller->GetViewportSize(SizeX, SizeY);
+	const float Aspect = SizeY > 0 ? static_cast<float>(SizeX) / static_cast<float>(SizeY) : 16.f / 9.f;
+	const float FOV = Controller->PlayerCameraManager ? Controller->PlayerCameraManager->GetFOVAngle() : 90.f;
+	const FVector Target = StageCameraNavigation::GetFocusLocation(Bounds, View, FOV, Aspect, Pawn->GetActorLocation());
+	Pawn->GlideTo(Target, View, StageCameraNavigation::FrameStageSeconds);
+
+	RememberedPivot = Bounds.GetCenter();
+	RememberedPivotCameraLocation = Target;
+	return true;
+}
+
 void UStageCameraNavigationComponent::StoreCameraSpeed()
 {
 	const AStageCameraPawn* Pawn = GetCameraPawn();

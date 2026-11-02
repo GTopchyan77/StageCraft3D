@@ -12,18 +12,24 @@
 #include "Import/StageMeshImportSubsystem.h"
 #include "IO/StageCraftPaths.h"
 #include "Misc/Paths.h"
+#include "MoviePlayer.h"
 #include "Player/ModularPlayerController.h"
 #include "Scene/StageSceneComponent.h"
 #include "Scene/StageSceneStore.h"
+#include "Startup/SStageBrandedLoader.h"
+#include "Startup/StageStartupSubsystem.h"
 #include "Subsystems/StageSessionSubsystem.h"
 #include "UI/StageStatusBarWidget.h"
 #include "UI/StageViewportToolbar.h"
+#include "TimerManager.h"
 #include "Widgets/SNullWidget.h"
 #include "Widgets/SViewport.h"
 #include "Widgets/SWindow.h"
 #include "Widgets/Layout/SBox.h"
 #include "Widgets/Text/STextBlock.h"
 #include "Workspace/SStageUnsavedChangesDialog.h"
+#include "Workspace/SStageWelcomeDialog.h"
+#include "Settings/StageCraftUserSettings.h"
 #include "Workspace/SStageWorkspaceMenuBar.h"
 #include "Workspace/StageCraftGameEngine.h"
 #include "IO/StageAtomicFile.h"
@@ -90,6 +96,29 @@ void UStageWorkspaceSubsystem::Deinitialize()
 	// Quitting another way while the prompt is up (the 'exit' command): it has nothing left to ask.
 	CloseExitPrompt();
 
+	if (LoadingScreenFinishedHandle.IsValid())
+	{
+		if (IsMoviePlayerEnabled() && GetMoviePlayer())
+		{
+			GetMoviePlayer()->OnMoviePlaybackFinished().Remove(LoadingScreenFinishedHandle);
+		}
+		LoadingScreenFinishedHandle.Reset();
+	}
+	if (StartupSettledHandle.IsValid())
+	{
+		if (UStageStartupSubsystem* Startup = GetGameInstance() ? GetGameInstance()->GetSubsystem<UStageStartupSubsystem>() : nullptr)
+		{
+			Startup->OnSettled.Remove(StartupSettledHandle);
+		}
+		StartupSettledHandle.Reset();
+	}
+	if (UGameInstance* GameInstance = GetGameInstance())
+	{
+		GameInstance->GetTimerManager().ClearTimer(WelcomeTimer);
+	}
+	WelcomeDialog.Reset();
+	StartupLoader.Reset();
+
 	State = EStageWorkspaceState::ShuttingDown;
 	if (Shell.IsValid())
 	{
@@ -101,6 +130,9 @@ void UStageWorkspaceSubsystem::Deinitialize()
 		PanelCatalogHandle->CancelHandle();
 		PanelCatalogHandle.Reset();
 	}
+	OnPanelCatalogLoadProgress.Clear();
+	OnPanelCatalogLoaded.Clear();
+	bPanelCatalogLoaded = false;
 	PanelDefinitions.Reset();
 	LocalController.Reset();
 	Super::Deinitialize();
@@ -158,6 +190,22 @@ void UStageWorkspaceSubsystem::InstallIfSupported()
 		UE_LOG(LogStageWorkspace, Log, TEXT("Workspace unsupported in this run: %s. Using the plain HUD."),
 			!GameEngine ? TEXT("GameEngine is not StageCraftGameEngine") : TEXT("the game viewport renders directly to the window (-StageDirectViewport?) or has no window"));
 		return;
+	}
+
+	// The engine's loading screen (our loader, ADR 0024 §1) owns the main window until the map has loaded. When it finishes,
+	// UGameEngine::SwitchGameWindowToUseGameViewport puts GameViewportWidget back in the window and registers it as Slate's
+	// game viewport. Installed now, that widget would be our host, which has no viewport interface (RegisterViewport
+	// ensures). So the install waits: the switch then registers the real viewport, and the workspace takes over after it.
+	if (IsMoviePlayerEnabled())
+	{
+		IGameMoviePlayer* MoviePlayer = GetMoviePlayer();
+		if (MoviePlayer && MoviePlayer->IsMovieCurrentlyPlaying())
+		{
+			State = EStageWorkspaceState::WaitingForLoadingScreen;
+			LoadingScreenFinishedHandle = MoviePlayer->OnMoviePlaybackFinished().AddUObject(this, &ThisClass::HandleLoadingScreenFinished);
+			UE_LOG(LogStageWorkspace, Log, TEXT("Workspace install waits for the loading screen to finish."));
+			return;
+		}
 	}
 
 	if (!UAssetManager::Get().HasInitialScanCompleted())
@@ -286,6 +334,156 @@ void UStageWorkspaceSubsystem::InstallIfSupported()
 	ActiveLayoutName = Session.Name;
 	UE_LOG(LogStageWorkspace, Log, TEXT("Workspace installed in the main window with layout '%s'%s."), *ActiveLayoutName,
 		SessionResult == EStageLayoutResult::Success ? TEXT(" (restored from the last session)") : TEXT(""));
+
+	ShowStartupLoader();
+}
+
+// --- Startup loader ---
+
+void UStageWorkspaceSubsystem::HandleLoadingScreenFinished()
+{
+	if (IsMoviePlayerEnabled() && GetMoviePlayer())
+	{
+		GetMoviePlayer()->OnMoviePlaybackFinished().Remove(LoadingScreenFinishedHandle);
+	}
+	LoadingScreenFinishedHandle.Reset();
+	if (State != EStageWorkspaceState::WaitingForLoadingScreen)
+	{
+		return;
+	}
+	State = EStageWorkspaceState::Uninitialized;
+	if (LocalController.IsValid())
+	{
+		InstallIfSupported();
+	}
+}
+
+void UStageWorkspaceSubsystem::ShowStartupLoader()
+{
+	UStageStartupSubsystem* Startup = GetGameInstance() ? GetGameInstance()->GetSubsystem<UStageStartupSubsystem>() : nullptr;
+	if (!Startup || !Shell.IsValid() || Startup->GetState() == EStageStartupState::Ready)
+	{
+		HandleStartupLoaderClosed();
+		return;
+	}
+
+	TWeakObjectPtr<UStageStartupSubsystem> WeakStartup(Startup);
+	StartupLoader = SNew(SStageBrandedLoader)
+		.Progress_Lambda([WeakStartup]() { return WeakStartup.IsValid() ? TOptional<float>(WeakStartup->GetProgress()) : TOptional<float>(1.f); })
+		.Status_Lambda([WeakStartup]() { return WeakStartup.IsValid() ? WeakStartup->GetStatusText() : FText::GetEmpty(); })
+		.ShowContinue_Lambda([WeakStartup]()
+		{
+			// A failed source or a timeout never traps the user behind the loader.
+			return !WeakStartup.IsValid() || (WeakStartup->IsSettled() && WeakStartup->GetState() != EStageStartupState::Ready);
+		})
+		.OnContinue(FSimpleDelegate::CreateWeakLambda(this, [this]() { DismissStartupLoader(); }));
+	Shell->ShowStartupOverlay(StartupLoader.ToSharedRef());
+
+	if (Startup->IsSettled())
+	{
+		HandleStartupSettled(Startup->GetState());
+	}
+	else
+	{
+		StartupSettledHandle = Startup->OnSettled.AddUObject(this, &ThisClass::HandleStartupSettled);
+	}
+}
+
+void UStageWorkspaceSubsystem::HandleStartupSettled(EStageStartupState NewState)
+{
+	if (UStageStartupSubsystem* Startup = GetGameInstance() ? GetGameInstance()->GetSubsystem<UStageStartupSubsystem>() : nullptr)
+	{
+		Startup->OnSettled.Remove(StartupSettledHandle);
+	}
+	StartupSettledHandle.Reset();
+
+	// Failed or timed out: the loader stays with its reason and Continue (ShowContinue above).
+	if (NewState == EStageStartupState::Ready)
+	{
+		DismissStartupLoader();
+	}
+}
+
+void UStageWorkspaceSubsystem::DismissStartupLoader()
+{
+	if (!StartupLoader.IsValid())
+	{
+		return;
+	}
+	StartupLoader->FadeOut(0.35f, FSimpleDelegate::CreateWeakLambda(this, [this]()
+	{
+		if (Shell.IsValid())
+		{
+			Shell->CloseStartupOverlay();
+		}
+		StartupLoader.Reset();
+		HandleStartupLoaderClosed();
+	}));
+}
+
+void UStageWorkspaceSubsystem::HandleStartupLoaderClosed()
+{
+	// Not from here: this can run inside the install, itself inside the engine's loading-screen callback, before the main window
+	// has laid out and shown the workspace once. A dialog shown then kept the bare viewport on screen; a moment later it is safe.
+	if (UGameInstance* GameInstance = GetGameInstance())
+	{
+		GameInstance->GetTimerManager().SetTimer(WelcomeTimer, FTimerDelegate::CreateUObject(this, &ThisClass::ShowWelcome), 0.25f, false);
+	}
+}
+
+void UStageWorkspaceSubsystem::ShowWelcome()
+{
+	const UStageCraftUserSettings* Settings = UStageCraftUserSettings::Get();
+	if (!Shell.IsValid() || !LocalController.IsValid() || IsSavePromptOpen() || WelcomeDialog.IsValid() || (Settings && !Settings->IsWelcomeShownAtStartup()))
+	{
+		return;
+	}
+#if !UE_BUILD_SHIPPING
+	// Scripted runs drive the app from the console; a dialog would take the keys they send.
+	if (FParse::Param(FCommandLine::Get(), TEXT("StageNoWelcome")))
+	{
+		return;
+	}
+#endif
+
+	const TWeakObjectPtr<UStageWorkspaceSubsystem> WeakThis(this);
+	WelcomeDialog = SNew(SStageWelcomeDialog)
+		.TemplateNames(LocalController->GetTemplateNames())
+		.bShowAtStartup(Settings ? Settings->IsWelcomeShownAtStartup() : true)
+		.OnTemplatePicked_Lambda([WeakThis](const FString& Name)
+		{
+			if (UStageWorkspaceSubsystem* Self = WeakThis.Get())
+			{
+				Self->CloseWelcome();
+				if (AModularPlayerController* Controller = Self->LocalController.Get())
+				{
+					Controller->RequestNewFromTemplate(Name);
+				}
+			}
+		})
+		.OnContinue_Lambda([WeakThis]() { if (WeakThis.IsValid()) { WeakThis->CloseWelcome(); } })
+		.OnShowAtStartupChanged_Lambda([](bool bShow)
+		{
+			if (UStageCraftUserSettings* UserSettings = UStageCraftUserSettings::Get(); UserSettings && UserSettings->SetWelcomeShownAtStartup(bShow))
+			{
+				UserSettings->SaveSettings();
+			}
+		});
+	Shell->ShowDialog(WelcomeDialog.ToSharedRef(), WelcomeDialog->GetInitialFocus());
+	UE_LOG(LogStageWorkspace, Log, TEXT("Welcome screen shown."));
+}
+
+void UStageWorkspaceSubsystem::CloseWelcome()
+{
+	if (!WelcomeDialog.IsValid())
+	{
+		return;
+	}
+	WelcomeDialog.Reset();
+	if (Shell.IsValid())
+	{
+		Shell->CloseDialog();
+	}
 }
 
 // --- Panels ---
@@ -319,10 +517,20 @@ void UStageWorkspaceSubsystem::LoadPanelCatalog()
 	if (PanelIds.IsEmpty())
 	{
 		UE_LOG(LogStageWorkspace, Warning, TEXT("No panel definitions found. Check the StagePanel entry under AssetManagerSettings in DefaultGame.ini."));
+		// Nothing to wait for: the startup loader must not wait for it either.
+		bPanelCatalogLoaded = true;
+		OnPanelCatalogLoaded.Broadcast();
 		return;
 	}
 	PanelCatalogHandle = AssetManager.LoadPrimaryAssets(PanelIds, { UStagePanelDefinition::UIBundle },
 		FStreamableDelegate::CreateUObject(this, &ThisClass::HandlePanelCatalogLoaded));
+	if (PanelCatalogHandle.IsValid() && !bPanelCatalogLoaded)
+	{
+		PanelCatalogHandle->BindUpdateDelegate(FStreamableUpdateDelegate::CreateWeakLambda(this, [this](TSharedRef<FStreamableHandle> Handle)
+		{
+			OnPanelCatalogLoadProgress.Broadcast(Handle->GetLoadProgress());
+		}));
+	}
 }
 
 void UStageWorkspaceSubsystem::HandlePanelCatalogLoaded()
@@ -340,12 +548,23 @@ void UStageWorkspaceSubsystem::HandlePanelCatalogLoaded()
 		}
 	}
 	UE_LOG(LogStageWorkspace, Log, TEXT("Panel catalog loaded: %d definitions."), PanelDefinitions.Num());
+	bPanelCatalogLoaded = true;
 
 	// Panels spawned before this showed a loading state.
 	if (State == EStageWorkspaceState::Ready)
 	{
 		Shell->RefreshPanelContent();
 	}
+	OnPanelCatalogLoaded.Broadcast();
+}
+
+float UStageWorkspaceSubsystem::GetPanelCatalogLoadProgress() const
+{
+	if (bPanelCatalogLoaded)
+	{
+		return 1.f;
+	}
+	return PanelCatalogHandle.IsValid() ? PanelCatalogHandle->GetLoadProgress() : 0.f;
 }
 
 TArray<FGameplayTag> UStageWorkspaceSubsystem::GetAvailablePanels() const
@@ -663,6 +882,8 @@ void UStageWorkspaceSubsystem::ShowSavePrompt(const FString& SceneName, EStageSa
 		return;
 	}
 
+	// One dialog at a time: the prompt replaces the welcome screen if it is up.
+	WelcomeDialog.Reset();
 	const TWeakObjectPtr<UStageWorkspaceSubsystem> WeakThis(this);
 	PromptPurpose = Purpose;
 	ExitDialog = SNew(SStageUnsavedChangesDialog)

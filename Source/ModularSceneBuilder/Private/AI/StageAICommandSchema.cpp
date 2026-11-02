@@ -961,7 +961,7 @@ namespace StageAICommandSchema
 		Lines.Add(FString::Printf(TEXT("Cues: %d%s."), Scene.Cues.Num(), Scene.ActiveCue > 0.f ? *FString::Printf(TEXT(", cue %g on stage"), Scene.ActiveCue) : TEXT("")));
 		if (Scene.bHasEnvironment)
 		{
-			Lines.Add(FString::Printf(TEXT("Environment: %s, time %s, weather %s%s."), Scene.Environment.bSkyEnabled ? TEXT("outdoor sky on") : TEXT("indoor (sky off)"),
+			Lines.Add(FString::Printf(TEXT("Environment: %s, time %s, weather %s%s."), Scene.Environment.IsOutdoorSky() ? TEXT("outdoor sky on") : Scene.Environment.Lighting == EStageLightingSource::Studio ? TEXT("studio lighting (sky off)") : TEXT("indoor (sky off)"),
 				*StageAIAnswers::FormatHour(Scene.Environment.TimeOfDay), *StageAIAnswers::DescribeWeather(StageEnvironment::FindWeatherPreset(Scene.Environment)).ToString(),
 				Scene.bSkyAvailable ? TEXT("") : TEXT(", no sky system installed")));
 		}

@@ -5,6 +5,7 @@
 #include "CoreMinimal.h"
 #include "Subsystems/GameInstanceSubsystem.h"
 #include "GameplayTagContainer.h"
+#include "Startup/StageStartupTypes.h"
 #include "StageItemSubsystem.generated.h"
 
 DECLARE_DYNAMIC_MULTICAST_DELEGATE(FOnStageItemCatalogLoaded);
@@ -33,6 +34,12 @@ public:
 
 	UFUNCTION(BlueprintPure, Category = "StageCraft|Catalog")
 	bool IsCatalogLoaded() const { return bCatalogLoaded; }
+
+	/** Load progress of the catalog in [0, 1]: 1 once loaded. For the startup loader (Docs/ADR/0024 §2). */
+	float GetCatalogLoadProgress() const;
+
+	/** Pushed while the catalog streams in, from its streamable handle. Not fired after OnCatalogLoaded. */
+	FOnStageLoadProgress OnCatalogLoadProgress;
 
 	/** Every discovered item, sorted by display name. Empty until OnCatalogLoaded fires. */
 	UFUNCTION(BlueprintPure, Category = "StageCraft|Catalog")
@@ -104,6 +111,9 @@ private:
 
 	UPROPERTY(Transient)
 	TObjectPtr<class UBaseItemData> PendingSelection = nullptr;
+
+	/** The catalog load in flight; reset once it completes. */
+	TSharedPtr<struct FStreamableHandle> CatalogHandle;
 
 	bool bCatalogLoaded = false;
 };

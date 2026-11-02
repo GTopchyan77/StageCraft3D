@@ -82,6 +82,19 @@ namespace StageSceneCommands
 		}
 	}
 
+	void NewFromTemplate(const TArray<FString>& Args, UWorld* World)
+	{
+		if (AModularPlayerController* Controller = GetController(World))
+		{
+			if (Args.IsEmpty())
+			{
+				UE_LOG(LogStageCraft, Display, TEXT("Usage: StageCraft.Scene.NewFromTemplate <Name> (%s)"), *FString::Join(Controller->GetTemplateNames(), TEXT(", ")));
+				return;
+			}
+			UE_LOG(LogStageCraft, Display, TEXT("StageCraft.Scene.NewFromTemplate: %s"), *UEnum::GetValueAsString(Controller->RequestNewFromTemplate(JoinArgs(Args))));
+		}
+	}
+
 	void Delete(const TArray<FString>& Args, UWorld* World)
 	{
 		if (AModularPlayerController* Controller = GetController(World))
@@ -141,6 +154,8 @@ namespace StageSceneCommands
 		FConsoleCommandWithWorldAndArgsDelegate::CreateStatic(&Status));
 	FAutoConsoleCommandWithWorldAndArgs SaveCommand(TEXT("StageCraft.Scene.Save"), TEXT("<Name> Same as File > Save Scene As (replaces an existing scene without asking)."),
 		FConsoleCommandWithWorldAndArgsDelegate::CreateStatic(&Save));
+	FAutoConsoleCommandWithWorldAndArgs NewFromTemplateCommand(TEXT("StageCraft.Scene.NewFromTemplate"), TEXT("<Name> Same as File > New from Template (discards unsaved changes without asking)."),
+		FConsoleCommandWithWorldAndArgsDelegate::CreateStatic(&NewFromTemplate));
 	FAutoConsoleCommandWithWorldAndArgs LoadCommand(TEXT("StageCraft.Scene.Load"), TEXT("<Name> Same as File > Open Scene (discards unsaved changes without asking)."),
 		FConsoleCommandWithWorldAndArgsDelegate::CreateStatic(&Load));
 	FAutoConsoleCommandWithWorldAndArgs RecoverCommand(TEXT("StageCraft.Scene.Recover"), TEXT("<Name> Same as File > Recover Autosave (discards unsaved changes without asking)."),

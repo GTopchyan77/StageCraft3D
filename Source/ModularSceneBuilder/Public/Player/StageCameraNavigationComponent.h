@@ -76,6 +76,12 @@ public:
 	/** Frames an explicit box, as FocusSelection does. */
 	bool FocusBounds(const FBox& Bounds);
 
+	/**
+	 * Glides to a three-quarter view of a whole stage from the front of house (-X), turning the view as it goes (Docs/ADR/0024 §6):
+	 * how an opened starter stage is presented. Orthographic views fit the box instead. False without a pawn or a valid box.
+	 */
+	bool FrameStage(const FBox& Bounds);
+
 	/** A drag is moving the camera (or the right button is held). Keyboard commands wait while this is true. */
 	bool IsNavigating() const { return ActiveDrag != EStageCameraDrag::None; }
 

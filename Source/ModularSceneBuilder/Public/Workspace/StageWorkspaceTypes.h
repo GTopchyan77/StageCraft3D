@@ -18,7 +18,9 @@ enum class EStageWorkspaceState : uint8
 	Unsupported,
 	/** The dock root is installed in the main window. */
 	Ready,
-	ShuttingDown
+	ShuttingDown,
+	/** Supported, but the engine's loading screen still owns the main window; the dock root installs when it finishes (ADR 0024 §1). */
+	WaitingForLoadingScreen
 };
 
 /** Where a panel currently lives. Derived from Slate; Slate's tab manager is the source of truth. */

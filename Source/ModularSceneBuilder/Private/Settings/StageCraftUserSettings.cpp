@@ -31,6 +31,7 @@ void UStageCraftUserSettings::SetToDefaults()
 	AngleSnapDegrees = StageViewMath::DefaultAngleSnapDegrees;
 	bViewportGridVisible = true;
 	bViewportToolbarCollapsed = false;
+	bShowWelcomeAtStartup = true;
 	DMXInput = FStageDMXInputSettings();
 	ResetInputToDefaults();
 }
@@ -196,6 +197,13 @@ bool UStageCraftUserSettings::SetViewportToolbarCollapsed(bool bCollapsed)
 {
 	const bool bChanged = bViewportToolbarCollapsed != bCollapsed;
 	bViewportToolbarCollapsed = bCollapsed;
+	return bChanged;
+}
+
+bool UStageCraftUserSettings::SetWelcomeShownAtStartup(bool bShow)
+{
+	const bool bChanged = bShowWelcomeAtStartup != bShow;
+	bShowWelcomeAtStartup = bShow;
 	return bChanged;
 }
 

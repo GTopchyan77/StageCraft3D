@@ -8,15 +8,18 @@
 #include "StageEnvironmentPanel.generated.h"
 
 /**
- * The Environment panel (StageCraft.Panel.Environment): the outdoor sky on or off, one-click weather presets, and sliders
- * for time of day, sun height, sun direction, clouds, rain, snow and fog (Docs/ADR/0009-outdoor-environment.md §4).
+ * The Environment panel (StageCraft.Panel.Environment): one-click atmospheres (Docs/ADR/0024 §3), what lights the stage
+ * (level, outdoor sky, studio), one-click weather presets, sliders for time of day, sun height, sun direction, clouds, rain,
+ * snow and fog (Docs/ADR/0009-outdoor-environment.md §4), and the camera look (exposure, bloom, white balance).
  *
  * A view in the project's binding pattern:
  *  - Settings are read from UStageEnvironmentSubsystem and written back through SetSettings, its single write path; the
  *    panel shows them again from OnEnvironmentChanged (read-back), never from its own copy. A slider drag writes on every
  *    move, so the sky follows the slider live.
  *  - Bound in NativeConstruct, unbound in NativeDestruct. No tick. Sliders and buttons never take keyboard focus.
- *  - Without a sky backend every control is disabled and the panel says why; with the sky off, only the On switch is live.
+ *  - An atmosphere card goes through the controller (RequestApplyAtmosphere): one undo step, blended in. The card whose
+ *    settings match the stored ones is lit.
+ *  - Without a sky backend the Outdoor choice is disabled and the panel says why; time and weather are live only outdoors.
  *
  * The widget tree is built in code from the theme, like the Render panel; there is no Widget Blueprint.
  */
@@ -47,7 +50,10 @@ private:
 	void Refresh();
 	void StyleChoice(class UStageChoiceButton& Button, bool bSelected) const;
 
-	void HandleSkyPicked(int32 Index);
+	void RebuildAtmosphereCards();
+	void StyleCard(class UStageChoiceButton& Button, bool bSelected) const;
+	void HandleAtmospherePicked(int32 Index);
+	void HandleLightingPicked(int32 Index);
 	void HandleWeatherPicked(int32 Index);
 	void HandleSliderMoved(int32 SliderIndex, float Value);
 
@@ -55,7 +61,17 @@ private:
 	void HandleEnvironmentChanged(const FStageEnvironmentSettings& Settings);
 
 	UPROPERTY(Transient)
-	TArray<TObjectPtr<class UStageChoiceButton>> SkyButtons;
+	TArray<TObjectPtr<class UStageChoiceButton>> LightingButtons;
+
+	/** One card per atmosphere preset, in the catalog's order; rebuilt when the presets load. */
+	UPROPERTY(Transient)
+	TArray<TObjectPtr<class UStageChoiceButton>> AtmosphereButtons;
+
+	UPROPERTY(Transient)
+	TArray<TObjectPtr<class UStageAtmospherePreset>> AtmospherePresets;
+
+	UPROPERTY(Transient)
+	TObjectPtr<class UUniformGridPanel> AtmosphereGrid = nullptr;
 
 	UPROPERTY(Transient)
 	TArray<TObjectPtr<class UStageChoiceButton>> WeatherButtons;
@@ -72,4 +88,6 @@ private:
 	TObjectPtr<class UTextBlock> NoticeText = nullptr;
 
 	TWeakObjectPtr<class UStageEnvironmentSubsystem> Environment;
+	TWeakObjectPtr<class UStageAtmosphereSubsystem> AtmosphereCatalog;
+	FDelegateHandle AtmospheresLoadedHandle;
 };
