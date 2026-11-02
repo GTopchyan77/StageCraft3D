@@ -5298,7 +5298,7 @@ Plan approved in plan mode.
 - **Builds:** Editor, Game and Shipping (`-DisableAdaptiveUnity`), all 0 warnings.
 - **Tests:** the new test passes alone. `Scripts/Tests/RunAutomation.ps1 -ExpectedCount 150` passes 150/150 with an offscreen renderer and 150/150 with `-NullRHI`, with user data unchanged (65 files checked).
 
-**Commit:** uncommitted (working tree).
+**Commit:** `d1cc206` (together with #57). The R57 game-run results and the `blender_receive.py` light check came in a follow-up commit.
 
 **Known issues / follow-ups**
 - `UStageTestMarketplaceBackend` ships as an unreachable class, like the other test backends.
@@ -5388,6 +5388,7 @@ Plan approved in plan mode.
   - `Private/Input/Tests/StageKeyBindingsTests.cpp`
   - `Private/Marketplace/Tests/StageMarketplaceTests.cpp` (`LocalStore` + Remove), `StageMarketplaceFetchTests.cpp` (`UnpublishFlow`)
   - `Private/Tests/StageTestEventRecorder.h/.cpp` (publish, unpublish and library events)
+  - `Tools/DCCBridge/tests/blender_receive.py`: optional third argument, the minimum number of spot lights the received stage must bring
 - Docs:
   - `Docs/ADR/0022-dcc-bridge.md` (§2 amended, §13), `Docs/ADR/0021-community-marketplace.md` (§15), `Docs/ADR/0013-preferences-key-bindings-and-audit-fixes.md` (§5)
   - `Docs/PROJECT_AUDIT.md`, `Docs/CURRENT_SYSTEMS.md`, `tasks/todo.md` (Phase 32)
@@ -5398,15 +5399,23 @@ Plan approved in plan mode.
 - **Automation:** `Scripts/Tests/RunAutomation.ps1 -ExpectedCount 155` gives 155/155 with an offscreen renderer and 155/155 with `-NullRHI`; user data unchanged (65 files checked). The 5 new tests are `StageCraft.Bridge.ExportCompleteness`, `StageCraft.Input.ShortcutRouting`, `StageCraft.History.Duplicate`, `StageCraft.Scene.SaveFlow` and `StageCraft.Marketplace.UnpublishFlow`; `StageCraft.Input.KeyBindings` and `StageCraft.Marketplace.LocalStore` are extended.
   - ExportCompleteness with a renderer: the whole catalog exports as 23 items and 13 lights, every item with a mesh node, the light nodes in the file matching `ExportedLights`; the hidden copy, the unknown entry and (through the bridge job) a damaged entry are each named in the message.
   - On its first run the test failed only because its own fixture gave the captured snapshots no instance id (the parser rightly drops those); fixed in the test.
+- **Scripted Standalone `-game` run with headless Blender 5.2.2** (R57; scratchpad `RunE1Check57.ps1`, which backs up and restores the profile, scenes, workspace, settings and marketplace folder):
+  - **Ctrl+D:** pressed through Slate (`StageCraft.Edit.Key`) with the keyboard focus on a docked panel tab (`SDockingTabStack`), so it went through the new preprocessor route. Result: "Duplicate: 4 of 4 selected items copied (0 refused)" (two moving heads, a line array and a truss), items 4 → 8, stage marked unsaved.
+  - **Ctrl+Z** on the same route undid "Duplicate 4 items" in one step (items back to 4).
+  - **Ctrl+S** was pressed while a text field had focus (`SEditableText`) and correctly stood aside. Nothing was saved, so the save path itself was not exercised in-game; it is covered by `StageCraft.Scene.SaveFlow`.
+  - **Export** of `Test`: 46 items and 26 lights, 3 left out as not owned. The file had 104 mesh nodes and 26 light nodes.
+  - **Send to Blender:** imported and acked. Blender found 104 meshes, 37,854 triangles and 26 spot lights. All 13 Blender checks passed, including the new "the fixtures' lights arrived" check.
+  - **Publish and unpublish** of a free test listing: Status 1 → 0 listings, and the publish record was left empty.
+  - **Restore:** Gevor's two existing community packages (published 17:43 and 17:46, during his editor session) were untouched and verified byte-identical afterwards. The profile, scenes and settings were also identical to the backup. The script's last cleanup step failed because Claude's own shell had its working folder inside the marketplace folder; the remaining restore was finished by hand and verified.
 - **Not verified:** nothing has been checked by hand in the running app. What needs a hand check:
-  - Ctrl+S and Ctrl+D with the focus in the outliner, the inspector, a floating window (Marketplace, Assistant) and the viewport;
+  - Ctrl+S and Ctrl+D with the focus in the outliner, the inspector, a floating window (Marketplace, Assistant) and the viewport (a docked panel tab was proved in the scripted run);
   - typing in a text field must not trigger them;
   - Ctrl+S on an untitled stage shows the name prompt;
   - the "Unsaved changes" mark;
   - the Marketplace UNPUBLISH and REMOVE FROM LIBRARY buttons;
   - a real Blender import of the exported lights.
 
-**Commit:** uncommitted (working tree).
+**Commit:** `d1cc206` (together with #56). The R57 game-run results and the `blender_receive.py` light check came in a follow-up commit.
 
 **Known issues / follow-ups**
 - **Shortcut routing in the running app is unverified:** whether Slate gives the preprocessor the key with the focus in every kind of panel (dock tab, floating window, the assistant field) has not been checked. There is no Slate focus automation, so this is a manual check.

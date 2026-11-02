@@ -1,7 +1,7 @@
 """End-to-end check of the StageCraft bridge with a real Blender (Docs/ADR/0022-dcc-bridge.md, STATE.md #53).
 
 Run headless while StageCraft has the bridge on:
-    blender -b --factory-startup --python Tools/DCCBridge/tests/blender_receive.py -- <wait seconds> <result json path>
+    blender -b --factory-startup --python Tools/DCCBridge/tests/blender_receive.py -- <wait seconds> <result json path> [<min lights>]
 
 It checks, in order:
   1. the client's own refusals (paths outside the outbox, wrong size or checksum, other formats);
@@ -29,6 +29,8 @@ from stagecraft_bridge import stagecraft_bridge_client as bridge  # noqa: E402
 args = sys.argv[sys.argv.index("--") + 1:] if "--" in sys.argv else []
 WAIT_SECONDS = float(args[0]) if args else 60.0
 RESULT_PATH = args[1] if len(args) > 1 else os.path.join(tempfile.gettempdir(), "stagecraft_blender_result.json")
+# Optional: the fewest lights the received stage must bring (its fixtures, ADR 0022 section 13). 0 skips the check.
+MIN_LIGHTS = int(args[2]) if len(args) > 2 else 0
 
 result = {"checks": {}, "imported": False}
 
@@ -117,6 +119,11 @@ def receive_one():
     result.update(imported=imported == 1, objects=len(bpy.data.objects), mesh_objects=len(meshes), triangles=triangles, collections=collections)
     check("the import has geometry", len(meshes) > 0 and triangles > 0, "{} meshes, {} triangles".format(len(meshes), triangles))
     check("the stage is in its own collection", len(collections) == 1, collections)
+    lights = [obj for obj in bpy.data.objects if obj.type == "LIGHT"]
+    spots = [obj for obj in lights if obj.data.type == "SPOT"]
+    result.update(lights=len(lights), spot_lights=len(spots))
+    if MIN_LIGHTS > 0:
+        check("the fixtures' lights arrived", len(spots) >= MIN_LIGHTS, "{} lights ({} spots), at least {} expected".format(len(lights), len(spots), MIN_LIGHTS))
 
 
 try:
