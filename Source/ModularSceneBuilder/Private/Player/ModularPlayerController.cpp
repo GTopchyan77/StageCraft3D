@@ -50,8 +50,10 @@
 #include "Report/StageCableScheduleSubsystem.h"
 #include "Report/StagePatchSheetSubsystem.h"
 #include "Bridge/StageBridgeSubsystem.h"
+#include "Marketplace/StageAcquireDispatchSubsystem.h"
 #include "Marketplace/StageMarketplaceSubsystem.h"
 #include "Scene/StageSceneComponent.h"
+#include "Services/StageAIToolSubsystem.h"
 #include "Subsystems/StageDMXNetworkSubsystem.h"
 #include "Sketch/StageSketchBuilder.h"
 #include "Sketch/StageSketchGenerator.h"
@@ -2203,6 +2205,89 @@ bool AModularPlayerController::RequestSendScene(const FString& SceneName, int32 
 		ReportRejection(FStageEconomyResultInfo::Fail(EStageEconomyResult::InvalidRequest, Result.Message));
 	}
 	return Result.IsSuccess();
+}
+
+bool AModularPlayerController::RequestAcquireAndDispatch(const FStageAcquireOrder& Order)
+{
+	UStageAcquireDispatchSubsystem* Dispatch = GetGameInstance() ? GetGameInstance()->GetSubsystem<UStageAcquireDispatchSubsystem>() : nullptr;
+	if (!Dispatch)
+	{
+		ReportRejection(FStageEconomyResultInfo::Fail(EStageEconomyResult::InvalidRequest, LOCTEXT("NoDispatch", "The marketplace is not available.")));
+		return false;
+	}
+	const FStageOrderResultInfo Result = Dispatch->RequestOrder(Order);
+	if (!Result.IsSuccess())
+	{
+		ReportRejection(FStageEconomyResultInfo::Fail(Result.Code == EStageOrderResult::AcquireFailed ? EStageEconomyResult::BackendRejected : EStageEconomyResult::InvalidRequest,
+			Result.Message));
+	}
+	return Result.IsSuccess();
+}
+
+bool AModularPlayerController::RequestCreditTopUp(int64 Amount)
+{
+	UStageEconomySubsystem* Economy = GetGameInstance() ? GetGameInstance()->GetSubsystem<UStageEconomySubsystem>() : nullptr;
+	const FStageEconomyResultInfo Result = Economy ? Economy->RequestCreditTopUp(StageCraftTags::Currency_Credits, Amount)
+		: FStageEconomyResultInfo::Fail(EStageEconomyResult::InvalidRequest, LOCTEXT("NoEconomy", "The shop is not available."));
+	if (!Result.IsSuccess())
+	{
+		ReportRejection(Result);
+	}
+	return Result.IsSuccess();
+}
+
+namespace StageAIToolRequests
+{
+	FStageEconomyResultInfo ToRejection(const FStageAIToolResultInfo& Result)
+	{
+		return FStageEconomyResultInfo::Fail(EStageEconomyResult::InvalidRequest, Result.Message);
+	}
+}
+
+bool AModularPlayerController::RequestStoreProviderKey(FName ProviderId, const FString& ApiKey)
+{
+	UStageAIToolSubsystem* Tools = GetGameInstance() ? GetGameInstance()->GetSubsystem<UStageAIToolSubsystem>() : nullptr;
+	const FStageAIToolResultInfo Result = Tools ? Tools->StoreKey(ProviderId, ApiKey)
+		: FStageAIToolResultInfo::Fail(EStageAIToolResult::Unavailable, ProviderId, LOCTEXT("NoTools", "AI tools are not available."));
+	if (!Result.IsSuccess())
+	{
+		ReportRejection(StageAIToolRequests::ToRejection(Result));
+	}
+	return Result.IsSuccess();
+}
+
+bool AModularPlayerController::RequestRemoveProviderKey(FName ProviderId)
+{
+	UStageAIToolSubsystem* Tools = GetGameInstance() ? GetGameInstance()->GetSubsystem<UStageAIToolSubsystem>() : nullptr;
+	const FStageAIToolResultInfo Result = Tools ? Tools->RemoveKey(ProviderId)
+		: FStageAIToolResultInfo::Fail(EStageAIToolResult::Unavailable, ProviderId, LOCTEXT("NoTools", "AI tools are not available."));
+	if (!Result.IsSuccess())
+	{
+		ReportRejection(StageAIToolRequests::ToRejection(Result));
+	}
+	return Result.IsSuccess();
+}
+
+bool AModularPlayerController::RequestVerifyProviderKey(FName ProviderId)
+{
+	UStageAIToolSubsystem* Tools = GetGameInstance() ? GetGameInstance()->GetSubsystem<UStageAIToolSubsystem>() : nullptr;
+	const FStageAIToolResultInfo Result = Tools ? Tools->VerifyKey(ProviderId)
+		: FStageAIToolResultInfo::Fail(EStageAIToolResult::Unavailable, ProviderId, LOCTEXT("NoTools", "AI tools are not available."));
+	if (!Result.IsSuccess())
+	{
+		ReportRejection(StageAIToolRequests::ToRejection(Result));
+	}
+	return Result.IsSuccess();
+}
+
+bool AModularPlayerController::RequestDevGrantCredits(int64 Amount)
+{
+#if !UE_BUILD_SHIPPING
+	UStageEconomySubsystem* Economy = GetGameInstance() ? GetGameInstance()->GetSubsystem<UStageEconomySubsystem>() : nullptr;
+	return Economy && Economy->DevGrantCurrency(StageCraftTags::Currency_Credits, Amount);
+#else
+	return false;
+#endif
 }
 
 bool AModularPlayerController::RequestRender()

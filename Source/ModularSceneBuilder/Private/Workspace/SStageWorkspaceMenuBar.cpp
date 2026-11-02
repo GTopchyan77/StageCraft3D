@@ -494,6 +494,9 @@ void SStageWorkspaceMenuBar::FillEditMenu(FMenuBuilder& MenuBuilder)
 	MenuBuilder.AddMenuEntry(LOCTEXT("Marketplace", "Community Marketplace..."),
 		LOCTEXT("MarketplaceTip", "Browse stages, lighting rigs and cue lists from the community, inspect them in a read-only 3D preview, get or buy them with credits, and publish your own saved scenes."),
 		FSlateIcon(), FUIAction(FExecuteAction::CreateSP(this, &SStageWorkspaceMenuBar::ShowPanel, FGameplayTag(StageCraftTags::Panel_Marketplace))));
+	MenuBuilder.AddMenuEntry(LOCTEXT("Services", "Services & Keys..."),
+		LOCTEXT("ServicesTip", "Add, check or remove the API keys of AI tools (stored encrypted for your Windows user), and see which 3D apps are connected."),
+		FSlateIcon(), FUIAction(FExecuteAction::CreateSP(this, &SStageWorkspaceMenuBar::ShowPanel, FGameplayTag(StageCraftTags::Panel_Services))));
 	MenuBuilder.EndSection();
 
 	MenuBuilder.BeginSection(TEXT("Preferences"));

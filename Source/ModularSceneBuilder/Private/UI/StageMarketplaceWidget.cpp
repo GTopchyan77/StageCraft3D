@@ -9,6 +9,8 @@
 #include "Components/HorizontalBox.h"
 #include "Components/HorizontalBoxSlot.h"
 #include "Components/MultiLineEditableTextBox.h"
+#include "Components/Overlay.h"
+#include "Components/OverlaySlot.h"
 #include "Components/ScaleBox.h"
 #include "Components/ScrollBox.h"
 #include "Components/SizeBox.h"
@@ -21,6 +23,7 @@
 #include "Engine/GameInstance.h"
 #include "Engine/TextureRenderTarget2D.h"
 #include "Engine/World.h"
+#include "Marketplace/StageAcquireDispatchSubsystem.h"
 #include "Marketplace/StageMarketplacePreview.h"
 #include "Marketplace/StagePackage.h"
 #include "Player/ModularPlayerController.h"
@@ -28,6 +31,8 @@
 #include "Subsystems/StageItemSubsystem.h"
 #include "Subsystems/StageProfileSubsystem.h"
 #include "Subsystems/StageSessionSubsystem.h"
+#include "TimerManager.h"
+#include "UI/StageAcquireDialogWidget.h"
 #include "UI/StageCraftUITheme.h"
 #include "UI/StageCraftWidgetStyle.h"
 #include "UI/StageMarketplacePreviewWidget.h"
@@ -240,8 +245,26 @@ void UStageMarketplaceWidget::BuildTree()
 	Root->SetPadding(FMargin(0.f));
 	WidgetTree->RootWidget = Root;
 
+	// The panel, and above it the acquire dialog's layer: dimmed and click-eating while a dialog is open, collapsed otherwise.
+	// (The workspace's own dialog layer does not cover floating panel windows, so the dialog lives inside the panel.)
+	UOverlay* Layers = WidgetTree->ConstructWidget<UOverlay>(UOverlay::StaticClass(), TEXT("Layers"));
+	Root->SetContent(Layers);
 	UVerticalBox* Column = WidgetTree->ConstructWidget<UVerticalBox>(UVerticalBox::StaticClass(), TEXT("Column"));
-	Root->SetContent(Column);
+	if (UOverlaySlot* ColumnSlot = Layers->AddChildToOverlay(Column))
+	{
+		ColumnSlot->SetHorizontalAlignment(HAlign_Fill);
+		ColumnSlot->SetVerticalAlignment(VAlign_Fill);
+	}
+	DialogLayer = WidgetTree->ConstructWidget<UBorder>(UBorder::StaticClass(), TEXT("DialogLayer"));
+	DialogLayer->SetBrush(MakeBox(WithAlpha(Palette.WindowBackground, 0.75f)));
+	DialogLayer->SetHorizontalAlignment(HAlign_Center);
+	DialogLayer->SetVerticalAlignment(VAlign_Center);
+	DialogLayer->SetVisibility(ESlateVisibility::Collapsed);
+	if (UOverlaySlot* DialogSlot = Layers->AddChildToOverlay(DialogLayer))
+	{
+		DialogSlot->SetHorizontalAlignment(HAlign_Fill);
+		DialogSlot->SetVerticalAlignment(VAlign_Fill);
+	}
 	Column->AddChildToVerticalBox(BuildHeader());
 
 	Pages = WidgetTree->ConstructWidget<UWidgetSwitcher>(UWidgetSwitcher::StaticClass(), TEXT("Pages"));
@@ -404,7 +427,8 @@ UWidget* UStageMarketplaceWidget::BuildDetailColumn()
 	ActionButtons[int32(EAction::Preview)] = MakeButton(LOCTEXT("Preview", "PREVIEW 3D"),
 		LOCTEXT("PreviewTip", "Inspect this stage in 3D, read-only. Nothing is downloaded into your scenes and nothing is bought."), int32(EAction::Preview), &ThisClass::HandleActionPicked);
 	ActionButtons[int32(EAction::Acquire)] = MakeButton(LOCTEXT("Get", "GET"),
-		LOCTEXT("GetTip", "Add this listing to your saved scenes. Paid listings are bought with credits first."), int32(EAction::Acquire), &ThisClass::HandleActionPicked);
+		LOCTEXT("GetTip", "Choose where the listing goes (StageCraft, a 3D app, an AI tool or a .glb file) and confirm the price. Nothing is bought until you confirm."),
+		int32(EAction::Acquire), &ThisClass::HandleActionPicked);
 	ActionButtons[int32(EAction::Open)] = MakeButton(LOCTEXT("Open", "OPEN IN STAGE"),
 		LOCTEXT("OpenTip", "Open the scene you got from this listing, replacing the stage (like File > Open)."), int32(EAction::Open), &ThisClass::HandleActionPicked);
 	Add(BuildRow({ ActionButtons[int32(EAction::Preview)], ActionButtons[int32(EAction::Acquire)], ActionButtons[int32(EAction::Open)] }));
@@ -469,6 +493,13 @@ UWidget* UStageMarketplaceWidget::BuildPublishPage()
 	Add(BuildRow({ BuildLabeled(LOCTEXT("PublishKind", "KIND"), KindSegment), BuildLabeled(LOCTEXT("PublishCategory", "CATEGORY"), CategoryBox),
 		BuildLabeled(LOCTEXT("PublishPrice", "PRICE (CREDITS)"), PriceBox) }, StageMarketplacePanel::GroupGap));
 
+	UWidget* ExportSegment = BuildSegment({ LOCTEXT("PublishKeep", "KEEP IN STAGECRAFT"), LOCTEXT("PublishAllowExport", "ALLOW 3D APPS & FILES") },
+		PublishExportButtons, &ThisClass::HandlePublishExportPicked);
+	PublishExportButtons[0]->SetToolTipText(LOCTEXT("PublishKeepTip", "Buyers can open and use the stage in StageCraft only."));
+	PublishExportButtons[1]->SetToolTipText(LOCTEXT("PublishAllowExportTip",
+		"Buyers can also send the stage to Blender, 3ds Max, Cinema 4D or Maya, hand it to AI tools, and save it as a .glb file. Nobody can republish it."));
+	Add(BuildLabeled(LOCTEXT("PublishExport", "WHERE BUYERS MAY USE IT"), ExportSegment));
+
 	PublishButton = MakeButton(LOCTEXT("Publish", "PUBLISH"), LOCTEXT("PublishTip", "Package the saved scene and publish it to the community folder."), 0, &ThisClass::HandlePublishPicked);
 	StyleChoice(*PublishButton, true);
 	PublishStatusText = MakeText(FText::GetEmpty(), 8, TEXT("Regular"), Palette.TextSecondary);
@@ -483,6 +514,7 @@ UWidget* UStageMarketplaceWidget::BuildPublishPage()
 	}
 	Add(Footer);
 	HandlePublishKindPicked(0);
+	HandlePublishExportPicked(0);
 	return Page;
 }
 
@@ -506,6 +538,11 @@ void UStageMarketplaceWidget::NativeConstruct()
 		Profile->OnBalanceChanged.AddUniqueDynamic(this, &ThisClass::HandleBalanceChanged);
 		Profile->OnEntitlementsChanged.AddUniqueDynamic(this, &ThisClass::HandleOwnershipChanged);
 		Profile->OnProfileLoaded.AddUniqueDynamic(this, &ThisClass::HandleOwnershipChanged);
+	}
+	if (UStageAcquireDispatchSubsystem* Dispatch = GameInstance ? GameInstance->GetSubsystem<UStageAcquireDispatchSubsystem>() : nullptr)
+	{
+		BoundDispatch = Dispatch;
+		Dispatch->OnOrderCompleted.AddUniqueDynamic(this, &ThisClass::HandleOrderCompleted);
 	}
 	SearchField->OnTextCommitted.AddUniqueDynamic(this, &ThisClass::HandleSearchCommitted);
 	CategoryCombo->OnSelectionChanged.AddUniqueDynamic(this, &ThisClass::HandleCategoryChanged);
@@ -535,6 +572,18 @@ void UStageMarketplaceWidget::NativeDestruct()
 		Profile->OnEntitlementsChanged.RemoveDynamic(this, &ThisClass::HandleOwnershipChanged);
 		Profile->OnProfileLoaded.RemoveDynamic(this, &ThisClass::HandleOwnershipChanged);
 	}
+	if (UStageAcquireDispatchSubsystem* Dispatch = BoundDispatch.Get())
+	{
+		Dispatch->OnOrderCompleted.RemoveDynamic(this, &ThisClass::HandleOrderCompleted);
+	}
+	BoundDispatch.Reset();
+	// The dialog goes with the panel; an order it started carries on in the dispatcher.
+	if (DialogLayer)
+	{
+		DialogLayer->ClearChildren();
+		DialogLayer->SetVisibility(ESlateVisibility::Collapsed);
+	}
+	AcquireDialog = nullptr;
 	if (SearchField)
 	{
 		SearchField->OnTextCommitted.RemoveDynamic(this, &ThisClass::HandleSearchCommitted);
@@ -727,7 +776,8 @@ void UStageMarketplaceWidget::RefreshDetails()
 		Listing->ItemCount, Listing->FixtureCount, Listing->CueCount, FText::AsNumber(Listing->Downloads), FText::AsMemory(Listing->PackageBytes),
 		Listing->Keywords.IsEmpty() ? FText::GetEmpty() : FText::FromString(TEXT("  ·  #") + FString::Join(Listing->Keywords, TEXT("  #")))));
 	DetailDescription->SetText(Listing->Description.IsEmpty() ? LOCTEXT("NoDescription", "No description.") : FText::FromString(Listing->Description));
-	DetailPrice->SetText(DescribePrice(*Listing, Ownership));
+	DetailPrice->SetText(FText::Format(LOCTEXT("DetailPriceRights", "{0}   ·   {1}"), DescribePrice(*Listing, Ownership),
+		Listing->bAllowsExport ? LOCTEXT("ExportAllowed", "EXPORT ALLOWED") : LOCTEXT("ExportKept", "STAYS IN STAGECRAFT")));
 	DetailPrice->SetColorAndOpacity(FSlateColor(Ownership == EStageOwnershipState::Locked ? GetTheme().WarningColor : GetTheme().AccentColor));
 
 	FText AcquireLabel;
@@ -739,9 +789,9 @@ void UStageMarketplaceWidget::RefreshDetails()
 	{
 		switch (Ownership)
 		{
-		case EStageOwnershipState::Free:		AcquireLabel = LOCTEXT("GetFree", "GET (FREE)"); break;
-		case EStageOwnershipState::Owned:		AcquireLabel = LOCTEXT("GetOwned", "GET AGAIN (OWNED)"); break;
-		case EStageOwnershipState::Purchasable:	AcquireLabel = FText::Format(LOCTEXT("Buy", "BUY · {0} CREDITS"), FText::AsNumber(Listing->Price.Credits)); break;
+		case EStageOwnershipState::Free:		AcquireLabel = LOCTEXT("GetFree", "GET (FREE)..."); break;
+		case EStageOwnershipState::Owned:		AcquireLabel = LOCTEXT("GetOwned", "GET AGAIN (OWNED)..."); break;
+		case EStageOwnershipState::Purchasable:	AcquireLabel = FText::Format(LOCTEXT("Buy", "BUY · {0} CREDITS..."), FText::AsNumber(Listing->Price.Credits)); break;
 		default:								AcquireLabel = LOCTEXT("Unavailable", "NOT AVAILABLE"); break;
 		}
 	}
@@ -851,37 +901,18 @@ void UStageMarketplaceWidget::HandleActionPicked(int32 Index)
 		break;
 
 	case EAction::Acquire:
-		if (Listing && Controller && Controller->RequestMarketplaceAcquire(Listing->ListingId))
+		if (Listing)
 		{
-			ShowStatus(FText::Format(LOCTEXT("Acquiring", "Getting \"{0}\"..."), FText::FromString(Listing->Title)), false);
+			OpenAcquireDialog(Listing->ListingId);
 		}
-		RefreshDetails();
 		break;
 
 	case EAction::Open:
-	{
-		const FString* SceneName = Listing ? ImportedScenes.Find(Listing->ListingId) : nullptr;
-		if (!SceneName || !Controller)
+		if (Listing && Controller)
 		{
-			break;
+			OpenImportedScene(Listing->ListingId);
 		}
-		// The same duty as File > Open: a dirty stage is replaced only after an explicit second click.
-		const UStageSessionSubsystem* Session = UWorld::GetSubsystem<UStageSessionSubsystem>(GetWorld());
-		if (Session && Session->IsDirty() && ConfirmOpenListing != Listing->ListingId)
-		{
-			ConfirmOpenListing = Listing->ListingId;
-			ShowStatus(LOCTEXT("ConfirmOpen", "The stage has unsaved changes. Click DISCARD CHANGES AND OPEN to replace it, or save it first (File > Save)."), true);
-			RefreshDetails();
-			break;
-		}
-		ConfirmOpenListing.Invalidate();
-		if (Controller->RequestLoadScene(*SceneName) == EStageSceneResult::Success)
-		{
-			ShowStatus(FText::Format(LOCTEXT("Opening", "Opening \"{0}\" in the stage..."), FText::FromString(*SceneName)), false);
-		}
-		RefreshDetails();
 		break;
-	}
 
 	case EAction::Frame:
 		if (Preview.IsValid())
@@ -889,6 +920,86 @@ void UStageMarketplaceWidget::HandleActionPicked(int32 Index)
 			Preview->Frame();
 		}
 		break;
+	}
+}
+
+void UStageMarketplaceWidget::OpenImportedScene(const FGuid& ListingId)
+{
+	AModularPlayerController* Controller = GetStageController();
+	const FString* SceneName = ImportedScenes.Find(ListingId);
+	if (!SceneName || !Controller)
+	{
+		return;
+	}
+	// The same duty as File > Open: a dirty stage is replaced only after an explicit second click.
+	const UStageSessionSubsystem* Session = UWorld::GetSubsystem<UStageSessionSubsystem>(GetWorld());
+	if (Session && Session->IsDirty() && ConfirmOpenListing != ListingId)
+	{
+		ConfirmOpenListing = ListingId;
+		ShowStatus(LOCTEXT("ConfirmOpen", "The stage has unsaved changes. Click DISCARD CHANGES AND OPEN to replace it, or save it first (File > Save)."), true);
+		RefreshDetails();
+		return;
+	}
+	ConfirmOpenListing.Invalidate();
+	if (Controller->RequestLoadScene(*SceneName) == EStageSceneResult::Success)
+	{
+		ShowStatus(FText::Format(LOCTEXT("Opening", "Opening \"{0}\" in the stage..."), FText::FromString(*SceneName)), false);
+	}
+	RefreshDetails();
+}
+
+// --- Acquire dialog ---
+
+void UStageMarketplaceWidget::OpenAcquireDialog(const FGuid& ListingId)
+{
+	if (!AcquireDialog)
+	{
+		AcquireDialog = CreateWidget<UStageAcquireDialogWidget>(this, UStageAcquireDialogWidget::StaticClass());
+		if (!AcquireDialog)
+		{
+			return;
+		}
+		AcquireDialog->OnCloseRequested.BindUObject(this, &ThisClass::CloseAcquireDialog);
+		// Added to the layer: NativeConstruct binds the dialog to the subsystems; removing it unbinds them.
+		DialogLayer->SetContent(AcquireDialog);
+	}
+	AcquireDialog->ShowListing(ListingId);
+	DialogLayer->SetVisibility(ESlateVisibility::Visible);
+	AcquireDialog->SetKeyboardFocus();
+}
+
+void UStageMarketplaceWidget::CloseAcquireDialog()
+{
+	// Asked from inside the dialog (its button, its Esc): removing it now would destroy the widget whose callback is running.
+	UWorld* World = GetWorld();
+	if (!World)
+	{
+		return;
+	}
+	World->GetTimerManager().SetTimerForNextTick(FTimerDelegate::CreateWeakLambda(this, [this]()
+	{
+		if (DialogLayer)
+		{
+			DialogLayer->ClearChildren();
+			DialogLayer->SetVisibility(ESlateVisibility::Collapsed);
+		}
+		AcquireDialog = nullptr;
+		RefreshDetails();
+	}));
+}
+
+void UStageMarketplaceWidget::HandleOrderCompleted(const FStageOrderResultInfo& Result)
+{
+	// Also seen by HandleAcquireCompleted, but the order may finish first within the same broadcast: record it here too.
+	if (Result.WasAcquired())
+	{
+		ImportedScenes.Add(Result.ListingId, Result.SceneName);
+	}
+	ShowStatus(Result.Message, !Result.IsSuccess());
+	if (Result.IsSuccess() && Result.Target.Kind == EStageDispatchKind::OpenInStageCraft)
+	{
+		SelectedListing = Result.ListingId;
+		OpenImportedScene(Result.ListingId);
 	}
 }
 
@@ -1069,6 +1180,15 @@ void UStageMarketplaceWidget::HandlePublishKindPicked(int32 Index)
 	}
 }
 
+void UStageMarketplaceWidget::HandlePublishExportPicked(int32 Index)
+{
+	bPublishAllowExport = Index == 1;
+	for (int32 Button = 0; Button < PublishExportButtons.Num(); ++Button)
+	{
+		StyleChoice(*PublishExportButtons[Button], Button == Index);
+	}
+}
+
 void UStageMarketplaceWidget::HandlePublishPicked(int32 Unused)
 {
 	AModularPlayerController* Controller = GetStageController();
@@ -1095,6 +1215,7 @@ void UStageMarketplaceWidget::HandlePublishPicked(int32 Unused)
 	const int32 CategoryIndex = PublishCategoryCombo->GetSelectedIndex();
 	Request.Category = Categories.IsValidIndex(CategoryIndex) ? Categories[CategoryIndex] : StageCraftTags::Marketplace_Category_Other.GetTag();
 	Request.Price.Credits = FMath::Max<int64>(0, FMath::RoundToInt64(PriceField->GetValue()));
+	Request.bAllowExport = bPublishAllowExport;
 
 	if (Controller->RequestMarketplacePublish(Request))
 	{

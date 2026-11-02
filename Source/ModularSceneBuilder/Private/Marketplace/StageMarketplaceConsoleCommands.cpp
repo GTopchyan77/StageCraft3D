@@ -13,10 +13,12 @@
 #include "Framework/Application/SlateApplication.h"
 #include "HAL/IConsoleManager.h"
 #include "ImageUtils.h"
+#include "Bridge/StageBridgeSubsystem.h"
 #include "Marketplace/StageMarketplaceSubsystem.h"
 #include "Misc/FileHelper.h"
 #include "Misc/Paths.h"
 #include "ModularSceneBuilder.h"
+#include "Player/ModularPlayerController.h"
 #include "UI/StageMarketplaceWidget.h"
 #include "UObject/UObjectIterator.h"
 #include "Widgets/SWindow.h"
@@ -147,7 +149,7 @@ namespace StageMarketplaceCommands
 	}
 
 	/** <StageDesign|LightingRig|CueList> <credits> <saved scene name...>; the scene name is also the title. */
-	void Publish(const TArray<FString>& Args, UWorld* World)
+	void PublishWith(const TArray<FString>& Args, UWorld* World, bool bAllowExport)
 	{
 		UStageMarketplaceSubsystem* Marketplace = GetMarketplace(World);
 		const int64 KindValue = Args.Num() > 0 ? StaticEnum<EStagePackageKind>()->GetValueByNameString(Args[0]) : INDEX_NONE;
@@ -163,8 +165,82 @@ namespace StageMarketplaceCommands
 		Request.Title = Request.SceneName;
 		Request.Description = TEXT("Published from the console.");
 		Request.Category = StageCraftTags::Marketplace_Category_Concert;
+		Request.bAllowExport = bAllowExport;
 		const FStageMarketplaceResultInfo Result = Marketplace->RequestPublish(Request);
-		UE_LOG(LogStageCraft, Display, TEXT("StageCraft.Marketplace.Publish \"%s\": %s %s"), *Request.SceneName, *UEnum::GetValueAsString(Result.Code), *Result.Message.ToString());
+		UE_LOG(LogStageCraft, Display, TEXT("StageCraft.Marketplace.Publish \"%s\" (export %s): %s %s"), *Request.SceneName, bAllowExport ? TEXT("allowed") : TEXT("kept in StageCraft"),
+			*UEnum::GetValueAsString(Result.Code), *Result.Message.ToString());
+	}
+
+	void Publish(const TArray<FString>& Args, UWorld* World) { PublishWith(Args, World, /*bAllowExport*/ false); }
+	void PublishExportable(const TArray<FString>& Args, UWorld* World) { PublishWith(Args, World, /*bAllowExport*/ true); }
+
+	FGuid ResolveListing(const UStageMarketplaceSubsystem& Marketplace, const FString& Arg)
+	{
+		FGuid ListingId;
+		if (!FGuid::Parse(Arg, ListingId) && Marketplace.GetListings().IsValidIndex(FCString::Atoi(*Arg) - 1))
+		{
+			ListingId = Marketplace.GetListings()[FCString::Atoi(*Arg) - 1].ListingId;
+		}
+		return ListingId;
+	}
+
+	/**
+	 * <listing number | id> <open | glb <absolute path> | app <client id | first> | tool <tool id>>: places an acquire order through
+	 * the player controller, at the listing's current price, exactly as the acquire dialog does (ADR 0022 §11.2).
+	 */
+	void Order(const TArray<FString>& Args, UWorld* World)
+	{
+		UStageMarketplaceSubsystem* Marketplace = GetMarketplace(World);
+		AModularPlayerController* Controller = World ? Cast<AModularPlayerController>(World->GetFirstPlayerController()) : nullptr;
+		const FGuid ListingId = Marketplace && Args.Num() >= 2 ? ResolveListing(*Marketplace, Args[0]) : FGuid();
+		const FStageMarketplaceListing* Listing = Marketplace ? Marketplace->FindListing(ListingId) : nullptr;
+		if (!Controller || !Listing)
+		{
+			UE_LOG(LogStageCraft, Display, TEXT("Usage: StageCraft.Marketplace.Order <listing number | id> <open | glb <path> | app <client id | first> | tool <tool id>>"));
+			return;
+		}
+
+		FStageAcquireOrder Order;
+		Order.ListingId = ListingId;
+		Order.ExpectedCredits = Listing->Price.Credits;
+		const FString Kind = Args[1].ToLower();
+		const FString Value = Args.Num() > 2 ? Args[2] : FString();
+		if (Kind == TEXT("glb"))
+		{
+			Order.Target.Kind = EStageDispatchKind::SaveFile;
+			Order.Target.FilePath = Value;
+		}
+		else if (Kind == TEXT("app"))
+		{
+			Order.Target.Kind = EStageDispatchKind::BridgeApp;
+			const UStageBridgeSubsystem* Bridge = World->GetGameInstance()->GetSubsystem<UStageBridgeSubsystem>();
+			Order.Target.BridgeClientId = Value == TEXT("first") && Bridge && !Bridge->GetClients().IsEmpty() ? Bridge->GetClients()[0].ClientId : FCString::Atoi(*Value);
+		}
+		else if (Kind == TEXT("tool"))
+		{
+			Order.Target.Kind = EStageDispatchKind::AITool;
+			Order.Target.ProviderId = FName(*Value);
+		}
+		const TArray<FStageEconomyResultInfo> Refusals = Controller->RunCapturingRejections([Controller, &Order]() { Controller->RequestAcquireAndDispatch(Order); });
+		UE_LOG(LogStageCraft, Display, TEXT("StageCraft.Marketplace.Order \"%s\" -> %s: %s"), *Listing->Title, *Kind,
+			Refusals.IsEmpty() ? TEXT("started") : *FString::Printf(TEXT("refused: %s"), *Refusals[0].Message.ToString()));
+	}
+
+	/** <listing number | id>: opens the acquire dialog for it in an open Marketplace panel. */
+	void Dialog(const TArray<FString>& Args, UWorld* World)
+	{
+		UStageMarketplaceSubsystem* Marketplace = GetMarketplace(World);
+		const FGuid ListingId = Marketplace && !Args.IsEmpty() ? ResolveListing(*Marketplace, Args[0]) : FGuid();
+		for (TObjectIterator<UStageMarketplaceWidget> It; It && ListingId.IsValid(); ++It)
+		{
+			if (It->IsConstructed())
+			{
+				It->OpenAcquireDialog(ListingId);
+				UE_LOG(LogStageCraft, Display, TEXT("StageCraft.Marketplace.Dialog: opened for %s."), *ListingId.ToString());
+				return;
+			}
+		}
+		UE_LOG(LogStageCraft, Display, TEXT("StageCraft.Marketplace.Dialog: needs an open Marketplace panel and a listing number from Status."));
 	}
 
 	FAutoConsoleCommandWithWorldAndArgs QueryCommand(TEXT("StageCraft.Marketplace.Query"), TEXT("[search words] Browses the marketplace (most popular first)."),
@@ -179,6 +255,14 @@ namespace StageMarketplaceCommands
 		FConsoleCommandWithWorldAndArgsDelegate::CreateStatic(&Screenshot));
 	FAutoConsoleCommandWithWorldAndArgs PublishCommand(TEXT("StageCraft.Marketplace.Publish"), TEXT("<StageDesign|LightingRig|CueList> <credits> <saved scene name> Publishes a saved scene."),
 		FConsoleCommandWithWorldAndArgsDelegate::CreateStatic(&Publish));
+	FAutoConsoleCommandWithWorldAndArgs PublishExportableCommand(TEXT("StageCraft.Marketplace.PublishExportable"),
+		TEXT("<StageDesign|LightingRig|CueList> <credits> <saved scene name> Publishes a saved scene whose buyers may export it (ADR 0022 §11.1)."),
+		FConsoleCommandWithWorldAndArgsDelegate::CreateStatic(&PublishExportable));
+	FAutoConsoleCommandWithWorldAndArgs OrderCommand(TEXT("StageCraft.Marketplace.Order"),
+		TEXT("<number | id> <open | glb <path> | app <client id | first> | tool <tool id>> Gets a listing and sends it to a target, like the acquire dialog."),
+		FConsoleCommandWithWorldAndArgsDelegate::CreateStatic(&Order));
+	FAutoConsoleCommandWithWorldAndArgs DialogCommand(TEXT("StageCraft.Marketplace.Dialog"), TEXT("<number | id> Opens the acquire dialog in an open Marketplace panel."),
+		FConsoleCommandWithWorldAndArgsDelegate::CreateStatic(&Dialog));
 }
 
 #endif // !UE_BUILD_SHIPPING

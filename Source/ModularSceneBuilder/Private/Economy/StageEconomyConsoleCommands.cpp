@@ -117,6 +117,23 @@ namespace StageEconomyCommands
 		UE_LOG(LogStageCraft, Display, TEXT("Grant %s %s: %s"), *Args[0], *Currency.ToString(), bOk ? TEXT("ok") : TEXT("refused"));
 	}
 
+	/** <Amount>: asks the store for credits through the player controller, like the acquire dialog's GET CREDITS (ADR 0022 §11.4). */
+	void TopUp(const TArray<FString>& Args, UWorld* World)
+	{
+		AModularPlayerController* Controller = World ? Cast<AModularPlayerController>(World->GetFirstPlayerController()) : nullptr;
+		if (!Controller || Args.IsEmpty())
+		{
+			UE_LOG(LogStageCraft, Display, TEXT("Usage (in PIE): StageCraft.Shop.TopUp <Amount>"));
+			return;
+		}
+		const int64 Amount = FCString::Atoi64(*Args[0]);
+		const TArray<FStageEconomyResultInfo> Refusals = Controller->RunCapturingRejections([Controller, Amount]() { Controller->RequestCreditTopUp(Amount); });
+		UE_LOG(LogStageCraft, Display, TEXT("StageCraft.Shop.TopUp %lld: %s"), Amount, Refusals.IsEmpty() ? TEXT("sent to the store")
+			: *FString::Printf(TEXT("refused (%s): %s"), *UEnum::GetValueAsString(Refusals[0].Code), *Refusals[0].Message.ToString()));
+	}
+
+	FAutoConsoleCommandWithWorldAndArgs TopUpCommand(TEXT("StageCraft.Shop.TopUp"), TEXT("<Amount> Asks the store for credits (offline: refused, a server is required)."),
+		FConsoleCommandWithWorldAndArgsDelegate::CreateStatic(&TopUp));
 	FAutoConsoleCommandWithWorldAndArgs ListCommand(TEXT("StageCraft.Shop.List"), TEXT("Lists shop products and whether they can be bought."),
 		FConsoleCommandWithWorldAndArgsDelegate::CreateStatic(&ListProducts));
 	FAutoConsoleCommandWithWorldAndArgs BuyCommand(TEXT("StageCraft.Shop.Buy"), TEXT("<ProductAssetName> Buys a product through the player controller."),

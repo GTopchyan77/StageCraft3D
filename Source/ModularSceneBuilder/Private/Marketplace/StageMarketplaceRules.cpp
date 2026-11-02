@@ -241,4 +241,25 @@ FString StageMarketplaceRules::MakeImportSceneName(const FString& Title, TFuncti
 	return FString();
 }
 
+EStageExportRights StageMarketplaceRules::ResolveExportRights(const FGuid& ListingId, const FStagePackageManifest* Manifest, const FStagePlayerProfile& Profile)
+{
+	if (!Manifest)
+	{
+		return EStageExportRights::NoLibraryCopy;
+	}
+	if (!ListingId.IsValid() || Manifest->PackageId != ListingId)
+	{
+		return EStageExportRights::Mismatch;
+	}
+	if (!Manifest->bAllowExport)
+	{
+		return EStageExportRights::NotAllowedByPublisher;
+	}
+	if (!Manifest->Price.IsFree() && !OwnsListing(Profile, ListingId))
+	{
+		return EStageExportRights::NotOwned;
+	}
+	return EStageExportRights::Allowed;
+}
+
 #undef LOCTEXT_NAMESPACE

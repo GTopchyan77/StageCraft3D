@@ -340,7 +340,7 @@ bool FStageMarketplaceManifestTest::RunTest(const FString& Parameters)
 	FStagePackageManifest Parsed;
 	TestEqual(TEXT("Serialized manifest parses"), Str(StagePackage::ParseManifest(Json, Parsed)), Str(EStageMarketplaceResult::Success));
 	TestEqual(TEXT("Unknown kind"), Str(StagePackage::ParseManifest(Json.Replace(TEXT("\"LightingRig\""), TEXT("\"Hologram\"")), Parsed)), Str(EStageMarketplaceResult::Corrupt));
-	TestEqual(TEXT("Newer manifest"), Str(StagePackage::ParseManifest(Json.Replace(TEXT("\"version\":1"), TEXT("\"version\":2")), Parsed)), Str(EStageMarketplaceResult::VersionMismatch));
+	TestEqual(TEXT("Newer manifest"), Str(StagePackage::ParseManifest(Json.Replace(TEXT("\"version\":2"), TEXT("\"version\":3")), Parsed)), Str(EStageMarketplaceResult::VersionMismatch));
 	TestEqual(TEXT("Unknown category parses"), Str(StagePackage::ParseManifest(Json.Replace(TEXT("Category.Festival"), TEXT("Category.Circus")), Parsed)), Str(EStageMarketplaceResult::Success));
 	TestEqual(TEXT("... as Other"), Parsed.Category, StageCraftTags::Marketplace_Category_Other.GetTag());
 	TestEqual(TEXT("Not JSON"), Str(StagePackage::ParseManifest(TEXT("{"), Parsed)), Str(EStageMarketplaceResult::Corrupt));
@@ -474,6 +474,88 @@ bool FStageMarketplacePurchaseRulesTest::RunTest(const FString& Parameters)
 	const FPrimaryAssetId ProductId = StageMarketplaceRules::MakeListingProductId(Paid.ListingId);
 	TestEqual(TEXT("Listing product type"), ProductId.PrimaryAssetType.GetName(), FName(StageMarketplaceRules::ListingProductType));
 	TestNotEqual(TEXT("Each listing has its own product id"), ProductId, StageMarketplaceRules::MakeListingProductId(Dear.ListingId));
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FStageMarketplaceExportFlagTest, "StageCraft.Marketplace.ManifestExportFlag", StageMarketplaceTests::Flags)
+
+bool FStageMarketplaceExportFlagTest::RunTest(const FString& Parameters)
+{
+	using namespace StageMarketplaceTests;
+
+	FStagePackageManifest Allowing = MakeManifest(MakeScene());
+	Allowing.bAllowExport = true;
+	const FString Json = StagePackage::SerializeManifest(Allowing);
+	FStagePackageManifest Parsed;
+	TestEqual(TEXT("A version 2 manifest parses"), Str(StagePackage::ParseManifest(Json, Parsed)), Str(EStageMarketplaceResult::Success));
+	TestTrue(TEXT("... with the publisher's flag"), Parsed.bAllowExport);
+	TestTrue(TEXT("The listing shows it"), StagePackage::ToListing(Parsed, false, 0, 0).bAllowsExport);
+
+	TestEqual(TEXT("Off is written and read"), Str(StagePackage::ParseManifest(StagePackage::SerializeManifest(MakeManifest(MakeScene())), Parsed)), Str(EStageMarketplaceResult::Success));
+	TestFalse(TEXT("... as off"), Parsed.bAllowExport);
+
+	// A version 1 package predates the flag: it never allows export, whatever extra field it carries.
+	const FString Version1 = Json.Replace(TEXT("\"version\":2"), TEXT("\"version\":1"));
+	TestEqual(TEXT("A version 1 manifest still parses"), Str(StagePackage::ParseManifest(Version1, Parsed)), Str(EStageMarketplaceResult::Success));
+	TestFalse(TEXT("... and never allows export"), Parsed.bAllowExport);
+
+	// Deny by default: a version 2 manifest must state the flag as a boolean.
+	TestEqual(TEXT("Missing flag in version 2"), Str(StagePackage::ParseManifest(Json.Replace(TEXT(",\"allowExport\":true"), TEXT("")), Parsed)), Str(EStageMarketplaceResult::Corrupt));
+	TestEqual(TEXT("Flag that is not a boolean"), Str(StagePackage::ParseManifest(Json.Replace(TEXT("\"allowExport\":true"), TEXT("\"allowExport\":\"yes\"")), Parsed)), Str(EStageMarketplaceResult::Corrupt));
+
+	// The flag survives a whole package.
+	FStagePackage Package = MakePackage(/*bWithThumbnail*/ false);
+	Package.Manifest.bAllowExport = true;
+	TArray<uint8> Bytes;
+	TestEqual(TEXT("Package written"), Str(StagePackage::Write(Package, Bytes)), Str(EStageMarketplaceResult::Success));
+	FStagePackageManifest Read;
+	bool bHasThumbnail = true;
+	TestEqual(TEXT("Manifest read back"), Str(StagePackage::ReadManifest(Bytes, Read, bHasThumbnail)), Str(EStageMarketplaceResult::Success));
+	TestTrue(TEXT("... with the flag"), Read.bAllowExport);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FStageMarketplaceExportRightsTest, "StageCraft.Marketplace.ExportRights", StageMarketplaceTests::Flags)
+
+bool FStageMarketplaceExportRightsTest::RunTest(const FString& Parameters)
+{
+	using namespace StageMarketplaceTests;
+
+	const auto Name = [](EStageExportRights Rights)
+	{
+		switch (Rights)
+		{
+		case EStageExportRights::Allowed: return FString(TEXT("Allowed"));
+		case EStageExportRights::NoLibraryCopy: return FString(TEXT("NoLibraryCopy"));
+		case EStageExportRights::Mismatch: return FString(TEXT("Mismatch"));
+		case EStageExportRights::NotAllowedByPublisher: return FString(TEXT("NotAllowedByPublisher"));
+		case EStageExportRights::NotOwned: return FString(TEXT("NotOwned"));
+		}
+		return FString(TEXT("?"));
+	};
+
+	FStagePlayerProfile Profile;
+	FStagePackageManifest Paid = MakeManifest(MakeScene());
+	Paid.bAllowExport = true;
+	const FGuid Id = Paid.PackageId;
+
+	TestEqual(TEXT("No library copy (deny by default)"), Name(StageMarketplaceRules::ResolveExportRights(Id, nullptr, Profile)), Name(EStageExportRights::NoLibraryCopy));
+	TestEqual(TEXT("A paid listing not owned"), Name(StageMarketplaceRules::ResolveExportRights(Id, &Paid, Profile)), Name(EStageExportRights::NotOwned));
+	Profile.OwnedListings.Add(Id);
+	TestEqual(TEXT("Owned and allowed"), Name(StageMarketplaceRules::ResolveExportRights(Id, &Paid, Profile)), Name(EStageExportRights::Allowed));
+	TestEqual(TEXT("Another listing's package"), Name(StageMarketplaceRules::ResolveExportRights(FGuid::NewGuid(), &Paid, Profile)), Name(EStageExportRights::Mismatch));
+	TestEqual(TEXT("No origin"), Name(StageMarketplaceRules::ResolveExportRights(FGuid(), &Paid, Profile)), Name(EStageExportRights::Mismatch));
+
+	FStagePackageManifest Closed = Paid;
+	Closed.bAllowExport = false;
+	TestEqual(TEXT("Owned, but the publisher said no"), Name(StageMarketplaceRules::ResolveExportRights(Id, &Closed, Profile)), Name(EStageExportRights::NotAllowedByPublisher));
+
+	FStagePlayerProfile Stranger;
+	FStagePackageManifest Free = Paid;
+	Free.Price = FStageMarketplacePrice();
+	TestEqual(TEXT("A free listing needs no ownership record"), Name(StageMarketplaceRules::ResolveExportRights(Id, &Free, Stranger)), Name(EStageExportRights::Allowed));
+	Free.bAllowExport = false;
+	TestEqual(TEXT("... but still the publisher's flag"), Name(StageMarketplaceRules::ResolveExportRights(Id, &Free, Stranger)), Name(EStageExportRights::NotAllowedByPublisher));
 	return true;
 }
 

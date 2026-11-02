@@ -10,6 +10,7 @@
 #include "IO/StageAtomicFile.h"
 #include "Marketplace/StageMarketplaceRules.h"
 #include "Marketplace/StagePackage.h"
+#include "Misc/FileHelper.h"
 #include "Misc/Paths.h"
 #include "ModularSceneBuilder.h"
 #include "Scene/StageSceneStore.h"
@@ -202,6 +203,42 @@ FText UStageMarketplaceSubsystem::GetBackendName() const
 FString UStageMarketplaceSubsystem::GetLibraryDirectory()
 {
 	return FPaths::Combine(FPaths::ProjectSavedDir(), TEXT("StageCraft"), TEXT("Marketplace"), TEXT("Library"));
+}
+
+FStageMarketplaceResultInfo UStageMarketplaceSubsystem::CheckExportRights(const FGuid& OriginListingId) const
+{
+	const UStageProfileSubsystem* Profile = GetProfile();
+	if (!Profile || !OriginListingId.IsValid())
+	{
+		return FStageMarketplaceResultInfo::Fail(EStageMarketplaceResult::NotOriginal, StageMarketplace::Describe(EStageMarketplaceResult::NotOriginal));
+	}
+
+	// The library copy is the publisher's package exactly as it was acquired; a missing or unreadable copy means no rights.
+	const FString LibraryPath = FPaths::Combine(GetLibraryDirectory(), OriginListingId.ToString(EGuidFormats::Digits) + StagePackage::FileExtension);
+	TArray<uint8> Bytes;
+	FStagePackageManifest Manifest;
+	bool bHasThumbnail = false;
+	const bool bHasManifest = IFileManager::Get().FileSize(*LibraryPath) <= StagePackage::MaxPackageBytes
+		&& FFileHelper::LoadFileToArray(Bytes, *LibraryPath, FILEREAD_Silent)
+		&& StagePackage::ReadManifest(Bytes, Manifest, bHasThumbnail) == EStageMarketplaceResult::Success;
+
+	switch (StageMarketplaceRules::ResolveExportRights(OriginListingId, bHasManifest ? &Manifest : nullptr, Profile->GetProfile()))
+	{
+	case EStageExportRights::Allowed:
+		return FStageMarketplaceResultInfo::Ok();
+	case EStageExportRights::NoLibraryCopy:
+		return FStageMarketplaceResultInfo::Fail(EStageMarketplaceResult::NotOriginal,
+			LOCTEXT("ExportNoLibrary", "This stage came from the marketplace and its listing is no longer in your library. Get the listing again to export it."));
+	case EStageExportRights::NotAllowedByPublisher:
+		return FStageMarketplaceResultInfo::Fail(EStageMarketplaceResult::NotOriginal,
+			LOCTEXT("ExportNotAllowed", "The publisher of this stage does not allow it to leave StageCraft. You can still open and use it here."));
+	case EStageExportRights::NotOwned:
+		return FStageMarketplaceResultInfo::Fail(EStageMarketplaceResult::NotOriginal,
+			LOCTEXT("ExportNotOwned", "This marketplace stage is not owned by this profile, so it cannot be exported."));
+	case EStageExportRights::Mismatch:
+	default:
+		return FStageMarketplaceResultInfo::Fail(EStageMarketplaceResult::NotOriginal, StageMarketplace::Describe(EStageMarketplaceResult::NotOriginal));
+	}
 }
 
 // --- Browsing ---
@@ -465,6 +502,7 @@ FStageMarketplaceResultInfo UStageMarketplaceSubsystem::RequestPublish(const FSt
 	Manifest.Category = Request.Category;
 	Manifest.Keywords = Request.Keywords;
 	Manifest.Price = Request.Price;
+	Manifest.bAllowExport = Request.bAllowExport;
 	Manifest.CreatedAtUtc = FDateTime::UtcNow();
 	StagePackage::NormalizeManifest(Manifest);
 	// The text and price are checked now, for immediate feedback; the counts are filled in from the scene and checked again by Write.

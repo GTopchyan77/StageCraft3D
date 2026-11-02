@@ -178,6 +178,13 @@ struct MODULARSCENEBUILDER_API FStageMarketplaceListing
 
 	UPROPERTY(BlueprintReadOnly, Category = "Marketplace")
 	bool bHasThumbnail = false;
+
+	/**
+	 * The publisher allows buyers to send this stage to 3D apps or save it as a file (ADR 0022 §11.1). For display and target
+	 * choice only: the exporter decides from the package in the user's library, never from this copy.
+	 */
+	UPROPERTY(BlueprintReadOnly, Category = "Marketplace")
+	bool bAllowsExport = false;
 };
 
 /** What to browse. Empty fields do not filter. */
@@ -267,6 +274,10 @@ struct MODULARSCENEBUILDER_API FStageMarketplacePublishRequest
 	/** Optional PNG (checked by signature and size). */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Marketplace")
 	TArray<uint8> ThumbnailPng;
+
+	/** Let buyers send the stage to 3D apps and save it as a file. Off by default; never allows republishing. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Marketplace")
+	bool bAllowExport = false;
 };
 
 namespace StageCraftTags

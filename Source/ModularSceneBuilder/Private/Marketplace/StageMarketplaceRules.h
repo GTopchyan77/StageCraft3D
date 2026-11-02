@@ -5,6 +5,7 @@
 #include "CoreMinimal.h"
 #include "Economy/StageEconomyTypes.h"
 #include "Marketplace/StageMarketplaceTypes.h"
+#include "Marketplace/StagePackage.h"
 
 /** What the economy knows when it decides on a listing purchase (Docs/ADR/0021-community-marketplace.md §5). */
 struct FStageListingPurchaseContext
@@ -17,6 +18,20 @@ struct FStageListingPurchaseContext
 	bool bPending = false;
 	/** True only for a commerce backend that is an authoritative server (UStageCommerceBackend::CanSettleRealMoney). */
 	bool bCanSettleRealMoney = false;
+};
+
+/** Whether a stage acquired from the marketplace may leave the app (Docs/ADR/0022-dcc-bridge.md §11.1). */
+enum class EStageExportRights : uint8
+{
+	Allowed,
+	/** The acquired package is not in the user's library, or cannot be read. Getting the listing again restores it. */
+	NoLibraryCopy,
+	/** The library copy belongs to another listing. */
+	Mismatch,
+	/** The publisher did not allow export. */
+	NotAllowedByPublisher,
+	/** A paid listing the profile does not own. */
+	NotOwned,
 };
 
 /**
@@ -58,4 +73,11 @@ namespace StageMarketplaceRules
 	 * with " (2)", " (3)", ... against Exists. Empty when 999 names are taken.
 	 */
 	FString MakeImportSceneName(const FString& Title, TFunctionRef<bool(const FString&)> Exists);
+
+	/**
+	 * Export rights of a stage whose origin is ListingId. Manifest is the package kept in the library when the stage was acquired,
+	 * or null when there is none (deny by default). Allowed only for that listing's own manifest, with the publisher's flag set,
+	 * and a free price or an owned listing. Like every client-side check this deters casual copying; it is not a security boundary.
+	 */
+	EStageExportRights ResolveExportRights(const FGuid& ListingId, const FStagePackageManifest* Manifest, const FStagePlayerProfile& Profile);
 }

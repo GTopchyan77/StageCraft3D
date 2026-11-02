@@ -166,6 +166,26 @@ struct MODULARSCENEBUILDER_API FStagePurchaseRequest
 	TArray<FStageCurrencyAmount> Price;
 };
 
+/**
+ * A request to buy in-app currency, handed to the commerce backend (Docs/ADR/0022-dcc-bridge.md §11.4). Carries no price: a
+ * server looks up what Amount costs itself and treats TransactionId as an idempotency key.
+ */
+USTRUCT(BlueprintType)
+struct MODULARSCENEBUILDER_API FStageTopUpRequest
+{
+	GENERATED_BODY()
+
+	UPROPERTY(BlueprintReadOnly, Category = "Economy")
+	FGuid TransactionId;
+
+	/** A child of StageCraft.Currency. */
+	UPROPERTY(BlueprintReadOnly, Category = "Economy")
+	FGameplayTag Currency;
+
+	UPROPERTY(BlueprintReadOnly, Category = "Economy")
+	int64 Amount = 0;
+};
+
 namespace StageCraftTags
 {
 	MODULARSCENEBUILDER_API UE_DECLARE_GAMEPLAY_TAG_EXTERN(Currency);

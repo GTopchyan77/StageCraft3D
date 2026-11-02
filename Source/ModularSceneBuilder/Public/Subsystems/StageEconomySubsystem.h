@@ -12,6 +12,7 @@
 DECLARE_DYNAMIC_MULTICAST_DELEGATE(FOnStageProductCatalogLoaded);
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_TwoParams(FOnStagePurchaseCompleted, class UStageProductData*, Product, FStageEconomyResultInfo, Result);
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_TwoParams(FOnStageListingPurchaseCompleted, FGuid, ListingId, FStageEconomyResultInfo, Result);
+DECLARE_DYNAMIC_MULTICAST_DELEGATE_ThreeParams(FOnStageCreditTopUpCompleted, FGameplayTag, Currency, int64, GrantedAmount, FStageEconomyResultInfo, Result);
 
 /**
  * The economy's rules and its only writer: product catalog, ownership queries, purchase
@@ -134,6 +135,30 @@ public:
 	UPROPERTY(BlueprintAssignable, Category = "StageCraft|Economy")
 	FOnStageListingPurchaseCompleted OnListingPurchaseCompleted;
 
+	// --- Currency top-ups (Docs/ADR/0022-dcc-bridge.md §11.4) ---
+
+	/** The most one top-up may add. */
+	static constexpr int64 MaxTopUpAmount = 1000000;
+
+	/** True when the commerce backend is a store that sells currency. False offline: credits cannot be bought then. */
+	UFUNCTION(BlueprintPure, Category = "StageCraft|Economy")
+	bool CanSellCredits() const;
+
+	/**
+	 * Starts buying Amount of Currency from the commerce backend. Success means accepted; completion arrives on
+	 * OnCreditTopUpCompleted. Refused as ServerRequired when the backend does not sell currency (always offline), PurchasePending
+	 * while one is in flight, IntegrityViolation for a frozen profile, InvalidRequest for an amount outside 1..MaxTopUpAmount or
+	 * one that would overflow the balance. The amount granted is re-checked and applied here, the profile's only writer.
+	 */
+	UFUNCTION(BlueprintCallable, Category = "StageCraft|Economy")
+	FStageEconomyResultInfo RequestCreditTopUp(FGameplayTag Currency, int64 Amount);
+
+	UFUNCTION(BlueprintPure, Category = "StageCraft|Economy")
+	bool IsCreditTopUpPending() const { return PendingTopUp.TransactionId.IsValid(); }
+
+	UPROPERTY(BlueprintAssignable, Category = "StageCraft|Economy")
+	FOnStageCreditTopUpCompleted OnCreditTopUpCompleted;
+
 	// --- Development only (compiled out of Shipping) ---
 
 	/** Adds currency (negative removes), bypassing the shop. For testing and for future reward systems' prototypes. */
@@ -150,6 +175,7 @@ private:
 	void HandleProductCatalogLoaded();
 	void HandlePurchaseProcessed(bool bApproved, const FText& Reason, FGuid TransactionId, TWeakObjectPtr<class UStageProductData> WeakProduct);
 	void HandleListingPurchaseProcessed(bool bApproved, const FText& Reason, FGuid TransactionId);
+	void HandleCreditTopUpProcessed(int64 GrantedAmount, const FText& Reason, FGuid TransactionId);
 
 	/** Listing checks shared by CanPurchaseListing and the re-check on settlement (against the offer snapshot). */
 	FStageEconomyResultInfo ValidateListingPurchase(const FStageMarketplaceListing* Offer, bool bIgnorePending) const;
@@ -173,6 +199,9 @@ private:
 	 * newer marketplace query that replaces the visible listings can neither lose the purchase nor change its price.
 	 */
 	TMap<FGuid, FStageMarketplaceListing> PendingListingOffers;
+
+	/** The top-up in flight; an invalid TransactionId when none. At most one at a time. */
+	FStageTopUpRequest PendingTopUp;
 
 	bool bCatalogLoaded = false;
 };

@@ -1,6 +1,6 @@
 # ADR 0022: DCC bridge — send stages to Blender, 3ds Max, Cinema 4D and Maya
 
-- **Status:** accepted. Phase D1 implemented (STATE.md #53).
+- **Status:** accepted. Phase D1 implemented (STATE.md #53). Phase D3 implemented (STATE.md #54, §11 addendum); §4 is amended by §11.1: a publisher may allow buyers to export.
 - **Related:**
   - ADR 0021: marketplace listings and `.stage` packages. This ADR adds the scene origin that keeps bought stages inside the app (§4).
   - ADR 0019 §3: the threading pattern of the DMX network receiver, reused for the bridge server (§7).
@@ -177,3 +177,135 @@ The add-ons poll their socket from a main-thread timer every 0.25–0.5 s. None 
 - New dev console commands (compiled out of Shipping): `StageCraft.Bridge.Start`, `Stop`, `Status`, `Export <scene>`, `Send <id|first> <scene>`, `Screenshot`.
 - Tests: `StageCraft.Bridge.Protocol`, `.SceneOrigin`, `.ExportRefusals`, `.ProceduralConversion`, `.Server` (real loopback sockets).
 - End to end: `Tools/DCCBridge/tests/blender_receive.py` with headless Blender.
+
+## 11. Phase D3 addendum: acquire and send (2026-11-02, STATE.md #54)
+
+Gevor's brief (2026-11-02) asked for an acquire screen with:
+- live balance and subscription checks;
+- top-up;
+- a target picker covering DCC apps, AI generators and disk;
+- API key management.
+
+His choices when asked:
+
+| Question | Choice |
+|---|---|
+| Bought stages leaving the app (§4) | **A publisher flag.** The publisher decides per listing. |
+| Scope | **D3 plus an AI tool seam.** A provider interface, secure key storage and an offline mock. No live provider (ADR 0023). |
+| Top-up and subscriptions | **A seam with a clear refusal.** Offline, the answer is always ServerRequired. |
+
+Not built, by decision or by constraint:
+- **FBX:** there is no runtime writer (§2).
+- **USD:** D2. Maya stays "needs USD".
+- **WebSocket:** rejected in §9.
+- **Checking Maya, 3ds Max or Cinema 4D licences:** StageCraft has no way to verify them. The honest signal is that the app's add-on is connected.
+
+### 11.1 The publisher's export flag (amends §4)
+
+**Package format (manifest version 2).**
+- `FStagePackageManifest::bAllowExport` is written as `"allowExport"`. It is off by default, set on the publish page ("where buyers may use it").
+- **Deny by default:** a version 1 package reads as false. A version 2 manifest without the field, or with anything other than a JSON boolean, is Corrupt. `TryGetBoolField` would accept the string "yes", so the parser checks the value type.
+- The flag reaches listings as `FStageMarketplaceListing::bAllowsExport`, for display and target choice.
+
+**Source of truth: the library package.**
+- `UStageMarketplaceSubsystem::CheckExportRights(OriginListingId)` reads `Library/<id>.stage`. That is the publisher's bytes exactly as they were acquired.
+- It then applies `StageMarketplaceRules::ResolveExportRights`. The result is allowed only when all of these hold:
+  - the manifest is present and readable;
+  - it is that listing's manifest;
+  - the flag is set;
+  - the listing is free, or the profile owns it.
+- `FStageSceneExporter::ExportSavedScene` asks for these rights instead of refusing every stage with an origin. File export and send both pass through it.
+- The scene file still carries only `OriginListingId`, so the scene format is unchanged.
+
+**Republishing a bought stage is still refused, whatever the flag.** Export rights are not resale rights.
+
+**Limits:**
+- Losing the library copy now loses the export rights (NoLibraryCopy). Getting the listing again restores them.
+- A hand-edited library package can flip the flag. Like every client-side check, this deters casual copying and is not a security boundary (Rules.md §66).
+
+### 11.2 Orders: `UStageAcquireDispatchSubsystem`
+
+An order is "get this listing, then send it there".
+
+**Types:** `FStageAcquireOrder` holds the listing, `ExpectedCredits` and an `FStageDispatchTarget`. Target kinds: OpenInStageCraft, SaveFile, BridgeApp, AITool.
+
+**Lifetime:** a GameInstance subsystem owns the order, so it outlives the dialog and the panel. There is one order at a time.
+
+**Flow:**
+1. `RequestOrder` checks, in order:
+   - Busy;
+   - the listing is in the current results (NotFound);
+   - its price equals the confirmed one (PriceChanged);
+   - a SaveFile target has an absolute .glb path;
+   - the target is available.
+2. It calls `UStageMarketplaceSubsystem::RequestAcquire`. The economy's validate → settle → re-validate → commit path is unchanged.
+3. On `OnAcquireCompleted` it checks the target again, then delivers:
+   - Open: done; the panel opens the scene with its unsaved-changes confirm.
+   - SaveFile: `ExportSceneToFile`.
+   - BridgeApp: `SendSceneToApp`, finished by the app's answer.
+   - AITool: export into `Saved/StageCraft/AITools/Outbox`, then `UStageAIToolSubsystem::SubmitModel`. The outbox copy is deleted when the tool answers.
+4. It broadcasts `OnOrderProgress` and `OnOrderCompleted`.
+
+**One rule for display and enforcement:** `StageDispatchRules::EvaluateTarget` gives Available, NeedsExportRights, NotConnected, NeedsUsd, NeedsKey, KeyRejected, Busy or Unavailable. The exporter's rights check (§11.1) is the last gate.
+
+**Failed delivery:** a purchase is never rolled back because a delivery failed. The stage is in the user's scenes, and the result says both parts ("…is in your scenes, but it could not go to Blender: …").
+
+**Delegates:** the delegates of the other subsystems are bound only while an order waits for them.
+
+**Controller:** `AModularPlayerController::RequestAcquireAndDispatch`. Refusals go to `OnRequestRejected`.
+
+### 11.3 The acquire dialog
+
+`UStageAcquireDialogWidget` replaces one-click buying. Before this change, the panel's "BUY · N CREDITS" spent credits at once; only the assistant asked first.
+
+**Hosting.** A dimmed overlay layer inside the Marketplace panel holds it. `FStageWorkspaceShell::ShowDialog` does not cover floating panel windows. Removal is deferred to the next tick, because it is asked from the dialog's own callbacks.
+
+**Listing section:** the title, the byline and the publisher's export rule.
+
+**Wallet section:**
+- Balance, price and balance afterwards, live through `OnBalanceChanged`.
+- The reason buying is blocked, from the read-only `CanPurchaseListing`: shortfall, frozen profile, real money, pending.
+- The store line: backend name, whether credits can be bought, and the entitlement count. Subscriptions arrive as entitlements.
+- When credits are short: GET CREDITS (`RequestCreditTopUp`). Development builds also show DEV: ADD THE MISSING CREDITS (`RequestDevGrantCredits`, false in Shipping, collapsed there).
+
+**Targets:**
+- Open in StageCraft;
+- Save as .glb (the path is chosen when the row is picked, before buying);
+- each connected bridge app;
+- each AI tool that takes models.
+
+Rows that cannot be used stay visible with the reason, and cannot be picked. Links open Send to 3D App and Services & Keys.
+
+**Confirm button.** It names the action ("BUY FOR 120 CREDITS & OPEN", "GET & SEND TO BLENDER") and sends the price on screen as `ExpectedCredits`.
+
+**Lifetime.** Push-bound, rebuilt on the next tick, no tick. Closing never cancels an order.
+
+### 11.4 Top-up seam
+
+- **Commerce backend.** `UStageCommerceBackend::CanSellCredits` (false by default) and `ProcessCreditTopUp`, which declines by default and answers the amount granted.
+- **Economy.** `UStageEconomySubsystem::RequestCreditTopUp` checks, through the pure rule `StageTopUpRules::Validate`:
+  - profile and integrity;
+  - a concrete currency;
+  - an amount of 1..1,000,000 that cannot overflow the balance;
+  - one top-up in flight at a time;
+  - a store that sells credits, otherwise ServerRequired.
+- **On the backend's answer** it re-checks the transaction, and refuses a grant larger than the request. It applies the credits with `AdjustBalance`; the profile keeps a single writer. The outcome goes to `OnCreditTopUpCompleted`.
+- **Price.** The request carries no price. A server looks it up and treats `TransactionId` as an idempotency key.
+- **Subscriptions** are entitlement tags granted by such a server. Expiry needs a server too, so it is not modelled offline.
+
+### 11.5 Consequences
+
+- Manifest version 2. Older builds refuse version 2 packages as VersionMismatch, by the existing rule.
+- **New dev commands** (compiled out of Shipping):
+  - `StageCraft.Marketplace.PublishExportable`, `.Order`, `.Dialog`;
+  - `StageCraft.Shop.TopUp`;
+  - `StageCraft.AITools.Mock`, `.MockKey`, `.Status` (ADR 0023).
+- **New tests:**
+  - `StageCraft.Marketplace.ManifestExportFlag`, `.ExportRights`;
+  - `StageCraft.Dispatch.Rules`;
+  - `StageCraft.Economy.TopUp`;
+  - `StageCraft.Services.CredentialVault`, `.AIToolMock`.
+- **Follow-ups:**
+  - Getting an owned listing again adds another copy of the scene. Reusing the existing copy needs an origin index of the saved scenes.
+  - The order path is verified end to end, not by an automated test with a live marketplace.
+  - D2 (USD, Maya), D4 and D5 as in §8.

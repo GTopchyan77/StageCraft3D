@@ -59,6 +59,12 @@ public class ModularSceneBuilder : ModuleRules
 			}
 		}
 
+		// The credential vault encrypts third-party API keys per Windows user with DPAPI (CryptProtectData; ADR 0023 §2).
+		if (Target.Platform == UnrealTargetPlatform.Win64)
+		{
+			PublicSystemLibraries.Add("crypt32.lib");
+		}
+
 		// The DMX Engine plugin is deliberately not a dependency: StageCraft reads Art-Net and sACN itself (ADR 0019 section 3).
 
 		// Uncomment if you are using online features

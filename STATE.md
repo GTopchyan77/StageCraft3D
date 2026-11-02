@@ -5034,7 +5034,7 @@ The plan was approved in plan mode.
   - The Save dialog by hand.
   - Status: **implemented, awaiting manual verification.**
 
-**Commit:** uncommitted (working tree).
+**Commit:** `008e854`.
 
 **Known issues / follow-ups**
 - Materials export through the exporter's runtime path (no baking): complex StageCraft materials may arrive as simple colours. Fixture lights are not exported.
@@ -5043,3 +5043,134 @@ The plan was approved in plan mode.
 - Cinema 4D plug-in IDs are from Maxon's development range; register real IDs before distributing.
 - The export runs on the game thread; measured at 0.54 s for 15 items. Larger stages need measuring (D2).
 - D2–D5 as listed in ADR 0022 §8.
+
+## #54 — Acquire & Send (Phase D3): acquire dialog, publisher export flag, credit top-up seam, AI tools and API key vault (2026-11-02)
+
+**Status: implemented, awaiting manual verification** (all six milestones are done; Claude verified it end to end in a scripted run).
+
+**Request (Gevor, 2026-11-02, pasted):** an "Acquire & Universal Integration Modal" brief:
+- live balance and subscription checks;
+- top-up;
+- a target picker: DCC apps over the bridge, AI generators, disk;
+- API key and subscription management.
+
+Gevor's choices when asked:
+- **Export rule:** a publisher "allow export" flag. This amends ADR 0022 §4.
+- **Scope:** D3 plus an AI tool seam (an interface, secure key storage and an offline mock; no live provider).
+- **Top-up:** a seam with a clear ServerRequired refusal.
+- **Provider:** the interface only.
+
+Plan approved in plan mode.
+
+**Design:** Docs/ADR/0022-dcc-bridge.md §11 (new addendum; it amends §4) and Docs/ADR/0023-ai-tool-providers-and-credential-vault.md (new). The ADR 0021 status note is updated.
+
+**What & why**
+1. **Manifest v2 and export rights.**
+   - `allowExport` was added to the manifest, the listing and the publish request.
+   - A v1 package reads as false. In v2 the flag must be a JSON boolean; anything else is Corrupt.
+   - New rule `StageMarketplaceRules::ResolveExportRights` and `UStageMarketplaceSubsystem::CheckExportRights`. Rights are decided from the library package kept at acquire time.
+   - `FStageSceneExporter` now asks for these rights instead of refusing every marketplace stage.
+   - Republishing a bought stage is still refused.
+2. **Credential vault and AI tools.**
+   - `FStageCredentialVault`: Windows DPAPI per user, with the id as entropy. Files live in `%LOCALAPPDATA%\StageCraft\Credentials\<id>.key`. Other platforms are Unavailable.
+   - `UStageAIToolProvider` (abstract), `UStageAIToolSubsystem` (config `ProviderClasses`, empty by default; one operation at a time) and `UStageMockAIToolProvider`.
+   - Dev commands `StageCraft.AITools.Mock`, `.MockKey` and `.Status`.
+   - `crypt32.lib` is linked on Win64.
+3. **Top-up seam.**
+   - `UStageCommerceBackend::CanSellCredits` and `ProcessCreditTopUp`, which declines by default.
+   - `UStageEconomySubsystem::RequestCreditTopUp`, `OnCreditTopUpCompleted` and the pure `StageTopUpRules::Validate`.
+   - Offline the answer is always ServerRequired.
+4. **Dispatcher.**
+   - `UStageAcquireDispatchSubsystem` runs an order: price check → target check → acquire → re-check → deliver to Open, a .glb file, a bridge app or an AI tool.
+   - `StageDispatchRules::EvaluateTarget` is the one rule used for display and enforcement.
+   - Controller requests: `RequestAcquireAndDispatch`, `RequestCreditTopUp`, `RequestStore/Remove/VerifyProviderKey`, and `RequestDevGrantCredits` (development builds only).
+
+5. **UI.**
+   - **Acquire dialog** (`UStageAcquireDialogWidget`), shown over the Marketplace panel in a dimmed overlay layer, because the workspace dialog layer does not cover floating windows.
+     - It replaces one-click buying: before this, "BUY · N CREDITS" spent credits at once.
+     - Listing section: the listing and the publisher's export rule.
+     - Wallet section: balance, price and balance afterwards, and why buying is blocked (shortfall, frozen profile, real money). The store line says whether credits can be bought and how many entitlements the profile has.
+     - When credits are short: GET CREDITS. Development builds also have DEV: ADD THE MISSING CREDITS.
+     - Targets: Open in StageCraft; Save as .glb (the path is picked before buying); each connected app; each AI tool. Each row gives the reason it cannot be used.
+     - The confirm button names the action and the price.
+     - Esc or CLOSE never cancels an order. The dialog is removed on the next tick.
+   - **Publish page:** "KEEP IN STAGECRAFT" or "ALLOW 3D APPS & FILES", off by default.
+   - **Detail column:** an "EXPORT ALLOWED" or "STAYS IN STAGECRAFT" badge.
+   - **After an order:** Open goes through the panel's existing unsaved-changes confirm.
+   - **Services & Keys panel** (`UStageServicesWidget`; Window › Services & Keys…; `StageCraft.Panel.Services`; `DA_Panel_Services`).
+     - One row per AI tool: password field, SAVE, CHECK, REMOVE, key state. The field is cleared on save and when the panel closes.
+     - 3D apps: the bridge state and connected apps, with a note that app licences are the apps' own business.
+6. **Dev commands** (compiled out of Shipping): `StageCraft.Marketplace.PublishExportable`, `.Order`, `.Dialog`, and `StageCraft.Shop.TopUp`.
+
+**Not built, by decision or constraint:**
+- FBX (no runtime writer).
+- USD and Maya (D2).
+- WebSocket (ADR 0022 §9).
+- Real-money top-up and subscriptions (they need a server backend).
+- DCC licence checks (no way to verify them; the signal is a connected add-on).
+- A live AI provider (D5).
+
+**Files changed**
+- New:
+  - `Public/Marketplace/StageDispatchTypes.h`, `Public/Marketplace/StageAcquireDispatchSubsystem.h`
+  - `Private/Marketplace/StageAcquireDispatchSubsystem.cpp`, `StageDispatchRules.h/.cpp`, `Tests/StageDispatchTests.cpp`
+  - `Public/Services/StageAIToolTypes.h`, `StageAIToolProvider.h`, `StageAIToolSubsystem.h`
+  - `Private/Services/StageCredentialVault.h/.cpp`, `StageMockAIToolProvider.h/.cpp`, `StageAIToolSubsystem.cpp`, `StageAIToolConsoleCommands.cpp`, `Tests/StageServicesTests.cpp`
+  - `Private/Economy/StageTopUpRules.h/.cpp`, `Private/Economy/Tests/StageTopUpTests.cpp`
+  - `Public/UI/StageAcquireDialogWidget.h`, `Private/UI/StageAcquireDialogWidget.cpp`, `Public/UI/StageServicesWidget.h`, `Private/UI/StageServicesWidget.cpp`
+  - `Content/StageCraft/UI/Panels/DA_Panel_Services.uasset` (made by the new `Scripts/Content/create_services_content.py`)
+  - `Docs/ADR/0023-ai-tool-providers-and-credential-vault.md`
+- Changed:
+  - `ModularSceneBuilder.Build.cs` (crypt32 on Win64)
+  - `Private/Marketplace/StagePackage.h/.cpp` (manifest v2)
+  - `StageMarketplaceRules.h/.cpp` (ResolveExportRights)
+  - `StageMarketplaceSubsystem.h/.cpp` (CheckExportRights, publish flag)
+  - `StageMarketplaceTypes.h` (bAllowsExport, bAllowExport)
+  - `StageMarketplaceConsoleCommands.cpp`, `Tests/StageMarketplaceTests.cpp`
+  - `Private/Bridge/StageSceneExporter.cpp` (asks for rights), `Bridge/Tests/StageBridgeTests.cpp` (comment)
+  - `Public/Economy/StageCommerceBackend.h`, `Private/Economy/StageCommerceBackend.cpp`, `Public/Economy/StageEconomyTypes.h` (FStageTopUpRequest)
+  - `Public/Subsystems/StageEconomySubsystem.h`, `Private/Subsystems/StageEconomySubsystem.cpp`, `Private/Economy/StageEconomyConsoleCommands.cpp`
+  - `Public/Player/ModularPlayerController.h`, `Private/Player/ModularPlayerController.cpp` (six requests)
+  - `Public/UI/StageMarketplaceWidget.h`, `Private/UI/StageMarketplaceWidget.cpp`
+  - `Public/Workspace/StageWorkspaceTypes.h`, `Private/Workspace/StageWorkspaceTypes.cpp` (Panel_Services)
+  - `StageWorkspaceShell.cpp` (window size), `SStageWorkspaceMenuBar.cpp` (Window menu entry)
+  - `Docs/ADR/0021-community-marketplace.md`, `Docs/ADR/0022-dcc-bridge.md`, `tasks/todo.md` (Phase 30)
+- STATE.md #53's commit hash (`008e854`) was missing and is now recorded.
+
+**Verification**
+- **Builds:** Editor, Game and Shipping (`-DisableAdaptiveUnity`) all succeeded with 0 warnings.
+- **Shipping binary:** it contains none of these strings (UTF-16 scan): `StageCraft.AITools.Mock`, `StageCraft.Marketplace.Order`, `StageCraft.Shop.TopUp`, "DEV: ADD THE MISSING". It does contain "GET CREDITS", as it should.
+  - The first scan found the dev-grant button's text in Shipping. The button is now not built in Shipping at all; rebuilt and rescanned.
+- **Automation:** 141/141 pass (135 before plus 6 new):
+  - `StageCraft.Marketplace.ManifestExportFlag`, `.ExportRights`
+  - `StageCraft.Dispatch.Rules`
+  - `StageCraft.Economy.TopUp`
+  - `StageCraft.Services.CredentialVault`, `.AIToolMock`
+  - The suite left the profile save and GameUserSettings.ini byte-identical.
+  - The new tests found one bug: `TryGetBoolField` accepted "yes" as a boolean. The parser now requires a JSON boolean.
+- **Scripted Standalone `-game` run by Claude with a real headless Blender 5.2.2** (R54; harness `RunAcquireCheck.ps1` in the session scratchpad):
+  - Publishing: R37 Test at 120 credits (kept inside), R38 Cues at 150 (exportable), R27 A at 999,999 (exportable).
+  - Blender: a wrong token got `bye`; the real token connected as client 2 ("Blender 5.2.2").
+  - Shortfall dialog for R27 A: "994,999 more credits are needed", confirm disabled. Screenshot `Saved/Screenshots/Marketplace_103052.png`.
+  - `Shop.TopUp 1000`: ServerRequired, "Buying credits needs the StageCraft online store…".
+  - R37 dialog: the three export rows are disabled with "The publisher keeps this stage inside StageCraft"; "BUY FOR 120 CREDITS & OPEN" is enabled (`Marketplace_103058.png`).
+  - Order R37 → glb: refused (TargetUnavailable). Order R37 → open: bought (5000 → 4880), "R37 Test (2)" imported. `Bridge.Export "R37 Test (2)"` → NotOriginal with the publisher message.
+  - Order R38 → glb: bought (4880 → 4730), exported to `R38.glb` (66,428 bytes).
+  - Order R38 → mock tool with no key: refused (NeedsKey). After `MockKey`, the order succeeded and the tool received the model; the outbox copy was deleted.
+  - R38 dialog (owned): all targets available, including Blender 5.2.2 and the Local test tool; "GET & OPEN" (`Marketplace_103119.png`).
+  - Order R38 → Blender: sent, imported and acked ("Blender imported "R38 Cues (4)" (6 items)"; 8 meshes, 3,136 triangles, in collection "StageCraft - R38 Cues (4)"). All 12 Blender checks passed.
+  - Cleanup removed only the four scenes the run created, the Marketplace folder and the mock key, and emptied the mock folder. The profile was restored (same hash), along with the workspace session and GameUserSettings.ini.
+- **Not verified:**
+  - Clicking through the dialog and the Services panel by hand.
+  - The Windows Save dialog from the .glb row.
+  - Esc to close.
+  - Status: **implemented, awaiting manual verification.**
+
+**Commit:** uncommitted (working tree).
+
+**Known issues / follow-ups**
+- Getting an owned listing again imports another copy of the scene. Reusing the existing copy needs an origin index of the saved scenes.
+- The order path is verified end to end and by the pure-rule tests, but not by an automated test with a live marketplace.
+- `UStageMockAIToolProvider` ships in Shipping as unreachable code: UHT cannot compile a UCLASS out, and registration is a no-op in Shipping.
+- Losing the library copy of a package loses its export rights; getting the listing again restores them.
+- D2 (USD, Maya), D4 (bilingual search), D5 (a live AI provider, and moving the assistant's keys into the vault).

@@ -254,7 +254,8 @@ bool FStageBridgeExportRefusalTest::RunTest(const FString& Parameters)
 	// No library or profile is needed to refuse: refusals come before anything is spawned.
 	UGameInstance* GameInstance = NewObject<UGameInstance>(GetTransientPackage());
 	const FString Path = FPaths::ConvertRelativePathToFull(FPaths::Combine(Directory, TEXT("out.glb")));
-	TestEqual(TEXT("A bought stage is refused"), Str(FStageSceneExporter::ExportSavedScene(*GameInstance, Store, Bought.Name, Path).Code), Str(EStageBridgeResult::NotOriginal));
+	// The bare game instance has no marketplace to grant export rights (ADR 0022 §11.1): deny by default.
+	TestEqual(TEXT("A bought stage without export rights is refused"),Str(FStageSceneExporter::ExportSavedScene(*GameInstance, Store, Bought.Name, Path).Code), Str(EStageBridgeResult::NotOriginal));
 	TestEqual(TEXT("A missing scene"), Str(FStageSceneExporter::ExportSavedScene(*GameInstance, Store, TEXT("Nope"), Path).Code), Str(EStageBridgeResult::NotFound));
 	TestEqual(TEXT("A bad scene name"), Str(FStageSceneExporter::ExportSavedScene(*GameInstance, Store, TEXT("../x"), Path).Code), Str(EStageBridgeResult::InvalidRequest));
 	TestEqual(TEXT("A relative target"), Str(FStageSceneExporter::ExportSavedScene(*GameInstance, Store, Bought.Name, TEXT("out.glb")).Code), Str(EStageBridgeResult::InvalidRequest));

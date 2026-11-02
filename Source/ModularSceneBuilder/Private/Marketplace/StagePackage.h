@@ -26,6 +26,11 @@ struct FStagePackageManifest
 	int32 CueCount = 0;
 	/** Distinct catalog paths the scene uses, sorted. Recomputed from the scene on a full read, never trusted. */
 	TArray<FString> RequiredItems;
+	/**
+	 * The publisher's choice: buyers may send this stage to 3D apps and save it as a file (Docs/ADR/0022-dcc-bridge.md §11.1).
+	 * Manifest version 2; a version 1 package reads as false. Never permits republishing.
+	 */
+	bool bAllowExport = false;
 };
 
 /** A complete package in memory: manifest, scene, optional thumbnail. Plain value type, safe on any thread. */
@@ -52,7 +57,9 @@ namespace StagePackage
 	inline constexpr TCHAR FileExtension[] = TEXT(".stage");
 
 	inline constexpr uint32 ContainerVersion = 1;
-	inline constexpr int32 ManifestVersion = 1;
+	/** 2 added allowExport (ADR 0022 §11.1). Older manifests are still read. */
+	inline constexpr int32 ManifestVersion = 2;
+	inline constexpr int32 FirstManifestVersionWithExportFlag = 2;
 	inline constexpr int32 MaxSections = 8;
 	inline constexpr int64 MaxManifestBytes = 256 * 1024;
 	inline constexpr int64 MaxSceneBytes = 64ll * 1024 * 1024;

@@ -24,4 +24,5 @@ namespace StageCraftTags
 	UE_DEFINE_GAMEPLAY_TAG_COMMENT(Panel_Assistant,	"StageCraft.Panel.Assistant",	"AI Assistant: ask about the stage and request safe, undoable changes in plain language.");
 	UE_DEFINE_GAMEPLAY_TAG_COMMENT(Panel_Marketplace,	"StageCraft.Panel.Marketplace",	"Community Marketplace: browse, preview in 3D, get and publish stages (ADR 0021).");
 	UE_DEFINE_GAMEPLAY_TAG_COMMENT(Panel_SendTo,		"StageCraft.Panel.SendTo",		"Send to 3D App: send saved stages to Blender, 3ds Max or Cinema 4D, or save them as .glb (ADR 0022).");
+	UE_DEFINE_GAMEPLAY_TAG_COMMENT(Panel_Services,	"StageCraft.Panel.Services",	"Services & Keys: API keys of AI tools (encrypted per user) and the 3D apps connected over the bridge (ADR 0023).");
 }

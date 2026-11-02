@@ -112,6 +112,13 @@ public:
 	/** Where copies of acquired packages are kept (Saved/StageCraft/Marketplace/Library). */
 	static FString GetLibraryDirectory();
 
+	/**
+	 * May a stage acquired as OriginListingId leave the app (export, send to a 3D app)? Decided from the package kept in the
+	 * library when it was acquired: the publisher's allowExport flag and, for a paid listing, ownership (ADR 0022 §11.1).
+	 * Ok, or NotOriginal with the reason. Reads the library file synchronously on the game thread; call it once per export.
+	 */
+	FStageMarketplaceResultInfo CheckExportRights(const FGuid& OriginListingId) const;
+
 	UPROPERTY(BlueprintAssignable, Category = "StageCraft|Marketplace")
 	FOnStageMarketplaceListingsUpdated OnListingsUpdated;
 

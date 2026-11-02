@@ -509,6 +509,18 @@ Gevor's brief had four parts: buy-and-send screen, DCC bridge, AI 3D generation,
 - [ ] Manual verification (Gevor): the panel, Save as .glb, the Blender add-on in a normal Blender session
 - [ ] Manual verification (Gevor or a tester with the apps): Cinema 4D, 3ds Max, Maya add-ons
 - [ ] D2: USD (.usda) writer + Maya import; export off the game thread for large scenes
-- [ ] D3: buy-and-send screen (credits, confirmation, target picker)
+- [x] D3: buy-and-send screen (credits, confirmation, target picker) — Phase 30, STATE.md #54
 - [ ] D4: bilingual search provider seam, offline synonym/tag expansion first
 - [ ] D5: AI generation provider seam + mesh post-processing (needs a provider choice and key)
+
+## Phase 30 — Acquire & Send (D3) and the AI tool seam (requested by Gevor 2026-11-02; STATE.md #54, ADR 0022 §11, ADR 0023)
+Gevor's choices: a publisher "allow export" flag (amends ADR 0022 §4); D3 plus an AI tool seam (interface, key vault, offline mock); top-up as a seam with a ServerRequired refusal; no live AI provider yet.
+- [x] Manifest v2 `allowExport`; export rights from the library package; exporter asks instead of refusing; republish still refused
+- [x] Credential vault (DPAPI per user), UStageAIToolProvider / UStageAIToolSubsystem / mock provider, dev commands
+- [x] Top-up seam: commerce backend CanSellCredits / ProcessCreditTopUp, economy RequestCreditTopUp + StageTopUpRules
+- [x] UStageAcquireDispatchSubsystem + StageDispatchRules; controller requests
+- [x] Acquire dialog over the Marketplace panel (no more one-click buying); publish-page export choice; Services & Keys panel (Window menu)
+- [x] Tests 141/141; scripted run with Blender 5.2.2 (R54); Editor/Game/Shipping builds
+- [ ] Manual verification (Gevor): the acquire dialog (all rows, GET CREDITS, Esc), the publish choice, Services & Keys key entry
+- [ ] Follow-up: getting an owned listing again should reuse the existing scene copy (needs an origin index of saved scenes)
+- [ ] Follow-up: a live AI provider (D5); move the assistant's keys into the vault

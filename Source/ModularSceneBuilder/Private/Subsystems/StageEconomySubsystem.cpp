@@ -6,6 +6,7 @@
 #include "Data/BaseItemData.h"
 #include "Economy/StageCommerceBackend.h"
 #include "Economy/StageProductData.h"
+#include "Economy/StageTopUpRules.h"
 #include "Economy/StageUnlockCondition.h"
 #include "Engine/AssetManager.h"
 #include "Engine/GameInstance.h"
@@ -74,8 +75,10 @@ void UStageEconomySubsystem::Deinitialize()
 	OnProductCatalogLoaded.Clear();
 	OnPurchaseCompleted.Clear();
 	OnListingPurchaseCompleted.Clear();
+	OnCreditTopUpCompleted.Clear();
 	PendingPurchases.Reset();
 	PendingListingOffers.Reset();
+	PendingTopUp = FStageTopUpRequest();
 	Products.Reset();
 	Backend = nullptr;
 	bCatalogLoaded = false;
@@ -492,6 +495,80 @@ void UStageEconomySubsystem::HandleListingPurchaseProcessed(bool bApproved, cons
 	UE_LOG(LogStageCraft, Log, TEXT("Purchase %s of listing %s: %s %s"), *TransactionId.ToString(), *Offer.ListingId.ToString(),
 		Result.IsSuccess() ? TEXT("completed") : TEXT("failed"), *Result.Message.ToString());
 	OnListingPurchaseCompleted.Broadcast(Offer.ListingId, Result);
+}
+
+bool UStageEconomySubsystem::CanSellCredits() const
+{
+	return Backend && Backend->CanSellCredits();
+}
+
+FStageEconomyResultInfo UStageEconomySubsystem::RequestCreditTopUp(FGameplayTag Currency, int64 Amount)
+{
+	const UStageProfileSubsystem* Profile = GetProfile();
+	FStageTopUpContext Context;
+	Context.Profile = Profile && Backend ? &Profile->GetProfile() : nullptr;
+	Context.bIntegrityValid = Profile && Profile->IsIntegrityValid();
+	Context.bPending = IsCreditTopUpPending();
+	Context.bCanSellCredits = CanSellCredits();
+	Context.Currency = Currency;
+	Context.Amount = Amount;
+	Context.MaxAmount = MaxTopUpAmount;
+	const FStageEconomyResultInfo Validation = StageTopUpRules::Validate(Context);
+	if (!Validation.IsSuccess())
+	{
+		UE_LOG(LogStageCraft, Log, TEXT("Top-up of %lld %s refused: %s"), Amount, *Currency.ToString(), *Validation.Message.ToString());
+		return Validation;
+	}
+
+	PendingTopUp.TransactionId = FGuid::NewGuid();
+	PendingTopUp.Currency = Currency;
+	PendingTopUp.Amount = Amount;
+	UE_LOG(LogStageCraft, Log, TEXT("Top-up %s of %lld %s sent to %s."), *PendingTopUp.TransactionId.ToString(), Amount, *Currency.ToString(), *GetNameSafe(Backend));
+	Backend->ProcessCreditTopUp(PendingTopUp, FOnStageTopUpProcessed::CreateUObject(this, &ThisClass::HandleCreditTopUpProcessed, PendingTopUp.TransactionId));
+	return FStageEconomyResultInfo::Ok();
+}
+
+void UStageEconomySubsystem::HandleCreditTopUpProcessed(int64 GrantedAmount, const FText& Reason, FGuid TransactionId)
+{
+	if (!PendingTopUp.TransactionId.IsValid() || PendingTopUp.TransactionId != TransactionId)
+	{
+		UE_LOG(LogStageCraft, Warning, TEXT("Ignoring backend answer for unknown top-up %s."), *TransactionId.ToString());
+		return;
+	}
+	const FStageTopUpRequest Request = PendingTopUp;
+	PendingTopUp = FStageTopUpRequest();
+
+	FStageEconomyResultInfo Result = FStageEconomyResultInfo::Ok();
+	int64 Applied = 0;
+	if (GrantedAmount <= 0)
+	{
+		Result = FStageEconomyResultInfo::Fail(EStageEconomyResult::BackendRejected, Reason.IsEmpty() ? LOCTEXT("TopUpDeclined", "The credit purchase was declined.") : Reason);
+	}
+	else if (GrantedAmount > Request.Amount)
+	{
+		// More than was asked for is not a valid answer to this request.
+		Result = FStageEconomyResultInfo::Fail(EStageEconomyResult::BackendRejected, LOCTEXT("TopUpMismatch", "The store's answer did not match the request."));
+	}
+	else
+	{
+		UStageProfileSubsystem* Profile = GetProfile();
+		if (!Profile || !Profile->IsIntegrityValid())
+		{
+			Result = FStageEconomyResultInfo::Fail(EStageEconomyResult::IntegrityViolation, LOCTEXT("TopUpFrozenLate", "The credits could not be added: the profile is frozen."));
+		}
+		else if (!Profile->AdjustBalance(Request.Currency, GrantedAmount))
+		{
+			Result = FStageEconomyResultInfo::Fail(EStageEconomyResult::InvalidRequest, LOCTEXT("TopUpApply", "The credits could not be added to the balance."));
+		}
+		else
+		{
+			Applied = GrantedAmount;
+		}
+	}
+
+	UE_LOG(LogStageCraft, Log, TEXT("Top-up %s: %s (%lld of %lld) %s"), *TransactionId.ToString(), Result.IsSuccess() ? TEXT("completed") : TEXT("failed"),
+		Applied, Request.Amount, *Result.Message.ToString());
+	OnCreditTopUpCompleted.Broadcast(Request.Currency, Applied, Result);
 }
 
 bool UStageEconomySubsystem::DevGrantCurrency(FGameplayTag Currency, int64 Amount)

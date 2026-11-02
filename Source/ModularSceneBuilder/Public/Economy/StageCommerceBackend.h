@@ -10,6 +10,9 @@
 /** Backend answer for one purchase. bApproved = false carries a user-facing reason. */
 DECLARE_DELEGATE_TwoParams(FOnStagePurchaseProcessed, bool /*bApproved*/, const FText& /*Reason*/);
 
+/** Backend answer for one currency top-up: the amount granted (0 = declined) and, when declined, a user-facing reason. */
+DECLARE_DELEGATE_TwoParams(FOnStageTopUpProcessed, int64 /*GrantedAmount*/, const FText& /*Reason*/);
+
 /**
  * Where a purchase is settled: the seam between the game's economy rules and whoever is
  * authoritative over money.
@@ -38,6 +41,18 @@ public:
 	 * (Economy security 7). Real-money marketplace listings are refused as ServerRequired unless this is true (ADR 0021 §5).
 	 */
 	virtual bool CanSettleRealMoney() const { return false; }
+
+	/**
+	 * True only for a server backend that sells in-app currency for real money (Economy security 7). The economy refuses top-ups
+	 * as ServerRequired otherwise, and never calls ProcessCreditTopUp (ADR 0022 §11.4).
+	 */
+	virtual bool CanSellCredits() const { return false; }
+
+	/**
+	 * Settles a currency top-up: the store charges the user and answers the amount actually granted (0 = declined, with a
+	 * reason). Must call OnProcessed exactly once, on the game thread. The default declines.
+	 */
+	virtual void ProcessCreditTopUp(const FStageTopUpRequest& Request, FOnStageTopUpProcessed OnProcessed);
 };
 
 /** Offline backend: the local profile is the authority, so every validated purchase is approved. */

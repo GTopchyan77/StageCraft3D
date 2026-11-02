@@ -5,6 +5,7 @@
 #include "CoreMinimal.h"
 #include "Blueprint/UserWidget.h"
 #include "Economy/StageEconomyTypes.h"
+#include "Marketplace/StageDispatchTypes.h"
 #include "Marketplace/StageMarketplaceSubsystem.h"
 #include "Marketplace/StageMarketplaceTypes.h"
 #include "StageMarketplaceWidget.generated.h"
@@ -16,8 +17,9 @@
  *
  * A view in the project's binding pattern:
  *  - Reads come from UStageMarketplaceSubsystem (queries, the read-only preview), the profile (credits) and the economy.
- *  - Writes go through the controller: RequestMarketplaceAcquire, RequestMarketplacePublish and RequestLoadScene (confirmed with a
- *    second click when the stage has unsaved changes). Refusals reach the status bar through OnRequestRejected; outcomes arrive
+ *  - Writes go through the controller: RequestMarketplacePublish and RequestLoadScene (confirmed with a second click when the
+ *    stage has unsaved changes). GET / BUY opens the acquire dialog (UStageAcquireDialogWidget, ADR 0022 §11.3) over the panel,
+ *    which confirms the price and the target and starts an order with RequestAcquireAndDispatch; nothing is bought in one click. Refusals reach the status bar through OnRequestRejected; outcomes arrive
  *    on the subsystem's delegates and are also shown here.
  *  - Push, never poll: bound in NativeConstruct, unbound in NativeDestruct; no tick (DisableNativeTick). The card list is rebuilt
  *    when a query answers (always a later frame than the click that asked), never inside a card's own click.
@@ -29,6 +31,10 @@ UCLASS(meta = (DisableNativeTick))
 class MODULARSCENEBUILDER_API UStageMarketplaceWidget : public UUserWidget
 {
 	GENERATED_BODY()
+
+public:
+	/** Shows the acquire dialog for ListingId (a listing of the current results) over the panel. Nothing is bought until it is confirmed. */
+	void OpenAcquireDialog(const FGuid& ListingId);
 
 protected:
 	//~ Begin UUserWidget Interface
@@ -79,6 +85,11 @@ private:
 	void HandleCardPicked(int32 Index);
 	void HandleActionPicked(int32 Index);
 
+	// --- Acquire dialog ---
+	void CloseAcquireDialog();
+	/** Opens the scene imported from ListingId on the stage; a dirty stage needs a second request (the same duty as File > Open). */
+	void OpenImportedScene(const FGuid& ListingId);
+
 	// --- Preview ---
 	void StartPreview();
 	void HandlePreviewReady(const FGuid& ListingId, const FStageMarketplaceResultInfo& Result, const FStageMarketplacePreviewScene& Scene);
@@ -89,6 +100,7 @@ private:
 	void RefreshSceneChoices();
 	void HandlePagesPicked(int32 Index);
 	void HandlePublishKindPicked(int32 Index);
+	void HandlePublishExportPicked(int32 Index);
 	void HandlePublishPicked(int32 Index);
 
 	void ShowStatus(const FText& Message, bool bWarning);
@@ -109,6 +121,8 @@ private:
 	void HandleBalanceChanged(FGameplayTag Currency, int64 NewBalance);
 	UFUNCTION()
 	void HandleOwnershipChanged();
+	UFUNCTION()
+	void HandleOrderCompleted(const FStageOrderResultInfo& Result);
 
 	class UStageMarketplaceSubsystem* GetMarketplace() const { return BoundMarketplace.Get(); }
 	class AModularPlayerController* GetStageController() const;
@@ -178,13 +192,23 @@ private:
 	TObjectPtr<class UStageThemedComboBox> PublishCategoryCombo = nullptr;
 	UPROPERTY(Transient)
 	TObjectPtr<class USpinBox> PriceField = nullptr;
+	/** Keep in StageCraft / allow 3D apps and files (the manifest's allowExport). */
+	UPROPERTY(Transient)
+	TArray<TObjectPtr<class UStageChoiceButton>> PublishExportButtons;
 	UPROPERTY(Transient)
 	TObjectPtr<class UStageChoiceButton> PublishButton = nullptr;
+
+	// Acquire dialog: a dimmed layer over the whole panel, holding the dialog while it is open.
+	UPROPERTY(Transient)
+	TObjectPtr<class UBorder> DialogLayer = nullptr;
+	UPROPERTY(Transient)
+	TObjectPtr<class UStageAcquireDialogWidget> AcquireDialog = nullptr;
 	UPROPERTY(Transient)
 	TObjectPtr<class UTextBlock> PublishStatusText = nullptr;
 
 	TWeakObjectPtr<class UStageMarketplaceSubsystem> BoundMarketplace;
 	TWeakObjectPtr<class UStageProfileSubsystem> BoundProfile;
+	TWeakObjectPtr<class UStageAcquireDispatchSubsystem> BoundDispatch;
 	FDelegateHandle PreviewReadyHandle;
 
 	/** Lives as long as this widget: the preview world is destroyed with it. Shared (not unique) because the type is private. */
@@ -202,4 +226,6 @@ private:
 	/** Set by a first OPEN click on a dirty stage; the second click on the same listing discards and opens. */
 	FGuid ConfirmOpenListing;
 	EStagePackageKind PublishKind = EStagePackageKind::StageDesign;
+	/** Off by default: a publisher opts in to letting buyers export (ADR 0022 §11.1). */
+	bool bPublishAllowExport = false;
 };

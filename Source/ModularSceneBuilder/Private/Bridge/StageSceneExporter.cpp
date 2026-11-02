@@ -11,6 +11,7 @@
 #include "Exporters/GLTFExporter.h"
 #include "HAL/FileManager.h"
 #include "Marketplace/StageMarketplacePreview.h"
+#include "Marketplace/StageMarketplaceSubsystem.h"
 #include "Materials/Material.h"
 #include "MeshDescription.h"
 #include "Misc/App.h"
@@ -244,11 +245,19 @@ FStageBridgeResultInfo FStageSceneExporter::ExportSavedScene(UGameInstance& Game
 		return FStageBridgeResultInfo::Fail(EStageBridgeResult::Unreadable, FText::Format(LOCTEXT("Unreadable", "Scene \"{0}\" could not be read."), FText::FromString(SceneName)));
 	}
 
-	// Deny by default: a bought stage stays inside StageCraft, under any name it was saved as.
+	// Deny by default: a marketplace stage, under any name it was saved as, leaves only when its publisher allowed it (ADR 0022 §11.1).
 	if (Scene.IsFromMarketplace())
 	{
-		return FStageBridgeResultInfo::Fail(EStageBridgeResult::NotOriginal,
-			FText::Format(LOCTEXT("NotOriginal", "\"{0}\" came from the Community Marketplace; only your own stages can be exported."), FText::FromString(SceneName)));
+		const UStageMarketplaceSubsystem* Marketplace = GameInstance.GetSubsystem<UStageMarketplaceSubsystem>();
+		const FStageMarketplaceResultInfo Rights = Marketplace
+			? Marketplace->CheckExportRights(Scene.OriginListingId)
+			: FStageMarketplaceResultInfo::Fail(EStageMarketplaceResult::NotOriginal, FText::GetEmpty());
+		if (!Rights.IsSuccess())
+		{
+			return FStageBridgeResultInfo::Fail(EStageBridgeResult::NotOriginal, Rights.Message.IsEmpty()
+				? FText::Format(LOCTEXT("NotOriginal", "\"{0}\" came from the Community Marketplace and cannot be exported."), FText::FromString(SceneName))
+				: Rights.Message);
+		}
 	}
 
 	const UStageItemSubsystem* Items = GameInstance.GetSubsystem<UStageItemSubsystem>();

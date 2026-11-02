@@ -9,6 +9,7 @@
 #include "Environment/StageEnvironmentTypes.h"
 #include "History/StageEditCommand.h"
 #include "Input/StageKeyBindings.h"
+#include "Marketplace/StageDispatchTypes.h"
 #include "Marketplace/StageMarketplaceTypes.h"
 #include "Placement/StagePlacementTypes.h"
 #include "Scene/StageSceneTypes.h"
@@ -431,6 +432,34 @@ public:
 	 */
 	UFUNCTION(BlueprintCallable, Category = "StageCraft|Requests")
 	bool RequestSendScene(const FString& SceneName, int32 ClientId);
+
+	/**
+	 * Gets a marketplace listing and delivers it to a target: StageCraft, a .glb file, a connected 3D app or an AI tool (Docs/ADR/
+	 * 0022-dcc-bridge.md §11.2). The order carries the price the user confirmed; it is refused if the price is different now.
+	 * Progress and the outcome arrive on UStageAcquireDispatchSubsystem; a refusal is reported on OnRequestRejected.
+	 */
+	UFUNCTION(BlueprintCallable, Category = "StageCraft|Requests")
+	bool RequestAcquireAndDispatch(const FStageAcquireOrder& Order);
+
+	/**
+	 * Asks the store for Amount credits (ADR 0022 §11.4). Offline this is always refused as ServerRequired, reported on
+	 * OnRequestRejected; with a store the outcome arrives on UStageEconomySubsystem::OnCreditTopUpCompleted.
+	 */
+	UFUNCTION(BlueprintCallable, Category = "StageCraft|Requests")
+	bool RequestCreditTopUp(int64 Amount);
+
+	/**
+	 * Saves, removes or checks an AI tool's API key (Docs/ADR/0023-ai-tool-providers-and-credential-vault.md). The key is passed
+	 * once, encrypted for this Windows user and never shown again. Refusals are reported on OnRequestRejected; a check's answer
+	 * arrives on UStageAIToolSubsystem::OnKeyVerified. Not Blueprint-callable: keys stay out of Blueprint graphs.
+	 */
+	bool RequestStoreProviderKey(FName ProviderId, const FString& ApiKey);
+	bool RequestRemoveProviderKey(FName ProviderId);
+	bool RequestVerifyProviderKey(FName ProviderId);
+
+	/** Development builds only (false in Shipping): adds Amount credits through the economy, for testing the acquire dialog. */
+	UFUNCTION(BlueprintCallable, Category = "StageCraft|Requests|Dev", meta = (DevelopmentOnly))
+	bool RequestDevGrantCredits(int64 Amount);
 
 	/**
 	 * Renders a still image of the current view with the user's render settings (Render panel, Render menu), leaving out

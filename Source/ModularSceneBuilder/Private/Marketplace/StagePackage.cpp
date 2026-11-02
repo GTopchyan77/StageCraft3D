@@ -63,6 +63,7 @@ namespace StagePackageFormat
 		const TCHAR* Fixtures = TEXT("fixtures");
 		const TCHAR* Cues = TEXT("cues");
 		const TCHAR* RequiredItems = TEXT("requiredItems");
+		const TCHAR* AllowExport = TEXT("allowExport");
 	}
 
 	struct FSectionHeader
@@ -425,6 +426,7 @@ FString StagePackage::SerializeManifest(const FStagePackageManifest& Manifest)
 	Root->SetNumberField(Field::SceneVersion, Manifest.SceneVersion);
 	Root->SetObjectField(Field::Stats, Stats);
 	Root->SetArrayField(Field::RequiredItems, ToJsonStrings(Manifest.RequiredItems));
+	Root->SetBoolField(Field::AllowExport, Manifest.bAllowExport);
 
 	FString Json;
 	const TSharedRef<TJsonWriter<TCHAR, TCondensedJsonPrintPolicy<TCHAR>>> Writer = TJsonWriterFactory<TCHAR, TCondensedJsonPrintPolicy<TCHAR>>::Create(&Json);
@@ -515,6 +517,18 @@ EStageMarketplaceResult StagePackage::ParseManifest(const FString& Json, FStageP
 		FDateTime::ParseIso8601(*CreatedAt, OutManifest.CreatedAtUtc);
 	}
 	Root->TryGetNumberField(Field::SceneVersion, OutManifest.SceneVersion);
+
+	// Deny by default: a version 1 manifest predates the flag, and a version 2 manifest must state it as a JSON boolean.
+	// (TryGetBoolField also accepts strings such as "yes", which is not what a publisher's choice may look like.)
+	if (Version >= FirstManifestVersionWithExportFlag)
+	{
+		const TSharedPtr<FJsonValue> AllowExport = Root->TryGetField(Field::AllowExport);
+		if (!AllowExport.IsValid() || AllowExport->Type != EJson::Boolean)
+		{
+			return EStageMarketplaceResult::Corrupt;
+		}
+		OutManifest.bAllowExport = AllowExport->AsBool();
+	}
 
 	NormalizeManifest(OutManifest);
 	return ValidateManifest(OutManifest) == EStageMarketplaceResult::Success ? EStageMarketplaceResult::Success : EStageMarketplaceResult::Corrupt;
@@ -717,5 +731,6 @@ FStageMarketplaceListing StagePackage::ToListing(const FStagePackageManifest& Ma
 	Listing.CueCount = Manifest.CueCount;
 	Listing.PackageBytes = PackageBytes;
 	Listing.bHasThumbnail = bHasThumbnail;
+	Listing.bAllowsExport = Manifest.bAllowExport;
 	return Listing;
 }
