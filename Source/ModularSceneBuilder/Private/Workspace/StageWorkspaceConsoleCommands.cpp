@@ -162,19 +162,14 @@ namespace StageWorkspaceCommands
 		UE_LOG(LogStageWorkspace, Display, TEXT("Screenshot requested (next frame, Saved/Screenshots)."));
 	}
 
-	/**
-	 * The main window exactly as Slate draws it, overlays and dialogs included (the startup loader, the welcome screen), to
-	 * Saved/Screenshots/Window_<time>.png. Screenshot captures through the game viewport, which a dialog over the workspace hides.
-	 */
-	void ScreenshotWindow(const TArray<FString>& Args, UWorld* World)
+	/** Saves one Slate window as Slate draws it to Saved/Screenshots/<Name>_<time>.png. */
+	void SaveWindowShot(const TSharedRef<SWindow>& Window, const FString& Name)
 	{
-		const UGameEngine* GameEngine = Cast<UGameEngine>(GEngine);
-		const TSharedPtr<SWindow> Window = GameEngine ? GameEngine->GameViewportWindow.Pin() : nullptr;
 		TArray<FColor> Pixels;
 		FIntVector Size(0, 0, 0);
-		if (!Window.IsValid() || !FSlateApplication::Get().TakeScreenshot(Window.ToSharedRef(), Pixels, Size) || Pixels.IsEmpty())
+		if (!FSlateApplication::Get().TakeScreenshot(Window, Pixels, Size) || Pixels.IsEmpty())
 		{
-			UE_LOG(LogStageWorkspace, Display, TEXT("ScreenshotWindow: capture failed."));
+			UE_LOG(LogStageWorkspace, Display, TEXT("ScreenshotWindow: capture of %s failed."), *Name);
 			return;
 		}
 		for (FColor& Pixel : Pixels)
@@ -183,8 +178,36 @@ namespace StageWorkspaceCommands
 		}
 		TArray64<uint8> Png;
 		FImageUtils::PNGCompressImageArray(Size.X, Size.Y, Pixels, Png);
-		const FString File = FPaths::ProjectSavedDir() / TEXT("Screenshots") / FString::Printf(TEXT("Window_%s.png"), *FDateTime::Now().ToString(TEXT("%H%M%S")));
+		const FString File = FPaths::ProjectSavedDir() / TEXT("Screenshots") / FString::Printf(TEXT("%s_%s.png"), *Name, *FDateTime::Now().ToString(TEXT("%H%M%S")));
 		UE_LOG(LogStageWorkspace, Display, TEXT("ScreenshotWindow: %dx%d %s %s."), Size.X, Size.Y, FFileHelper::SaveArrayToFile(Png, *File) ? TEXT("saved") : TEXT("NOT saved"), *File);
+	}
+
+	/**
+	 * The main window exactly as Slate draws it, overlays and dialogs included (the startup loader, the welcome screen), to
+	 * Saved/Screenshots/Window_<time>.png. Screenshot captures through the game viewport, which a dialog over the workspace hides.
+	 * "All" also saves every visible floating panel window (Window_<time>.png, Floating1_<time>.png, ...).
+	 */
+	void ScreenshotWindow(const TArray<FString>& Args, UWorld* World)
+	{
+		const UGameEngine* GameEngine = Cast<UGameEngine>(GEngine);
+		const TSharedPtr<SWindow> Window = GameEngine ? GameEngine->GameViewportWindow.Pin() : nullptr;
+		if (!Window.IsValid())
+		{
+			UE_LOG(LogStageWorkspace, Display, TEXT("ScreenshotWindow: capture failed."));
+			return;
+		}
+		SaveWindowShot(Window.ToSharedRef(), TEXT("Window"));
+		if (Args.Contains(TEXT("All")))
+		{
+			int32 Floating = 0;
+			for (const TSharedRef<SWindow>& Child : Window->GetChildWindows())
+			{
+				if (Child->IsVisible())
+				{
+					SaveWindowShot(Child, FString::Printf(TEXT("Floating%d"), ++Floating));
+				}
+			}
+		}
 	}
 
 	/** Logs the widget tree of the first live user widget whose class name contains the argument: names, classes and slot types, for layout debugging. */
@@ -494,7 +517,7 @@ namespace StageWorkspaceCommands
 		FConsoleCommandWithWorldAndArgsDelegate::CreateStatic(&Reset));
 	FAutoConsoleCommandWithWorldAndArgs ScreenshotCommand(TEXT("StageCraft.Workspace.Screenshot"), TEXT("Saves the main window, with all panels, to Saved/Screenshots."),
 		FConsoleCommandWithWorldAndArgsDelegate::CreateStatic(&Screenshot));
-	FAutoConsoleCommandWithWorldAndArgs ScreenshotWindowCommand(TEXT("StageCraft.Workspace.ScreenshotWindow"), TEXT("Saves the main window as Slate draws it, dialogs and overlays included, to Saved/Screenshots."),
+	FAutoConsoleCommandWithWorldAndArgs ScreenshotWindowCommand(TEXT("StageCraft.Workspace.ScreenshotWindow"), TEXT("[All] Saves the main window as Slate draws it, dialogs and overlays included (All: and every floating panel window), to Saved/Screenshots."),
 		FConsoleCommandWithWorldAndArgsDelegate::CreateStatic(&ScreenshotWindow));
 	FAutoConsoleCommandWithWorldAndArgs DumpWidgetCommand(TEXT("StageCraft.Workspace.DumpWidget"), TEXT("<ClassNamePart> Logs a live widget's tree (names, classes, slot types)."),
 		FConsoleCommandWithWorldAndArgsDelegate::CreateStatic(&DumpWidget));

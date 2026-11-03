@@ -82,6 +82,12 @@ namespace StageKeyBindings
 				// Appended (STATE.md #57); listed under EDITING. Both work wherever the keyboard focus is, except in a text field.
 				Make(C::Save, G::Editing, LOCTEXT("Save", "Save Stage"), LOCTEXT("SaveTip", "Save the stage under its name; a stage that was never saved asks for one."), Ctrl(EKeys::S)),
 				Make(C::Duplicate, G::Editing, LOCTEXT("Duplicate", "Duplicate Selection"), LOCTEXT("DuplicateTip", "Copy the selected items one grid step to the side, as one step to undo."), Ctrl(EKeys::D)),
+
+				// Appended (STATE.md #59, ADR 0025); listed under SHOW. They work wherever the keyboard focus is, except in a text field.
+				Make(C::CueGo, G::Show, LOCTEXT("CueGo", "Go"), LOCTEXT("CueGoTip", "Play the next cue."), Ctrl(EKeys::Enter)),
+				Make(C::CueBack, G::Show, LOCTEXT("CueBack", "Back"), LOCTEXT("CueBackTip", "Play the previous cue."), Ctrl(EKeys::BackSpace)),
+				Make(C::ClearProgrammer, G::Show, LOCTEXT("ClearProgrammer", "Clear Programmer"), LOCTEXT("ClearProgrammerTip", "Release every value set by hand: fixtures go back to the playing cue and their home look."), CtrlShift(EKeys::C)),
+				Make(C::Highlight, G::Show, LOCTEXT("Highlight", "Highlight"), LOCTEXT("HighlightTip", "Show the selected fixtures at full, in open white, to find them on stage. Press again to turn it off."), CtrlShift(EKeys::H)),
 			};
 			check(Commands.Num() == Index(C::Count));
 			for (int32 Position = 0; Position < Commands.Num(); ++Position)

@@ -27,6 +27,10 @@ bool StageShortcutRouting::IsAppWideCommand(EStageInputCommand Command)
 	case EStageInputCommand::Undo:
 	case EStageInputCommand::Redo:
 	case EStageInputCommand::Duplicate:
+	case EStageInputCommand::CueGo:
+	case EStageInputCommand::CueBack:
+	case EStageInputCommand::ClearProgrammer:
+	case EStageInputCommand::Highlight:
 		return true;
 	default:
 		return false;

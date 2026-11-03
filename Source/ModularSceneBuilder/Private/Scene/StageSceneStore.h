@@ -17,6 +17,9 @@ struct FStageSceneParseReport
 
 	/** Cues, fixtures in cues and cue attributes dropped because they were invalid (format version 3). Logged; the rest loads. */
 	int32 InvalidCueEntries = 0;
+
+	/** Programmer entries, groups and an active cue dropped because they were invalid (format version 6). Logged; the rest loads. */
+	int32 InvalidShowEntries = 0;
 };
 
 /**
@@ -48,8 +51,11 @@ public:
 	 *    files load as the user's own stage. A present but unreadable id makes the file Corrupt: never read as "own".
 	 *  - 5: "environment" names its "lighting" source (Level, OutdoorSky, Studio) instead of "skyEnabled", and adds the camera
 	 *    "look" (Docs/ADR/0024 §4). Older files read "skyEnabled" as OutdoorSky or Level, with the default look.
+	 *  - 6: adds the "programmer", fixture "groups" and the "activeCue" (Docs/ADR/0025 §7); a fixture state holds its home
+	 *    look. Older files load with an empty programmer, no groups and no cue playing.
 	 */
-	static constexpr int32 FormatVersion = 5;
+	static constexpr int32 FormatVersion = 6;
+	static constexpr int32 MaxGroups = StageFixtureGroupRules::MaxGroups;
 	/** The oldest version Parse still migrates. Older or newer files are refused as VersionMismatch and left untouched. */
 	static constexpr int32 MinReadableVersion = 1;
 	static constexpr int32 MaxItems = 10000;

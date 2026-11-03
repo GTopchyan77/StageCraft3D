@@ -35,7 +35,9 @@
 #include "InputKeyEventArgs.h"
 #include "InputModifiers.h"
 #include "Misc/Paths.h"
+#include "History/StageCueCommands.h"
 #include "History/StageEditHistoryComponent.h"
+#include "History/StageShowCommands.h"
 #include "History/StageItemSnapshot.h"
 #include "Import/StageFileDialog.h"
 #include "Import/StageMeshImportSubsystem.h"
@@ -66,6 +68,7 @@
 #include "Subsystems/StageDMXPatchSubsystem.h"
 #include "Subsystems/StageEconomySubsystem.h"
 #include "Subsystems/StageItemSubsystem.h"
+#include "Subsystems/StageProgrammerSubsystem.h"
 #include "Subsystems/StageSessionSubsystem.h"
 #include "TimerManager.h"
 #include "UnrealClient.h"
@@ -155,6 +158,7 @@ void AModularPlayerController::BeginPlay()
 	}
 
 	Selection->OnSelectionChanged.AddUniqueDynamic(this, &ThisClass::HandleSelectionChanged);
+	Selection->OnSelectionSetChanged.AddUniqueDynamic(this, &ThisClass::HandleSelectionSetChanged);
 
 	// Every spawn is decided by the GameMode through this controller; the preview colour asks the same rules without reporting.
 	SpawnSystem->PlacementValidator.BindUObject(this, &ThisClass::ValidatePlacement);
@@ -225,6 +229,12 @@ void AModularPlayerController::EndPlay(const EEndPlayReason::Type EndPlayReason)
 	bPreviewRefreshQueued = false;
 
 	Selection->OnSelectionChanged.RemoveDynamic(this, &ThisClass::HandleSelectionChanged);
+	Selection->OnSelectionSetChanged.RemoveDynamic(this, &ThisClass::HandleSelectionSetChanged);
+	if (bHighlightOn)
+	{
+		// The highlight is this player's overlay: it leaves with the player.
+		RequestSetHighlight(false);
+	}
 	SpawnSystem->PlacementValidator.Unbind();
 	PlacementTool->PreviewEvaluator.Unbind();
 	PlacementTool->PlacementSnapper.Unbind();
@@ -513,6 +523,10 @@ void AModularPlayerController::ExecuteCommand(EStageInputCommand Command)
 	case EStageInputCommand::ToggleViewportToolbar:	ViewportView->SetToolbarCollapsed(!ViewportView->IsToolbarCollapsed()); break;
 	case EStageInputCommand::Save:					RequestQuickSave(); break;
 	case EStageInputCommand::Duplicate:				RequestDuplicateSelection(); break;
+	case EStageInputCommand::CueGo:					RequestCueGo(); break;
+	case EStageInputCommand::CueBack:				RequestCueBack(); break;
+	case EStageInputCommand::ClearProgrammer:		RequestClearProgrammer(); break;
+	case EStageInputCommand::Highlight:				RequestSetHighlight(!bHighlightOn); break;
 	default:
 		// Navigation commands are fly-axis mappings (RebuildCameraMapping); FindCommand never returns them.
 		break;
@@ -1182,6 +1196,13 @@ FStageEconomyResultInfo AModularPlayerController::RequestParameterChange(UObject
 			LOCTEXT("NoAuthority", "Editing needs the StageCraft game mode."));
 		ReportRejection(Result);
 		return Result;
+	}
+
+	// A fixture's look goes into the programmer, for every selected fixture when it is selected (Docs/ADR/0025 §4).
+	if (ALightingFixtureActor* Fixture = StageCraftTags::IsFixtureLookParameter(ParameterId) ? Cast<ALightingFixtureActor>(Target) : nullptr)
+	{
+		const TArray<ALightingFixtureActor*> Fixtures = Selection->IsActorSelected(Fixture) ? GetSelectedFixtures() : TArray<ALightingFixtureActor*>{ Fixture };
+		return RequestProgrammerChange(Fixtures, *Fixture, ParameterId, Value);
 	}
 
 	const FStageEconomyResultInfo Verdict = GameMode->EvaluateParameterChange(this, Target, ParameterId, Value);
@@ -1987,7 +2008,28 @@ bool AModularPlayerController::RequestStoreCue(float CueNumber, const FText& Lab
 	{
 		return false;
 	}
-	RecordCueEdit(Description, Before, *Show);
+
+	// As on a console, the stored values leave the programmer (Docs/ADR/0025 §6). The new cue becomes the playing one, so what the
+	// stage shows does not change; the store and the clear are one undo step.
+	TArray<TSharedRef<IStageEditCommand>> Commands;
+	Commands.Add(MakeShared<FStageCueListCommand>(Description, Before, Show->GetCues()));
+	if (UStageProgrammerSubsystem* Programmer = UWorld::GetSubsystem<UStageProgrammerSubsystem>(GetWorld()); Programmer && !Programmer->IsEmpty())
+	{
+		TArray<FShowCueFixtureState> ProgrammerBefore = Programmer->GetEntries();
+		TArray<int32> FixtureIds;
+		for (const FShowCueFixtureState& Entry : ProgrammerBefore)
+		{
+			FixtureIds.Add(Entry.FixtureId);
+		}
+		Show->RestoreActiveCue(CueNumber);
+		Programmer->ClearAll();
+		Commands.Add(MakeShared<FStageProgrammerCommand>(Description, MoveTemp(FixtureIds), MoveTemp(ProgrammerBefore), TArray<FShowCueFixtureState>()));
+	}
+	else
+	{
+		Show->RestoreActiveCue(CueNumber);
+	}
+	EditHistory->RecordAsOneStep(MoveTemp(Commands), Description);
 	return true;
 }
 

@@ -234,7 +234,7 @@ void UStageFaderBankWidget::RefreshTitle(UObject* Target)
 	FStageParameterValue Label;
 	if (Target && IStageParameterInterface::Execute_GetParameterValue(Target, StageCraftTags::Param_Info_Label, Label))
 	{
-		TitleText->SetText(FText::Format(LOCTEXT("TitleFormat", "FADERS  |  {0}"), Label.Text));
+		TitleText->SetText(FText::Format(LOCTEXT("TitleFormat", "FADERS  |  {0}"), DecorateWithSharedSelection(Label.Text)));
 	}
 	else
 	{

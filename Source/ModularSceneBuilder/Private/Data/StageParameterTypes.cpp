@@ -205,6 +205,11 @@ namespace StageCraftTags
 			|| ParameterId == Param_Stairs_Rise || ParameterId == Param_Stairs_Width || ParameterId == Param_Stairs_Handrails;
 	}
 
+	bool IsFixtureLookParameter(const FGameplayTag& ParameterId)
+	{
+		return (ParameterId.MatchesTag(Attribute) && ParameterId != Attribute) || ParameterId == Param_Fixture_Gel || ParameterId == Param_Fixture_AllCells;
+	}
+
 	bool IsPatchParameter(const FGameplayTag& ParameterId)
 	{
 		return ParameterId == Param_Patch_FixtureId || ParameterId == Param_Patch_Universe || ParameterId == Param_Patch_Address;

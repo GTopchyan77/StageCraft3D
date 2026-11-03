@@ -297,4 +297,10 @@ namespace StageCraftTags
 
 	/** Read-only beam results derived from the fixture's attributes and position (StagePhotometry). */
 	MODULARSCENEBUILDER_API bool IsPhotometricParameter(const FGameplayTag& ParameterId);
+
+	/**
+	 * A fixture's look: its attributes (StageCraft.Attribute.*, composite colour rows included) and the gel and all-cells rows that
+	 * set them. Edits of these go into the programmer and spread over the selected fixtures (Docs/ADR/0025-programmer-and-output-mix.md §4).
+	 */
+	MODULARSCENEBUILDER_API bool IsFixtureLookParameter(const FGameplayTag& ParameterId);
 }

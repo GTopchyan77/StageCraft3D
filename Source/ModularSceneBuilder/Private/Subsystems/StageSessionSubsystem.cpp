@@ -9,6 +9,8 @@
 #include "Interaction/StageParameterInterface.h"
 #include "ModularSceneBuilder.h"
 #include "Subsystems/ShowControlSubsystem.h"
+#include "Subsystems/StageProgrammerSubsystem.h"
+#include "Subsystems/StageShowLibrarySubsystem.h"
 
 #include UE_INLINE_GENERATED_CPP_BY_NAME(StageSessionSubsystem)
 
@@ -31,12 +33,22 @@ void UStageSessionSubsystem::Initialize(FSubsystemCollectionBase& Collection)
 	}
 	if (UShowControlSubsystem* Show = Collection.InitializeDependency<UShowControlSubsystem>())
 	{
-		Show->OnCueListChanged.AddUniqueDynamic(this, &ThisClass::HandleCueListChanged);
+		Show->OnCueListChanged.AddUniqueDynamic(this, &ThisClass::HandleShowDataChanged);
 		BoundShowControl = Show;
+	}
+	if (UStageProgrammerSubsystem* Programmer = Collection.InitializeDependency<UStageProgrammerSubsystem>())
+	{
+		Programmer->OnValuesChanged.AddUniqueDynamic(this, &ThisClass::HandleShowDataChanged);
+		BoundProgrammer = Programmer;
+	}
+	if (UStageShowLibrarySubsystem* Library = Collection.InitializeDependency<UStageShowLibrarySubsystem>())
+	{
+		Library->OnGroupsChanged.AddUniqueDynamic(this, &ThisClass::HandleShowDataChanged);
+		BoundShowLibrary = Library;
 	}
 }
 
-void UStageSessionSubsystem::HandleCueListChanged()
+void UStageSessionSubsystem::HandleShowDataChanged()
 {
 	// Same rule as the environment: only edits during play count (loading a scene marks it clean afterwards).
 	const UWorld* World = GetWorld();
@@ -65,9 +77,19 @@ void UStageSessionSubsystem::Deinitialize()
 	BoundEnvironment.Reset();
 	if (UShowControlSubsystem* Show = BoundShowControl.Get())
 	{
-		Show->OnCueListChanged.RemoveDynamic(this, &ThisClass::HandleCueListChanged);
+		Show->OnCueListChanged.RemoveDynamic(this, &ThisClass::HandleShowDataChanged);
 	}
 	BoundShowControl.Reset();
+	if (UStageProgrammerSubsystem* Programmer = BoundProgrammer.Get())
+	{
+		Programmer->OnValuesChanged.RemoveDynamic(this, &ThisClass::HandleShowDataChanged);
+	}
+	BoundProgrammer.Reset();
+	if (UStageShowLibrarySubsystem* Library = BoundShowLibrary.Get())
+	{
+		Library->OnGroupsChanged.RemoveDynamic(this, &ThisClass::HandleShowDataChanged);
+	}
+	BoundShowLibrary.Reset();
 
 	for (const TWeakObjectPtr<AModularBaseActor>& Item : Items)
 	{

@@ -498,6 +498,7 @@ void FStageWorkspaceShell::RegisterPanelSpawners()
 	FTabManager::RegisterDefaultTabWindowSize(FGameplayTag(StageCraftTags::Panel_Marketplace).GetTagName(), FVector2D(1180.0, 760.0));
 	FTabManager::RegisterDefaultTabWindowSize(FGameplayTag(StageCraftTags::Panel_SendTo).GetTagName(), FVector2D(520.0, 560.0));
 	FTabManager::RegisterDefaultTabWindowSize(FGameplayTag(StageCraftTags::Panel_Services).GetTagName(), FVector2D(560.0, 600.0));
+	FTabManager::RegisterDefaultTabWindowSize(FGameplayTag(StageCraftTags::Panel_Groups).GetTagName(), FVector2D(560.0, 420.0));
 }
 
 void FStageWorkspaceShell::SyncReportedHosts()

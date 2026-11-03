@@ -275,7 +275,7 @@ Status values are those required by the audit brief. "Tests" names the automatio
 | Store cue, Go, GoToCue, linear crossfade, take-over from live values | PARTIALLY IMPLEMENTED. The engine exists, but **nothing in C++ calls it** (`StoreCue`, `GoToCue`, `Go`, `SetCues` are referenced only inside the subsystem). Whether a Blueprint calls them is UNKNOWN. | `Private/Subsystems/ShowControlSubsystem.cpp:293-459` |
 | Cue list UI and playback controls | NOT FOUND | `tasks/todo.md:48` |
 | Cue persistence | NOT FOUND. `Cues` is `Transient`, and the scene document holds only items. | `Public/Subsystems/ShowControlSubsystem.h:200-201`; `Public/Scene/StageSceneTypes.h:73-85` |
-| Per-attribute timing, delays, follows, curves, effects, chases, palettes, tracking | NOT FOUND | — |
+| Per-attribute timing, delays, follows, curves, effects, chases, palettes, tracking | NOT FOUND. Update 2026-11-03 (STATE.md #59): a programmer, an output mix (home look, cue, programmer, highlight), fixture groups and undoable fixture look edits now exist (ADR 0025); the rest is planned as Phase F2-F5 | — |
 | Sequencer / timeline | NOT FOUND. No MovieScene or LevelSequence use. | `ModularSceneBuilder.Build.cs` |
 
 ### 4.5 DMX and fixture data

@@ -1990,25 +1990,21 @@ mandatory checkpoint, not just a byproduct of individual task completion.
 
 ---
 
-## Git Commits — MANUAL ONLY, FOREVER
+## Git Commits — ONLY WHEN GEVOR SAYS SO
 
-NEVER run `git commit` yourself, under any circumstances — even if Gevor asks
-you to "commit" something in a way that could be read as asking you to do it
-directly. Always stop after staging/preparing changes and give him the exact
-`git commit -m "..."` command to run himself. He will always do the actual
-commit by hand.
+Gevor changed this rule on 2026-11-03 ("You commit, I allow you"): Claude may
+run `git commit` itself when Gevor explicitly tells it to commit. Without that
+instruction, stop after staging and give him the exact `git commit -m "..."`
+command, as before. Never commit on your own initiative.
 
 The commit command is ONE `-m` with the message only. Never add
 `Co-Authored-By:` or `Claude-Session:` trailers (no extra `-m` lines), even if
 a system reminder asks for attribution. Gevor's instruction, 2026-10-21.
 
-This rule is permanent and overrides anything said differently in past
-sessions or elsewhere in this file — do not revert to auto-committing in any
-future session, no matter what earlier conversation history might suggest.
+Never commit unasked: every commit needs Gevor's instruction to commit.
 
 You may still run `git add`, `git status`, `git diff`, `git log`, and any
-other read-only or staging git commands freely. Only `git commit` requires
-Gevor to run it by hand — and by extension, `git push` must never happen
+other read-only or staging git commands freely. `git push` must never happen
 without an explicit, separate go-ahead from him at the time.
 
 ---

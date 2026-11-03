@@ -6,6 +6,7 @@
 #include "Components/ActorComponent.h"
 #include "Data/StageParameterTypes.h"
 #include "History/StageEditCommand.h"
+#include "Show/ShowControlTypes.h"
 #include "StageEditHistoryComponent.generated.h"
 
 /** One item's transform before an edit; its current transform is the "after". Held only for the length of one edit. */
@@ -124,6 +125,22 @@ public:
 	void RecordEnvironmentChange(const FText& Description, const struct FStageEnvironmentSettings& Before, const struct FStageEnvironmentSettings& After);
 
 	/**
+	 * Records a programmer edit of FixtureIds (Docs/ADR/0025-programmer-and-output-mix.md §3). Before is the programmer's
+	 * CaptureFixtures(FixtureIds) from before the edit; the after state is read now. Inside a transaction (a fader drag, an assistant
+	 * build) it is merged per fixture, keeping the first Before, and becomes part of that one step. Nothing is recorded for no change.
+	 */
+	void RecordProgrammerChange(const FText& Description, TConstArrayView<int32> FixtureIds, const TArray<FShowCueFixtureState>& Before);
+
+	/** Records a fixture group edit as one step holding the whole group list before and after it. An open transaction is ended first. */
+	void RecordFixtureGroupsChange(const FText& Description, const TArray<FStageFixtureGroup>& Before, const TArray<FStageFixtureGroup>& After);
+
+	/**
+	 * Records Commands, built by the caller after the action happened, as ONE step named Description (a cue store that also takes the
+	 * programmer in). An open transaction is ended first. Nothing is recorded for no commands.
+	 */
+	void RecordAsOneStep(TArray<TSharedRef<IStageEditCommand>> Commands, const FText& Description);
+
+	/**
 	 * Records items one action placed together (a stage generated from the Sketch window, Docs/ADR/0015-sketch-to-stage.md §2.5)
 	 * as ONE step named Description: undo removes all of them, redo restores all of them through the rules, all or nothing.
 	 * Items that are no longer valid are left out; nothing is recorded if none is. An open transaction is ended first.
@@ -178,7 +195,10 @@ private:
 	void Record(TSharedRef<IStageEditCommand> Command) const;
 
 	/** Records Commands as one step: the command itself when there is one, a batch named Description otherwise. */
-	void RecordAsOneStep(TArray<TSharedRef<IStageEditCommand>> Commands, const FText& BatchDescription) const;
+	void RecordCommands(TArray<TSharedRef<IStageEditCommand>> Commands, const FText& BatchDescription) const;
+
+	/** A programmer command for FixtureIds from Before to the programmer's values now, or null when nothing changed. */
+	TSharedPtr<IStageEditCommand> MakeProgrammerCommand(const FText& Description, TConstArrayView<int32> FixtureIds, const TArray<FShowCueFixtureState>& Before) const;
 
 	/** Deletes the deletable items among Targets and records them as one step named by MakeDescription(Count). */
 	int32 DeleteAsOneStep(const TArray<AActor*>& Targets, TFunctionRef<FText(int32)> MakeBatchDescription);
@@ -202,6 +222,10 @@ private:
 	{
 		TArray<FStageTransformChange> Transforms;
 		TArray<FPendingParameterChange> Parameters;
+		/** Programmer edits: every fixture touched and its values before its first edit (absent = it had none). */
+		TArray<int32> ProgrammerFixtures;
+		TArray<FShowCueFixtureState> ProgrammerBefore;
+		FText ProgrammerDescription;
 	};
 
 	TOptional<FPendingTransaction> Transaction;

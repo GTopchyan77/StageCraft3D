@@ -363,6 +363,54 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "StageCraft|Requests")
 	bool RequestSetControlSource(EStageControlSource Source);
 
+	// --- Programmer, highlight and groups (Docs/ADR/0025-programmer-and-output-mix.md) ---
+	// RequestParameterChange of a fixture's look (StageCraftTags::IsFixtureLookParameter) on a selected fixture applies to every
+	// selected fixture, spread by the fan mode, and lands in the programmer through RequestProgrammerChange.
+
+	/**
+	 * Writes ParameterId = Value on Fixtures (selection order) and takes what each write changed into the programmer, as one undo step
+	 * (or part of an open edit transaction). Primary is the fixture the edit was made on: with a fan mode, the change from its current
+	 * value is spread over Fixtures (StageShowMix::FanFactor; float rows only). Each fixture is judged by the GameMode's
+	 * EvaluateParameterChange; a refused one is left out and the first refusal reported. Fails when no fixture took the value.
+	 */
+	FStageEconomyResultInfo RequestProgrammerChange(TConstArrayView<class ALightingFixtureActor*> Fixtures, const class ALightingFixtureActor& Primary, FGameplayTag ParameterId, const FStageParameterValue& Value);
+
+	/** Clear: removes every programmer value, so the fixtures fall back to the playing cue and their home look. One undo step. */
+	UFUNCTION(BlueprintCallable, Category = "StageCraft|Requests")
+	bool RequestClearProgrammer();
+
+	/** Highlight on: the selected fixtures (following the selection) show full, open white on top of everything. Never stored. */
+	UFUNCTION(BlueprintCallable, Category = "StageCraft|Requests")
+	void RequestSetHighlight(bool bOn);
+
+	UFUNCTION(BlueprintPure, Category = "StageCraft|Requests")
+	bool IsHighlightOn() const { return bHighlightOn; }
+
+	/** How a look edit spreads over several selected fixtures from now on (a tool setting of this player, not saved). */
+	UFUNCTION(BlueprintCallable, Category = "StageCraft|Requests")
+	void RequestSetFanMode(EStageFanMode Mode);
+
+	UFUNCTION(BlueprintPure, Category = "StageCraft|Requests")
+	EStageFanMode GetFanMode() const { return FanMode; }
+
+	/** Records the selected fixtures (selection order) as a new group named Name ("Group n" when empty). Invalid id when none is selected. */
+	UFUNCTION(BlueprintCallable, Category = "StageCraft|Requests")
+	FGuid RequestRecordGroup(const FText& Name);
+
+	/** Replaces a group's fixtures with the selected ones. */
+	UFUNCTION(BlueprintCallable, Category = "StageCraft|Requests")
+	bool RequestUpdateGroup(FGuid GroupId);
+
+	UFUNCTION(BlueprintCallable, Category = "StageCraft|Requests")
+	bool RequestRenameGroup(FGuid GroupId, const FText& Name);
+
+	UFUNCTION(BlueprintCallable, Category = "StageCraft|Requests")
+	bool RequestDeleteGroup(FGuid GroupId);
+
+	/** Selects the group's fixtures that exist, in the group's order (the last becomes the primary). Not an undo step, as any selection. */
+	UFUNCTION(BlueprintCallable, Category = "StageCraft|Requests")
+	bool RequestSelectGroup(FGuid GroupId);
+
 	/**
 	 * Re-patches fixtures as ONE undoable step (the Patch panel's AUTO PATCH, FIX CONFLICTS and PATCH SELECTION, planned by
 	 * UStageDMXPatchSubsystem; Docs/ADR/0019 §2.3). All or nothing: every new universe and address is checked by the GameMode's
@@ -823,6 +871,22 @@ private:
 
 	/** Where a plain left press went down, selected on release if it never became a camera drag. */
 	FVector2D PendingClickPosition = FVector2D::ZeroVector;
+
+	/** The selected lighting fixtures in selection order (the primary last). */
+	TArray<class ALightingFixtureActor*> GetSelectedFixtures() const;
+
+	/** Records a group list edit made by Edit (true when it changed something), as one undo step named Description. */
+	bool EditGroups(const FText& Description, TFunctionRef<bool(class UStageShowLibrarySubsystem&)> Edit);
+
+	/** Highlight follows the selection while it is on. */
+	UFUNCTION()
+	void HandleSelectionSetChanged(int32 Count);
+
+	/** Gives the programmer this player's highlight set: the selected fixtures while highlight is on, none otherwise. */
+	void RefreshHighlight();
+
+	EStageFanMode FanMode = EStageFanMode::Off;
+	bool bHighlightOn = false;
 
 	/** While RunCapturingRejections runs: where ReportRejection also copies each refusal. */
 	TArray<FStageEconomyResultInfo>* RejectionSink = nullptr;

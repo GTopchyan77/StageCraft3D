@@ -208,6 +208,9 @@ void SStageWorkspaceMenuBar::FillReportSection(FMenuBuilder& MenuBuilder, const 
 	MenuBuilder.AddMenuEntry(LOCTEXT("ShowCues", "Cue List..."),
 		LOCTEXT("ShowCuesTip", "Show the Cues panel: store, play and edit the show's lighting cues."), FSlateIcon(),
 		FUIAction(FExecuteAction::CreateSP(this, &SStageWorkspaceMenuBar::ShowPanel, FGameplayTag(StageCraftTags::Panel_Cues))));
+	MenuBuilder.AddMenuEntry(LOCTEXT("ShowGroups", "Groups && Programmer..."),
+		LOCTEXT("ShowGroupsTip", "Show the Groups panel: fixture groups, Clear, Highlight and the fan mode."), FSlateIcon(),
+		FUIAction(FExecuteAction::CreateSP(this, &SStageWorkspaceMenuBar::ShowPanel, FGameplayTag(StageCraftTags::Panel_Groups))));
 	MenuBuilder.AddMenuEntry(LOCTEXT("OpenReportsFolder", "Open Reports Folder"), FText::FromString(Report->GetOutputDirectory()), FSlateIcon(),
 		FUIAction(FExecuteAction::CreateLambda([Directory = Report->GetOutputDirectory()]() { OpenFolder(Directory); })));
 	MenuBuilder.EndSection();

@@ -687,7 +687,7 @@ EStageMarketplaceResult StagePackage::Read(TConstArrayView<uint8> Bytes, FStageP
 	// The writer never produces a scene the parser has to repair, so any repair means the package was not written by StageCraft
 	// as it claims. The counts must match what a browser was shown.
 	FStagePackageManifest& Manifest = OutPackage.Manifest;
-	if (Report.InvalidItems > 0 || Report.RepairedIds > 0 || Report.InvalidCueEntries > 0
+	if (Report.InvalidItems > 0 || Report.RepairedIds > 0 || Report.InvalidCueEntries > 0 || Report.InvalidShowEntries > 0
 		|| Manifest.ItemCount != OutPackage.Scene.Items.Num() || Manifest.CueCount != OutPackage.Scene.Cues.Num())
 	{
 		return EStageMarketplaceResult::Corrupt;

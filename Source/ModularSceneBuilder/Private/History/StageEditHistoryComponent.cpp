@@ -11,6 +11,7 @@
 #include "History/StageBatchCommand.h"
 #include "History/StageCueCommands.h"
 #include "History/StageEnvironmentCommands.h"
+#include "History/StageShowCommands.h"
 #include "History/StageEditHistorySubsystem.h"
 #include "History/StageItemCommands.h"
 #include "History/StageItemSnapshot.h"
@@ -20,7 +21,9 @@
 #include "Placement/StagePlacementToolComponent.h"
 #include "Placement/StageSpanToolComponent.h"
 #include "Subsystems/ShowControlSubsystem.h"
+#include "Subsystems/StageProgrammerSubsystem.h"
 #include "Subsystems/StageSessionSubsystem.h"
+#include "Subsystems/StageShowLibrarySubsystem.h"
 
 #include UE_INLINE_GENERATED_CPP_BY_NAME(StageEditHistoryComponent)
 
@@ -147,6 +150,29 @@ namespace StageEditHistory
 			return EStageCommandResult::Succeeded;
 		}
 
+		virtual EStageCommandResult SetProgrammerValues(TConstArrayView<int32> FixtureIds, TConstArrayView<FShowCueFixtureState> Entries) override
+		{
+			UStageProgrammerSubsystem* Programmer = UWorld::GetSubsystem<UStageProgrammerSubsystem>(Session.GetWorld());
+			if (!Programmer)
+			{
+				return EStageCommandResult::Invalid;
+			}
+			// The show control re-mixes those fixtures; the session marks itself dirty through OnValuesChanged.
+			Programmer->RestoreFixtures(FixtureIds, Entries);
+			return EStageCommandResult::Succeeded;
+		}
+
+		virtual EStageCommandResult SetFixtureGroups(const TArray<FStageFixtureGroup>& Groups) override
+		{
+			UStageShowLibrarySubsystem* Library = UWorld::GetSubsystem<UStageShowLibrarySubsystem>(Session.GetWorld());
+			if (!Library)
+			{
+				return EStageCommandResult::Invalid;
+			}
+			Library->SetGroups(Groups);
+			return EStageCommandResult::Succeeded;
+		}
+
 	private:
 		UStageSessionSubsystem& Session;
 		USpawnSystemComponent& SpawnSystem;
@@ -250,7 +276,7 @@ void UStageEditHistoryComponent::RecordPlacements(TConstArrayView<AModularBaseAc
 			Commands.Add(MakeShared<FStagePlaceItemCommand>(Item->CaptureSnapshot()));
 		}
 	}
-	RecordAsOneStep(MoveTemp(Commands), Description);
+	RecordCommands(MoveTemp(Commands), Description);
 }
 
 void UStageEditHistoryComponent::RecordReplacement(TConstArrayView<FStageItemSnapshot> Removed, TConstArrayView<AModularBaseActor*> Placed, const FText& Description)
@@ -270,10 +296,10 @@ void UStageEditHistoryComponent::RecordReplacement(TConstArrayView<FStageItemSna
 			Commands.Add(MakeShared<FStagePlaceItemCommand>(Item->CaptureSnapshot()));
 		}
 	}
-	RecordAsOneStep(MoveTemp(Commands), Description);
+	RecordCommands(MoveTemp(Commands), Description);
 }
 
-void UStageEditHistoryComponent::RecordAsOneStep(TArray<TSharedRef<IStageEditCommand>> Commands, const FText& BatchDescription) const
+void UStageEditHistoryComponent::RecordCommands(TArray<TSharedRef<IStageEditCommand>> Commands, const FText& BatchDescription) const
 {
 	if (Commands.Num() == 1)
 	{
@@ -283,6 +309,62 @@ void UStageEditHistoryComponent::RecordAsOneStep(TArray<TSharedRef<IStageEditCom
 	{
 		Record(MakeShared<FStageBatchCommand>(BatchDescription, MoveTemp(Commands)));
 	}
+}
+
+void UStageEditHistoryComponent::RecordAsOneStep(TArray<TSharedRef<IStageEditCommand>> Commands, const FText& Description)
+{
+	EndTransaction();
+	RecordCommands(MoveTemp(Commands), Description);
+}
+
+TSharedPtr<IStageEditCommand> UStageEditHistoryComponent::MakeProgrammerCommand(const FText& Description, TConstArrayView<int32> FixtureIds, const TArray<FShowCueFixtureState>& Before) const
+{
+	const UStageProgrammerSubsystem* Programmer = UWorld::GetSubsystem<UStageProgrammerSubsystem>(GetWorld());
+	if (!Programmer || FixtureIds.IsEmpty())
+	{
+		return nullptr;
+	}
+	TArray<FShowCueFixtureState> After = Programmer->CaptureFixtures(FixtureIds);
+	if (!FStageProgrammerCommand::IsMeaningfulChange(Before, After))
+	{
+		return nullptr;
+	}
+	return MakeShared<FStageProgrammerCommand>(Description, TArray<int32>(FixtureIds), Before, MoveTemp(After));
+}
+
+void UStageEditHistoryComponent::RecordProgrammerChange(const FText& Description, TConstArrayView<int32> FixtureIds, const TArray<FShowCueFixtureState>& Before)
+{
+	if (Transaction.IsSet())
+	{
+		// First edit of each fixture wins: its values before the whole transaction are what undo returns to.
+		if (Transaction->ProgrammerFixtures.IsEmpty())
+		{
+			Transaction->ProgrammerDescription = Description;
+		}
+		for (const int32 FixtureId : FixtureIds)
+		{
+			if (Transaction->ProgrammerFixtures.Contains(FixtureId))
+			{
+				continue;
+			}
+			Transaction->ProgrammerFixtures.Add(FixtureId);
+			if (const FShowCueFixtureState* Entry = Before.FindByPredicate([FixtureId](const FShowCueFixtureState& State) { return State.FixtureId == FixtureId; }))
+			{
+				Transaction->ProgrammerBefore.Add(*Entry);
+			}
+		}
+		return;
+	}
+	if (const TSharedPtr<IStageEditCommand> Command = MakeProgrammerCommand(Description, FixtureIds, Before))
+	{
+		Record(Command.ToSharedRef());
+	}
+}
+
+void UStageEditHistoryComponent::RecordFixtureGroupsChange(const FText& Description, const TArray<FStageFixtureGroup>& Before, const TArray<FStageFixtureGroup>& After)
+{
+	EndTransaction();
+	Record(MakeShared<FStageFixtureGroupsCommand>(Description, Before, After));
 }
 
 bool UStageEditHistoryComponent::DeleteItem(AActor* Target)
@@ -376,7 +458,7 @@ int32 UStageEditHistoryComponent::DeleteAsOneStep(const TArray<AActor*>& Targets
 	}
 
 	const int32 Deleted = Commands.Num();
-	RecordAsOneStep(MoveTemp(Commands), MakeBatchDescription(Deleted));
+	RecordCommands(MoveTemp(Commands), MakeBatchDescription(Deleted));
 	return Deleted;
 }
 
@@ -404,7 +486,7 @@ void UStageEditHistoryComponent::RecordTransformChanges(TConstArrayView<FStageTr
 
 	TArray<TSharedRef<IStageEditCommand>> Commands = MakeTransformCommands(Changes);
 	const int32 Count = Commands.Num();
-	RecordAsOneStep(MoveTemp(Commands), FText::Format(NSLOCTEXT("StageEditHistory", "TransformItems", "Transform {0} items"), FText::AsNumber(Count)));
+	RecordCommands(MoveTemp(Commands), FText::Format(NSLOCTEXT("StageEditHistory", "TransformItems", "Transform {0} items"), FText::AsNumber(Count)));
 }
 
 TArray<TSharedRef<IStageEditCommand>> UStageEditHistoryComponent::MakeTransformCommands(TConstArrayView<FStageTransformChange> Changes)
@@ -487,8 +569,13 @@ void UStageEditHistoryComponent::EndTransaction()
 		}
 	}
 
+	if (const TSharedPtr<IStageEditCommand> Programmed = MakeProgrammerCommand(Collected.ProgrammerDescription, Collected.ProgrammerFixtures, Collected.ProgrammerBefore))
+	{
+		Commands.Add(Programmed.ToSharedRef());
+	}
+
 	const int32 Count = Commands.Num();
-	RecordAsOneStep(MoveTemp(Commands), FText::Format(NSLOCTEXT("StageEditHistory", "EditItems", "Edit {0} items"), FText::AsNumber(Count)));
+	RecordCommands(MoveTemp(Commands), FText::Format(NSLOCTEXT("StageEditHistory", "EditItems", "Edit {0} items"), FText::AsNumber(Count)));
 }
 
 EStageCommandResult UStageEditHistoryComponent::Undo()

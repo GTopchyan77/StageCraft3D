@@ -74,6 +74,26 @@ namespace StageSceneStore
 
 		// Version 4: where a marketplace stage came from.
 		const TCHAR* OriginListingId = TEXT("originListingId");
+
+		// Version 6: the programmer, fixture groups and the playing cue (Docs/ADR/0025 §7).
+		const TCHAR* Programmer = TEXT("programmer");
+		const TCHAR* Groups = TEXT("groups");
+		const TCHAR* ActiveCue = TEXT("activeCue");
+	}
+
+	/** One fixture's attribute values: {"id": fixtureId, "attributes": {"<tag>": value}} (cues and the programmer). */
+	TSharedPtr<FJsonValue> WriteFixtureState(const FShowCueFixtureState& State)
+	{
+		// Tags by name: a name stays readable and survives tag table changes; unknown ones are dropped on load.
+		const TSharedRef<FJsonObject> Attributes = MakeShared<FJsonObject>();
+		for (const TPair<FGameplayTag, float>& Pair : State.Attributes)
+		{
+			Attributes->SetNumberField(Pair.Key.ToString(), Pair.Value);
+		}
+		const TSharedRef<FJsonObject> Fixture = MakeShared<FJsonObject>();
+		Fixture->SetNumberField(Field::Id, State.FixtureId);
+		Fixture->SetObjectField(Field::Attributes, Attributes);
+		return MakeShared<FJsonValueObject>(Fixture);
 	}
 
 	TArray<TSharedPtr<FJsonValue>> WriteCues(const TArray<FShowCue>& Cues)
@@ -86,16 +106,7 @@ namespace StageSceneStore
 			Fixtures.Reserve(Cue.Fixtures.Num());
 			for (const FShowCueFixtureState& State : Cue.Fixtures)
 			{
-				// Tags by name: a name stays readable and survives tag table changes; unknown ones are dropped on load.
-				const TSharedRef<FJsonObject> Attributes = MakeShared<FJsonObject>();
-				for (const TPair<FGameplayTag, float>& Pair : State.Attributes)
-				{
-					Attributes->SetNumberField(Pair.Key.ToString(), Pair.Value);
-				}
-				const TSharedRef<FJsonObject> Fixture = MakeShared<FJsonObject>();
-				Fixture->SetNumberField(Field::Id, State.FixtureId);
-				Fixture->SetObjectField(Field::Attributes, Attributes);
-				Fixtures.Add(MakeShared<FJsonValueObject>(Fixture));
+				Fixtures.Add(WriteFixtureState(State));
 			}
 
 			const TSharedRef<FJsonObject> Object = MakeShared<FJsonObject>();
@@ -199,6 +210,103 @@ namespace StageSceneStore
 		}
 		InOutInvalid += StageCueRules::SanitizeCueList(Cues);
 		return Cues;
+	}
+
+	TArray<TSharedPtr<FJsonValue>> WriteGroups(const TArray<FStageFixtureGroup>& Groups)
+	{
+		TArray<TSharedPtr<FJsonValue>> Array;
+		for (const FStageFixtureGroup& Group : Groups)
+		{
+			TArray<TSharedPtr<FJsonValue>> Fixtures;
+			for (const int32 FixtureId : Group.FixtureIds)
+			{
+				Fixtures.Add(MakeShared<FJsonValueNumber>(FixtureId));
+			}
+			const TSharedRef<FJsonObject> Object = MakeShared<FJsonObject>();
+			Object->SetStringField(Field::Id, Group.Id.ToString(EGuidFormats::DigitsWithHyphens));
+			Object->SetStringField(Field::Name, Group.Name.ToString());
+			Object->SetArrayField(Field::Fixtures, Fixtures);
+			Array.Add(MakeShared<FJsonValueObject>(Object));
+		}
+		return Array;
+	}
+
+	/** The programmer of a version 6 file: one entry per fixture, as a cue's fixtures. What cannot be read is dropped and counted. */
+	TArray<FShowCueFixtureState> ReadProgrammer(const FJsonObject& Root, int32& InOutInvalid)
+	{
+		TArray<FShowCueFixtureState> Entries;
+		const TArray<TSharedPtr<FJsonValue>>* Array = nullptr;
+		if (!Root.TryGetArrayField(Field::Programmer, Array))
+		{
+			return Entries;
+		}
+		TSet<int32> Seen;
+		for (const TSharedPtr<FJsonValue>& Value : *Array)
+		{
+			const TSharedPtr<FJsonObject>* Object = nullptr;
+			FShowCueFixtureState State;
+			bool bDuplicate = false;
+			if (Entries.Num() >= FStageSceneStore::MaxFixturesPerCue || !Value.IsValid() || !Value->TryGetObject(Object) || !Object->IsValid()
+				|| !ReadCueFixture(**Object, State, InOutInvalid))
+			{
+				++InOutInvalid;
+				continue;
+			}
+			Seen.Add(State.FixtureId, &bDuplicate);
+			if (bDuplicate)
+			{
+				++InOutInvalid;
+				continue;
+			}
+			Entries.Add(MoveTemp(State));
+		}
+		return Entries;
+	}
+
+	/** The fixture groups of a version 6 file, repaired by StageFixtureGroupRules. */
+	TArray<FStageFixtureGroup> ReadGroups(const FJsonObject& Root, int32& InOutInvalid)
+	{
+		TArray<FStageFixtureGroup> Groups;
+		const TArray<TSharedPtr<FJsonValue>>* Array = nullptr;
+		if (!Root.TryGetArrayField(Field::Groups, Array))
+		{
+			return Groups;
+		}
+		for (const TSharedPtr<FJsonValue>& Value : *Array)
+		{
+			const TSharedPtr<FJsonObject>* Object = nullptr;
+			FString Id;
+			FStageFixtureGroup Group;
+			if (Groups.Num() >= FStageSceneStore::MaxGroups || !Value.IsValid() || !Value->TryGetObject(Object) || !Object->IsValid()
+				|| !(*Object)->TryGetStringField(Field::Id, Id) || !FGuid::Parse(Id, Group.Id) || !Group.Id.IsValid())
+			{
+				++InOutInvalid;
+				continue;
+			}
+			FString Name;
+			(*Object)->TryGetStringField(Field::Name, Name);
+			Group.Name = FText::FromString(Name);
+			const TArray<TSharedPtr<FJsonValue>>* Fixtures = nullptr;
+			if ((*Object)->TryGetArrayField(Field::Fixtures, Fixtures))
+			{
+				for (const TSharedPtr<FJsonValue>& Fixture : *Fixtures)
+				{
+					double FixtureId = 0.0;
+					if (Group.FixtureIds.Num() < StageFixtureGroupRules::MaxFixturesPerGroup && Fixture.IsValid() && Fixture->TryGetNumber(FixtureId)
+						&& FMath::IsFinite(FixtureId) && FixtureId >= 1.0 && FixtureId <= double(MAX_int32))
+					{
+						Group.FixtureIds.Add(static_cast<int32>(FixtureId));
+					}
+					else
+					{
+						++InOutInvalid;
+					}
+				}
+			}
+			Groups.Add(MoveTemp(Group));
+		}
+		InOutInvalid += StageFixtureGroupRules::SanitizeGroups(Groups);
+		return Groups;
 	}
 
 	TSharedRef<FJsonObject> WriteEnvironment(const FStageEnvironmentSettings& Settings)
@@ -538,6 +646,17 @@ FString FStageSceneStore::Serialize(const FStageSceneDocument& Document)
 	Root->SetArrayField(Field::Items, Items);
 	Root->SetObjectField(Field::Environment, WriteEnvironment(Document.Environment));
 	Root->SetArrayField(Field::Cues, WriteCues(Document.Cues));
+	TArray<TSharedPtr<FJsonValue>> Programmer;
+	for (const FShowCueFixtureState& State : Document.Programmer)
+	{
+		Programmer.Add(WriteFixtureState(State));
+	}
+	Root->SetArrayField(Field::Programmer, Programmer);
+	Root->SetArrayField(Field::Groups, WriteGroups(Document.Groups));
+	if (Document.ActiveCueNumber.IsSet())
+	{
+		Root->SetNumberField(Field::ActiveCue, Document.ActiveCueNumber.GetValue());
+	}
 	// Only when set: the user's own stages stay free of it.
 	if (Document.OriginListingId.IsValid())
 	{
@@ -596,6 +715,25 @@ EStageSceneResult FStageSceneStore::Parse(const FString& Contents, FStageSceneDo
 	if (Version >= 3)
 	{
 		OutDocument.Cues = ReadCues(*Root, OutReport.InvalidCueEntries);
+	}
+	// Migration 5 -> 6: older stages have an empty programmer, no groups and no cue playing.
+	if (Version >= 6)
+	{
+		OutDocument.Programmer = ReadProgrammer(*Root, OutReport.InvalidShowEntries);
+		OutDocument.Groups = ReadGroups(*Root, OutReport.InvalidShowEntries);
+		double ActiveCue = 0.0;
+		if (Root->TryGetNumberField(Field::ActiveCue, ActiveCue))
+		{
+			const float Number = static_cast<float>(ActiveCue);
+			if (StageCueRules::IsValidCueNumber(Number))
+			{
+				OutDocument.ActiveCueNumber = StageCueRules::RoundCueNumber(Number);
+			}
+			else
+			{
+				++OutReport.InvalidShowEntries;
+			}
+		}
 	}
 	// Migration 3 -> 4: older stages are the user's own. Deny by default: an origin that is there but unreadable is not "own".
 	FString Origin;

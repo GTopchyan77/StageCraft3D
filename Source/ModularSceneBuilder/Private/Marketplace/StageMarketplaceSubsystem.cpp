@@ -123,7 +123,7 @@ namespace StageMarketplace
 			return EStageMarketplaceResult::Corrupt;
 		}
 		// What is published must be what the creator sees: a scene the parser had to repair is not published until it is re-saved.
-		if (Report.InvalidItems > 0 || Report.RepairedIds > 0 || Report.InvalidCueEntries > 0)
+		if (Report.InvalidItems > 0 || Report.RepairedIds > 0 || Report.InvalidCueEntries > 0 || Report.InvalidShowEntries > 0)
 		{
 			return EStageMarketplaceResult::Corrupt;
 		}

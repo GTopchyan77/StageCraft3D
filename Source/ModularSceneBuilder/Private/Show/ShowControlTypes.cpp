@@ -77,3 +77,68 @@ namespace StageCueRules
 		return Before - Cues.Num();
 	}
 }
+
+namespace StageFixtureGroupRules
+{
+	FText SanitizeName(const FText& Name)
+	{
+		const FString Trimmed = Name.ToString().TrimStartAndEnd();
+		if (Trimmed.Len() <= MaxNameLength)
+		{
+			return Trimmed.Len() == Name.ToString().Len() ? Name : FText::FromString(Trimmed);
+		}
+		return FText::FromString(Trimmed.Left(MaxNameLength));
+	}
+
+	TArray<int32> SanitizeFixtureIds(TConstArrayView<int32> FixtureIds)
+	{
+		TArray<int32> Kept;
+		TSet<int32> Seen;
+		for (const int32 Id : FixtureIds)
+		{
+			if (Kept.Num() >= MaxFixturesPerGroup)
+			{
+				break;
+			}
+			bool bAlreadyKept = false;
+			if (Id > 0)
+			{
+				Seen.Add(Id, &bAlreadyKept);
+				if (!bAlreadyKept)
+				{
+					Kept.Add(Id);
+				}
+			}
+		}
+		return Kept;
+	}
+
+	int32 SanitizeGroups(TArray<FStageFixtureGroup>& Groups)
+	{
+		const int32 Before = Groups.Num();
+		TArray<FStageFixtureGroup> Kept;
+		TSet<FGuid> Seen;
+		for (FStageFixtureGroup& Group : Groups)
+		{
+			bool bDuplicate = false;
+			if (!Group.Id.IsValid() || Kept.Num() >= MaxGroups)
+			{
+				continue;
+			}
+			Seen.Add(Group.Id, &bDuplicate);
+			if (bDuplicate)
+			{
+				continue;
+			}
+			Group.Name = SanitizeName(Group.Name);
+			if (Group.Name.IsEmpty())
+			{
+				Group.Name = FText::Format(NSLOCTEXT("StageCraftGroups", "UnnamedGroup", "Group {0}"), FText::AsNumber(Kept.Num() + 1));
+			}
+			Group.FixtureIds = SanitizeFixtureIds(Group.FixtureIds);
+			Kept.Add(MoveTemp(Group));
+		}
+		Groups = MoveTemp(Kept);
+		return Before - Groups.Num();
+	}
+}

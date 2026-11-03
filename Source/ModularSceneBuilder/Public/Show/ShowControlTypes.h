@@ -125,3 +125,59 @@ enum class EStageControlSource : uint8
 	/** Incoming DMX drives fixtures; cues are disabled. StageCraft acts as a visualiser for an external console. */
 	External	UMETA(DisplayName = "External (DMX In)"),
 };
+
+/**
+ * How one edit spreads over several selected fixtures (Docs/ADR/0025-programmer-and-output-mix.md §4), as a console's fan.
+ * The change made on the primary fixture is scaled per fixture by StageShowMix::FanFactor, in selection order.
+ */
+UENUM(BlueprintType)
+enum class EStageFanMode : uint8
+{
+	/** Every fixture takes the value set. */
+	Off,
+	/** From minus the change on the first fixture to plus the change on the last; the middle keeps its value. */
+	Linear,
+	/** The ends take the full change, the middle none. */
+	V		UMETA(DisplayName = "V"),
+	/** The middle takes the full change, the ends none. */
+	InvertedV	UMETA(DisplayName = "Inverted V"),
+};
+
+/**
+ * A saved fixture selection, as on a console's group pool (Docs/ADR/0025 §5). Fixtures are named by FixtureId, in the order they
+ * were selected, so a group survives save/load and re-spawns and keeps its fan order. Validated by StageFixtureGroupRules.
+ */
+USTRUCT(BlueprintType)
+struct MODULARSCENEBUILDER_API FStageFixtureGroup
+{
+	GENERATED_BODY()
+
+	UPROPERTY(BlueprintReadOnly, Category = "Group")
+	FGuid Id;
+
+	UPROPERTY(BlueprintReadOnly, Category = "Group")
+	FText Name;
+
+	UPROPERTY(BlueprintReadOnly, Category = "Group")
+	TArray<int32> FixtureIds;
+};
+
+/** What a valid group list is. Applied by UStageShowLibrarySubsystem on every entry (record, rename, load, undo). Pure, any thread. */
+namespace StageFixtureGroupRules
+{
+	inline constexpr int32 MaxGroups = 999;
+	inline constexpr int32 MaxFixturesPerGroup = 4096;
+	inline constexpr int32 MaxNameLength = 64;
+
+	/** Trimmed and cut to MaxNameLength; empty stays empty (the caller names it). */
+	MODULARSCENEBUILDER_API FText SanitizeName(const FText& Name);
+
+	/** Positive ids only, each once, in their first order, at most MaxFixturesPerGroup. */
+	MODULARSCENEBUILDER_API TArray<int32> SanitizeFixtureIds(TConstArrayView<int32> FixtureIds);
+
+	/**
+	 * Repairs a group list from an untrusted source (a file, an undo step): drops groups without a valid id, later duplicates of an
+	 * id and groups past MaxGroups, gives unnamed groups a name and sanitizes the fixture lists. Returns how many groups were dropped.
+	 */
+	MODULARSCENEBUILDER_API int32 SanitizeGroups(TArray<FStageFixtureGroup>& Groups);
+}

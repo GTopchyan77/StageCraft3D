@@ -63,6 +63,9 @@ public:
 	UFUNCTION(BlueprintPure, Category = "StageCraft|Fixture")
 	const TMap<FGameplayTag, float>& GetAttributes() const { return Attributes; }
 
+	/** The home look: the bottom layer of the output mix (Docs/ADR/0025 §2). Every supported attribute has a value. */
+	const TMap<FGameplayTag, float>& GetHomeAttributes() const { return HomeAttributes; }
+
 	UFUNCTION(BlueprintPure, Category = "StageCraft|Fixture")
 	FLinearColor GetColorRGB() const;
 
@@ -204,6 +207,14 @@ protected:
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, SaveGame, Category = "StageCraft|Fixture", meta = (Categories = "StageCraft.Attribute"))
 	TMap<FGameplayTag, float> Attributes;
 
+	/**
+	 * The home look (Docs/ADR/0025-programmer-and-output-mix.md §2): what the fixture shows where neither the playing cue nor the
+	 * programmer drives an attribute. Attributes is the output UShowControlSubsystem mixes from this, the cue and the programmer.
+	 * A state saved before #59 has none, so ApplyItemData takes the restored output as the home look and an old show looks the same.
+	 */
+	UPROPERTY(SaveGame)
+	TMap<FGameplayTag, float> HomeAttributes;
+
 private:
 	/**
 	 * The parts of the fixture an attribute drives. An edit or a fade frame re-applies only the parts its changed attributes
@@ -260,6 +271,12 @@ private:
 	 * Each repair is reported (ReportStateRepair). Runs from ApplyItemData, after unsupported attributes were dropped.
 	 */
 	void SanitizeRestoredState(const class ULightingFixtureData& Fixture);
+
+	/**
+	 * Gives HomeAttributes exactly the fixture's attributes: unsupported ones dropped, missing or non-finite ones taken from the
+	 * (already sanitized) output, the rest clamped like every write. Runs from ApplyItemData after SanitizeRestoredState.
+	 */
+	void SanitizeHomeAttributes(const class ULightingFixtureData& Fixture);
 
 	static float SanitizeAttributeValue(const FGameplayTag& Attribute, float Value, float Min, float Max);
 	static FStageDMXPatch ClampPatch(const FStageDMXPatch& InPatch);

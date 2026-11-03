@@ -4,13 +4,16 @@
 
 #include "Actors/LightingFixtureActor.h"
 #include "Camera/PlayerCameraManager.h"
+#include "Data/StageParameterTypes.h"
 #include "Engine/World.h"
 #include "GameFramework/PlayerController.h"
 #include "ModularSceneBuilder.h"
 #include "Show/StageDMXBridge.h"
 #include "Show/StageDMXPatching.h"
 #include "Show/StageShadowBudget.h"
+#include "Show/StageShowMix.h"
 #include "Subsystems/StageDMXPatchSubsystem.h"
+#include "Subsystems/StageProgrammerSubsystem.h"
 #include "TimerManager.h"
 
 #include UE_INLINE_GENERATED_CPP_BY_NAME(ShowControlSubsystem)
@@ -38,6 +41,11 @@ void UShowControlSubsystem::Initialize(FSubsystemCollectionBase& Collection)
 {
 	Super::Initialize(Collection);
 	Patch = Collection.InitializeDependency<UStageDMXPatchSubsystem>();
+	Programmer = Collection.InitializeDependency<UStageProgrammerSubsystem>();
+	if (Programmer)
+	{
+		ProgrammerChangedHandle = Programmer->OnFixturesChanged.AddUObject(this, &ThisClass::HandleProgrammerFixturesChanged);
+	}
 }
 
 void UShowControlSubsystem::Deinitialize()
@@ -47,6 +55,13 @@ void UShowControlSubsystem::Deinitialize()
 		World->GetTimerManager().ClearTimer(ShadowBudgetTimer);
 	}
 	SetDMXBridge(nullptr);
+	if (Programmer)
+	{
+		Programmer->OnFixturesChanged.Remove(ProgrammerChangedHandle);
+	}
+	ProgrammerChangedHandle.Reset();
+	Programmer = nullptr;
+	PlaybackValues.Reset();
 	Fixtures.Reset();
 	Fades.Reset();
 	Strobes.Reset();
@@ -153,6 +168,12 @@ void UShowControlSubsystem::RegisterFixture(ALightingFixtureActor* Fixture)
 
 	Fixtures.Add(Fixture);
 	UE_LOG(LogStageCraft, Log, TEXT("Fixture %d registered (%s)."), Fixture->GetFixtureId(), *Fixture->GetName());
+	// A fixture the show already has data for (a re-spawn, an undone delete, a reused ID) takes its place in the mix at once.
+	const int32 Id = Fixture->GetFixtureId();
+	if (PlaybackValues.Contains(Id) || (Programmer && (Programmer->FindValues(Id) || Programmer->IsHighlighted(Id))))
+	{
+		ResolveFixture(*Fixture);
+	}
 	MarkShadowBudgetDirty();
 	OnFixturesChanged.Broadcast();
 }
@@ -323,7 +344,7 @@ bool UShowControlSubsystem::StoreCue(float CueNumber, const FText& Label, float 
 	{
 		FShowCueFixtureState& State = Cue.Fixtures.AddDefaulted_GetRef();
 		State.FixtureId = Fixture->GetFixtureId();
-		State.Attributes = Fixture->GetAttributes();
+		State.Attributes = GetRecordableValues(*Fixture);
 	}
 
 	const int32 Existing = FindCueIndex(Cue.Number);
@@ -391,7 +412,29 @@ void UShowControlSubsystem::SetCues(const TArray<FShowCue>& InCues)
 	FinishFade();
 	AssignSanitizedCues(InCues, TEXT("SetCues"));
 	ActiveCueNumber = -1.f;
+	// A loaded show starts with no cue playing; the fixtures keep the output they were restored with (RestoreActiveCue follows).
+	PlaybackValues.Reset();
 	OnCueListChanged.Broadcast();
+}
+
+bool UShowControlSubsystem::RestoreActiveCue(float CueNumber)
+{
+	const int32 Index = FindCueIndex(CueNumber);
+	if (Index == INDEX_NONE || ControlSource == EStageControlSource::External)
+	{
+		return false;
+	}
+	FinishFade();
+	TArray<int32> Restored;
+	for (const FShowCueFixtureState& State : Cues[Index].Fixtures)
+	{
+		PlaybackValues.Add(State.FixtureId, State.Attributes);
+		Restored.Add(State.FixtureId);
+	}
+	ActiveCueNumber = Cues[Index].Number;
+	ResolveFixtures(Restored);
+	OnCueListChanged.Broadcast();
+	return true;
 }
 
 void UShowControlSubsystem::ReplaceCues(const TArray<FShowCue>& InCues)
@@ -435,7 +478,8 @@ bool UShowControlSubsystem::GoToCue(float CueNumber)
 		Fade.To = State.Attributes;
 		for (const TPair<FGameplayTag, float>& Pair : State.Attributes)
 		{
-			const float From = Fixture->GetAttribute(Pair.Key);
+			// From the playback layer, not the output: a value the programmer holds is not where the cue's fade starts.
+			const float From = GetPlaybackValue(*Fixture, Pair.Key);
 			if (!FMath::IsNearlyEqual(From, Pair.Value))
 			{
 				Fade.Changing.Add({ Pair.Key, From, Pair.Value });
@@ -498,7 +542,10 @@ void UShowControlSubsystem::CompleteFade()
 	{
 		if (ALightingFixtureActor* Fixture = Fade.Fixture.Get())
 		{
-			Fixture->SetAttributes(Fade.To);
+			PlaybackValues.FindOrAdd(Fixture->GetFixtureId()).Append(Fade.To);
+			TMap<FGameplayTag, float> Final = Fade.To;
+			RemoveHeldAttributes(*Fixture, Final);
+			Fixture->SetAttributes(Final);
 		}
 	}
 	Fades.Reset();
@@ -534,6 +581,9 @@ void UShowControlSubsystem::TickFades(float DeltaTime)
 		{
 			Frame.Add(Lerp.Attribute, FMath::Lerp(Lerp.From, Lerp.To, Alpha));
 		}
+		// The playback layer follows the fade, so a take-over or a Clear mid-fade starts from where the cue is now.
+		PlaybackValues.FindOrAdd(Fixture->GetFixtureId()).Append(Frame);
+		RemoveHeldAttributes(*Fixture, Frame);
 		Fixture->SetAttributes(Frame);
 	}
 }
@@ -572,7 +622,141 @@ void UShowControlSubsystem::SetControlSource(EStageControlSource NewSource)
 	ControlSource = NewSource;
 	// Frames received under the other source were never applied, so none may count as "unchanged".
 	LastInputFrames.Reset();
+	if (ControlSource == EStageControlSource::Internal)
+	{
+		// The show takes the fixtures back: the console's last look gives way to the mix (home look, cue, programmer).
+		ResolveAllFixtures();
+	}
 	OnControlSourceChanged.Broadcast(ControlSource);
+}
+
+// --- Output mix ---
+
+void UShowControlSubsystem::HandleProgrammerFixturesChanged(TConstArrayView<int32> FixtureIds)
+{
+	ResolveFixtures(FixtureIds);
+}
+
+void UShowControlSubsystem::ResolveFixtures(TConstArrayView<int32> FixtureIds)
+{
+	for (const int32 FixtureId : FixtureIds)
+	{
+		if (ALightingFixtureActor* Fixture = FindFixture(FixtureId))
+		{
+			ResolveFixture(*Fixture);
+		}
+	}
+}
+
+void UShowControlSubsystem::ResolveAllFixtures()
+{
+	for (ALightingFixtureActor* Fixture : GetFixtures())
+	{
+		ResolveFixture(*Fixture);
+	}
+}
+
+void UShowControlSubsystem::MakeHighlightValues(const ALightingFixtureActor& Fixture, TMap<FGameplayTag, float>& OutValues)
+{
+	OutValues = Fixture.MatchColor(FLinearColor::White);
+	const TMap<FGameplayTag, float>& Own = Fixture.GetAttributes();
+	if (Own.Contains(StageCraftTags::Attribute_Dimmer))
+	{
+		OutValues.Add(StageCraftTags::Attribute_Dimmer, 1.f);
+	}
+	if (Own.Contains(StageCraftTags::Attribute_Shutter))
+	{
+		OutValues.Add(StageCraftTags::Attribute_Shutter, 0.f);
+	}
+}
+
+void UShowControlSubsystem::ResolveFixture(ALightingFixtureActor& Fixture)
+{
+	const int32 Id = Fixture.GetFixtureId();
+	TMap<FGameplayTag, float> HighlightValues;
+	const bool bHighlighted = Programmer && Programmer->IsHighlighted(Id);
+	if (bHighlighted)
+	{
+		MakeHighlightValues(Fixture, HighlightValues);
+	}
+
+	// Under External DMX the console owns the cue and home layers; only what the user holds by hand is written over it.
+	const bool bInternal = ControlSource == EStageControlSource::Internal;
+	StageShowMix::FFixtureLayers Layers;
+	Layers.Home = bInternal ? &Fixture.GetHomeAttributes() : nullptr;
+	Layers.Playback = bInternal ? PlaybackValues.Find(Id) : nullptr;
+	Layers.Programmer = Programmer ? Programmer->FindValues(Id) : nullptr;
+	Layers.Highlight = bHighlighted ? &HighlightValues : nullptr;
+
+	TArray<FGameplayTag> Attributes;
+	Fixture.GetAttributes().GetKeys(Attributes);
+	TMap<FGameplayTag, float> Mixed;
+	StageShowMix::ResolveFixture(Attributes, Layers, Mixed);
+	// SetAttributes stores and applies only the values that differ from the output.
+	Fixture.SetAttributes(Mixed);
+}
+
+void UShowControlSubsystem::RemoveHeldAttributes(const ALightingFixtureActor& Fixture, TMap<FGameplayTag, float>& Frame) const
+{
+	if (!Programmer)
+	{
+		return;
+	}
+	const int32 Id = Fixture.GetFixtureId();
+	const TMap<FGameplayTag, float>* Held = Programmer->FindValues(Id);
+	if (Programmer->IsHighlighted(Id))
+	{
+		TMap<FGameplayTag, float> HighlightValues;
+		MakeHighlightValues(Fixture, HighlightValues);
+		for (const TPair<FGameplayTag, float>& Pair : HighlightValues)
+		{
+			Frame.Remove(Pair.Key);
+		}
+	}
+	if (Held)
+	{
+		for (const TPair<FGameplayTag, float>& Pair : *Held)
+		{
+			Frame.Remove(Pair.Key);
+		}
+	}
+}
+
+float UShowControlSubsystem::GetPlaybackValue(const ALightingFixtureActor& Fixture, const FGameplayTag& Attribute) const
+{
+	if (const TMap<FGameplayTag, float>* Playback = PlaybackValues.Find(Fixture.GetFixtureId()))
+	{
+		if (const float* Value = Playback->Find(Attribute))
+		{
+			return *Value;
+		}
+	}
+	if (const float* Home = Fixture.GetHomeAttributes().Find(Attribute))
+	{
+		return *Home;
+	}
+	return Fixture.GetAttribute(Attribute);
+}
+
+TMap<FGameplayTag, float> UShowControlSubsystem::GetRecordableValues(const ALightingFixtureActor& Fixture) const
+{
+	const int32 Id = Fixture.GetFixtureId();
+	if (!Programmer || !Programmer->IsHighlighted(Id))
+	{
+		return Fixture.GetAttributes();
+	}
+	// Highlighted: the output shows the highlight, so the look underneath is mixed again without it.
+	TMap<FGameplayTag, float> Values = Fixture.GetAttributes();
+	StageShowMix::FFixtureLayers Layers;
+	Layers.Home = &Fixture.GetHomeAttributes();
+	Layers.Playback = PlaybackValues.Find(Id);
+	Layers.Programmer = Programmer->FindValues(Id);
+	TArray<FGameplayTag> Attributes;
+	Values.GetKeys(Attributes);
+	TMap<FGameplayTag, float> Mixed;
+	StageShowMix::ResolveFixture(Attributes, Layers, Mixed);
+	Values.Append(Mixed);
+	return Values;
 }
 
 bool UShowControlSubsystem::IsDMXOutputActive() const

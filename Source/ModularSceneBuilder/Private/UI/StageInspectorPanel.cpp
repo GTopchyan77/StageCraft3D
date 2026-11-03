@@ -100,7 +100,7 @@ void UStageInspectorPanel::RefreshHeader(UObject* Target)
 	{
 		FStageParameterValue Label;
 		const bool bHasLabel = Target && IStageParameterInterface::Execute_GetParameterValue(Target, StageCraftTags::Param_Info_Label, Label);
-		TitleText->SetText(bHasLabel ? Label.Text : (Target ? FText::FromString(Target->GetName()) : NSLOCTEXT("StageCraftInspector", "NoSelection", "No Selection")));
+		TitleText->SetText(DecorateWithSharedSelection(bHasLabel ? Label.Text : (Target ? FText::FromString(Target->GetName()) : NSLOCTEXT("StageCraftInspector", "NoSelection", "No Selection"))));
 	}
 
 	if (SubtitleText)

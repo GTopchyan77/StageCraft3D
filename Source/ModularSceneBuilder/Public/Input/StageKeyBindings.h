@@ -44,6 +44,11 @@ enum class EStageInputCommand : uint8
 	// Added in STATE.md #57 (ADR 0013 addendum), last so saved key maps keep their meaning.
 	Save,
 	Duplicate,
+	// Added in STATE.md #59 (ADR 0025), last so saved key maps keep their meaning.
+	CueGo,
+	CueBack,
+	ClearProgrammer,
+	Highlight,
 	Count UMETA(Hidden)
 };
 
@@ -54,6 +59,8 @@ enum class EStageInputCategory : uint8
 	Tools,
 	View,
 	Navigation,
+	/** Lighting playback and programming (STATE.md #59). */
+	Show,
 };
 
 /** Each command has two bindings, like the Unreal Editor's keyboard shortcuts. */

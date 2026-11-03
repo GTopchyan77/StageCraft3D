@@ -135,11 +135,16 @@ private:
 
 	TWeakObjectPtr<class UStageEnvironmentSubsystem> BoundEnvironment;
 
-	/** Cues are part of the scene file (format version 3), so storing, editing or deleting one is an unsaved edit. */
+	/**
+	 * Show data is part of the scene file: cues (format version 3), the programmer and fixture groups (version 6), so changing any of
+	 * them is an unsaved edit.
+	 */
 	UFUNCTION()
-	void HandleCueListChanged();
+	void HandleShowDataChanged();
 
 	TWeakObjectPtr<class UShowControlSubsystem> BoundShowControl;
+	TWeakObjectPtr<class UStageProgrammerSubsystem> BoundProgrammer;
+	TWeakObjectPtr<class UStageShowLibrarySubsystem> BoundShowLibrary;
 
 	void RecomputeStats();
 	void SetDirty(bool bNewDirty);

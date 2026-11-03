@@ -254,6 +254,8 @@ void ALightingFixtureActor::PrepareAsDuplicate()
 	// Not registered yet (play has not begun), so plain writes: registration then assigns them (ShowControl, DMX patch).
 	FixtureId = 0;
 	Patch = FStageDMXPatch();
+	// The copy has no programmer values or cue data of its own: what it shows now is its home look (Docs/ADR/0025 §2).
+	HomeAttributes = Attributes;
 }
 
 void ALightingFixtureActor::BeginPlay()
@@ -343,6 +345,7 @@ void ALightingFixtureActor::ApplyItemData(const UBaseItemData& Data)
 		}
 	}
 	SanitizeRestoredState(*Fixture);
+	SanitizeHomeAttributes(*Fixture);
 	// A swapped model has another footprint, and a restored state another patch: either changes the addressing.
 	NotifyPatchSubsystem();
 
@@ -389,6 +392,31 @@ void ALightingFixtureActor::SanitizeRestoredState(const ULightingFixtureData& Fi
 	{
 		ReportStateRepair(FString::Printf(TEXT("fixture ID %d -> automatic"), FixtureId));
 		FixtureId = 0;
+	}
+}
+
+void ALightingFixtureActor::SanitizeHomeAttributes(const ULightingFixtureData& Fixture)
+{
+	for (auto It = HomeAttributes.CreateIterator(); It; ++It)
+	{
+		if (!Attributes.Contains(It.Key()))
+		{
+			It.RemoveCurrent();
+		}
+	}
+	for (const TPair<FGameplayTag, float>& Output : Attributes)
+	{
+		float* Home = HomeAttributes.Find(Output.Key);
+		float Min = 0.f;
+		float Max = 1.f;
+		if (!Home || !FMath::IsFinite(*Home))
+		{
+			HomeAttributes.Add(Output.Key, Output.Value);
+		}
+		else if (Fixture.GetAttributeRange(Output.Key, Min, Max))
+		{
+			*Home = SanitizeAttributeValue(Output.Key, *Home, Min, Max);
+		}
 	}
 }
 

@@ -92,9 +92,18 @@ protected:
 	/** Feature-group color from Theme, or a neutral default when no theme is assigned. */
 	FLinearColor GetGroupColor(const FGameplayTag& FeatureGroup) const;
 
+	/**
+	 * Title plus " (+N)" when the inspected object is a selected fixture and N other fixtures are selected: a look edit here applies to
+	 * all of them (Docs/ADR/0025-programmer-and-output-mix.md §4). OnViewUpdated runs again whenever the selection's size changes.
+	 */
+	FText DecorateWithSharedSelection(const FText& Title) const;
+
 private:
 	UFUNCTION()
 	void HandleSelectionChanged(AActor* NewSelection, AActor* PreviousSelection);
+
+	UFUNCTION()
+	void HandleSelectionSetChanged(int32 Count);
 
 	UFUNCTION()
 	void HandleParameterChanged(class AModularBaseActor* Actor, FGameplayTag ParameterId);

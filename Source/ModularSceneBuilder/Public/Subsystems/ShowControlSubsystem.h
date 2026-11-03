@@ -158,6 +158,24 @@ public:
 	UPROPERTY(BlueprintAssignable, Category = "StageCraft|Show")
 	FOnShowCueEvent OnCueFinished;
 
+	/**
+	 * Makes CueNumber the active cue at once, without a fade or OnCueStarted: scene load resumes the show where it was saved, so the
+	 * cue's values become the playback layer again. False for an unknown number or in External control mode.
+	 */
+	bool RestoreActiveCue(float CueNumber);
+
+	// --- Output mix (Docs/ADR/0025-programmer-and-output-mix.md §2) ---
+
+	/**
+	 * Re-mixes these fixtures' output from their home look, the playing cue, the programmer and the highlight (StageShowMix), writing
+	 * only the values that change. This subsystem is the only writer of the mix; it runs on demand (programmer edits, highlight,
+	 * control source), never per frame except for the attributes a fade is driving. Unknown IDs are ignored.
+	 */
+	void ResolveFixtures(TConstArrayView<int32> FixtureIds);
+
+	/** ResolveFixtures for every registered fixture. */
+	void ResolveAllFixtures();
+
 	// --- DMX ---
 
 	/** Installs (or with nullptr removes) the transport. The previous bridge is stopped. */
@@ -250,11 +268,43 @@ private:
 	void AssignSanitizedCues(const TArray<FShowCue>& InCues, const TCHAR* Source);
 	int32 FindCueIndex(float CueNumber) const;
 
+	void HandleProgrammerFixturesChanged(TConstArrayView<int32> FixtureIds);
+
+	/** Re-mixes one fixture (ResolveFixtures). In External mode only the programmer and highlight are written, so the console's look stays. */
+	void ResolveFixture(class ALightingFixtureActor& Fixture);
+
+	/**
+	 * The values the highlight shows on Fixture: full dimmer, open shutter and the fixture's own full white. Stored in OutValues so
+	 * the mix can point at them.
+	 */
+	static void MakeHighlightValues(const class ALightingFixtureActor& Fixture, TMap<FGameplayTag, float>& OutValues);
+
+	/** Removes from Frame the attributes the programmer or the highlight holds on Fixture, so a cue never drives them. */
+	void RemoveHeldAttributes(const class ALightingFixtureActor& Fixture, TMap<FGameplayTag, float>& Frame) const;
+
+	/** Where a fade of Attribute starts and Clear returns to: the playback layer, else the home look, else the output. */
+	float GetPlaybackValue(const class ALightingFixtureActor& Fixture, const FGameplayTag& Attribute) const;
+
+	/** What Fixture shows without the highlight (cue store records this, never the highlight). */
+	TMap<FGameplayTag, float> GetRecordableValues(const class ALightingFixtureActor& Fixture) const;
+
 	TArray<TWeakObjectPtr<class ALightingFixtureActor>> Fixtures;
 
 	/** The addressing this show reads and writes DMX by. Resolved in Initialize; same world, so it outlives every use. */
 	UPROPERTY(Transient)
 	TObjectPtr<class UStageDMXPatchSubsystem> Patch = nullptr;
+
+	/** The programmer layer of the mix (Docs/ADR/0025 §3). Resolved in Initialize; same world. */
+	UPROPERTY(Transient)
+	TObjectPtr<class UStageProgrammerSubsystem> Programmer = nullptr;
+
+	FDelegateHandle ProgrammerChangedHandle;
+
+	/**
+	 * The playback layer: per fixture ID, the values the cue list has set (the active cue's, part-way through a fade while one runs).
+	 * Kept by ID like cues, so a re-spawned fixture finds its values. Cleared when a show is loaded (SetCues).
+	 */
+	TMap<int32, TMap<FGameplayTag, float>> PlaybackValues;
 
 	/**
 	 * The last frame received per universe, to find which fixtures' channels changed. Forgotten when the patch changes

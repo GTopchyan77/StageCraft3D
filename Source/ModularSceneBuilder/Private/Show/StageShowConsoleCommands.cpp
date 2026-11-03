@@ -22,6 +22,8 @@
 #include "Player/ModularPlayerController.h"
 #include "Subsystems/ShowControlSubsystem.h"
 #include "Subsystems/StageDMXPatchSubsystem.h"
+#include "Subsystems/StageProgrammerSubsystem.h"
+#include "Subsystems/StageShowLibrarySubsystem.h"
 #include "UI/StagePatchPanel.h"
 
 namespace StageShowCommands
@@ -219,6 +221,129 @@ namespace StageShowCommands
 			*UEnum::GetValueAsString(ShowControl->GetControlSource()));
 	}
 
+	/** Selects fixtures by fixture ID, in the order given (the last is the primary), so scripted runs can build a selection. */
+	void Select(const TArray<FString>& Args, UWorld* World)
+	{
+		AModularPlayerController* Controller = GetController(World);
+		const UShowControlSubsystem* ShowControl = World ? World->GetSubsystem<UShowControlSubsystem>() : nullptr;
+		if (!Controller || !ShowControl)
+		{
+			return;
+		}
+		TArray<AModularBaseActor*> Fixtures;
+		for (const FString& Arg : Args)
+		{
+			int32 FixtureId = 0;
+			if (ALightingFixtureActor* Fixture = LexTryParseString(FixtureId, *Arg) ? ShowControl->FindFixture(FixtureId) : nullptr)
+			{
+				Fixtures.Add(Fixture);
+			}
+		}
+		Controller->RequestSelectItems(Fixtures, EStageSelectionClick::Replace);
+		UE_LOG(LogStageCraft, Display, TEXT("StageCraft.Show.Select: %d fixtures selected."), Fixtures.Num());
+	}
+
+	void Programmer(const TArray<FString>& Args, UWorld* World)
+	{
+		AModularPlayerController* Controller = GetController(World);
+		const UStageProgrammerSubsystem* ProgrammerState = World ? World->GetSubsystem<UStageProgrammerSubsystem>() : nullptr;
+		if (!Controller || !ProgrammerState)
+		{
+			return;
+		}
+		const FString Verb = Args.IsEmpty() ? TEXT("List") : Args[0];
+		if (Verb == TEXT("Clear"))
+		{
+			Controller->RequestClearProgrammer();
+		}
+		else if (Verb == TEXT("Highlight") && Args.Num() >= 2)
+		{
+			Controller->RequestSetHighlight(Args[1] == TEXT("On") || Args[1] == TEXT("1"));
+		}
+		else if (Verb == TEXT("Fan") && Args.Num() >= 2)
+		{
+			const int64 Mode = StaticEnum<EStageFanMode>()->GetValueByNameString(Args[1]);
+			if (Mode == INDEX_NONE)
+			{
+				UE_LOG(LogStageCraft, Display, TEXT("StageCraft.Show.Programmer Fan: Off, Linear, V or InvertedV."));
+				return;
+			}
+			Controller->RequestSetFanMode(static_cast<EStageFanMode>(Mode));
+		}
+		else if (Verb != TEXT("List"))
+		{
+			UE_LOG(LogStageCraft, Display, TEXT("Usage: StageCraft.Show.Programmer Clear | Highlight On|Off | Fan Off|Linear|V|InvertedV | List"));
+			return;
+		}
+		for (const FShowCueFixtureState& Entry : ProgrammerState->GetEntries())
+		{
+			TArray<FString> Values;
+			for (const TPair<FGameplayTag, float>& Pair : Entry.Attributes)
+			{
+				Values.Add(FString::Printf(TEXT("%s=%.3f"), *Pair.Key.GetTagName().ToString().RightChop(21), Pair.Value));
+			}
+			UE_LOG(LogStageCraft, Display, TEXT("StageCraft.Show.Programmer: fixture %d: %s"), Entry.FixtureId, *FString::Join(Values, TEXT(" ")));
+		}
+		UE_LOG(LogStageCraft, Display, TEXT("StageCraft.Show.Programmer: %d fixtures held, highlight %s, fan %s."), ProgrammerState->GetFixtureCount(),
+			Controller->IsHighlightOn() ? TEXT("on") : TEXT("off"), *UEnum::GetValueAsString(Controller->GetFanMode()));
+	}
+
+	void Group(const TArray<FString>& Args, UWorld* World)
+	{
+		AModularPlayerController* Controller = GetController(World);
+		const UStageShowLibrarySubsystem* Library = World ? World->GetSubsystem<UStageShowLibrarySubsystem>() : nullptr;
+		if (!Controller || !Library)
+		{
+			return;
+		}
+		const FString Verb = Args.IsEmpty() ? TEXT("List") : Args[0];
+		int32 Index = 0;
+		const bool bHasIndex = Args.Num() >= 2 && LexTryParseString(Index, *Args[1]) && Library->GetGroups().IsValidIndex(Index - 1);
+		const FGuid GroupId = bHasIndex ? Library->GetGroups()[Index - 1].Id : FGuid();
+		bool bOk = true;
+		if (Verb == TEXT("Record"))
+		{
+			bOk = Controller->RequestRecordGroup(FText::FromString(FString::Join(TArrayView<const FString>(Args).RightChop(1), TEXT(" ")))).IsValid();
+		}
+		else if (Verb == TEXT("Select") && bHasIndex)
+		{
+			bOk = Controller->RequestSelectGroup(GroupId);
+		}
+		else if (Verb == TEXT("Update") && bHasIndex)
+		{
+			bOk = Controller->RequestUpdateGroup(GroupId);
+		}
+		else if (Verb == TEXT("Delete") && bHasIndex)
+		{
+			bOk = Controller->RequestDeleteGroup(GroupId);
+		}
+		else if (Verb != TEXT("List"))
+		{
+			UE_LOG(LogStageCraft, Display, TEXT("Usage: StageCraft.Show.Group Record [name] | Select <n> | Update <n> | Delete <n> | List (n counts from 1)"));
+			return;
+		}
+		if (Verb != TEXT("List"))
+		{
+			UE_LOG(LogStageCraft, Display, TEXT("StageCraft.Show.Group %s: %s."), *FString::Join(Args, TEXT(" ")), bOk ? TEXT("done") : TEXT("refused"));
+		}
+		int32 Number = 0;
+		for (const FStageFixtureGroup& Each : Library->GetGroups())
+		{
+			TArray<FString> Ids;
+			for (const int32 FixtureId : Each.FixtureIds)
+			{
+				Ids.Add(FString::FromInt(FixtureId));
+			}
+			UE_LOG(LogStageCraft, Display, TEXT("StageCraft.Show.Group %d \"%s\": %s"), ++Number, *Each.Name.ToString(), *FString::Join(Ids, TEXT(" ")));
+		}
+	}
+
+	FAutoConsoleCommandWithWorldAndArgs SelectCommand(TEXT("StageCraft.Show.Select"), TEXT("<fixture id>... Selects fixtures by ID in that order (the last is the primary)."),
+		FConsoleCommandWithWorldAndArgsDelegate::CreateStatic(&Select));
+	FAutoConsoleCommandWithWorldAndArgs ProgrammerCommand(TEXT("StageCraft.Show.Programmer"), TEXT("Clear | Highlight On|Off | Fan Off|Linear|V|InvertedV | List (as the Groups panel's programmer bar)"),
+		FConsoleCommandWithWorldAndArgsDelegate::CreateStatic(&Programmer));
+	FAutoConsoleCommandWithWorldAndArgs GroupCommand(TEXT("StageCraft.Show.Group"), TEXT("Record [name] | Select <n> | Update <n> | Delete <n> | List (validated, undoable like the Groups panel)"),
+		FConsoleCommandWithWorldAndArgsDelegate::CreateStatic(&Group));
 	FAutoConsoleCommandWithWorldAndArgs CueCommand(TEXT("StageCraft.Show.Cue"), TEXT("Store <n> [fade] [label] | Update <n> <fade> [label] | Delete <n> | Go | Back | GoTo <n> | Source Internal|External | List (validated, undoable like the Cue panel)."),
 		FConsoleCommandWithWorldAndArgsDelegate::CreateStatic(&Cue));
 	FAutoConsoleCommandWithWorldAndArgs SetCommand(TEXT("StageCraft.Show.Set"), TEXT("<Attribute|Param> <value> Inspector-equivalent edit of the selected item (validated)."),

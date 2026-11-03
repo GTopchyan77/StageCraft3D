@@ -18,7 +18,9 @@
 #include "Scene/StageSceneStore.h"
 #include "Subsystems/ShowControlSubsystem.h"
 #include "Subsystems/StageItemSubsystem.h"
+#include "Subsystems/StageProgrammerSubsystem.h"
 #include "Subsystems/StageSessionSubsystem.h"
+#include "Subsystems/StageShowLibrarySubsystem.h"
 #include "Tasks/Task.h"
 
 #include UE_INLINE_GENERATED_CPP_BY_NAME(StageSceneComponent)
@@ -122,6 +124,18 @@ FStageSceneDocument UStageSceneComponent::CaptureStage(const FString& Name) cons
 	if (const UShowControlSubsystem* Show = UWorld::GetSubsystem<UShowControlSubsystem>(GetWorld()))
 	{
 		Document.Cues = Show->GetCues();
+		if (Show->GetActiveCueNumber() >= 0.f && Show->FindCue(Show->GetActiveCueNumber()))
+		{
+			Document.ActiveCueNumber = Show->GetActiveCueNumber();
+		}
+	}
+	if (const UStageProgrammerSubsystem* Programmer = UWorld::GetSubsystem<UStageProgrammerSubsystem>(GetWorld()))
+	{
+		Document.Programmer = Programmer->GetEntries();
+	}
+	if (const UStageShowLibrarySubsystem* Library = UWorld::GetSubsystem<UStageShowLibrarySubsystem>(GetWorld()))
+	{
+		Document.Groups = Library->GetGroups();
 	}
 	return Document;
 }
@@ -371,6 +385,19 @@ FStageSceneOperationResult UStageSceneComponent::ApplyDocument(const FStageScene
 		SpawnSystem->TryDeleteActor(Existing);
 	}
 
+	// The old show goes with its fixtures, before the new ones register: its playing cue and programmer name fixture IDs the new
+	// fixtures may reuse (Docs/ADR/0025 §7). A file without cues clears the list.
+	UShowControlSubsystem* Show = UWorld::GetSubsystem<UShowControlSubsystem>(GetWorld());
+	UStageProgrammerSubsystem* Programmer = UWorld::GetSubsystem<UStageProgrammerSubsystem>(GetWorld());
+	if (Show)
+	{
+		Show->SetCues(Document.Cues);
+	}
+	if (Programmer)
+	{
+		Programmer->ReplaceAll({});
+	}
+
 	// Skipped items are kept, not dropped: they go back into the file with the next save (Docs/ADR/0013 §3.1).
 	int32 UnknownItems = 0;
 	int32 RefusedItems = 0;
@@ -413,10 +440,22 @@ FStageSceneOperationResult UStageSceneComponent::ApplyDocument(const FStageScene
 	{
 		Environment->SetSettings(Document.Environment);
 	}
-	// After the items: their fixtures have registered with the IDs the cues refer to. A file without cues clears the list.
-	if (UShowControlSubsystem* Show = UWorld::GetSubsystem<UShowControlSubsystem>(GetWorld()))
+	// After the items, whose fixtures have registered with the IDs these name: the show resumes where it was saved.
+	if (Show && Document.ActiveCueNumber.IsSet())
 	{
-		Show->SetCues(Document.Cues);
+		Show->RestoreActiveCue(Document.ActiveCueNumber.GetValue());
+	}
+	if (Programmer)
+	{
+		Programmer->ReplaceAll(Document.Programmer);
+	}
+	if (UStageShowLibrarySubsystem* Library = UWorld::GetSubsystem<UStageShowLibrarySubsystem>(GetWorld()))
+	{
+		Library->SetGroups(Document.Groups);
+	}
+	if (Report.InvalidShowEntries > 0)
+	{
+		UE_LOG(LogStageCraft, Warning, TEXT("Scene \"%s\": %d damaged programmer, group or playback entries were skipped."), *Document.Name, Report.InvalidShowEntries);
 	}
 	if (Report.InvalidCueEntries > 0)
 	{

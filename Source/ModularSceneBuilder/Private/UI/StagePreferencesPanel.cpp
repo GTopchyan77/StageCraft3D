@@ -62,6 +62,7 @@ namespace StagePreferencesPanel
 		case EStageInputCategory::Tools:		return LOCTEXT("CategoryTools", "TOOLS");
 		case EStageInputCategory::View:			return LOCTEXT("CategoryView", "VIEW");
 		case EStageInputCategory::Navigation:	return LOCTEXT("CategoryNavigation", "FLYING  (while the right mouse button is held)");
+		case EStageInputCategory::Show:			return LOCTEXT("CategoryShow", "SHOW");
 		default:								return FText::GetEmpty();
 		}
 	}
@@ -318,7 +319,7 @@ UWidget* UStagePreferencesPanel::BuildShortcutSection()
 	BindingButtons.SetNum(static_cast<int32>(EStageInputCommand::Count) * 2);
 	ResetButtons.SetNum(static_cast<int32>(EStageInputCommand::Count));
 	// By category, not enum order: commands added later (appended to keep saved maps valid) still sit under their heading.
-	for (EStageInputCategory Category : { EStageInputCategory::Editing, EStageInputCategory::Tools, EStageInputCategory::View, EStageInputCategory::Navigation })
+	for (EStageInputCategory Category : { EStageInputCategory::Editing, EStageInputCategory::Tools, EStageInputCategory::View, EStageInputCategory::Show, EStageInputCategory::Navigation })
 	{
 		if (Category != EStageInputCategory::Editing)
 		{

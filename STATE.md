@@ -5495,7 +5495,7 @@ Plan approved in plan mode.
   - `StageCraft.Bench.AtmosphereBlend` (all four atmospheres, Development editor binaries, 1600×900): frame 8.37 ms average / 20.0 ms worst while blending (715 frames) against 7.64 / 11.9 ms at rest (401 frames); game thread 4.64 / 8.95 ms against 4.34 / 7.44 ms.
 - **Not verified by hand:** a cold start in a packaged build (the loader is visible longest there); the welcome and atmosphere cards, the Lighting choice and look sliders by mouse; fixture beams under Cyberpunk Night in a full show.
 
-**Commit:** uncommitted (working tree).
+**Commit:** `eece06e`.
 
 **Known issues / follow-ups**
 - **An existing automated test saves `GameUserSettings.ini`** during the suite (same bytes before #58, so the runner never noticed). Find it and make it use a scoped settings object.
@@ -5505,3 +5505,156 @@ Plan approved in plan mode.
 - No scalability or quality settings; the main window title is still the project name.
 - Starter stages use one fixture type (the Sketch tool's Beam 280).
 - v5 scene files are refused by builds older than #58 (VersionMismatch), as with every format bump.
+
+## #59 — Phase F1: lighting-console gap analysis; programmer, output mix, multi-fixture editing with fan, fixture groups (2026-11-03)
+
+**Status: implemented, awaiting manual verification.** Claude verified it with builds, the automated suite, scripted -game runs and a same-session benchmark against the previous commit (see Verification). Nobody has used the Groups panel, the fan or Highlight with a mouse yet.
+
+**Request (Gevor, 2026-11-03, pasted brief):** a gap analysis of StageCraft against professional lighting consoles (grandMA3, MagicQ, Avolites Titan, Daslight 5), then implement the missing lighting control logic, UI patterns and workflow, step by step, with Rules.md, STATE.md and tasks/todo.md kept.
+
+**Gap analysis** (read-only scan of the show-control, cue, patch, panel and selection code; full table in Docs/ADR/0025 §1):
+- **Already at console level:**
+  - undockable floating windows and saved layouts (ADR 0001);
+  - patch with conflicts and auto-patch (ADR 0019);
+  - Art-Net/sACN input;
+  - the fixture model (ADR 0020).
+- **Missing:**
+  - G1, a programmer: edits wrote straight onto the fixture; the Inspector and Faders edited only the last-selected fixture; no Clear, Highlight or Fan; attribute edits not undoable.
+  - G2, mixing: a fade overwrote a manual edit on the next frame.
+  - G3, groups.
+  - G4, palettes.
+  - G5, cue timing beyond one fade.
+  - G6, tracking.
+  - G7, playback faders, flash, Grand Master, Blackout and Go/Back keys.
+  - G8, an effects engine.
+  - G9, DMX output and pan/tilt invert or swap.
+
+**Gevor's decisions (AskUserQuestion):**
+- the full roadmap, in steps (Phase F1–F5, tasks/todo.md Phase 34);
+- tracking cues (F3);
+- the main cue list plus 10 playback faders with Grand Master and Blackout (F3).
+
+The plan was approved in plan mode.
+
+**What changed (F1, ADR 0025)**
+- **Output mix** (§2).
+  - Each fixture's output (`Attributes`, unchanged for every reader) is mixed by `UShowControlSubsystem` from these layers:
+    - its home look: new SaveGame `HomeAttributes`, sanitized in `ApplyItemData`; a pre-#59 state takes its restored output, a duplicate its current look;
+    - the playing cue: `PlaybackValues` per fixture ID;
+    - the programmer;
+    - the highlight.
+  - Pure rules: `StageShowMix` (ResolveAttribute, ResolveFixture, IsHeldAbovePlayback, FanFactor).
+  - Fades start from the playback layer and never write held attributes (`RemoveHeldAttributes`).
+  - `ResolveFixtures` runs on demand: programmer change, highlight, `RestoreActiveCue`, back to Internal, registering a fixture the show has data for.
+  - Under External DMX only programmer and highlight values are written.
+  - Cue store records the look under the highlight (`GetRecordableValues`).
+  - New `RestoreActiveCue` (no fade).
+- **Programmer** (§3). New `UStageProgrammerSubsystem` (world): values per fixture ID plus the highlight set; sanitized and bounded entries; a native fixtures-changed delegate and a dynamic `OnValuesChanged`.
+- **Controller** (new `Private/Player/ModularPlayerControllerProgrammer.cpp`).
+  - `RequestParameterChange` sends a fixture look row (`StageCraftTags::IsFixtureLookParameter`) to the new `RequestProgrammerChange`. That request writes every selected fixture through the GameMode's `EvaluateParameterChange`, takes what each write changed into the programmer, and records one undo step.
+  - Fan modes Off, Linear, V, Inverted V spread the primary fixture's change (float rows).
+  - New requests: `RequestClearProgrammer`, `RequestSetHighlight` (follows the selection), `RequestSetFanMode`, `RequestRecordGroup` / `UpdateGroup` / `RenameGroup` / `DeleteGroup` / `SelectGroup`.
+  - `RequestStoreCue` now makes the stored cue the playing one and clears the programmer, in the same undo step as the store.
+- **Undo.**
+  - New `History/StageShowCommands` (`FStageProgrammerCommand`, `FStageFixtureGroupsCommand`).
+  - New `IStageItemEditor::SetProgrammerValues` and `SetFixtureGroups`.
+  - Programmer edits merge per fixture inside an edit transaction (a fader drag is one step).
+  - `UStageEditHistoryComponent::RecordAsOneStep` is now public. The old private helper is renamed `RecordCommands`.
+- **Groups** (§5). `FStageFixtureGroup` and `StageFixtureGroupRules` (ShowControlTypes), held by the new `UStageShowLibrarySubsystem` (world).
+- **Scene format v6** (§7).
+  - Adds `"programmer"`, `"groups"` and `"activeCue"`.
+  - Load clears the old show before the new fixtures register, restores the cue without a fade, then the programmer and groups.
+  - Bad entries are dropped and counted (`InvalidShowEntries`); marketplace packages treat them as Corrupt.
+- **Session.** `HandleCueListChanged` is renamed `HandleShowDataChanged`. Programmer values and groups now mark the stage unsaved.
+- **Keys** (§6), under a new SHOW category, routed from any panel:
+
+  | Command | Default key |
+  |---|---|
+  | Go | Ctrl+Enter |
+  | Back | Ctrl+Backspace |
+  | Clear Programmer | Ctrl+Shift+C |
+  | Highlight | Ctrl+Shift+H |
+
+  A plain H was tried first: a new default takes its chord from a user override that already uses it, which `StageCraft.Input.SavedBindings` caught.
+- **UI.**
+  - New Groups panel (`StageCraft.Panel.Groups`, `UStageGroupsPanel`, Window > Groups & Programmer..., floating 560×420): programmer bar (RECORD, programmer count, CLEAR, HIGHLIGHT, FAN), group tiles, and the current group's rename / UPDATE / DELETE.
+  - `DA_Panel_Groups` is made by the new `Scripts/Content/create_groups_content.py`.
+  - The Inspector and Faders titles show "(+N)" when an edit applies to N other selected fixtures.
+- **Dev commands** (non-Shipping):
+  - `StageCraft.Show.Select <ids>`
+  - `StageCraft.Show.Programmer Clear|Highlight|Fan|List`
+  - `StageCraft.Show.Group Record|Select|Update|Delete|List`
+  - `StageCraft.Workspace.ScreenshotWindow All`, which also saves floating panel windows
+- **Docs:**
+  - new ADR 0025;
+  - CURRENT_SYSTEMS (programmer and groups rows, undo coverage, state owners, 164 tests);
+  - PROJECT_AUDIT §4.4 update;
+  - tasks/todo.md Phase 34.
+
+**Files changed**
+- **New:**
+  - `Public/Show/StageShowMix.h`, `Private/Show/StageShowMix.cpp`
+  - `Public/Subsystems/StageProgrammerSubsystem.h` / `.cpp`
+  - `Public/Subsystems/StageShowLibrarySubsystem.h` / `.cpp`
+  - `Public/History/StageShowCommands.h` / `.cpp`
+  - `Private/Player/ModularPlayerControllerProgrammer.cpp`
+  - `Public/UI/StageGroupsPanel.h` / `.cpp`
+  - `Private/Show/Tests/StageProgrammerTests.cpp`
+  - `Content/StageCraft/UI/Panels/DA_Panel_Groups.uasset`
+  - `Scripts/Content/create_groups_content.py`
+  - `Docs/ADR/0025-programmer-and-output-mix.md`
+- **Modified:**
+  - Show and fixtures: `Show/ShowControlTypes.h/.cpp`, `Actors/LightingFixtureActor.h/.cpp`, `Subsystems/ShowControlSubsystem.h/.cpp`, `Subsystems/StageSessionSubsystem.h/.cpp`.
+  - History: `History/StageEditCommand.h`, `History/StageEditHistoryComponent.h/.cpp`.
+  - Controller and input: `Player/ModularPlayerController.h/.cpp`, `Data/StageParameterTypes.h/.cpp`, `Input/StageKeyBindings.h/.cpp`, `Input/StageShortcutRouting.cpp`.
+  - Scenes and marketplace: `Scene/StageSceneTypes.h`, `Scene/StageSceneStore.h/.cpp`, `Scene/StageSceneComponent.cpp`, `Marketplace/StagePackage.cpp`, `Marketplace/StageMarketplaceSubsystem.cpp`.
+  - Console commands: `Show/StageShowConsoleCommands.cpp`, `Workspace/StageWorkspaceConsoleCommands.cpp`.
+  - Workspace: `Workspace/StageWorkspaceTypes.h/.cpp`, `Workspace/SStageWorkspaceMenuBar.cpp`, `Workspace/StageWorkspaceShell.cpp`.
+  - UI: `UI/StagePreferencesPanel.cpp`, `UI/StageParameterViewWidget.h/.cpp`, `UI/StageInspectorPanel.cpp`, `UI/StageFaderBankWidget.cpp`.
+  - Docs and records: `Docs/CURRENT_SYSTEMS.md`, `Docs/PROJECT_AUDIT.md`, `tasks/todo.md`, `STATE.md` (#58 commit line).
+
+**Verification**
+- **Builds:** Editor, Game (Development) and Shipping all built with 0 warnings and 0 errors.
+- **Shipping scan:**
+  - absent: `StageCraft.Show.Programmer`, `StageCraft.Show.Group`, `StageCraft.Show.Select`, `ScreenshotWindow`;
+  - present (UTF-16): "Programmer empty", "Clear Programmer", "FAN: INV V".
+- **Automation:** `RunAutomation.ps1 -ExpectedCount 164` gave 164/164 with an offscreen renderer and 164/164 with `-NullRHI`, user data unchanged (65 files).
+  - New tests: `StageCraft.Show.OutputMix`, `StageCraft.Show.Programmer`, `StageCraft.Show.FixtureGroups`, `StageCraft.Scene.ShowData`.
+  - The first run failed `StageCraft.Input.SavedBindings` because of the plain-H default; fixed by moving Highlight to Ctrl+Shift+H.
+- **Scripted -game runs** (`RunGameScripted.ps1 -WithoutUserImports`, user data restored and hash-checked). On the Concert starter stage:
+  - **R59a:**
+    - select fixtures 1–5, fan Linear, Pan 60: programmer -60/-30/0/30/60;
+    - group "Front" recorded (1–5);
+    - Highlight on/off;
+    - Dimmer 0.4 then Edit.Undo: the dimmer left the programmer and pan stayed;
+    - Cue Store 1: programmer emptied, cue 1 active;
+    - Dimmer 0.3, then save, open Empty Stage, reload: programmer (5 × Dimmer 0.3), group "Front" and active cue 1 all restored.
+  - **R59b:** two groups, Group Select 1, fan V, Tilt 40 and Dimmer 0.8. Captures show the Groups panel (floating window with tiles, "Programmer: 5 fixtures", CLEAR and FAN: V lit) and the Inspector and Faders titles "Beam 280 (Moving Head) (+4)".
+  - Artefacts: `%TEMP%\StageCraftRuns\R59a`, `R59b`.
+- **Benchmark (Rules §22), same session.** The previous commit `eece06e` was built in a temporary worktree (since removed); `RunFixtureBench.ps1 -Counts 200,500` was run there and then on F1.
+  - Show tick while crossfading:
+    - 200 fixtures: 4.78 ms mean / 9.90 max before, 3.96 / 8.74 after;
+    - 500 fixtures: 10.07 / 22.3 before, 8.93 / 17.7 after.
+  - So there is no regression from the mix. This is not claimed as a speed-up, because the runs differ by noise.
+  - Frame and GPU times are not comparable: the F1 run also loaded the user's 3 imported models.
+  - CSVs: `Saved/StageCraft/Benchmarks/FixtureBench_20261103-192152.csv`; the baseline CSV went with the worktree.
+- **Not verified by hand:**
+  - the Groups panel, the FAN button and HIGHLIGHT by mouse;
+  - a fader drag over several fixtures (one undo step);
+  - the new keys from a docked panel.
+
+**Commit:** uncommitted (working tree).
+
+**Known issues / follow-ups**
+- **Behaviour changes (intended, ADR 0025 §10):**
+  - a manual edit now survives a cue fade until Clear or a store;
+  - switching from External DMX back to Internal restores the show's look.
+- **Fan applies to float rows only.** Colour and wheel rows set the same value on every selected fixture.
+- **Cue store still records every fixture's full look.** Tracking and Cue Only come in F3.
+- **The Groups panel's current-group row** appears only after a tile click or RECORD in the panel itself, not after a console-made group.
+- **Next steps:**
+  - F2 palettes;
+  - F3 cue timing, tracking, playbacks and masters (ADR 0026, scene v7);
+  - F4 effects;
+  - F5 DMX output.
+- **The pre-existing follow-ups from #58 remain open.**

@@ -553,3 +553,11 @@ Gevor's choices: automation tests on a harness game instance (not AFunctionalTes
 - [x] Tests 160/160 with and without a renderer; Editor/Game/Shipping builds
 - [ ] Manual verification (Gevor): cold start in a packaged build (loader), welcome cards and Show at startup, atmosphere cards and look sliders by mouse, studio look, beams under Cyberpunk Night
 - [ ] Find the existing test that saves GameUserSettings during the suite (its bytes only changed because #58 added a setting)
+
+## Phase 34 - Professional lighting-console layer (requested by Gevor 2026-11-03; STATE.md #59-#63; plan: gap analysis against grandMA3 / MagicQ / Titan / Daslight)
+- [x] F1 programmer and mix layer (ADR 0025): UStageProgrammerSubsystem, StageShowMix (home look, cue, programmer, highlight), multi-fixture editing with Fan, groups pool, programmer undo, keys, scene format v6 (STATE.md #59)
+- [ ] F1 manual verification (Gevor): Groups panel, FAN and HIGHLIGHT by mouse, a fader drag over several fixtures as one undo step, Go / Back / Clear / Highlight keys from a docked panel
+- [ ] F2 palettes: global and per-fixture, references in the programmer and cues, palette pools panel, starter palettes (STATE.md #60)
+- [ ] F3 cue timing (in/out/delay/per-feature, follow/wait, curve), tracking and Cue Only, cue lists, 10 playbacks with flash and release, Grand Master and Blackout, Playback panel, Lighting Desk layout, format v7 (ADR 0026, STATE.md #61)
+- [ ] F4 effects engine: templates, phase spread, wings and blocks, BPM and tap tempo, Effects panel, measured with Bench.Fixtures (ADR 0027, STATE.md #62)
+- [ ] F5 DMX output (Art-Net / sACN), per-fixture invert / swap pan and tilt, fixture schedule CSV import (ADR 0019 amendment, STATE.md #63)

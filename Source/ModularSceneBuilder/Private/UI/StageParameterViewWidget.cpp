@@ -2,6 +2,7 @@
 
 #include "UI/StageParameterViewWidget.h"
 
+#include "Actors/LightingFixtureActor.h"
 #include "Actors/ModularBaseActor.h"
 #include "Components/SelectionComponent.h"
 #include "Engine/World.h"
@@ -26,6 +27,7 @@ void UStageParameterViewWidget::NativeConstruct()
 		if (Selection)
 		{
 			Selection->OnSelectionChanged.AddUniqueDynamic(this, &ThisClass::HandleSelectionChanged);
+			Selection->OnSelectionSetChanged.AddUniqueDynamic(this, &ThisClass::HandleSelectionSetChanged);
 			BoundSelection = Selection;
 		}
 	}
@@ -52,6 +54,7 @@ void UStageParameterViewWidget::NativeDestruct()
 	if (USelectionComponent* Selection = BoundSelection.Get())
 	{
 		Selection->OnSelectionChanged.RemoveDynamic(this, &ThisClass::HandleSelectionChanged);
+		Selection->OnSelectionSetChanged.RemoveDynamic(this, &ThisClass::HandleSelectionSetChanged);
 	}
 	BoundSelection.Reset();
 	if (UStageProfileSubsystem* Profile = BoundProfile.Get())
@@ -73,6 +76,28 @@ void UStageParameterViewWidget::HandleEntitlementsChanged()
 void UStageParameterViewWidget::HandleSelectionChanged(AActor* NewSelection, AActor* PreviousSelection)
 {
 	Inspect(NewSelection);
+}
+
+void UStageParameterViewWidget::HandleSelectionSetChanged(int32 Count)
+{
+	// The primary may stay while others join or leave: only the header's (+N) changes.
+	OnViewUpdated(InspectedObject.Get());
+}
+
+FText UStageParameterViewWidget::DecorateWithSharedSelection(const FText& Title) const
+{
+	const USelectionComponent* Selection = BoundSelection.Get();
+	const AActor* Inspected = Cast<ALightingFixtureActor>(InspectedObject.Get());
+	if (!Selection || !Inspected || !Selection->IsActorSelected(Inspected))
+	{
+		return Title;
+	}
+	int32 Others = 0;
+	for (const AActor* Selected : Selection->GetSelectedActors())
+	{
+		Others += Selected != Inspected && Cast<ALightingFixtureActor>(Selected) ? 1 : 0;
+	}
+	return Others > 0 ? FText::Format(NSLOCTEXT("StageCraftInspector", "SharedSelection", "{0} (+{1})"), Title, FText::AsNumber(Others)) : Title;
 }
 
 void UStageParameterViewWidget::Inspect(UObject* Target)

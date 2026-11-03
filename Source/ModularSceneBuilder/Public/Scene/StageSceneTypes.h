@@ -110,4 +110,16 @@ struct FStageSceneDocument
 	FGuid OriginListingId;
 
 	bool IsFromMarketplace() const { return OriginListingId.IsValid(); }
+
+	/**
+	 * The programmer values per fixture ID (format version 6; Docs/ADR/0025-programmer-and-output-mix.md §7). Older files read as
+	 * an empty programmer, and their fixtures take their saved output as their home look, so they look as they did.
+	 */
+	TArray<FShowCueFixtureState> Programmer;
+
+	/** The show fixture groups (format version 6). Sanitized (StageFixtureGroupRules). Older files read as no groups. */
+	TArray<FStageFixtureGroup> Groups;
+
+	/** The cue that was playing when the stage was saved (format version 6), so loading resumes the show there. Unset: none. */
+	TOptional<float> ActiveCueNumber;
 };

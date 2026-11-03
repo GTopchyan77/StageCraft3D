@@ -74,6 +74,15 @@ public:
 	 * there is no environment; the default is for editors that never see environment steps.
 	 */
 	virtual EStageCommandResult SetEnvironment(const struct FStageEnvironmentSettings& Settings) { return EStageCommandResult::Invalid; }
+
+	/**
+	 * Gives the programmer's FixtureIds exactly the values in Entries; a fixture without an entry is cleared
+	 * (Docs/ADR/0025-programmer-and-output-mix.md §3). Invalid where there is no programmer.
+	 */
+	virtual EStageCommandResult SetProgrammerValues(TConstArrayView<int32> FixtureIds, TConstArrayView<struct FShowCueFixtureState> Entries) { return EStageCommandResult::Invalid; }
+
+	/** Replaces the show's fixture groups (Docs/ADR/0025 §5). Invalid where there is no show library. */
+	virtual EStageCommandResult SetFixtureGroups(const TArray<struct FStageFixtureGroup>& Groups) { return EStageCommandResult::Invalid; }
 };
 
 /**
