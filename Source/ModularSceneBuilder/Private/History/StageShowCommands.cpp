@@ -4,13 +4,13 @@
 
 namespace
 {
-	/** The entries as one map per fixture ID, for an order-independent comparison. */
-	TMap<int32, const TMap<FGameplayTag, float>*> ByFixture(const TArray<FShowCueFixtureState>& Entries)
+	/** The entries by fixture ID, for an order-independent comparison. */
+	TMap<int32, const FShowCueFixtureState*> ByFixture(const TArray<FShowCueFixtureState>& Entries)
 	{
-		TMap<int32, const TMap<FGameplayTag, float>*> Map;
+		TMap<int32, const FShowCueFixtureState*> Map;
 		for (const FShowCueFixtureState& Entry : Entries)
 		{
-			Map.Add(Entry.FixtureId, &Entry.Attributes);
+			Map.Add(Entry.FixtureId, &Entry);
 		}
 		return Map;
 	}
@@ -31,6 +31,12 @@ namespace
 		}
 		return true;
 	}
+
+	/** Same values and same palette references (applying a palette over its own values still changes what the fixture follows). */
+	bool AreSameEntries(const FShowCueFixtureState& A, const FShowCueFixtureState& B)
+	{
+		return AreSameValues(A.Attributes, B.Attributes) && A.PaletteRefs.OrderIndependentCompareEqual(B.PaletteRefs);
+	}
 }
 
 FStageProgrammerCommand::FStageProgrammerCommand(const FText& InDescription, TArray<int32> InFixtureIds, TArray<FShowCueFixtureState> InBefore, TArray<FShowCueFixtureState> InAfter)
@@ -43,16 +49,16 @@ FStageProgrammerCommand::FStageProgrammerCommand(const FText& InDescription, TAr
 
 bool FStageProgrammerCommand::IsMeaningfulChange(const TArray<FShowCueFixtureState>& InBefore, const TArray<FShowCueFixtureState>& InAfter)
 {
-	const TMap<int32, const TMap<FGameplayTag, float>*> BeforeMap = ByFixture(InBefore);
-	const TMap<int32, const TMap<FGameplayTag, float>*> AfterMap = ByFixture(InAfter);
+	const TMap<int32, const FShowCueFixtureState*> BeforeMap = ByFixture(InBefore);
+	const TMap<int32, const FShowCueFixtureState*> AfterMap = ByFixture(InAfter);
 	if (BeforeMap.Num() != AfterMap.Num())
 	{
 		return true;
 	}
-	for (const TPair<int32, const TMap<FGameplayTag, float>*>& Pair : BeforeMap)
+	for (const TPair<int32, const FShowCueFixtureState*>& Pair : BeforeMap)
 	{
-		const TMap<FGameplayTag, float>* const* Other = AfterMap.Find(Pair.Key);
-		if (!Other || !AreSameValues(*Pair.Value, **Other))
+		const FShowCueFixtureState* const* Other = AfterMap.Find(Pair.Key);
+		if (!Other || !AreSameEntries(*Pair.Value, **Other))
 		{
 			return true;
 		}
@@ -85,4 +91,21 @@ EStageCommandResult FStageFixtureGroupsCommand::Undo(IStageItemEditor& Editor)
 EStageCommandResult FStageFixtureGroupsCommand::Redo(IStageItemEditor& Editor)
 {
 	return Editor.SetFixtureGroups(After);
+}
+
+FStagePalettesCommand::FStagePalettesCommand(const FText& InDescription, TArray<FStagePalette> InBefore, TArray<FStagePalette> InAfter)
+	: Description(InDescription)
+	, Before(MoveTemp(InBefore))
+	, After(MoveTemp(InAfter))
+{
+}
+
+EStageCommandResult FStagePalettesCommand::Undo(IStageItemEditor& Editor)
+{
+	return Editor.SetPalettes(Before);
+}
+
+EStageCommandResult FStagePalettesCommand::Redo(IStageItemEditor& Editor)
+{
+	return Editor.SetPalettes(After);
 }

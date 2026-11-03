@@ -45,3 +45,22 @@ private:
 	TArray<FStageFixtureGroup> Before;
 	TArray<FStageFixtureGroup> After;
 };
+
+/**
+ * The palettes changed (record, update, rename, delete). Whole list before and after, like groups (Docs/ADR/0028-palettes-and-references.md
+ * §4). A delete is batched with the cue and programmer steps that turned its references into values, so it undoes as one.
+ */
+class MODULARSCENEBUILDER_API FStagePalettesCommand final : public IStageEditCommand
+{
+public:
+	FStagePalettesCommand(const FText& InDescription, TArray<FStagePalette> InBefore, TArray<FStagePalette> InAfter);
+
+	virtual FText GetDescription() const override { return Description; }
+	virtual EStageCommandResult Undo(IStageItemEditor& Editor) override;
+	virtual EStageCommandResult Redo(IStageItemEditor& Editor) override;
+
+private:
+	FText Description;
+	TArray<FStagePalette> Before;
+	TArray<FStagePalette> After;
+};

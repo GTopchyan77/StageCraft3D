@@ -80,8 +80,9 @@ public:
 
 	/**
 	 * The colour attribute values (cells included) that make this fixture's light its own full white seen through Filter: emitter
-	 * levels on an additive fixture (as bright as its emitters allow), the filter itself on CMY and a gel frame. Empty for a
-	 * fixture that cannot colour its light. Used by the gel picker and the assistant; the values still go through the normal writes.
+	 * levels on an additive fixture (as bright as its emitters allow), the filter itself on CMY and a gel frame, the nearest colour
+	 * wheel slot on a wheel-only fixture (Docs/ADR/0028 §2). Empty for a fixture that cannot colour its light. Used by the gel picker,
+	 * the assistant, the highlight and colour palettes; the values still go through the normal writes.
 	 */
 	TMap<FGameplayTag, float> MatchColor(const FLinearColor& Filter) const;
 

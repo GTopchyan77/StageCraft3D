@@ -79,20 +79,65 @@ namespace StageSceneStore
 		const TCHAR* Programmer = TEXT("programmer");
 		const TCHAR* Groups = TEXT("groups");
 		const TCHAR* ActiveCue = TEXT("activeCue");
+
+		// Version 7: palettes and palette references (Docs/ADR/0028 §6).
+		const TCHAR* Palettes = TEXT("palettes");
+		const TCHAR* Kind = TEXT("kind");
+		const TCHAR* Color = TEXT("color");
+		const TCHAR* Values = TEXT("values");
 	}
 
-	/** One fixture's attribute values: {"id": fixtureId, "attributes": {"<tag>": value}} (cues and the programmer). */
-	TSharedPtr<FJsonValue> WriteFixtureState(const FShowCueFixtureState& State)
+	/** Palette kinds by name in files, so a reordered enum never changes what a file means. Index = EStagePaletteKind value. */
+	const TCHAR* const PaletteKindNames[] = { TEXT("All"), TEXT("Intensity"), TEXT("Position"), TEXT("Color"), TEXT("Beam"), TEXT("Focus") };
+	static_assert(UE_ARRAY_COUNT(PaletteKindNames) == static_cast<int32>(EStagePaletteKind::Focus) + 1, "Name every palette kind.");
+
+	/** {"<tag>": value} for an attribute map. */
+	TSharedRef<FJsonObject> WriteAttributeValues(const TMap<FGameplayTag, float>& Values)
 	{
 		// Tags by name: a name stays readable and survives tag table changes; unknown ones are dropped on load.
-		const TSharedRef<FJsonObject> Attributes = MakeShared<FJsonObject>();
-		for (const TPair<FGameplayTag, float>& Pair : State.Attributes)
+		const TSharedRef<FJsonObject> Object = MakeShared<FJsonObject>();
+		for (const TPair<FGameplayTag, float>& Pair : Values)
 		{
-			Attributes->SetNumberField(Pair.Key.ToString(), Pair.Value);
+			Object->SetNumberField(Pair.Key.ToString(), Pair.Value);
 		}
+		return Object;
+	}
+
+	/** Reads {"<tag>": value} into OutValues; unknown tags and non-finite values are dropped and counted, at most MaxAttributesPerFixture. */
+	void ReadAttributeValues(const FJsonObject& Object, TMap<FGameplayTag, float>& OutValues, int32& InOutInvalid)
+	{
+		for (const TPair<FString, TSharedPtr<FJsonValue>>& Pair : Object.Values)
+		{
+			double Value = 0.0;
+			// ErrorIfNotFound = false: a tag this build does not know (removed attribute, hand edit) is skipped, not fatal.
+			const FGameplayTag Tag = FGameplayTag::RequestGameplayTag(FName(*Pair.Key), /*ErrorIfNotFound*/ false);
+			if (OutValues.Num() >= FStageSceneStore::MaxAttributesPerFixture || !Tag.IsValid() || !Pair.Value.IsValid() || !Pair.Value->TryGetNumber(Value) || !FMath::IsFinite(Value))
+			{
+				++InOutInvalid;
+				continue;
+			}
+			OutValues.Add(Tag, static_cast<float>(Value));
+		}
+	}
+
+	/**
+	 * One fixture's attribute values: {"id": fixtureId, "attributes": {"<tag>": value}, "palettes": {"<tag>": id}} (cues, the
+	 * programmer and per-fixture palette values). "palettes" only when the fixture follows any.
+	 */
+	TSharedPtr<FJsonValue> WriteFixtureState(const FShowCueFixtureState& State)
+	{
 		const TSharedRef<FJsonObject> Fixture = MakeShared<FJsonObject>();
 		Fixture->SetNumberField(Field::Id, State.FixtureId);
-		Fixture->SetObjectField(Field::Attributes, Attributes);
+		Fixture->SetObjectField(Field::Attributes, WriteAttributeValues(State.Attributes));
+		if (!State.PaletteRefs.IsEmpty())
+		{
+			const TSharedRef<FJsonObject> References = MakeShared<FJsonObject>();
+			for (const TPair<FGameplayTag, FGuid>& Pair : State.PaletteRefs)
+			{
+				References->SetStringField(Pair.Key.ToString(), Pair.Value.ToString(EGuidFormats::DigitsWithHyphens));
+			}
+			Fixture->SetObjectField(Field::Palettes, References);
+		}
 		return MakeShared<FJsonValueObject>(Fixture);
 	}
 
@@ -129,20 +174,25 @@ namespace StageSceneStore
 			return false;
 		}
 		OutState.FixtureId = FixtureId;
+		ReadAttributeValues(**Attributes, OutState.Attributes, InOutInvalid);
 
-		int32 Read = 0;
-		for (const TPair<FString, TSharedPtr<FJsonValue>>& Pair : (*Attributes)->Values)
+		// Version 7: references to palettes. One without a valid tag, id or a value of its own is dropped and counted.
+		const TSharedPtr<FJsonObject>* References = nullptr;
+		if (Object.TryGetObjectField(Field::Palettes, References) && References->IsValid())
 		{
-			double Value = 0.0;
-			// ErrorIfNotFound = false: a tag this build does not know (removed attribute, hand edit) is skipped, not fatal.
-			const FGameplayTag Tag = FGameplayTag::RequestGameplayTag(FName(*Pair.Key), /*ErrorIfNotFound*/ false);
-			if (Read >= FStageSceneStore::MaxAttributesPerFixture || !Tag.IsValid() || !Pair.Value.IsValid() || !Pair.Value->TryGetNumber(Value) || !FMath::IsFinite(Value))
+			for (const TPair<FString, TSharedPtr<FJsonValue>>& Pair : (*References)->Values)
 			{
-				++InOutInvalid;
-				continue;
+				const FGameplayTag Tag = FGameplayTag::RequestGameplayTag(FName(*Pair.Key), /*ErrorIfNotFound*/ false);
+				FString Id;
+				FGuid PaletteId;
+				if (!Tag.IsValid() || !OutState.Attributes.Contains(Tag) || !Pair.Value.IsValid() || !Pair.Value->TryGetString(Id)
+					|| !FGuid::Parse(Id, PaletteId) || !PaletteId.IsValid())
+				{
+					++InOutInvalid;
+					continue;
+				}
+				OutState.PaletteRefs.Add(Tag, PaletteId);
 			}
-			OutState.Attributes.Add(Tag, static_cast<float>(Value));
-			++Read;
 		}
 		return true;
 	}
@@ -307,6 +357,134 @@ namespace StageSceneStore
 		}
 		InOutInvalid += StageFixtureGroupRules::SanitizeGroups(Groups);
 		return Groups;
+	}
+
+	TArray<TSharedPtr<FJsonValue>> WritePalettes(const TArray<FStagePalette>& Palettes)
+	{
+		TArray<TSharedPtr<FJsonValue>> Array;
+		for (const FStagePalette& Palette : Palettes)
+		{
+			const TSharedRef<FJsonObject> Object = MakeShared<FJsonObject>();
+			Object->SetStringField(Field::Id, Palette.Id.ToString(EGuidFormats::DigitsWithHyphens));
+			Object->SetStringField(Field::Name, Palette.Name.ToString());
+			Object->SetStringField(Field::Kind, PaletteKindNames[static_cast<int32>(Palette.Kind)]);
+			if (Palette.bHasColor)
+			{
+				TArray<TSharedPtr<FJsonValue>> Color;
+				Color.Add(MakeShared<FJsonValueNumber>(Palette.Color.R));
+				Color.Add(MakeShared<FJsonValueNumber>(Palette.Color.G));
+				Color.Add(MakeShared<FJsonValueNumber>(Palette.Color.B));
+				Object->SetArrayField(Field::Color, Color);
+			}
+			Object->SetObjectField(Field::Values, WriteAttributeValues(Palette.GlobalValues));
+			TArray<TSharedPtr<FJsonValue>> Fixtures;
+			for (const FShowCueFixtureState& Entry : Palette.FixtureValues)
+			{
+				Fixtures.Add(WriteFixtureState(Entry));
+			}
+			Object->SetArrayField(Field::Fixtures, Fixtures);
+			Array.Add(MakeShared<FJsonValueObject>(Object));
+		}
+		return Array;
+	}
+
+	/** The palette kind named Name in a file; false for a name this build does not know. */
+	bool ParsePaletteKind(const FString& Name, EStagePaletteKind& OutKind)
+	{
+		for (int32 Index = 0; Index < UE_ARRAY_COUNT(PaletteKindNames); ++Index)
+		{
+			if (Name == PaletteKindNames[Index])
+			{
+				OutKind = static_cast<EStagePaletteKind>(Index);
+				return true;
+			}
+		}
+		return false;
+	}
+
+	/** One palette. False drops it (no valid id or an unknown kind); bad values inside are dropped and counted. */
+	bool ReadPalette(const FJsonObject& Object, FStagePalette& OutPalette, int32& InOutInvalid)
+	{
+		FString Id;
+		FString Kind;
+		if (!Object.TryGetStringField(Field::Id, Id) || !FGuid::Parse(Id, OutPalette.Id) || !OutPalette.Id.IsValid()
+			|| !Object.TryGetStringField(Field::Kind, Kind) || !ParsePaletteKind(Kind, OutPalette.Kind))
+		{
+			return false;
+		}
+
+		FString Name;
+		Object.TryGetStringField(Field::Name, Name);
+		OutPalette.Name = FText::FromString(Name);
+
+		const TArray<TSharedPtr<FJsonValue>>* Color = nullptr;
+		if (Object.TryGetArrayField(Field::Color, Color))
+		{
+			double Channels[3] = { 0.0, 0.0, 0.0 };
+			bool bValid = Color->Num() == 3;
+			for (int32 Index = 0; bValid && Index < 3; ++Index)
+			{
+				bValid = (*Color)[Index].IsValid() && (*Color)[Index]->TryGetNumber(Channels[Index]) && FMath::IsFinite(Channels[Index]);
+			}
+			if (bValid)
+			{
+				OutPalette.bHasColor = true;
+				OutPalette.Color = FLinearColor(static_cast<float>(Channels[0]), static_cast<float>(Channels[1]), static_cast<float>(Channels[2]));
+			}
+			else
+			{
+				++InOutInvalid;
+			}
+		}
+
+		const TSharedPtr<FJsonObject>* Values = nullptr;
+		if (Object.TryGetObjectField(Field::Values, Values) && Values->IsValid())
+		{
+			ReadAttributeValues(**Values, OutPalette.GlobalValues, InOutInvalid);
+		}
+
+		const TArray<TSharedPtr<FJsonValue>>* Fixtures = nullptr;
+		if (Object.TryGetArrayField(Field::Fixtures, Fixtures))
+		{
+			for (const TSharedPtr<FJsonValue>& Value : *Fixtures)
+			{
+				const TSharedPtr<FJsonObject>* FixtureObject = nullptr;
+				FShowCueFixtureState Entry;
+				if (OutPalette.FixtureValues.Num() >= StagePaletteRules::MaxFixturesPerPalette || !Value.IsValid() || !Value->TryGetObject(FixtureObject)
+					|| !FixtureObject->IsValid() || !ReadCueFixture(**FixtureObject, Entry, InOutInvalid))
+				{
+					++InOutInvalid;
+					continue;
+				}
+				OutPalette.FixtureValues.Add(MoveTemp(Entry));
+			}
+		}
+		return true;
+	}
+
+	/** The palettes of a version 7 file, repaired by StagePaletteRules (wrong kinds, duplicates, bounds). */
+	TArray<FStagePalette> ReadPalettes(const FJsonObject& Root, int32& InOutInvalid)
+	{
+		TArray<FStagePalette> Palettes;
+		const TArray<TSharedPtr<FJsonValue>>* Array = nullptr;
+		if (!Root.TryGetArrayField(Field::Palettes, Array))
+		{
+			return Palettes;
+		}
+		for (const TSharedPtr<FJsonValue>& Value : *Array)
+		{
+			const TSharedPtr<FJsonObject>* Object = nullptr;
+			FStagePalette Palette;
+			if (Palettes.Num() >= StagePaletteRules::MaxPalettes || !Value.IsValid() || !Value->TryGetObject(Object) || !Object->IsValid()
+				|| !ReadPalette(**Object, Palette, InOutInvalid))
+			{
+				++InOutInvalid;
+				continue;
+			}
+			Palettes.Add(MoveTemp(Palette));
+		}
+		InOutInvalid += StagePaletteRules::SanitizePalettes(Palettes);
+		return Palettes;
 	}
 
 	TSharedRef<FJsonObject> WriteEnvironment(const FStageEnvironmentSettings& Settings)
@@ -653,6 +831,7 @@ FString FStageSceneStore::Serialize(const FStageSceneDocument& Document)
 	}
 	Root->SetArrayField(Field::Programmer, Programmer);
 	Root->SetArrayField(Field::Groups, WriteGroups(Document.Groups));
+	Root->SetArrayField(Field::Palettes, WritePalettes(Document.Palettes));
 	if (Document.ActiveCueNumber.IsSet())
 	{
 		Root->SetNumberField(Field::ActiveCue, Document.ActiveCueNumber.GetValue());
@@ -735,6 +914,8 @@ EStageSceneResult FStageSceneStore::Parse(const FString& Contents, FStageSceneDo
 			}
 		}
 	}
+	// Migration 6 -> 7: older stages (and every starter stage) get the starter palettes; a version 7 file has exactly its own.
+	OutDocument.Palettes = Version >= 7 ? ReadPalettes(*Root, OutReport.InvalidShowEntries) : StagePaletteRules::MakeStarterPalettes();
 	// Migration 3 -> 4: older stages are the user's own. Deny by default: an origin that is there but unreadable is not "own".
 	FString Origin;
 	if (Version >= 4 && Root->TryGetStringField(Field::OriginListingId, Origin)

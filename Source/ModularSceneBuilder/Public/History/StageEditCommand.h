@@ -83,6 +83,9 @@ public:
 
 	/** Replaces the show's fixture groups (Docs/ADR/0025 §5). Invalid where there is no show library. */
 	virtual EStageCommandResult SetFixtureGroups(const TArray<struct FStageFixtureGroup>& Groups) { return EStageCommandResult::Invalid; }
+
+	/** Replaces the show's palettes (Docs/ADR/0028-palettes-and-references.md §4). Invalid where there is no show library. */
+	virtual EStageCommandResult SetPalettes(const TArray<struct FStagePalette>& Palettes) { return EStageCommandResult::Invalid; }
 };
 
 /**

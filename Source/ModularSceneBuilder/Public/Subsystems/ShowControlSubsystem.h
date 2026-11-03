@@ -176,6 +176,16 @@ public:
 	/** ResolveFixtures for every registered fixture. */
 	void ResolveAllFixtures();
 
+	/**
+	 * State's values with its palette references resolved (Docs/ADR/0028-palettes-and-references.md §3): each referenced attribute
+	 * takes the palette's current value for that fixture, or keeps its stored value when the palette is gone or has none. A colour
+	 * palette needs the fixture on stage to mix its colour; without it the stored value stays.
+	 */
+	TMap<FGameplayTag, float> ResolveReferences(const FShowCueFixtureState& State) const;
+
+	/** What Fixture shows without the highlight: what a cue store and a palette record take (never the highlight). */
+	TMap<FGameplayTag, float> GetRecordableValues(const class ALightingFixtureActor& Fixture) const;
+
 	// --- DMX ---
 
 	/** Installs (or with nullptr removes) the transport. The previous bridge is stopped. */
@@ -285,8 +295,21 @@ private:
 	/** Where a fade of Attribute starts and Clear returns to: the playback layer, else the home look, else the output. */
 	float GetPlaybackValue(const class ALightingFixtureActor& Fixture, const FGameplayTag& Attribute) const;
 
-	/** What Fixture shows without the highlight (cue store records this, never the highlight). */
-	TMap<FGameplayTag, float> GetRecordableValues(const class ALightingFixtureActor& Fixture) const;
+	/** Replaces InOutValues' referenced attributes with their palettes' values for FixtureId (Fixture, if on stage, mixes colours). */
+	void ApplyReferences(const class ALightingFixtureActor* Fixture, int32 FixtureId, const TMap<FGameplayTag, FGuid>& References, TMap<FGameplayTag, float>& InOutValues) const;
+
+	/** The programmer layer of Fixture with its references resolved (into Scratch when it has any), or null when it holds nothing. */
+	const TMap<FGameplayTag, float>* GetProgrammerLayer(const class ALightingFixtureActor& Fixture, TMap<FGameplayTag, float>& Scratch) const;
+
+	/**
+	 * Re-resolves the playing cue's palette references into the playback layer (all fixtures, or only OnlyFixtureId), so a changed
+	 * palette or a fixture that arrived after the cue started shows the palette's current value.
+	 */
+	void RefreshPlaybackReferences(int32 OnlyFixtureId = INDEX_NONE);
+
+	/** A palette changed (Docs/ADR/0028 §3): a running fade snaps to its end, the playing cue's references re-resolve, every fixture re-mixes. */
+	UFUNCTION()
+	void HandlePalettesChanged();
 
 	TArray<TWeakObjectPtr<class ALightingFixtureActor>> Fixtures;
 
@@ -299,6 +322,10 @@ private:
 	TObjectPtr<class UStageProgrammerSubsystem> Programmer = nullptr;
 
 	FDelegateHandle ProgrammerChangedHandle;
+
+	/** The palettes references resolve against (Docs/ADR/0028). Resolved in Initialize; same world. */
+	UPROPERTY(Transient)
+	TObjectPtr<class UStageShowLibrarySubsystem> Library = nullptr;
 
 	/**
 	 * The playback layer: per fixture ID, the values the cue list has set (the active cue's, part-way through a fade while one runs).

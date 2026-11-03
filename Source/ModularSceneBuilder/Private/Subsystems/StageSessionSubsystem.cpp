@@ -44,6 +44,7 @@ void UStageSessionSubsystem::Initialize(FSubsystemCollectionBase& Collection)
 	if (UStageShowLibrarySubsystem* Library = Collection.InitializeDependency<UStageShowLibrarySubsystem>())
 	{
 		Library->OnGroupsChanged.AddUniqueDynamic(this, &ThisClass::HandleShowDataChanged);
+		Library->OnPalettesChanged.AddUniqueDynamic(this, &ThisClass::HandleShowDataChanged);
 		BoundShowLibrary = Library;
 	}
 }
@@ -88,6 +89,7 @@ void UStageSessionSubsystem::Deinitialize()
 	if (UStageShowLibrarySubsystem* Library = BoundShowLibrary.Get())
 	{
 		Library->OnGroupsChanged.RemoveDynamic(this, &ThisClass::HandleShowDataChanged);
+		Library->OnPalettesChanged.RemoveDynamic(this, &ThisClass::HandleShowDataChanged);
 	}
 	BoundShowLibrary.Reset();
 

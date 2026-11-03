@@ -16,7 +16,7 @@ bool UStageProgrammerSubsystem::DoesSupportWorldType(const EWorldType::Type Worl
 
 void UStageProgrammerSubsystem::Deinitialize()
 {
-	Values.Reset();
+	Entries.Reset();
 	Highlighted.Reset();
 	OnFixturesChanged.Clear();
 	Super::Deinitialize();
@@ -39,29 +39,72 @@ TMap<FGameplayTag, float> UStageProgrammerSubsystem::SanitizeValues(const TMap<F
 	return Kept;
 }
 
+FShowCueFixtureState UStageProgrammerSubsystem::SanitizeEntry(const FShowCueFixtureState& InEntry)
+{
+	FShowCueFixtureState Entry;
+	Entry.FixtureId = InEntry.FixtureId;
+	Entry.Attributes = SanitizeValues(InEntry.Attributes);
+	Entry.PaletteRefs = InEntry.PaletteRefs;
+	StagePaletteRules::SanitizeReferences(Entry);
+	return Entry;
+}
+
 void UStageProgrammerSubsystem::BroadcastValues(TConstArrayView<int32> FixtureIds)
 {
 	OnFixturesChanged.Broadcast(FixtureIds);
 	OnValuesChanged.Broadcast();
 }
 
-void UStageProgrammerSubsystem::SetValues(int32 FixtureId, const TMap<FGameplayTag, float>& InValues)
+const TMap<FGameplayTag, float>* UStageProgrammerSubsystem::FindValues(int32 FixtureId) const
+{
+	const FShowCueFixtureState* Entry = Entries.Find(FixtureId);
+	return Entry ? &Entry->Attributes : nullptr;
+}
+
+const TMap<FGameplayTag, FGuid>* UStageProgrammerSubsystem::FindReferences(int32 FixtureId) const
+{
+	const FShowCueFixtureState* Entry = Entries.Find(FixtureId);
+	return Entry && !Entry->PaletteRefs.IsEmpty() ? &Entry->PaletteRefs : nullptr;
+}
+
+void UStageProgrammerSubsystem::MergeValues(int32 FixtureId, const TMap<FGameplayTag, float>& InValues, const FGuid& PaletteId)
 {
 	const TMap<FGameplayTag, float> Sanitized = SanitizeValues(InValues);
-	if (FixtureId <= 0 || Sanitized.IsEmpty() || (!Values.Contains(FixtureId) && Values.Num() >= MaxFixtures))
+	if (FixtureId <= 0 || Sanitized.IsEmpty() || (!Entries.Contains(FixtureId) && Entries.Num() >= MaxFixtures))
 	{
 		return;
 	}
-	TMap<FGameplayTag, float>& Fixture = Values.FindOrAdd(FixtureId);
+	FShowCueFixtureState& Entry = Entries.FindOrAdd(FixtureId);
+	Entry.FixtureId = FixtureId;
 	for (const TPair<FGameplayTag, float>& Pair : Sanitized)
 	{
-		if (Fixture.Contains(Pair.Key) || Fixture.Num() < MaxAttributesPerFixture)
+		if (!Entry.Attributes.Contains(Pair.Key) && Entry.Attributes.Num() >= MaxAttributesPerFixture)
 		{
-			Fixture.Add(Pair.Key, Pair.Value);
+			continue;
+		}
+		Entry.Attributes.Add(Pair.Key, Pair.Value);
+		// The latest edit of an attribute decides what it follows: a palette, or nothing (a plain value).
+		if (PaletteId.IsValid())
+		{
+			Entry.PaletteRefs.Add(Pair.Key, PaletteId);
+		}
+		else
+		{
+			Entry.PaletteRefs.Remove(Pair.Key);
 		}
 	}
 	const int32 Changed[] = { FixtureId };
 	BroadcastValues(Changed);
+}
+
+void UStageProgrammerSubsystem::SetValues(int32 FixtureId, const TMap<FGameplayTag, float>& InValues)
+{
+	MergeValues(FixtureId, InValues, FGuid());
+}
+
+void UStageProgrammerSubsystem::SetReferencedValues(int32 FixtureId, const TMap<FGameplayTag, float>& InValues, const FGuid& PaletteId)
+{
+	MergeValues(FixtureId, InValues, PaletteId);
 }
 
 void UStageProgrammerSubsystem::ClearFixtures(TConstArrayView<int32> FixtureIds)
@@ -69,7 +112,7 @@ void UStageProgrammerSubsystem::ClearFixtures(TConstArrayView<int32> FixtureIds)
 	TArray<int32> Cleared;
 	for (const int32 FixtureId : FixtureIds)
 	{
-		if (Values.Remove(FixtureId) > 0)
+		if (Entries.Remove(FixtureId) > 0)
 		{
 			Cleared.Add(FixtureId);
 		}
@@ -83,40 +126,38 @@ void UStageProgrammerSubsystem::ClearFixtures(TConstArrayView<int32> FixtureIds)
 void UStageProgrammerSubsystem::ClearAll()
 {
 	TArray<int32> Cleared;
-	Values.GetKeys(Cleared);
+	Entries.GetKeys(Cleared);
 	ClearFixtures(Cleared);
 }
 
 TArray<FShowCueFixtureState> UStageProgrammerSubsystem::CaptureFixtures(TConstArrayView<int32> FixtureIds) const
 {
-	TArray<FShowCueFixtureState> Entries;
+	TArray<FShowCueFixtureState> Captured;
 	for (const int32 FixtureId : FixtureIds)
 	{
-		if (const TMap<FGameplayTag, float>* Fixture = Values.Find(FixtureId))
+		if (const FShowCueFixtureState* Entry = Entries.Find(FixtureId))
 		{
-			FShowCueFixtureState& Entry = Entries.AddDefaulted_GetRef();
-			Entry.FixtureId = FixtureId;
-			Entry.Attributes = *Fixture;
+			Captured.Add(*Entry);
 		}
 	}
-	return Entries;
+	return Captured;
 }
 
-void UStageProgrammerSubsystem::RestoreFixtures(TConstArrayView<int32> FixtureIds, TConstArrayView<FShowCueFixtureState> Entries)
+void UStageProgrammerSubsystem::RestoreFixtures(TConstArrayView<int32> FixtureIds, TConstArrayView<FShowCueFixtureState> InEntries)
 {
 	TArray<int32> Changed;
 	for (const int32 FixtureId : FixtureIds)
 	{
-		Values.Remove(FixtureId);
+		Entries.Remove(FixtureId);
 		Changed.AddUnique(FixtureId);
 	}
-	for (const FShowCueFixtureState& Entry : Entries)
+	for (const FShowCueFixtureState& InEntry : InEntries)
 	{
 		// Only the fixtures the step names: an entry for any other fixture would be a malformed step, not part of the edit.
-		const TMap<FGameplayTag, float> Sanitized = SanitizeValues(Entry.Attributes);
-		if (Entry.FixtureId > 0 && FixtureIds.Contains(Entry.FixtureId) && !Sanitized.IsEmpty() && Values.Num() < MaxFixtures)
+		FShowCueFixtureState Entry = SanitizeEntry(InEntry);
+		if (Entry.FixtureId > 0 && FixtureIds.Contains(Entry.FixtureId) && !Entry.Attributes.IsEmpty() && Entries.Num() < MaxFixtures)
 		{
-			Values.Add(Entry.FixtureId, Sanitized);
+			Entries.Add(Entry.FixtureId, MoveTemp(Entry));
 		}
 	}
 	if (!Changed.IsEmpty())
@@ -128,28 +169,28 @@ void UStageProgrammerSubsystem::RestoreFixtures(TConstArrayView<int32> FixtureId
 TArray<FShowCueFixtureState> UStageProgrammerSubsystem::GetEntries() const
 {
 	TArray<int32> FixtureIds;
-	Values.GetKeys(FixtureIds);
+	Entries.GetKeys(FixtureIds);
 	FixtureIds.Sort();
 	return CaptureFixtures(FixtureIds);
 }
 
-void UStageProgrammerSubsystem::ReplaceAll(TConstArrayView<FShowCueFixtureState> Entries)
+void UStageProgrammerSubsystem::ReplaceAll(TConstArrayView<FShowCueFixtureState> InEntries)
 {
 	TArray<int32> Changed;
-	Values.GetKeys(Changed);
-	Values.Reset();
+	Entries.GetKeys(Changed);
+	Entries.Reset();
 
 	int32 Dropped = 0;
-	for (const FShowCueFixtureState& Entry : Entries)
+	for (const FShowCueFixtureState& InEntry : InEntries)
 	{
-		const TMap<FGameplayTag, float> Sanitized = SanitizeValues(Entry.Attributes);
-		if (Entry.FixtureId <= 0 || Sanitized.IsEmpty() || Values.Contains(Entry.FixtureId) || Values.Num() >= MaxFixtures)
+		FShowCueFixtureState Entry = SanitizeEntry(InEntry);
+		if (Entry.FixtureId <= 0 || Entry.Attributes.IsEmpty() || Entries.Contains(Entry.FixtureId) || Entries.Num() >= MaxFixtures)
 		{
 			++Dropped;
 			continue;
 		}
-		Values.Add(Entry.FixtureId, Sanitized);
 		Changed.AddUnique(Entry.FixtureId);
+		Entries.Add(Entry.FixtureId, MoveTemp(Entry));
 	}
 	if (Dropped > 0)
 	{

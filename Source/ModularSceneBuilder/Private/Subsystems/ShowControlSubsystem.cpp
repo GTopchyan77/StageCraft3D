@@ -14,6 +14,7 @@
 #include "Show/StageShowMix.h"
 #include "Subsystems/StageDMXPatchSubsystem.h"
 #include "Subsystems/StageProgrammerSubsystem.h"
+#include "Subsystems/StageShowLibrarySubsystem.h"
 #include "TimerManager.h"
 
 #include UE_INLINE_GENERATED_CPP_BY_NAME(ShowControlSubsystem)
@@ -46,6 +47,11 @@ void UShowControlSubsystem::Initialize(FSubsystemCollectionBase& Collection)
 	{
 		ProgrammerChangedHandle = Programmer->OnFixturesChanged.AddUObject(this, &ThisClass::HandleProgrammerFixturesChanged);
 	}
+	Library = Collection.InitializeDependency<UStageShowLibrarySubsystem>();
+	if (Library)
+	{
+		Library->OnPalettesChanged.AddUniqueDynamic(this, &ThisClass::HandlePalettesChanged);
+	}
 }
 
 void UShowControlSubsystem::Deinitialize()
@@ -61,6 +67,11 @@ void UShowControlSubsystem::Deinitialize()
 	}
 	ProgrammerChangedHandle.Reset();
 	Programmer = nullptr;
+	if (Library)
+	{
+		Library->OnPalettesChanged.RemoveDynamic(this, &ThisClass::HandlePalettesChanged);
+	}
+	Library = nullptr;
 	PlaybackValues.Reset();
 	Fixtures.Reset();
 	Fades.Reset();
@@ -168,8 +179,10 @@ void UShowControlSubsystem::RegisterFixture(ALightingFixtureActor* Fixture)
 
 	Fixtures.Add(Fixture);
 	UE_LOG(LogStageCraft, Log, TEXT("Fixture %d registered (%s)."), Fixture->GetFixtureId(), *Fixture->GetName());
-	// A fixture the show already has data for (a re-spawn, an undone delete, a reused ID) takes its place in the mix at once.
+	// A fixture the show already has data for (a re-spawn, an undone delete, a reused ID) takes its place in the mix at once; a colour
+	// palette the playing cue refers to could only be mixed now that the fixture is here.
 	const int32 Id = Fixture->GetFixtureId();
+	RefreshPlaybackReferences(Id);
 	if (PlaybackValues.Contains(Id) || (Programmer && (Programmer->FindValues(Id) || Programmer->IsHighlighted(Id))))
 	{
 		ResolveFixture(*Fixture);
@@ -339,12 +352,30 @@ bool UShowControlSubsystem::StoreCue(float CueNumber, const FText& Label, float 
 	Cue.Label = StageCueRules::SanitizeLabel(Label);
 	Cue.FadeTime = StageCueRules::SanitizeFadeTime(FadeTime);
 
+	// Palette references carry into the cue (Docs/ADR/0028 §3): what the programmer holds keeps the programmer's reference, the rest
+	// keeps the playing cue's. Not mid-fade: the output is then between two values, so no reference describes it.
+	const FShowCue* Playing = Fades.IsEmpty() ? FindCue(ActiveCueNumber) : nullptr;
 	const TArray<ALightingFixtureActor*> Recorded = GetFixtures();
 	for (ALightingFixtureActor* Fixture : Recorded)
 	{
 		FShowCueFixtureState& State = Cue.Fixtures.AddDefaulted_GetRef();
 		State.FixtureId = Fixture->GetFixtureId();
 		State.Attributes = GetRecordableValues(*Fixture);
+
+		const int32 Id = State.FixtureId;
+		const TMap<FGameplayTag, float>* Held = Programmer ? Programmer->FindValues(Id) : nullptr;
+		const TMap<FGameplayTag, FGuid>* HeldRefs = Programmer ? Programmer->FindReferences(Id) : nullptr;
+		const FShowCueFixtureState* PlayingState = Playing
+			? Playing->Fixtures.FindByPredicate([Id](const FShowCueFixtureState& Other) { return Other.FixtureId == Id; }) : nullptr;
+		for (const TPair<FGameplayTag, float>& Pair : State.Attributes)
+		{
+			const bool bHeld = Held && Held->Contains(Pair.Key);
+			const TMap<FGameplayTag, FGuid>* Source = bHeld ? HeldRefs : (PlayingState ? &PlayingState->PaletteRefs : nullptr);
+			if (const FGuid* Reference = Source ? Source->Find(Pair.Key) : nullptr)
+			{
+				State.PaletteRefs.Add(Pair.Key, *Reference);
+			}
+		}
 	}
 
 	const int32 Existing = FindCueIndex(Cue.Number);
@@ -428,7 +459,7 @@ bool UShowControlSubsystem::RestoreActiveCue(float CueNumber)
 	TArray<int32> Restored;
 	for (const FShowCueFixtureState& State : Cues[Index].Fixtures)
 	{
-		PlaybackValues.Add(State.FixtureId, State.Attributes);
+		PlaybackValues.Add(State.FixtureId, ResolveReferences(State));
 		Restored.Add(State.FixtureId);
 	}
 	ActiveCueNumber = Cues[Index].Number;
@@ -475,8 +506,9 @@ bool UShowControlSubsystem::GoToCue(float CueNumber)
 
 		FAttributeFade& Fade = Fades.AddDefaulted_GetRef();
 		Fade.Fixture = Fixture;
-		Fade.To = State.Attributes;
-		for (const TPair<FGameplayTag, float>& Pair : State.Attributes)
+		// Resolved once, at Go: the fade heads for the palettes' values as they are now, and its frames stay plain lerps.
+		Fade.To = ResolveReferences(State);
+		for (const TPair<FGameplayTag, float>& Pair : Fade.To)
 		{
 			// From the playback layer, not the output: a value the programmer holds is not where the cue's fade starts.
 			const float From = GetPlaybackValue(*Fixture, Pair.Key);
@@ -682,10 +714,11 @@ void UShowControlSubsystem::ResolveFixture(ALightingFixtureActor& Fixture)
 
 	// Under External DMX the console owns the cue and home layers; only what the user holds by hand is written over it.
 	const bool bInternal = ControlSource == EStageControlSource::Internal;
+	TMap<FGameplayTag, float> ProgrammerScratch;
 	StageShowMix::FFixtureLayers Layers;
 	Layers.Home = bInternal ? &Fixture.GetHomeAttributes() : nullptr;
 	Layers.Playback = bInternal ? PlaybackValues.Find(Id) : nullptr;
-	Layers.Programmer = Programmer ? Programmer->FindValues(Id) : nullptr;
+	Layers.Programmer = GetProgrammerLayer(Fixture, ProgrammerScratch);
 	Layers.Highlight = bHighlighted ? &HighlightValues : nullptr;
 
 	TArray<FGameplayTag> Attributes;
@@ -747,16 +780,102 @@ TMap<FGameplayTag, float> UShowControlSubsystem::GetRecordableValues(const ALigh
 	}
 	// Highlighted: the output shows the highlight, so the look underneath is mixed again without it.
 	TMap<FGameplayTag, float> Values = Fixture.GetAttributes();
+	TMap<FGameplayTag, float> ProgrammerScratch;
 	StageShowMix::FFixtureLayers Layers;
 	Layers.Home = &Fixture.GetHomeAttributes();
 	Layers.Playback = PlaybackValues.Find(Id);
-	Layers.Programmer = Programmer->FindValues(Id);
+	Layers.Programmer = GetProgrammerLayer(Fixture, ProgrammerScratch);
 	TArray<FGameplayTag> Attributes;
 	Values.GetKeys(Attributes);
 	TMap<FGameplayTag, float> Mixed;
 	StageShowMix::ResolveFixture(Attributes, Layers, Mixed);
 	Values.Append(Mixed);
 	return Values;
+}
+
+void UShowControlSubsystem::ApplyReferences(const ALightingFixtureActor* Fixture, int32 FixtureId, const TMap<FGameplayTag, FGuid>& References, TMap<FGameplayTag, float>& InOutValues) const
+{
+	if (References.IsEmpty() || !Library)
+	{
+		return;
+	}
+	// A colour palette's match is the same for every attribute of this fixture, so it is mixed once per palette.
+	TMap<FGuid, TMap<FGameplayTag, float>> ColorMatches;
+	for (const TPair<FGameplayTag, FGuid>& Reference : References)
+	{
+		float* Value = InOutValues.Find(Reference.Key);
+		const FStagePalette* Palette = Value ? Library->FindPalette(Reference.Value) : nullptr;
+		if (!Palette)
+		{
+			continue; // Gone: the stored value stands.
+		}
+		const TMap<FGameplayTag, float>* Match = nullptr;
+		if (Palette->bHasColor && Fixture)
+		{
+			Match = ColorMatches.Find(Palette->Id);
+			if (!Match)
+			{
+				Match = &ColorMatches.Add(Palette->Id, Fixture->MatchColor(Palette->Color));
+			}
+		}
+		StagePaletteRules::FindPaletteValue(*Palette, FixtureId, Reference.Key, Match, *Value);
+	}
+}
+
+TMap<FGameplayTag, float> UShowControlSubsystem::ResolveReferences(const FShowCueFixtureState& State) const
+{
+	TMap<FGameplayTag, float> Values = State.Attributes;
+	ApplyReferences(FindFixture(State.FixtureId), State.FixtureId, State.PaletteRefs, Values);
+	return Values;
+}
+
+const TMap<FGameplayTag, float>* UShowControlSubsystem::GetProgrammerLayer(const ALightingFixtureActor& Fixture, TMap<FGameplayTag, float>& Scratch) const
+{
+	const int32 Id = Fixture.GetFixtureId();
+	const TMap<FGameplayTag, float>* Values = Programmer ? Programmer->FindValues(Id) : nullptr;
+	const TMap<FGameplayTag, FGuid>* References = Programmer ? Programmer->FindReferences(Id) : nullptr;
+	if (!Values || !References)
+	{
+		return Values;
+	}
+	Scratch = *Values;
+	ApplyReferences(&Fixture, Id, *References, Scratch);
+	return &Scratch;
+}
+
+void UShowControlSubsystem::RefreshPlaybackReferences(int32 OnlyFixtureId)
+{
+	const FShowCue* Cue = ControlSource == EStageControlSource::Internal ? FindCue(ActiveCueNumber) : nullptr;
+	if (!Cue)
+	{
+		return;
+	}
+	for (const FShowCueFixtureState& State : Cue->Fixtures)
+	{
+		if (State.PaletteRefs.IsEmpty() || (OnlyFixtureId != INDEX_NONE && State.FixtureId != OnlyFixtureId))
+		{
+			continue;
+		}
+		const TMap<FGameplayTag, float> Resolved = ResolveReferences(State);
+		TMap<FGameplayTag, float>& Playback = PlaybackValues.FindOrAdd(State.FixtureId);
+		for (const TPair<FGameplayTag, FGuid>& Reference : State.PaletteRefs)
+		{
+			if (const float* Value = Resolved.Find(Reference.Key))
+			{
+				Playback.Add(Reference.Key, *Value);
+			}
+		}
+	}
+}
+
+void UShowControlSubsystem::HandlePalettesChanged()
+{
+	// A fade holds the targets it resolved at Go; finishing it first lets the playing cue take the palettes' new values cleanly.
+	FinishFade();
+	RefreshPlaybackReferences();
+	// Palette edits are rare user actions: re-mixing every fixture (only changed values are written) is simpler and as cheap as a
+	// switch back to Internal, and needs no second record of which fixture follows which palette (Docs/ADR/0028 §3).
+	ResolveAllFixtures();
 }
 
 bool UShowControlSubsystem::IsDMXOutputActive() const

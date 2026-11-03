@@ -5643,7 +5643,7 @@ The plan was approved in plan mode.
   - a fader drag over several fixtures (one undo step);
   - the new keys from a docked panel.
 
-**Commit:** uncommitted (working tree).
+**Commit:** `d8a50e5` (together with the Rules.md change that lets Claude commit when Gevor says so, 2026-11-03).
 
 **Known issues / follow-ups**
 - **Behaviour changes (intended, ADR 0025 §10):**
@@ -5658,3 +5658,132 @@ The plan was approved in plan mode.
   - F4 effects;
   - F5 DMX output.
 - **The pre-existing follow-ups from #58 remain open.**
+
+---
+
+## #60 — Phase F2: palettes and palette references; colour-wheel fixtures follow colours (2026-11-03)
+
+**What & why**
+
+Gevor approved the Phase F plan (#59) and said "Go" for F2. F2 closes gap G4: StageCraft had no palettes. A look had to be set by hand on every fixture, and changing it meant re-recording every cue that used it. grandMA3, MagicQ and Titan all have palettes that cues refer to. Design: `Docs/ADR/0028-palettes-and-references.md`.
+
+**Palettes** (`FStagePalette`, held in `UStageShowLibrarySubsystem` next to the groups):
+- Each palette has a kind: Intensity, Position, Color, Beam, Focus or All. `StagePaletteRules::GetAttributeKind` sorts every attribute, cell attributes included, into one kind. A palette holds only attributes of its kind.
+- **Global values** apply to any fixture that has the attribute.
+  - A colour palette holds **one colour**, and each fixture mixes it its own way through `MatchColor`. Colour attribute values are never global, because ColorR means an emitter level on an RGB fixture but a filter's transmission on a CMY one.
+- **Per-fixture values** are exact; they come from RECORD PER FIXTURE.
+- Resolution order for a fixture and attribute: its own value, then the global value, then the colour match, then nothing.
+- **Starter palettes** with fixed ids: White, Red, Green, Blue, Amber, Magenta, Cyan, UV, Home (pan/tilt 0) and Open (beam).
+  - A new stage starts with them (the library's `Initialize`).
+  - Files older than v7, including every starter stage, load with them.
+  - A v7 file keeps exactly its own palettes.
+
+**References, not copies:**
+- `FShowCueFixtureState` gains `PaletteRefs` (attribute → palette id). Every referenced attribute keeps its plain value as a fallback, and `StagePaletteRules::SanitizeReferences` drops any reference without one.
+- **The programmer** stores references with its values (`SetReferencedValues`, `FindReferences`). A plain edit replaces a reference. Undo captures both, and `FStageProgrammerCommand::IsMeaningfulChange` compares references too.
+- **The mix** (`UShowControlSubsystem::GetProgrammerLayer` / `ApplyReferences`) resolves the programmer's references.
+- **Cues:**
+  - `GoToCue` and `RestoreActiveCue` resolve a cue's references once, so the per-frame fade path is unchanged.
+  - `StoreCue` keeps the programmer's references for attributes the programmer holds, and the playing cue's for the rest (not mid-fade).
+- **When a palette changes**, the show control (bound to `OnPalettesChanged`):
+  1. finishes a running fade;
+  2. re-resolves the playing cue's references into the playback layer (`RefreshPlaybackReferences`);
+  3. re-mixes every fixture.
+
+  A fixture that registers later also refreshes its references.
+- **Deleting a palette that is in use** first turns its references into their current values in every cue and in the programmer. Palette, cue and programmer changes are one undo step, so nothing on stage changes.
+
+**Requests** (`ModularPlayerControllerProgrammer.cpp`), each one undo step:
+- `RequestApplyPalette`: the GameMode judges each attribute. A fixture with a refused attribute is left out entirely, so it never shows half a palette.
+- `RequestRecordPalette(kind, name, EStagePaletteScope Global | PerFixture)`: records what the selection shows, without the highlight.
+- `RequestUpdatePalette`, `RequestRenamePalette`, `RequestDeletePalette`.
+
+**Colour-wheel fixtures:**
+- **Problem.** R60a showed that "Red" had nothing for the Concert stage's moving heads: they have only a colour wheel, and `MatchColor` returned nothing for them.
+- **Fix.** `ALightingFixtureActor::MatchColorValues` now gives a wheel-only fixture its **nearest wheel slot**, comparing colours at full brightness (`FindNearestColorWheelSlot`), as a console's colour picker does.
+- This also makes the highlight open the wheel (white → Open), and the assistant's colours now reach wheel fixtures.
+
+**Scene format v7** (`FStageSceneStore::FormatVersion` 7):
+- `"palettes"` (`{id, name, kind by name, color?, values, fixtures}`);
+- `"palettes": {tag: id}` on cue and programmer fixture entries.
+- Damaged palettes, values and references are dropped and counted in `InvalidShowEntries`, which marketplace packages already treat as Corrupt.
+- Palettes are set before the active cue and the programmer are restored, because both resolve references.
+- **F3 now takes v8** (recorded in ADR 0028 and todo.md).
+
+**UI:**
+- `UStagePalettesPanel` (`StageCraft.Panel.Palettes`, Window > Palettes..., floating 600×460):
+  - kind tabs, colour swatches, RECORD and RECORD PER FIXTURE;
+  - a tile click applies the palette;
+  - current-palette row: rename, UPDATE, DELETE, and "Used by N cues …".
+- `DA_Panel_Palettes`, made headless by `Scripts/Content/create_palettes_content.py`.
+- The session's unsaved mark follows palette edits.
+
+**Development commands** (compiled out of Shipping):
+- `StageCraft.Show.Palette Record <kind> [PerFixture] [name] | Apply | Update | Rename | Delete | List`
+- `StageCraft.Show.Output <ids>` (logs a fixture's output values)
+- `StageCraft.Show.Programmer List` now shows `@palette` on referenced values.
+
+**Files changed**
+- **New:**
+  - `Docs/ADR/0028-palettes-and-references.md`
+  - `Public/UI/StagePalettesPanel.h`, `Private/UI/StagePalettesPanel.cpp`
+  - `Private/Show/Tests/StagePaletteTests.cpp`
+  - `Scripts/Content/create_palettes_content.py`
+  - `Content/StageCraft/UI/Panels/DA_Panel_Palettes.uasset`
+- **Modified:**
+  - Show and fixtures: `Public/Show/ShowControlTypes.h`, `Private/Show/ShowControlTypes.cpp`, `Public/Actors/LightingFixtureActor.h`, `Private/Actors/LightingFixtureActor.cpp`.
+  - Subsystems: `Public/Subsystems/StageShowLibrarySubsystem.h`, `Private/Subsystems/StageShowLibrarySubsystem.cpp`, `Public/Subsystems/StageProgrammerSubsystem.h`, `Private/Subsystems/StageProgrammerSubsystem.cpp`, `Public/Subsystems/ShowControlSubsystem.h`, `Private/Subsystems/ShowControlSubsystem.cpp`, `Private/Subsystems/StageSessionSubsystem.cpp`.
+  - History: `Public/History/StageEditCommand.h`, `Public/History/StageShowCommands.h`, `Private/History/StageShowCommands.cpp`, `Private/History/StageEditHistoryComponent.cpp`.
+  - Controller: `Public/Player/ModularPlayerController.h`, `Private/Player/ModularPlayerControllerProgrammer.cpp`.
+  - Scenes: `Public/Scene/StageSceneTypes.h`, `Private/Scene/StageSceneStore.h`, `Private/Scene/StageSceneStore.cpp`, `Private/Scene/StageSceneComponent.cpp`.
+  - Workspace: `Public/Workspace/StageWorkspaceTypes.h`, `Private/Workspace/StageWorkspaceTypes.cpp`, `Private/Workspace/StageWorkspaceShell.cpp`, `Private/Workspace/SStageWorkspaceMenuBar.cpp`.
+  - Console commands: `Private/Show/StageShowConsoleCommands.cpp`.
+  - Docs and records: `Docs/CURRENT_SYSTEMS.md`, `tasks/todo.md`, `STATE.md` (#59 commit line, this entry).
+
+**Verification**
+- **Builds:** Editor, Game (Development) and Shipping built with 0 warnings and 0 errors, all on the final code.
+- **Shipping UTF-16 scan:**
+  - absent: `StageCraft.Show.Palette`, `StageCraft.Show.Output`, `StageCraft.Show.Group`;
+  - present: "RECORD PER FIXTURE", "Not used by any cue".
+- **Automation:** `RunAutomation.ps1 -ExpectedCount 167`: 167/167 with an offscreen renderer and 167/167 with `-NullRHI`, both on the final code. User data unchanged (66 and 67 files).
+  - **New tests:**
+    - `StageCraft.Show.PaletteRules` (pure): kinds, resolution order, reference and pool sanitizing, cues using a palette, starter palettes.
+    - `StageCraft.Show.PaletteReferences` (world): a programmer and a cue follow a re-recorded palette; a Go fades to the palette's current value; undo and redo; a missing palette falls back to the stored value; wheel fixture slot matching.
+    - `StageCraft.Scene.PaletteData`: v7 round trip, hostile palettes and references, an empty v7 list stays empty, v6 gets the starter palettes.
+  - The first run failed one check of my own test (cue 1 was stored with a 0 s fade, so the Go had no halfway point). The test was fixed, not the code.
+- **Scripted -game runs** on the Concert starter stage (`RunGameScripted.ps1 -WithoutUserImports`, user data restored and hash-checked):
+  - **R60a:**
+    1. Fixtures 1–5 at pan 30 recorded as "Front Pos". Clear, then Apply put pan/tilt `@Front Pos` in the programmer.
+    2. Cue Store 1: the palette list shows cue 1 using it.
+    3. Set pan −40 and Update: after Clear, cue 1 shows pan −40.
+    4. Delete: pan stays −40.
+    5. Undo: the palette is back and used by cue 1.
+    6. Save, open Empty Stage, reload: the palette, cue 1 and pan −40 are all restored.
+  - **R60b** (after the wheel fix):
+    - Red and Home applied to the wheel movers: `ColorWheel=1@Red`, `Pan=0@Home`.
+    - Cue 1 stored using Home.
+    - A per-fixture colour palette was recorded.
+    - The Palettes panel was captured as a floating window: kind tabs, swatches for the eight colours and "Mixed: 5 fixtures".
+  - Artefacts: `%TEMP%\StageCraftRuns\R60a`, `R60b`.
+- **Benchmark** (`RunFixtureBench.ps1 -Counts 200,500`, same machine as #59). Show tick while crossfading:
+
+  | Fixtures | #59 (mean / max) | #60 (mean / max) |
+  |---|---|---|
+  | 200 | 3.96 / 8.74 ms | 3.64 / 8.50 ms |
+  | 500 | 8.93 / 17.7 ms | 8.39 / 14.8 ms |
+
+  - No regression; this is not claimed as a speed-up (noise).
+  - The idle show tick is 0.
+  - CSV: `Saved/StageCraft/Benchmarks/FixtureBench_20261103-210141.csv`.
+- **Not verified by hand:** the Palettes panel by mouse (tabs, record buttons, tile apply, rename field, UPDATE/DELETE and the "used by" note), and Undo from the panel.
+
+**Commit:** uncommitted (working tree).
+
+**Known issues / follow-ups**
+- **A global colour palette holds a colour only.** Colour temperature, CTO and exact wheel slots need RECORD PER FIXTURE.
+- **Recording a global colour while the primary fixture is highlighted** takes the highlight's white.
+- **A palette edit during a fade** snaps the fade to its end (ADR 0028 §3).
+- **The current-palette row** appears only after a tile click or a RECORD made in the panel itself, as with the Groups panel.
+- **The assistant** has no palette intents yet.
+- **v7 files are refused by builds before #60** (VersionMismatch).
+- **Next:** F3 (cue timing, tracking, playbacks and masters; ADR 0026; scene v8).

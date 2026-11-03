@@ -136,6 +136,7 @@ FStageSceneDocument UStageSceneComponent::CaptureStage(const FString& Name) cons
 	if (const UStageShowLibrarySubsystem* Library = UWorld::GetSubsystem<UStageShowLibrarySubsystem>(GetWorld()))
 	{
 		Document.Groups = Library->GetGroups();
+		Document.Palettes = Library->GetPalettes();
 	}
 	return Document;
 }
@@ -397,6 +398,13 @@ FStageSceneOperationResult UStageSceneComponent::ApplyDocument(const FStageScene
 	{
 		Programmer->ReplaceAll({});
 	}
+	// Before the fixtures register and before the active cue and the programmer are restored: all of them resolve palette
+	// references (Docs/ADR/0028 §6).
+	UStageShowLibrarySubsystem* Library = UWorld::GetSubsystem<UStageShowLibrarySubsystem>(GetWorld());
+	if (Library)
+	{
+		Library->SetPalettes(Document.Palettes);
+	}
 
 	// Skipped items are kept, not dropped: they go back into the file with the next save (Docs/ADR/0013 §3.1).
 	int32 UnknownItems = 0;
@@ -449,13 +457,13 @@ FStageSceneOperationResult UStageSceneComponent::ApplyDocument(const FStageScene
 	{
 		Programmer->ReplaceAll(Document.Programmer);
 	}
-	if (UStageShowLibrarySubsystem* Library = UWorld::GetSubsystem<UStageShowLibrarySubsystem>(GetWorld()))
+	if (Library)
 	{
 		Library->SetGroups(Document.Groups);
 	}
 	if (Report.InvalidShowEntries > 0)
 	{
-		UE_LOG(LogStageCraft, Warning, TEXT("Scene \"%s\": %d damaged programmer, group or playback entries were skipped."), *Document.Name, Report.InvalidShowEntries);
+		UE_LOG(LogStageCraft, Warning, TEXT("Scene \"%s\": %d damaged programmer, group, palette or playback entries were skipped."), *Document.Name, Report.InvalidShowEntries);
 	}
 	if (Report.InvalidCueEntries > 0)
 	{

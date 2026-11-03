@@ -411,6 +411,30 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "StageCraft|Requests")
 	bool RequestSelectGroup(FGuid GroupId);
 
+	// Palette requests (Docs/ADR/0028-palettes-and-references.md §4). Each edit is one undo step; applying is a programmer edit.
+
+	/**
+	 * Puts the palette into the programmer for every selected fixture it has values for, as references: the fixtures follow the
+	 * palette until a plain edit or Clear. Each attribute is judged by the GameMode like any programmer edit.
+	 */
+	UFUNCTION(BlueprintCallable, Category = "StageCraft|Requests")
+	FStageEconomyResultInfo RequestApplyPalette(FGuid PaletteId);
+
+	/** Records what the selected fixtures show (never the highlight), in Kind's attributes, as a new palette. Invalid id on failure. */
+	UFUNCTION(BlueprintCallable, Category = "StageCraft|Requests")
+	FGuid RequestRecordPalette(EStagePaletteKind Kind, const FText& Name, EStagePaletteScope Scope);
+
+	/** Re-records a palette from the selection, keeping its name and kind; every cue that refers to it changes with it. */
+	UFUNCTION(BlueprintCallable, Category = "StageCraft|Requests")
+	bool RequestUpdatePalette(FGuid PaletteId, EStagePaletteScope Scope);
+
+	UFUNCTION(BlueprintCallable, Category = "StageCraft|Requests")
+	bool RequestRenamePalette(FGuid PaletteId, const FText& Name);
+
+	/** Turns every reference to the palette (cues, programmer) into its current value, then deletes it: one undo step, no visible change. */
+	UFUNCTION(BlueprintCallable, Category = "StageCraft|Requests")
+	bool RequestDeletePalette(FGuid PaletteId);
+
 	/**
 	 * Re-patches fixtures as ONE undoable step (the Patch panel's AUTO PATCH, FIX CONFLICTS and PATCH SELECTION, planned by
 	 * UStageDMXPatchSubsystem; Docs/ADR/0019 §2.3). All or nothing: every new universe and address is checked by the GameMode's
@@ -877,6 +901,15 @@ private:
 
 	/** Records a group list edit made by Edit (true when it changed something), as one undo step named Description. */
 	bool EditGroups(const FText& Description, TFunctionRef<bool(class UStageShowLibrarySubsystem&)> Edit);
+
+	/** Records a palette list edit made by Edit (true when it changed something), as one undo step named Description. */
+	bool EditPalettes(const FText& Description, TFunctionRef<bool(class UStageShowLibrarySubsystem&)> Edit);
+
+	/**
+	 * A palette's content recorded from the selected fixtures (Docs/ADR/0028 §4). False, with the reason reported, when nothing is
+	 * selected or the selection shows nothing of Kind.
+	 */
+	bool CapturePaletteContent(EStagePaletteKind Kind, EStagePaletteScope Scope, struct FStagePalette& OutContent);
 
 	/** Highlight follows the selection while it is on. */
 	UFUNCTION()

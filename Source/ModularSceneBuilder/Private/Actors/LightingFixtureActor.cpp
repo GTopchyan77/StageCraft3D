@@ -44,6 +44,33 @@ namespace
 			|| Attribute == StageCraftTags::Attribute_ColorB;
 	}
 
+	/**
+	 * The colour wheel slot (0 = Open) whose filter is closest in hue and saturation to Color. Both are compared at full brightness,
+	 * because a wheel filter cannot dim: a dark red picks the red filter, not Open.
+	 */
+	int32 FindNearestColorWheelSlot(const ULightingFixtureData& Fixture, const FLinearColor& Color)
+	{
+		const auto Normalised = [](const FLinearColor& In)
+		{
+			const FLinearColor Clamped(FMath::Max(In.R, 0.f), FMath::Max(In.G, 0.f), FMath::Max(In.B, 0.f));
+			const float Peak = FMath::Max3(Clamped.R, Clamped.G, Clamped.B);
+			return Peak > UE_KINDA_SMALL_NUMBER ? FVector3f(Clamped.R, Clamped.G, Clamped.B) / Peak : FVector3f::OneVector;
+		};
+		const FVector3f Target = FMath::IsFinite(Color.R) && FMath::IsFinite(Color.G) && FMath::IsFinite(Color.B) ? Normalised(Color) : FVector3f::OneVector;
+		int32 Best = 0;
+		float BestDistance = TNumericLimits<float>::Max();
+		for (int32 Slot = 0; Slot <= Fixture.ColorWheel.Num(); ++Slot)
+		{
+			const float Distance = FVector3f::DistSquared(Target, Normalised(Fixture.GetColorWheelFilter(Slot)));
+			if (Distance < BestDistance)
+			{
+				BestDistance = Distance;
+				Best = Slot;
+			}
+		}
+		return Best;
+	}
+
 	/** Parameter names of the beam-shaping light-function material (Scripts/Content/create_fixture_library_content.py builds it). */
 	namespace BeamShapingParams
 	{
@@ -1333,8 +1360,18 @@ TMap<FGameplayTag, float> ALightingFixtureActor::MatchColorValues(const FLinearC
 {
 	TMap<FGameplayTag, float> Values;
 	const ULightingFixtureData* Fixture = GetFixtureData();
-	if (!Fixture || !(Fixture->AcceptsGelPreset() || Fixture->HasCellColor()) || (OnlyCell != INDEX_NONE && !Fixture->HasCellColor()))
+	if (!Fixture || (OnlyCell != INDEX_NONE && !Fixture->HasCellColor()))
 	{
+		return Values;
+	}
+	if (!(Fixture->AcceptsGelPreset() || Fixture->HasCellColor()))
+	{
+		// A colour-wheel fixture shows a colour by its nearest slot, as a console's colour picker does (Docs/ADR/0028 §2): a global
+		// colour palette, the highlight's white (the Open slot) and the assistant's colours reach wheel fixtures too.
+		if (!Fixture->ColorWheel.IsEmpty())
+		{
+			Values.Add(StageCraftTags::Attribute_ColorWheel, static_cast<float>(FindNearestColorWheelSlot(*Fixture, Color)));
+		}
 		return Values;
 	}
 	const FLinearColor Clamped = FMath::IsFinite(Color.R) && FMath::IsFinite(Color.G) && FMath::IsFinite(Color.B)

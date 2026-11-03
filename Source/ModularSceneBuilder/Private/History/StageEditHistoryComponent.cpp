@@ -173,6 +173,18 @@ namespace StageEditHistory
 			return EStageCommandResult::Succeeded;
 		}
 
+		virtual EStageCommandResult SetPalettes(const TArray<FStagePalette>& Palettes) override
+		{
+			UStageShowLibrarySubsystem* Library = UWorld::GetSubsystem<UStageShowLibrarySubsystem>(Session.GetWorld());
+			if (!Library)
+			{
+				return EStageCommandResult::Invalid;
+			}
+			// The show control re-mixes the fixtures that follow a palette (OnPalettesChanged); the session marks itself dirty.
+			Library->SetPalettes(Palettes);
+			return EStageCommandResult::Succeeded;
+		}
+
 	private:
 		UStageSessionSubsystem& Session;
 		USpawnSystemComponent& SpawnSystem;

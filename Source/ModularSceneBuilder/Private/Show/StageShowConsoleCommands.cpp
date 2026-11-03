@@ -20,6 +20,7 @@
 #include "Materials/Material.h"
 #include "ModularSceneBuilder.h"
 #include "Player/ModularPlayerController.h"
+#include "Show/StageFixtureCells.h"
 #include "Subsystems/ShowControlSubsystem.h"
 #include "Subsystems/StageDMXPatchSubsystem.h"
 #include "Subsystems/StageProgrammerSubsystem.h"
@@ -275,12 +276,17 @@ namespace StageShowCommands
 			UE_LOG(LogStageCraft, Display, TEXT("Usage: StageCraft.Show.Programmer Clear | Highlight On|Off | Fan Off|Linear|V|InvertedV | List"));
 			return;
 		}
+		const UStageShowLibrarySubsystem* Library = World->GetSubsystem<UStageShowLibrarySubsystem>();
 		for (const FShowCueFixtureState& Entry : ProgrammerState->GetEntries())
 		{
 			TArray<FString> Values;
 			for (const TPair<FGameplayTag, float>& Pair : Entry.Attributes)
 			{
-				Values.Add(FString::Printf(TEXT("%s=%.3f"), *Pair.Key.GetTagName().ToString().RightChop(21), Pair.Value));
+				// A referenced attribute shows the palette it follows: "ColorR=1.000@Red".
+				const FGuid* Reference = Entry.PaletteRefs.Find(Pair.Key);
+				const FStagePalette* Palette = Reference && Library ? Library->FindPalette(*Reference) : nullptr;
+				Values.Add(FString::Printf(TEXT("%s=%.3f%s"), *Pair.Key.GetTagName().ToString().RightChop(21), Pair.Value,
+					Reference ? *(TEXT("@") + (Palette ? Palette->Name.ToString() : FString(TEXT("(missing palette)")))) : TEXT("")));
 			}
 			UE_LOG(LogStageCraft, Display, TEXT("StageCraft.Show.Programmer: fixture %d: %s"), Entry.FixtureId, *FString::Join(Values, TEXT(" ")));
 		}
@@ -338,6 +344,107 @@ namespace StageShowCommands
 		}
 	}
 
+	void PaletteRequest(const TArray<FString>& Args, UWorld* World)
+	{
+		AModularPlayerController* Controller = GetController(World);
+		const UStageShowLibrarySubsystem* Library = World ? World->GetSubsystem<UStageShowLibrarySubsystem>() : nullptr;
+		const UShowControlSubsystem* Show = World ? World->GetSubsystem<UShowControlSubsystem>() : nullptr;
+		if (!Controller || !Library || !Show)
+		{
+			return;
+		}
+		const FString Verb = Args.IsEmpty() ? TEXT("List") : Args[0];
+		int32 Index = 0;
+		const bool bHasIndex = Args.Num() >= 2 && LexTryParseString(Index, *Args[1]) && Library->GetPalettes().IsValidIndex(Index - 1);
+		const FGuid PaletteId = bHasIndex ? Library->GetPalettes()[Index - 1].Id : FGuid();
+		const UEnum* KindEnum = StaticEnum<EStagePaletteKind>();
+		const int64 Kind = Args.Num() >= 2 && KindEnum ? KindEnum->GetValueByNameString(Args[1]) : INDEX_NONE;
+		bool bOk = true;
+		if (Verb == TEXT("Record") && Kind != INDEX_NONE)
+		{
+			// Record <kind> [PerFixture] [name...]
+			const bool bPerFixture = Args.Num() >= 3 && Args[2] == TEXT("PerFixture");
+			const int32 NameStart = bPerFixture ? 3 : 2;
+			const FString Name = FString::Join(TArrayView<const FString>(Args).RightChop(NameStart), TEXT(" "));
+			bOk = Controller->RequestRecordPalette(static_cast<EStagePaletteKind>(Kind), FText::FromString(Name),
+				bPerFixture ? EStagePaletteScope::PerFixture : EStagePaletteScope::Global).IsValid();
+		}
+		else if (Verb == TEXT("Apply") && bHasIndex)
+		{
+			bOk = Controller->RequestApplyPalette(PaletteId).IsSuccess();
+		}
+		else if (Verb == TEXT("Update") && bHasIndex)
+		{
+			const bool bPerFixture = !Library->GetPalettes()[Index - 1].FixtureValues.IsEmpty();
+			bOk = Controller->RequestUpdatePalette(PaletteId, bPerFixture ? EStagePaletteScope::PerFixture : EStagePaletteScope::Global);
+		}
+		else if (Verb == TEXT("Rename") && bHasIndex && Args.Num() >= 3)
+		{
+			bOk = Controller->RequestRenamePalette(PaletteId, FText::FromString(FString::Join(TArrayView<const FString>(Args).RightChop(2), TEXT(" "))));
+		}
+		else if (Verb == TEXT("Delete") && bHasIndex)
+		{
+			bOk = Controller->RequestDeletePalette(PaletteId);
+		}
+		else if (Verb != TEXT("List"))
+		{
+			UE_LOG(LogStageCraft, Display, TEXT("Usage: StageCraft.Show.Palette Record <All|Intensity|Position|Color|Beam|Focus> [PerFixture] [name] | Apply <n> | Update <n> | Rename <n> <name> | Delete <n> | List (n counts from 1)"));
+			return;
+		}
+		if (Verb != TEXT("List"))
+		{
+			UE_LOG(LogStageCraft, Display, TEXT("StageCraft.Show.Palette %s: %s."), *FString::Join(Args, TEXT(" ")), bOk ? TEXT("done") : TEXT("refused"));
+		}
+		int32 Number = 0;
+		for (const FStagePalette& Each : Library->GetPalettes())
+		{
+			TArray<FString> Cues;
+			for (const float CueNumber : StagePaletteRules::FindCuesUsing(Show->GetCues(), Each.Id))
+			{
+				Cues.Add(FString::SanitizeFloat(CueNumber));
+			}
+			UE_LOG(LogStageCraft, Display, TEXT("StageCraft.Show.Palette %d \"%s\" %s: colour %s, %d global value(s), %d fixture(s); cues [%s]"), ++Number,
+				*Each.Name.ToString(), *UEnum::GetDisplayValueAsText(Each.Kind).ToString(), Each.bHasColor ? *Each.Color.ToString() : TEXT("none"),
+				Each.GlobalValues.Num(), Each.FixtureValues.Num(), *FString::Join(Cues, TEXT(" ")));
+		}
+	}
+
+	/** Logs fixtures' output (the mix as it reaches the stage), cell controls left out: how scripted runs read what a fixture shows. */
+	void Output(const TArray<FString>& Args, UWorld* World)
+	{
+		const UShowControlSubsystem* Show = World ? World->GetSubsystem<UShowControlSubsystem>() : nullptr;
+		if (!Show || Args.IsEmpty())
+		{
+			UE_LOG(LogStageCraft, Display, TEXT("Usage: StageCraft.Show.Output <fixture id>..."));
+			return;
+		}
+		for (const FString& Arg : Args)
+		{
+			int32 FixtureId = 0;
+			const ALightingFixtureActor* Fixture = LexTryParseString(FixtureId, *Arg) ? Show->FindFixture(FixtureId) : nullptr;
+			if (!Fixture)
+			{
+				UE_LOG(LogStageCraft, Display, TEXT("StageCraft.Show.Output: no fixture %s."), *Arg);
+				continue;
+			}
+			TArray<FString> Values;
+			for (const TPair<FGameplayTag, float>& Pair : Fixture->GetAttributes())
+			{
+				if (!StageFixtureCells::IsCellAttribute(Pair.Key))
+				{
+					Values.Add(FString::Printf(TEXT("%s=%.3f"), *Pair.Key.GetTagName().ToString().RightChop(21), Pair.Value));
+				}
+			}
+			Values.Sort();
+			UE_LOG(LogStageCraft, Display, TEXT("StageCraft.Show.Output: fixture %d: %s"), FixtureId, *FString::Join(Values, TEXT(" ")));
+		}
+	}
+
+	FAutoConsoleCommandWithWorldAndArgs OutputCommand(TEXT("StageCraft.Show.Output"), TEXT("<fixture id>... Logs the fixtures' output values (cells left out)."),
+		FConsoleCommandWithWorldAndArgsDelegate::CreateStatic(&Output));
+	FAutoConsoleCommandWithWorldAndArgs PaletteCommand(TEXT("StageCraft.Show.Palette"),
+		TEXT("Record <kind> [PerFixture] [name] | Apply <n> | Update <n> | Rename <n> <name> | Delete <n> | List (validated, undoable like the Palettes panel)"),
+		FConsoleCommandWithWorldAndArgsDelegate::CreateStatic(&PaletteRequest));
 	FAutoConsoleCommandWithWorldAndArgs SelectCommand(TEXT("StageCraft.Show.Select"), TEXT("<fixture id>... Selects fixtures by ID in that order (the last is the primary)."),
 		FConsoleCommandWithWorldAndArgsDelegate::CreateStatic(&Select));
 	FAutoConsoleCommandWithWorldAndArgs ProgrammerCommand(TEXT("StageCraft.Show.Programmer"), TEXT("Clear | Highlight On|Off | Fan Off|Linear|V|InvertedV | List (as the Groups panel's programmer bar)"),

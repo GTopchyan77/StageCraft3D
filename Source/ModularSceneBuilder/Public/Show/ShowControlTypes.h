@@ -31,7 +31,10 @@ struct MODULARSCENEBUILDER_API FStageDMXPatch
 	bool operator==(const FStageDMXPatch& Other) const { return Universe == Other.Universe && Address == Other.Address; }
 };
 
-/** Attribute values of one fixture inside a cue. Fixtures are referenced by FixtureId so cues survive save/load and re-spawns. */
+/**
+ * Attribute values of one fixture inside a cue or the programmer. Fixtures are referenced by FixtureId so cues survive save/load
+ * and re-spawns.
+ */
 USTRUCT(BlueprintType)
 struct MODULARSCENEBUILDER_API FShowCueFixtureState
 {
@@ -42,6 +45,14 @@ struct MODULARSCENEBUILDER_API FShowCueFixtureState
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Cue", meta = (Categories = "StageCraft.Attribute"))
 	TMap<FGameplayTag, float> Attributes;
+
+	/**
+	 * Attributes that follow a palette (Docs/ADR/0028-palettes-and-references.md §3): the palette's current value wins, and the value
+	 * in Attributes is only the fallback when the palette is gone. Every key also has a value in Attributes
+	 * (StagePaletteRules::SanitizeReferences drops any that does not).
+	 */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Cue", meta = (Categories = "StageCraft.Attribute"))
+	TMap<FGameplayTag, FGuid> PaletteRefs;
 };
 
 /**
@@ -180,4 +191,113 @@ namespace StageFixtureGroupRules
 	 * id and groups past MaxGroups, gives unnamed groups a name and sanitizes the fixture lists. Returns how many groups were dropped.
 	 */
 	MODULARSCENEBUILDER_API int32 SanitizeGroups(TArray<FStageFixtureGroup>& Groups);
+}
+
+/** Which feature of a fixture a palette holds (Docs/ADR/0028-palettes-and-references.md §2), as a console's preset types. */
+UENUM(BlueprintType)
+enum class EStagePaletteKind : uint8
+{
+	/** Any attribute. */
+	All,
+	/** The dimmer and the cell dimmers. */
+	Intensity,
+	/** Pan and tilt. */
+	Position,
+	/** Emitters and filters, colour temperature, CTO, the colour wheel and the cell colours. */
+	Color,
+	/** Shutter, gobos, prisms, iris and blades: every attribute no other kind claims. */
+	Beam,
+	/** Zoom and frost. */
+	Focus,
+};
+
+/** How a palette is recorded from the selection. */
+UENUM(BlueprintType)
+enum class EStagePaletteScope : uint8
+{
+	/** One look for any fixture: the primary fixture's values (a colour palette: its colour, mixed by each fixture). */
+	Global,
+	/** Each selected fixture's own values, exactly. */
+	PerFixture,
+};
+
+/**
+ * A named look for one feature, as on a console's palette pool (Docs/ADR/0028 §2). Applied to a selection, it puts references into
+ * the programmer; cues keep them, so re-recording the palette changes every cue that uses it. Validated by StagePaletteRules.
+ */
+USTRUCT(BlueprintType)
+struct MODULARSCENEBUILDER_API FStagePalette
+{
+	GENERATED_BODY()
+
+	UPROPERTY(BlueprintReadOnly, Category = "Palette")
+	FGuid Id;
+
+	UPROPERTY(BlueprintReadOnly, Category = "Palette")
+	FText Name;
+
+	UPROPERTY(BlueprintReadOnly, Category = "Palette")
+	EStagePaletteKind Kind = EStagePaletteKind::All;
+
+	/** Colour palettes: whether Color holds a look. */
+	UPROPERTY(BlueprintReadOnly, Category = "Palette")
+	bool bHasColor = false;
+
+	/** Colour palettes: the colour each fixture mixes with its own system (ALightingFixtureActor::MatchColor). RGB 0..1. */
+	UPROPERTY(BlueprintReadOnly, Category = "Palette")
+	FLinearColor Color = FLinearColor::White;
+
+	/** Values for any fixture that has the attribute (never colour attributes, whose meaning differs between colour systems). */
+	UPROPERTY(BlueprintReadOnly, Category = "Palette", meta = (Categories = "StageCraft.Attribute"))
+	TMap<FGameplayTag, float> GlobalValues;
+
+	/** Exact values per fixture ID; they win over the global values. One entry per fixture. */
+	UPROPERTY(BlueprintReadOnly, Category = "Palette")
+	TArray<FShowCueFixtureState> FixtureValues;
+};
+
+/** What a valid palette list is and how a reference resolves (Docs/ADR/0028). Pure, any thread. */
+namespace StagePaletteRules
+{
+	inline constexpr int32 MaxPalettes = 999;
+	inline constexpr int32 MaxFixturesPerPalette = 4096;
+	inline constexpr int32 MaxAttributes = 256;
+	inline constexpr int32 MaxNameLength = 64;
+
+	/** The kind an attribute belongs to (never All). Unknown attributes count as Beam. */
+	MODULARSCENEBUILDER_API EStagePaletteKind GetAttributeKind(const FGameplayTag& Attribute);
+
+	/** A stored StageCraft.Attribute tag (composite rows such as ColorRGB are not) that a palette of Kind may hold. */
+	MODULARSCENEBUILDER_API bool AllowsAttribute(EStagePaletteKind Kind, const FGameplayTag& Attribute);
+
+	/** Only the values a palette of Kind may hold, finite, at most MaxAttributes. */
+	MODULARSCENEBUILDER_API TMap<FGameplayTag, float> FilterValues(EStagePaletteKind Kind, const TMap<FGameplayTag, float>& Values);
+
+	/** True when the palette holds something to apply (values or a colour). */
+	MODULARSCENEBUILDER_API bool HasContent(const FStagePalette& Palette);
+
+	/**
+	 * The value Palette gives FixtureId's Attribute: the fixture's own value, else the global value, else (colour palettes) the
+	 * attribute in ColorMatch, the fixture's MatchColor of Palette.Color (null when the caller has no fixture). False when none.
+	 */
+	MODULARSCENEBUILDER_API bool FindPaletteValue(const FStagePalette& Palette, int32 FixtureId, const FGameplayTag& Attribute, const TMap<FGameplayTag, float>* ColorMatch, float& OutValue);
+
+	/** Drops references with an invalid id or without a value in State.Attributes. Returns how many were dropped. */
+	MODULARSCENEBUILDER_API int32 SanitizeReferences(FShowCueFixtureState& State);
+
+	/** Trimmed and cut to MaxNameLength; empty stays empty. */
+	MODULARSCENEBUILDER_API FText SanitizeName(const FText& Name);
+
+	/**
+	 * Repairs a palette list from an untrusted source (a file, an undo step): drops palettes without a valid id, later duplicates and
+	 * palettes past MaxPalettes; names unnamed ones; keeps only the values of each palette's kind (finite, bounded), positive unique
+	 * fixture IDs and a finite colour. Returns how many palettes and entries were dropped.
+	 */
+	MODULARSCENEBUILDER_API int32 SanitizePalettes(TArray<FStagePalette>& Palettes);
+
+	/** The cue numbers whose fixtures refer to PaletteId, ascending. */
+	MODULARSCENEBUILDER_API TArray<float> FindCuesUsing(const TArray<FShowCue>& Cues, const FGuid& PaletteId);
+
+	/** The palettes every new stage starts with (Docs/ADR/0028 §5). Fixed ids, so they are the same in every stage. */
+	MODULARSCENEBUILDER_API TArray<FStagePalette> MakeStarterPalettes();
 }

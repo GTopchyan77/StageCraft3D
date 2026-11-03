@@ -122,4 +122,10 @@ struct FStageSceneDocument
 
 	/** The cue that was playing when the stage was saved (format version 6), so loading resumes the show there. Unset: none. */
 	TOptional<float> ActiveCueNumber;
+
+	/**
+	 * The show palettes (format version 7; Docs/ADR/0028-palettes-and-references.md §6). Sanitized (StagePaletteRules). Older files
+	 * read as the starter palettes, so every stage made before palettes existed has them.
+	 */
+	TArray<FStagePalette> Palettes;
 };
