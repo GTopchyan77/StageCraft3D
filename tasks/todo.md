@@ -559,6 +559,9 @@ Gevor's choices: automation tests on a harness game instance (not AFunctionalTes
 - [ ] F1 manual verification (Gevor): Groups panel, FAN and HIGHLIGHT by mouse, a fader drag over several fixtures as one undo step, Go / Back / Clear / Highlight keys from a docked panel
 - [x] F2 palettes (ADR 0028): global and per-fixture, references in the programmer and cues, palette pools panel, starter palettes, colour-wheel fixtures by nearest slot, scene format v7 (STATE.md #60)
 - [ ] F2 manual verification (Gevor): Palettes panel by mouse (kind tabs, RECORD, RECORD PER FIXTURE, tile apply, rename, UPDATE, DELETE with the "used by" note), Undo after each
-- [ ] F3 cue timing (in/out/delay/per-feature, follow/wait, curve), tracking and Cue Only, cue lists, 10 playbacks with flash and release, Grand Master and Blackout, Playback panel, Lighting Desk layout, format v8 (F2 took v7; ADR 0026, STATE.md #61)
-- [ ] F4 effects engine: templates, phase spread, wings and blocks, BPM and tap tempo, Effects panel, measured with Bench.Fixtures (ADR 0027, STATE.md #62)
-- [ ] F5 DMX output (Art-Net / sACN), per-fixture invert / swap pan and tilt, fixture schedule CSV import (ADR 0019 amendment, STATE.md #63)
+- [x] F3a cue timing (delay, In/Out, feature times, Follow/Wait, S-curve) and tracking (Track, Cue Only, Look, Block), Cues panel, format v8 (ADR 0026, STATE.md #61)
+- [ ] F3a manual verification (Gevor): Cues panel by mouse (time fields, trigger cycle, BLK, detail line, store modes)
+- [x] F3b 10 playbacks (own tracking lists, GO, FLASH, REC, REL), HTP/LTP, Grand Master and Blackout, Playback panel, Lighting Desk layout (ADR 0026, STATE.md #62)
+- [ ] F3b manual verification (Gevor): Playback panel by mouse (fader drag, FLASH hold, REC/REL/CLR, GM, BLACKOUT), Ctrl+Shift+B, Layout > Lighting Desk
+- [ ] F4 effects engine: templates, phase spread, wings and blocks, BPM and tap tempo, Effects panel, measured with Bench.Fixtures (ADR 0027, STATE.md #63)
+- [ ] F5 DMX output (Art-Net / sACN), per-fixture invert / swap pan and tilt, fixture schedule CSV import (ADR 0019 amendment, STATE.md #64)

@@ -53,3 +53,37 @@ private:
 
 	int32 ChoiceIndex = INDEX_NONE;
 };
+
+/** Reports a flash button going down (true) or up (false), and which one. */
+DECLARE_DELEGATE_TwoParams(FOnStageFlash, int32 /*Index*/, bool /*bDown*/);
+
+/**
+ * A console's flash key: reports press and release, so what it drives lasts exactly as long as the button is held
+ * (Docs/ADR/0026 §6). Never keyboard-focusable, like its parent.
+ */
+UCLASS()
+class MODULARSCENEBUILDER_API UStageFlashButton : public UStageToolButton
+{
+	GENERATED_BODY()
+
+public:
+	UStageFlashButton(const FObjectInitializer& ObjectInitializer);
+
+	//~ Begin UObject Interface
+	virtual void PostInitProperties() override;
+	//~ End UObject Interface
+
+	void SetFlashIndex(int32 InIndex) { FlashIndex = InIndex; }
+
+	/** Bound by the panel that owns the button; unbound when the panel is destroyed with it. */
+	FOnStageFlash OnFlash;
+
+private:
+	UFUNCTION()
+	void HandlePressed();
+
+	UFUNCTION()
+	void HandleReleased();
+
+	int32 FlashIndex = INDEX_NONE;
+};

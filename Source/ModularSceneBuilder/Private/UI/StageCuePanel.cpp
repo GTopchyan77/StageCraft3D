@@ -33,12 +33,62 @@ namespace StageCuePanel
 	constexpr float FixturesWidth = 44.f;
 	constexpr float RowButtonWidth = 58.f;
 	constexpr float DefaultFadeTime = 2.f;
+	constexpr float TimeWidth = 44.f;
+	constexpr float TriggerWidth = 62.f;
+	constexpr float ToggleWidth = 22.f;
+	constexpr float FeatureLabelWidth = 34.f;
 
 	// Transport and source buttons report these choice indices.
 	constexpr int32 ChoiceGo = 0;
 	constexpr int32 ChoiceBack = 1;
 	constexpr int32 ChoiceInternal = 0;
 	constexpr int32 ChoiceExternal = 1;
+
+	// Time fields report these ids; a feature time is FieldFeatureBase + its EStagePaletteKind.
+	constexpr int32 FieldIn = 0;
+	constexpr int32 FieldOut = 1;
+	constexpr int32 FieldDelay = 2;
+	constexpr int32 FieldWait = 3;
+	constexpr int32 FieldFeatureBase = 10;
+
+	FText TriggerLabel(const FStageCueTiming& Timing)
+	{
+		switch (Timing.Trigger)
+		{
+		case EStageCueTrigger::Follow:
+			return LOCTEXT("TriggerFollow", "FOLLOW");
+		case EStageCueTrigger::Wait:
+			return FText::Format(LOCTEXT("TriggerWait", "WAIT {0}"), FText::AsNumber(Timing.WaitTime));
+		default:
+			return LOCTEXT("TriggerGo", "GO");
+		}
+	}
+
+	FText StoreModeLabel(EStageCueStoreMode Mode)
+	{
+		switch (Mode)
+		{
+		case EStageCueStoreMode::Track:
+			return LOCTEXT("ModeTrack", "TRACK");
+		case EStageCueStoreMode::CueOnly:
+			return LOCTEXT("ModeCueOnly", "CUE ONLY");
+		default:
+			return LOCTEXT("ModeLook", "LOOK");
+		}
+	}
+
+	FText StoreModeTip(EStageCueStoreMode Mode)
+	{
+		switch (Mode)
+		{
+		case EStageCueStoreMode::Track:
+			return LOCTEXT("ModeTrackTip", "Store what the programmer holds. It tracks: later cues keep it until they change it.");
+		case EStageCueStoreMode::CueOnly:
+			return LOCTEXT("ModeCueOnlyTip", "Store what the programmer holds in this cue only: the next cue keeps its old values.");
+		default:
+			return LOCTEXT("ModeLookTip", "Store every fixture's whole look as a blocked cue that inherits nothing.");
+		}
+	}
 
 	FText FormatCueNumber(float CueNumber)
 	{
@@ -66,21 +116,22 @@ void UStageCueLabelField::HandleTextCommitted(const FText& InText, ETextCommit::
 	}
 }
 
-void UStageCueFadeField::Configure(float InCueNumber)
+void UStageCueFadeField::Configure(float InCueNumber, int32 InFieldId)
 {
 	CueNumber = InCueNumber;
+	FieldId = InFieldId;
 	OnValueCommitted.AddUniqueDynamic(this, &ThisClass::HandleValueCommitted);
 	OnEndSliderMovement.AddUniqueDynamic(this, &ThisClass::HandleEndSliderMovement);
 }
 
 void UStageCueFadeField::HandleValueCommitted(float InValue, ETextCommit::Type CommitMethod)
 {
-	OnFadeCommitted.ExecuteIfBound(CueNumber, InValue);
+	OnTimeCommitted.ExecuteIfBound(CueNumber, FieldId, InValue);
 }
 
 void UStageCueFadeField::HandleEndSliderMovement(float InValue)
 {
-	OnFadeCommitted.ExecuteIfBound(CueNumber, InValue);
+	OnTimeCommitted.ExecuteIfBound(CueNumber, FieldId, InValue);
 }
 
 // --- UStageCuePanel ---
@@ -194,7 +245,7 @@ void UStageCuePanel::BuildTree()
 	Column->AddChildToVerticalBox(BuildRecordRow());
 	Column->AddChildToVerticalBox(MakeColumnTitles());
 
-	EmptyText = MakeText(LOCTEXT("Empty", "No cues yet. Set up a look with the inspector or the faders, then STORE it as cue 1."), 8, TEXT("Italic"), Palette.TextSecondary);
+	EmptyText = MakeText(LOCTEXT("Empty", "No cues yet. Set up a look with the inspector or the faders (it goes into the programmer), then STORE it as cue 1."), 8, TEXT("Italic"), Palette.TextSecondary);
 	EmptyText->SetAutoWrapText(true);
 	EmptyText->SetJustification(ETextJustify::Center);
 	if (UVerticalBoxSlot* EmptySlot = Column->AddChildToVerticalBox(EmptyText))
@@ -239,7 +290,7 @@ UWidget* UStageCuePanel::BuildTransport()
 	};
 
 	UTextBlock* Title = MakeText(LOCTEXT("Title", "CUES"), 9, TEXT("Bold"), Palette.TextPrimary);
-	Title->SetToolTipText(LOCTEXT("TitleTip", "The show's cue list. Each cue records every fixture's look and crossfades to it on GO."));
+	Title->SetToolTipText(LOCTEXT("TitleTip", "The show's cue list. Cues track: each holds what it changes, earlier cues give the rest. GO plays the next cue with its timing."));
 	Add(Title, 0.f, false);
 
 	GoButton = MakeButton(LOCTEXT("Go", "GO"), LOCTEXT("GoTip", "Play the next cue."), ChoiceGo, true);
@@ -315,12 +366,21 @@ UWidget* UStageCuePanel::BuildRecordRow()
 	LabelBox->SetContent(RecordLabelField);
 	Add(LabelBox, 6.f, true);
 
-	Add(MakeText(LOCTEXT("RecordFade", "FADE"), 7, TEXT("Bold"), Palette.TextSecondary), 8.f, false);
+	Add(MakeText(LOCTEXT("RecordFade", "IN"), 7, TEXT("Bold"), Palette.TextSecondary), 8.f, false);
 	RecordFadeField = MakeNumberField(DefaultFadeTime, 0.f, StageCueRules::MaxFadeTime, 0.1f, 2,
-		LOCTEXT("RecordFadeTip", "Crossfade time in seconds when the cue plays."));
+		LOCTEXT("RecordFadeTip", "The cue's In time: seconds its values take to arrive when it plays (a new cue only)."));
 	Add(Sized(*RecordFadeField, FadeWidth), 6.f, false);
 
-	StoreButton = MakeButton(LOCTEXT("Store", "STORE"), LOCTEXT("StoreTip", "Record every fixture's current look as this cue."), 0, true);
+	StoreModeButtons.Reset();
+	for (const EStageCueStoreMode Mode : { EStageCueStoreMode::Look, EStageCueStoreMode::Track, EStageCueStoreMode::CueOnly })
+	{
+		UStageChoiceButton* ModeButton = MakeButton(StoreModeLabel(Mode), StoreModeTip(Mode), static_cast<int32>(Mode), Mode == StoreMode);
+		ModeButton->OnPicked.BindUObject(this, &ThisClass::HandleStoreModePicked);
+		Add(ModeButton, StoreModeButtons.IsEmpty() ? 8.f : 2.f, false);
+		StoreModeButtons.Add(ModeButton);
+	}
+
+	StoreButton = MakeButton(LOCTEXT("Store", "STORE"), LOCTEXT("StoreTip", "Record the cue as the store mode says."), 0, true);
 	StoreButton->OnPicked.BindUObject(this, &ThisClass::HandleStorePicked);
 	StoreButtonText = Cast<UTextBlock>(StoreButton->GetChildAt(0));
 	Add(StoreButton, 8.f, false);
@@ -356,9 +416,13 @@ UWidget* UStageCuePanel::MakeColumnTitles()
 	AddTitle(FText::GetEmpty(), ActiveMarkerWidth, 0.f);
 	AddTitle(LOCTEXT("NumberColumn", "CUE"), NumberWidth, 0.f);
 	AddTitle(LOCTEXT("LabelColumn", "LABEL"), 0.f, 6.f);
-	AddTitle(LOCTEXT("FadeColumn", "FADE (s)"), FadeWidth, 6.f);
+	AddTitle(LOCTEXT("InColumn", "IN (s)"), TimeWidth, 6.f);
+	AddTitle(LOCTEXT("OutColumn", "OUT"), TimeWidth, 4.f);
+	AddTitle(LOCTEXT("DelayColumn", "DELAY"), TimeWidth, 4.f);
+	AddTitle(LOCTEXT("TriggerColumn", "TRIGGER"), TriggerWidth, 4.f);
+	AddTitle(LOCTEXT("BlockColumn", "BLK"), ToggleWidth, 4.f);
 	AddTitle(LOCTEXT("FixturesColumn", "FIXT."), FixturesWidth, 6.f);
-	AddTitle(FText::GetEmpty(), RowButtonWidth * 2.f + 4.f, 6.f);
+	AddTitle(FText::GetEmpty(), ToggleWidth + RowButtonWidth * 2.f + 8.f, 6.f);
 	return Row;
 }
 
@@ -416,28 +480,37 @@ UWidget* UStageCuePanel::MakeCueRow(const FShowCue& Cue, bool bActive, int32 Row
 	Label->OnLabelCommitted.BindUObject(this, &ThisClass::HandleLabelCommitted);
 	AddCell(Sized(*Label, 0.f), 6.f, true);
 
-	UStageCueFadeField* Fade = WidgetTree->ConstructWidget<UStageCueFadeField>(UStageCueFadeField::StaticClass());
-	Fade->SetWidgetStyle(MakeNumericField(Palette));
-	Fade->SetFont(MakeFont(8));
-	Fade->SetForegroundColor(Palette.TextPrimary);
-	Fade->SetMinDesiredWidth(0.f);
-	Fade->SetMinFractionalDigits(0);
-	Fade->SetMaxFractionalDigits(2);
-	Fade->SetDelta(0.1f);
-	Fade->SetMinValue(0.f);
-	Fade->SetMaxValue(StageCueRules::MaxFadeTime);
-	Fade->SetMinSliderValue(0.f);
-	Fade->SetMaxSliderValue(30.f);
-	Fade->SetValue(Cue.FadeTime);
-	Fade->SetToolTipText(LOCTEXT("FadeTip", "Crossfade time in seconds."));
-	Fade->Configure(Cue.Number);
-	Fade->OnFadeCommitted.BindUObject(this, &ThisClass::HandleFadeCommitted);
-	AddCell(Sized(*Fade, FadeWidth), 6.f, false);
+	const FStageCueTiming& Timing = Cue.Timing;
+	AddCell(Sized(*MakeTimeField(Cue.Number, FieldIn, Cue.FadeTime,
+		LOCTEXT("InTip", "In time: seconds the cue's values take to arrive (unless a feature time says otherwise).")), TimeWidth), 6.f, false);
+	AddCell(Sized(*MakeTimeField(Cue.Number, FieldOut, Timing.bHasOutTime ? Timing.OutTime : Cue.FadeTime,
+		LOCTEXT("OutTip", "Out time: seconds for intensity going down. The same as In unless you change it.")), TimeWidth), 4.f, false);
+	AddCell(Sized(*MakeTimeField(Cue.Number, FieldDelay, Timing.Delay,
+		LOCTEXT("DelayTip", "Delay: seconds after the cue starts before anything in it moves.")), TimeWidth), 4.f, false);
+
+	UStageChoiceButton* Trigger = MakeButton(TriggerLabel(Timing),
+		LOCTEXT("TriggerTip", "What starts this cue: GO (your Go), FOLLOW (when the cue before it finishes) or WAIT (seconds after the cue before it starts; set the seconds in the detail line). Click to change."),
+		RowIndex, Timing.Trigger != EStageCueTrigger::Go);
+	Trigger->OnPicked.BindUObject(this, &ThisClass::HandleTriggerPicked);
+	AddCell(MakeCell(*Trigger, TriggerWidth), 4.f, false);
+
+	UStageChoiceButton* Block = MakeButton(LOCTEXT("BlockMark", "B"),
+		Cue.bBlock ? LOCTEXT("BlockedTip", "Blocked: this cue inherits nothing from the cues before it. Click to let it track again.")
+			: LOCTEXT("BlockTip", "Block: this cue keeps its look but stops inheriting from the cues before it. Click to block."),
+		RowIndex, Cue.bBlock);
+	Block->OnPicked.BindUObject(this, &ThisClass::HandleBlockPicked);
+	AddCell(MakeCell(*Block, ToggleWidth), 4.f, false);
 
 	UTextBlock* Fixtures = MakeText(FText::AsNumber(Cue.Fixtures.Num()), 8, TEXT("Regular"), Palette.TextSecondary);
 	Fixtures->SetJustification(ETextJustify::Right);
-	Fixtures->SetToolTipText(LOCTEXT("FixturesTip", "Fixtures recorded in this cue."));
+	Fixtures->SetToolTipText(LOCTEXT("FixturesTip", "Fixtures this cue changes (a tracking cue holds only its changes; earlier cues give the rest)."));
 	AddCell(MakeCell(*Fixtures, FixturesWidth), 6.f, false);
+
+	const bool bExpanded = ExpandedCues.Contains(Cue.Number);
+	UStageChoiceButton* Detail = MakeButton(bExpanded ? LOCTEXT("Collapse", "-") : LOCTEXT("Expand", "+"),
+		LOCTEXT("DetailTip", "Show or hide this cue's feature times, wait time and curve."), RowIndex, bExpanded);
+	Detail->OnPicked.BindUObject(this, &ThisClass::HandleDetailPicked);
+	AddCell(MakeCell(*Detail, ToggleWidth), 6.f, false);
 
 	UStageChoiceButton* GoTo = MakeButton(LOCTEXT("GoTo", "GO TO"), LOCTEXT("GoToTip", "Crossfade to this cue."), RowIndex, false);
 	GoTo->OnPicked.BindUObject(this, &ThisClass::HandleGoToPicked);
@@ -446,6 +519,83 @@ UWidget* UStageCuePanel::MakeCueRow(const FShowCue& Cue, bool bActive, int32 Row
 	UStageChoiceButton* Delete = MakeButton(LOCTEXT("Delete", "DELETE"), LOCTEXT("DeleteTip", "Delete this cue (Ctrl+Z brings it back)."), RowIndex, false);
 	Delete->OnPicked.BindUObject(this, &ThisClass::HandleDeletePicked);
 	AddCell(MakeCell(*Delete, RowButtonWidth), 4.f, false);
+	return Row;
+}
+
+UStageCueFadeField* UStageCuePanel::MakeTimeField(float CueNumber, int32 FieldId, float Seconds, const FText& ToolTip)
+{
+	using namespace StageCraftWidgetStyle;
+	const UStageCraftUITheme& Palette = GetTheme();
+	UStageCueFadeField* Field = WidgetTree->ConstructWidget<UStageCueFadeField>(UStageCueFadeField::StaticClass());
+	Field->SetWidgetStyle(MakeNumericField(Palette));
+	Field->SetFont(MakeFont(8));
+	Field->SetForegroundColor(Palette.TextPrimary);
+	Field->SetMinDesiredWidth(0.f);
+	Field->SetMinFractionalDigits(0);
+	Field->SetMaxFractionalDigits(2);
+	Field->SetDelta(0.1f);
+	Field->SetMinValue(0.f);
+	Field->SetMaxValue(StageCueRules::MaxFadeTime);
+	Field->SetMinSliderValue(0.f);
+	Field->SetMaxSliderValue(30.f);
+	Field->SetValue(Seconds);
+	Field->SetToolTipText(ToolTip);
+	Field->Configure(CueNumber, FieldId);
+	Field->OnTimeCommitted.BindUObject(this, &ThisClass::HandleTimeCommitted);
+	return Field;
+}
+
+UWidget* UStageCuePanel::MakeCueDetailRow(const FShowCue& Cue, int32 RowIndex)
+{
+	using namespace StageCraftWidgetStyle;
+	using namespace StageCuePanel;
+	const UStageCraftUITheme& Palette = GetTheme();
+
+	UBorder* Row = WidgetTree->ConstructWidget<UBorder>(UBorder::StaticClass());
+	Row->SetBrush(MakeBox(Palette.RowBackground));
+	Row->SetPadding(FMargin(10.f + ActiveMarkerWidth + NumberWidth, 2.f, 10.f, 4.f));
+	UHorizontalBox* Cells = WidgetTree->ConstructWidget<UHorizontalBox>(UHorizontalBox::StaticClass());
+	Row->SetContent(Cells);
+	const auto AddCell = [Cells](UWidget* Widget, float LeftGap)
+	{
+		if (UHorizontalBoxSlot* CellSlot = Cells->AddChildToHorizontalBox(Widget))
+		{
+			CellSlot->SetPadding(FMargin(LeftGap, 0.f, 0.f, 0.f));
+			CellSlot->SetVerticalAlignment(VAlign_Center);
+		}
+	};
+	const auto Sized = [this](UWidget& Content, float Width)
+	{
+		USizeBox* Box = WidgetTree->ConstructWidget<USizeBox>(USizeBox::StaticClass());
+		Box->SetWidthOverride(Width);
+		Box->SetHeightOverride(FieldHeight);
+		Box->SetContent(&Content);
+		return Box;
+	};
+
+	// A feature without its own time shows the In time; changing it gives the feature its own, setting it back to In removes it.
+	const TPair<EStagePaletteKind, FText> Features[] = {
+		{ EStagePaletteKind::Intensity, LOCTEXT("FeatureIntensity", "INT") },
+		{ EStagePaletteKind::Position, LOCTEXT("FeaturePosition", "POS") },
+		{ EStagePaletteKind::Color, LOCTEXT("FeatureColor", "COL") },
+		{ EStagePaletteKind::Beam, LOCTEXT("FeatureBeam", "BEAM") },
+		{ EStagePaletteKind::Focus, LOCTEXT("FeatureFocus", "FOC") },
+	};
+	for (const TPair<EStagePaletteKind, FText>& Feature : Features)
+	{
+		const float* Own = Cue.Timing.FeatureTimes.Find(Feature.Key);
+		AddCell(MakeCell(*MakeText(Feature.Value, 6, TEXT("Bold"), Own ? Palette.AccentColor : Palette.TextSecondary), FeatureLabelWidth), 6.f);
+		AddCell(Sized(*MakeTimeField(Cue.Number, FieldFeatureBase + static_cast<int32>(Feature.Key), Own ? *Own : Cue.FadeTime,
+			LOCTEXT("FeatureTimeTip", "This feature's own fade time. Set it back to the In time to follow In again.")), TimeWidth), 0.f);
+	}
+	AddCell(MakeCell(*MakeText(LOCTEXT("WaitLabel", "WAIT"), 6, TEXT("Bold"), Palette.TextSecondary), FeatureLabelWidth), 12.f);
+	AddCell(Sized(*MakeTimeField(Cue.Number, FieldWait, Cue.Timing.WaitTime,
+		LOCTEXT("WaitTip", "Trigger WAIT: seconds after the cue before this one starts.")), TimeWidth), 0.f);
+	UStageChoiceButton* Curve = MakeButton(Cue.Timing.Curve == EStageCueCurve::SCurve ? LOCTEXT("CurveS", "S-CURVE") : LOCTEXT("CurveLinear", "LINEAR"),
+		LOCTEXT("CurveTip", "How the cue's values move: evenly (LINEAR) or easing in and out (S-CURVE). Click to change."), RowIndex,
+		Cue.Timing.Curve == EStageCueCurve::SCurve);
+	Curve->OnPicked.BindUObject(this, &ThisClass::HandleCurvePicked);
+	AddCell(MakeCell(*Curve, TriggerWidth), 12.f);
 	return Row;
 }
 
@@ -515,8 +665,25 @@ void UStageCuePanel::Rebuild()
 	for (const FShowCue& Cue : Cues)
 	{
 		const bool bActive = Active >= 0.f && FMath::IsNearlyEqual(Cue.Number, Active, StageCueRules::NumberResolution * 0.5f);
-		ListBody->AddChildToVerticalBox(MakeCueRow(Cue, bActive, RowCueNumbers.Num()));
+		const int32 RowIndex = RowCueNumbers.Num();
+		ListBody->AddChildToVerticalBox(MakeCueRow(Cue, bActive, RowIndex));
+		if (ExpandedCues.Contains(Cue.Number))
+		{
+			ListBody->AddChildToVerticalBox(MakeCueDetailRow(Cue, RowIndex));
+		}
 		RowCueNumbers.Add(Cue.Number);
+	}
+	// A deleted cue's detail line does not come back if a new cue later takes its number.
+	for (auto It = ExpandedCues.CreateIterator(); It; ++It)
+	{
+		if (!RowCueNumbers.Contains(*It))
+		{
+			It.RemoveCurrent();
+		}
+	}
+	for (int32 Mode = 0; Mode < StoreModeButtons.Num(); ++Mode)
+	{
+		SetSegmentActive(*StoreModeButtons[Mode], static_cast<EStageCueStoreMode>(Mode) == StoreMode);
 	}
 
 	const UStageCraftUITheme& Palette = GetTheme();
@@ -561,15 +728,18 @@ void UStageCuePanel::RefreshStoreButton()
 {
 	const UShowControlSubsystem* Subsystem = ShowControl.Get();
 	const bool bExists = Subsystem && RecordNumberField && Subsystem->FindCue(RecordNumberField->GetValue()) != nullptr;
+	const bool bLook = StoreMode == EStageCueStoreMode::Look;
 	if (StoreButtonText)
 	{
-		StoreButtonText->SetText(bExists ? LOCTEXT("ReRecord", "RE-RECORD") : LOCTEXT("Store", "STORE"));
+		StoreButtonText->SetText(!bExists ? LOCTEXT("Store", "STORE") : (bLook ? LOCTEXT("ReRecord", "RE-RECORD") : LOCTEXT("Update", "UPDATE")));
 	}
 	if (StoreButton)
 	{
-		StoreButton->SetToolTipText(bExists
-			? LOCTEXT("ReRecordTip", "Replace this cue's recorded look with every fixture's current look (Ctrl+Z restores it).")
-			: LOCTEXT("StoreTip", "Record every fixture's current look as this cue."));
+		StoreButton->SetToolTipText(bLook
+			? (bExists ? LOCTEXT("ReRecordTip", "Replace this cue with every fixture's current look, as a blocked cue (Ctrl+Z restores it).")
+				: LOCTEXT("StoreLookTip", "Record every fixture's current look as this cue, a blocked cue."))
+			: (bExists ? LOCTEXT("UpdateTip", "Add what the programmer holds to this cue (Ctrl+Z restores it).")
+				: LOCTEXT("StoreTrackTip", "Record what the programmer holds as this cue; earlier cues give the rest.")));
 	}
 }
 
@@ -623,7 +793,7 @@ void UStageCuePanel::HandleStorePicked(int32 ChoiceIndex)
 	{
 		return;
 	}
-	if (Controller->RequestStoreCue(RecordNumberField->GetValue(), RecordLabelField->GetText(), RecordFadeField->GetValue()))
+	if (Controller->RequestStoreCue(RecordNumberField->GetValue(), RecordLabelField->GetText(), RecordFadeField->GetValue(), StoreMode))
 	{
 		// Ready for the next cue, like a console after Record.
 		RecordLabelField->SetText(FText::GetEmpty());
@@ -663,14 +833,120 @@ void UStageCuePanel::HandleLabelCommitted(float CueNumber, const FText& Label)
 	RequestRebuild();
 }
 
-void UStageCuePanel::HandleFadeCommitted(float CueNumber, float FadeTime)
+void UStageCuePanel::HandleTimeCommitted(float CueNumber, int32 FieldId, float Seconds)
 {
+	using namespace StageCuePanel;
 	AModularPlayerController* Controller = GetStageController();
 	const UShowControlSubsystem* Subsystem = ShowControl.Get();
 	const FShowCue* Cue = Subsystem ? Subsystem->FindCue(CueNumber) : nullptr;
-	if (Controller && Cue && !FMath::IsNearlyEqual(Cue->FadeTime, FadeTime))
+	if (!Controller || !Cue)
 	{
-		Controller->RequestUpdateCue(CueNumber, Cue->Label, FadeTime);
+		RequestRebuild();
+		return;
+	}
+	if (FieldId == FieldIn)
+	{
+		if (!FMath::IsNearlyEqual(Cue->FadeTime, Seconds))
+		{
+			Controller->RequestUpdateCue(CueNumber, Cue->Label, Seconds);
+		}
+		RequestRebuild();
+		return;
+	}
+
+	// Out and feature times equal to In mean "follow In": stored as no time of their own, so a later In change carries them along.
+	FStageCueTiming Timing = Cue->Timing;
+	const bool bSameAsIn = FMath::IsNearlyEqual(Seconds, Cue->FadeTime, 1e-3f);
+	if (FieldId == FieldOut)
+	{
+		Timing.bHasOutTime = !bSameAsIn;
+		Timing.OutTime = bSameAsIn ? 0.f : Seconds;
+	}
+	else if (FieldId == FieldDelay)
+	{
+		Timing.Delay = Seconds;
+	}
+	else if (FieldId == FieldWait)
+	{
+		Timing.WaitTime = Seconds;
+	}
+	else if (FieldId > FieldFeatureBase && FieldId <= FieldFeatureBase + static_cast<int32>(EStagePaletteKind::Focus))
+	{
+		const EStagePaletteKind Kind = static_cast<EStagePaletteKind>(FieldId - FieldFeatureBase);
+		if (bSameAsIn)
+		{
+			Timing.FeatureTimes.Remove(Kind);
+		}
+		else
+		{
+			Timing.FeatureTimes.Add(Kind, Seconds);
+		}
+	}
+	Controller->RequestUpdateCueTiming(CueNumber, Timing);
+	// Read back on the next tick: a refused or clamped time shows what the cue really holds.
+	RequestRebuild();
+}
+
+void UStageCuePanel::HandleStoreModePicked(int32 ChoiceIndex)
+{
+	StoreMode = static_cast<EStageCueStoreMode>(FMath::Clamp(ChoiceIndex, 0, static_cast<int32>(EStageCueStoreMode::CueOnly)));
+	RequestRebuild();
+}
+
+void UStageCuePanel::HandleTriggerPicked(int32 RowIndex)
+{
+	AModularPlayerController* Controller = GetStageController();
+	const UShowControlSubsystem* Subsystem = ShowControl.Get();
+	const FShowCue* Cue = Subsystem && RowCueNumbers.IsValidIndex(RowIndex) ? Subsystem->FindCue(RowCueNumbers[RowIndex]) : nullptr;
+	if (Controller && Cue)
+	{
+		FStageCueTiming Timing = Cue->Timing;
+		Timing.Trigger = Timing.Trigger == EStageCueTrigger::Go ? EStageCueTrigger::Follow
+			: (Timing.Trigger == EStageCueTrigger::Follow ? EStageCueTrigger::Wait : EStageCueTrigger::Go);
+		if (Timing.Trigger == EStageCueTrigger::Wait)
+		{
+			ExpandedCues.Add(Cue->Number); // The wait time is set in the detail line: show it.
+		}
+		Controller->RequestUpdateCueTiming(Cue->Number, Timing);
+	}
+	RequestRebuild();
+}
+
+void UStageCuePanel::HandleBlockPicked(int32 RowIndex)
+{
+	AModularPlayerController* Controller = GetStageController();
+	const UShowControlSubsystem* Subsystem = ShowControl.Get();
+	const FShowCue* Cue = Subsystem && RowCueNumbers.IsValidIndex(RowIndex) ? Subsystem->FindCue(RowCueNumbers[RowIndex]) : nullptr;
+	if (Controller && Cue)
+	{
+		Controller->RequestSetCueBlocked(Cue->Number, !Cue->bBlock);
+	}
+	RequestRebuild();
+}
+
+void UStageCuePanel::HandleCurvePicked(int32 RowIndex)
+{
+	AModularPlayerController* Controller = GetStageController();
+	const UShowControlSubsystem* Subsystem = ShowControl.Get();
+	const FShowCue* Cue = Subsystem && RowCueNumbers.IsValidIndex(RowIndex) ? Subsystem->FindCue(RowCueNumbers[RowIndex]) : nullptr;
+	if (Controller && Cue)
+	{
+		FStageCueTiming Timing = Cue->Timing;
+		Timing.Curve = Timing.Curve == EStageCueCurve::Linear ? EStageCueCurve::SCurve : EStageCueCurve::Linear;
+		Controller->RequestUpdateCueTiming(Cue->Number, Timing);
+	}
+	RequestRebuild();
+}
+
+void UStageCuePanel::HandleDetailPicked(int32 RowIndex)
+{
+	if (RowCueNumbers.IsValidIndex(RowIndex))
+	{
+		const float Number = RowCueNumbers[RowIndex];
+		if (ExpandedCues.Remove(Number) == 0)
+		{
+			ExpandedCues.Add(Number);
+		}
 	}
 	RequestRebuild();
 }

@@ -24,6 +24,8 @@ param(
     [ValidateSet(0, 1)][int]$Zoom = 1,
     # Fixture data asset to bench (e.g. DA_MovingHead_Test, DA_Fixture_Spot470); empty takes the catalog's first fixture.
     [string]$Item = '',
+    # Grand Master during the run: below 1 every fade frame goes through the full mix (HTP, LTP, masters; ADR 0026 section 6).
+    [double]$GM = 1,
     [int]$ResX = 1600,
     [int]$ResY = 900,
     [int]$StartDelaySeconds = 10,
@@ -46,7 +48,7 @@ if (Get-Process -Name 'UnrealEditor*' -ErrorAction SilentlyContinue) {
 }
 
 $Log = Join-Path $ProjectRoot "Saved\Logs\$($Project.BaseName).log"
-$BenchCommand = "StageCraft.Bench.Fixtures $($Counts -join ' ') Seconds=$Seconds Fade=$Fade Zoom=$Zoom"
+$BenchCommand = "StageCraft.Bench.Fixtures $($Counts -join ' ') Seconds=$Seconds Fade=$Fade Zoom=$Zoom GM=$GM"
 if ($Item) { $BenchCommand += " Item=$Item" }
 $ExecCmds = "StageCraft.Workspace.Delay $StartDelaySeconds $BenchCommand"
 

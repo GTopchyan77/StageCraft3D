@@ -145,6 +145,9 @@ public:
 	/** Only the viewport, filling the main window. Other panels stay available from the Window menu. */
 	static TSharedRef<FTabManager::FLayout> MakeViewportOnlyLayout();
 
+	/** "Lighting Desk": the viewport over the playback desk and cue list; groups, palettes and the inspector on the right. */
+	static TSharedRef<FTabManager::FLayout> MakeLightingDeskLayout();
+
 	/** An empty panel layout with the current PanelLayoutVersion. Every panel layout must start here. */
 	static TSharedRef<FTabManager::FLayout> NewPanelLayout();
 

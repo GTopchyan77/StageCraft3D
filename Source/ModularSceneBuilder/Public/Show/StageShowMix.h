@@ -7,25 +7,43 @@
 #include "Show/ShowControlTypes.h"
 
 /**
- * How a fixture's output is made from its layers (Docs/ADR/0025-programmer-and-output-mix.md §2), lowest priority first:
- *   home look  <  playing cue  <  programmer  <  highlight.
- * Each attribute takes the value of the highest layer that holds it (latest takes precedence, as a console's LTP channels).
- * UShowControlSubsystem is the only caller that writes the result onto fixtures. Pure, any thread; covered by StageCraft.Show.Mix.
+ * How a fixture's output is made from its layers (Docs/ADR/0025-programmer-and-output-mix.md §2, Docs/ADR/0026 §6), lowest first:
+ *   home look  <  main cue list and playback faders  <  programmer  <  highlight,  then the masters on intensity.
+ * Between the cue list and the playbacks, intensity (the Intensity kind: dimmer and cell dimmers) is HTP: the highest of the cue
+ * list's value and each playback's value times its fader. Every other attribute is LTP: the playback activated last that holds it,
+ * else the cue list. Above that each attribute takes the highest layer that holds it, and intensity is finally scaled by
+ * IntensityScale (Grand Master x Blackout). UShowControlSubsystem is the only caller that writes the result onto fixtures. Pure,
+ * any thread; covered by StageCraft.Show.OutputMix and StageCraft.Show.PlaybackMix.
  */
 namespace StageShowMix
 {
 	using FAttributeMap = TMap<FGameplayTag, float>;
 
+	/** One active playback fader's contribution to a fixture. */
+	struct FPlaybackLayer
+	{
+		const FAttributeMap* Values = nullptr;
+		/** The fader level, or 1 while flashed. Scales intensity only. */
+		float Level = 1.f;
+		/** Activation order: the higher one wins an LTP attribute. */
+		uint32 Order = 0;
+	};
+
 	/** One fixture's layers. Null means the layer holds nothing for this fixture. */
 	struct FFixtureLayers
 	{
 		const FAttributeMap* Home = nullptr;
+		/** The main cue list's playback layer. */
 		const FAttributeMap* Playback = nullptr;
+		/** Active playback faders that hold values for this fixture. */
+		TArray<FPlaybackLayer, TInlineAllocator<4>> Playbacks;
 		const FAttributeMap* Programmer = nullptr;
 		const FAttributeMap* Highlight = nullptr;
+		/** Grand Master x (Blackout ? 0 : 1), applied to intensity last. */
+		float IntensityScale = 1.f;
 	};
 
-	/** The value Attribute takes: the highest layer's that holds it. False when no layer does (the output keeps its value). */
+	/** The value Attribute takes. False when no layer holds it (the output keeps its value). */
 	MODULARSCENEBUILDER_API bool ResolveAttribute(const FGameplayTag& Attribute, const FFixtureLayers& Layers, float& OutValue);
 
 	/** True when a layer above the playback (programmer or highlight) holds Attribute, so a cue fade must leave it alone. */

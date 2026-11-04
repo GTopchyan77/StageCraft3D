@@ -30,3 +30,29 @@ void UStageChoiceButton::HandleClicked()
 {
 	OnPicked.ExecuteIfBound(ChoiceIndex);
 }
+
+UStageFlashButton::UStageFlashButton(const FObjectInitializer& ObjectInitializer)
+	: Super(ObjectInitializer)
+{
+}
+
+void UStageFlashButton::PostInitProperties()
+{
+	Super::PostInitProperties();
+	// As UStageChoiceButton: bound to itself for its whole life, never on the class default object.
+	if (!HasAnyFlags(RF_ClassDefaultObject | RF_ArchetypeObject))
+	{
+		OnPressed.AddUniqueDynamic(this, &ThisClass::HandlePressed);
+		OnReleased.AddUniqueDynamic(this, &ThisClass::HandleReleased);
+	}
+}
+
+void UStageFlashButton::HandlePressed()
+{
+	OnFlash.ExecuteIfBound(FlashIndex, true);
+}
+
+void UStageFlashButton::HandleReleased()
+{
+	OnFlash.ExecuteIfBound(FlashIndex, false);
+}

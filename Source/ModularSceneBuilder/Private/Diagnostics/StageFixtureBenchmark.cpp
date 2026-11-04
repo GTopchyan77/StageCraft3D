@@ -4,7 +4,8 @@
 // running game world, records two cues, and measures frame, game thread, render thread, GPU and show-control tick time while
 // idle and while crossfading continuously; then removes everything it added. Development builds only (compiled out of Shipping).
 //
-//   StageCraft.Bench.Fixtures 50 200 500 [Seconds=10] [Fade=2] [Settle=3] [Zoom=1] [Item=<catalog asset name>]
+//   StageCraft.Bench.Fixtures 50 200 500 [Seconds=10] [Fade=2] [Settle=3] [Zoom=1] [Item=<catalog asset name>] [GM=1]
+//   (GM below 1 measures fades mixed in full every frame, as with a playback up or the Grand Master down; Docs/ADR/0026 §6.)
 //   (Zoom=0 keeps the zoom fixed: a cone change rebuilds the engine's light proxy, so zoom fades are measured apart.)
 //   StageCraft.Bench.Cancel
 //
@@ -60,6 +61,11 @@ namespace StageFixtureBenchmark
 		/** Whether the two looks differ in zoom. A cone change rebuilds the engine's light proxy, so zoom fades cost far more than the rest. */
 		bool bFadeZoom = true;
 		FString ItemName;
+		/**
+		 * The Grand Master during the run (Docs/ADR/0026 §6). Below 1 every fade frame is mixed in full (HTP, LTP, masters) instead of
+		 * written straight onto the fixtures, so GM=0.9 measures that path. Put back to what it was afterwards.
+		 */
+		double GrandMaster = 1.0;
 	};
 
 	/** Per-frame samples of one measured phase, in milliseconds. */
@@ -320,6 +326,8 @@ namespace StageFixtureBenchmark
 			// Idle starts from a settled look with no fade running.
 			Show->GoToCue(CueA);
 			Show->FinishFade();
+			SavedGrandMaster = Show->GetGrandMaster();
+			Show->SetGrandMaster(static_cast<float>(Settings.GrandMaster));
 		}
 
 		/** "Bench 500 crossfade": a timing region in an Unreal Insights trace (-trace=cpu,frame), so a profile can be cut to one phase. */
@@ -391,6 +399,11 @@ namespace StageFixtureBenchmark
 
 			if (Show)
 			{
+				if (SavedGrandMaster.IsSet())
+				{
+					Show->SetGrandMaster(SavedGrandMaster.GetValue());
+					SavedGrandMaster.Reset();
+				}
 				const bool bHadActiveCue = SavedActiveCue >= 0.f && SavedCues.ContainsByPredicate([this](const FShowCue& Cue) { return FMath::IsNearlyEqual(Cue.Number, SavedActiveCue); });
 				if (bHadActiveCue)
 				{
@@ -472,6 +485,8 @@ namespace StageFixtureBenchmark
 
 		EStep Step = EStep::Spawn;
 		double StepSeconds = 0.0;
+		/** The Grand Master before the run, put back when it ends. */
+		TOptional<float> SavedGrandMaster;
 		int32 CountIndex = 0;
 		FRunResult Current;
 		TArray<FRunResult> Results;
@@ -522,9 +537,13 @@ namespace StageFixtureBenchmark
 				{
 					Out.ItemName = Value;
 				}
+				else if (Key.Equals(TEXT("GM"), ESearchCase::IgnoreCase) && Number >= 0.0 && Number <= 1.0 && !Value.IsEmpty())
+				{
+					Out.GrandMaster = Number;
+				}
 				else
 				{
-					UE_LOG(LogStageCraft, Display, TEXT("StageCraft.Bench: ignored \"%s\" (Seconds 1..600, Fade 0.1..60, Settle 0..60, Zoom 0|1, Item=<asset name>)."), *Arg);
+					UE_LOG(LogStageCraft, Display, TEXT("StageCraft.Bench: ignored \"%s\" (Seconds 1..600, Fade 0.1..60, Settle 0..60, Zoom 0|1, Item=<asset name>, GM 0..1)."), *Arg);
 				}
 				continue;
 			}

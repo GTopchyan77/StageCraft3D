@@ -49,6 +49,8 @@ enum class EStageInputCommand : uint8
 	CueBack,
 	ClearProgrammer,
 	Highlight,
+	// Added in STATE.md #62 (ADR 0026), last so saved key maps keep their meaning.
+	Blackout,
 	Count UMETA(Hidden)
 };
 

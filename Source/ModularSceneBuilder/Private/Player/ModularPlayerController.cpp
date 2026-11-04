@@ -527,6 +527,7 @@ void AModularPlayerController::ExecuteCommand(EStageInputCommand Command)
 	case EStageInputCommand::CueBack:				RequestCueBack(); break;
 	case EStageInputCommand::ClearProgrammer:		RequestClearProgrammer(); break;
 	case EStageInputCommand::Highlight:				RequestSetHighlight(!bHighlightOn); break;
+	case EStageInputCommand::Blackout:				{ const UShowControlSubsystem* Show = UWorld::GetSubsystem<UShowControlSubsystem>(GetWorld()); RequestSetBlackout(!(Show && Show->IsBlackout())); break; }
 	default:
 		// Navigation commands are fly-axis mappings (RebuildCameraMapping); FindCommand never returns them.
 		break;
@@ -1994,17 +1995,28 @@ void AModularPlayerController::RecordCueEdit(const FText& Description, const TAr
 	}
 }
 
-bool AModularPlayerController::RequestStoreCue(float CueNumber, const FText& Label, float FadeTime)
+bool AModularPlayerController::RequestStoreCue(float CueNumber, const FText& Label, float FadeTime, EStageCueStoreMode Mode)
 {
 	UShowControlSubsystem* Show = ApproveCueRequest(EStageCueRequest::Store, CueNumber);
 	if (!Show)
 	{
 		return false;
 	}
-	const FText Description = FText::Format(Show->FindCue(CueNumber) ? LOCTEXT("UpdateCueLook", "Re-record Cue {0}") : LOCTEXT("StoreCue", "Store Cue {0}"),
+	const UStageProgrammerSubsystem* ProgrammerState = UWorld::GetSubsystem<UStageProgrammerSubsystem>(GetWorld());
+	if (Mode != EStageCueStoreMode::Look && (!ProgrammerState || ProgrammerState->IsEmpty()))
+	{
+		ReportRejection(FStageEconomyResultInfo::Fail(EStageEconomyResult::InvalidRequest,
+			LOCTEXT("TrackNeedsProgrammer", "The programmer is empty: set some values first, or store the whole LOOK.")));
+		return false;
+	}
+	const bool bExists = Show->FindCue(CueNumber) != nullptr;
+	const FText Description = FText::Format(
+		Mode == EStageCueStoreMode::Look
+			? (bExists ? LOCTEXT("UpdateCueLook", "Re-record Cue {0}") : LOCTEXT("StoreCue", "Store Cue {0}"))
+			: (bExists ? LOCTEXT("MergeCue", "Update Cue {0}") : LOCTEXT("StoreTrackedCue", "Store Cue {0} (tracking)")),
 		FText::AsNumber(StageCueRules::RoundCueNumber(CueNumber)));
 	const TArray<FShowCue> Before = Show->GetCues();
-	if (!Show->StoreCue(CueNumber, Label, FadeTime))
+	if (!Show->StoreCue(CueNumber, Label, FadeTime, Mode))
 	{
 		return false;
 	}
@@ -2055,6 +2067,51 @@ bool AModularPlayerController::RequestUpdateCue(float CueNumber, const FText& La
 	{
 		RecordCueEdit(FText::Format(LOCTEXT("EditCue", "Edit Cue {0}"), FText::AsNumber(New->Number)), Before, *Show);
 	}
+	return true;
+}
+
+bool AModularPlayerController::RequestUpdateCueTiming(float CueNumber, const FStageCueTiming& Timing)
+{
+	UShowControlSubsystem* Show = ApproveCueRequest(EStageCueRequest::Update, CueNumber);
+	const FShowCue* Old = Show ? Show->FindCue(CueNumber) : nullptr;
+	if (!Old)
+	{
+		return false;
+	}
+	const FStageCueTiming OldTiming = Old->Timing;
+	const TArray<FShowCue> Before = Show->GetCues();
+	if (!Show->UpdateCueTiming(CueNumber, Timing))
+	{
+		return false;
+	}
+	// An update that changed nothing records nothing.
+	const FShowCue* New = Show->FindCue(CueNumber);
+	if (New && !New->Timing.Equals(OldTiming))
+	{
+		RecordCueEdit(FText::Format(LOCTEXT("EditCueTiming", "Timing of Cue {0}"), FText::AsNumber(New->Number)), Before, *Show);
+	}
+	return true;
+}
+
+bool AModularPlayerController::RequestSetCueBlocked(float CueNumber, bool bBlocked)
+{
+	UShowControlSubsystem* Show = ApproveCueRequest(EStageCueRequest::Update, CueNumber);
+	const FShowCue* Old = Show ? Show->FindCue(CueNumber) : nullptr;
+	if (!Old)
+	{
+		return false;
+	}
+	if (Old->bBlock == bBlocked)
+	{
+		return true;
+	}
+	const TArray<FShowCue> Before = Show->GetCues();
+	if (!Show->SetCueBlocked(CueNumber, bBlocked))
+	{
+		return false;
+	}
+	RecordCueEdit(FText::Format(bBlocked ? LOCTEXT("BlockCue", "Block Cue {0}") : LOCTEXT("UnblockCue", "Unblock Cue {0}"),
+		FText::AsNumber(StageCueRules::RoundCueNumber(CueNumber))), Before, *Show);
 	return true;
 }
 

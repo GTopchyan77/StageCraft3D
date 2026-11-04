@@ -9,6 +9,7 @@
 #include "GameFramework/PlayerController.h"
 #include "ModularSceneBuilder.h"
 #include "Show/StageDMXBridge.h"
+#include "Show/StageCueTracking.h"
 #include "Show/StageDMXPatching.h"
 #include "Show/StageShadowBudget.h"
 #include "Show/StageShowMix.h"
@@ -52,6 +53,8 @@ void UShowControlSubsystem::Initialize(FSubsystemCollectionBase& Collection)
 	{
 		Library->OnPalettesChanged.AddUniqueDynamic(this, &ThisClass::HandlePalettesChanged);
 	}
+	Playbacks.SetNum(StagePlaybackRules::Count);
+	PlaybackRuntime.SetNum(StagePlaybackRules::Count);
 }
 
 void UShowControlSubsystem::Deinitialize()
@@ -73,6 +76,8 @@ void UShowControlSubsystem::Deinitialize()
 	}
 	Library = nullptr;
 	PlaybackValues.Reset();
+	Playbacks.Reset();
+	PlaybackRuntime.Reset();
 	Fixtures.Reset();
 	Fades.Reset();
 	Strobes.Reset();
@@ -89,7 +94,7 @@ TStatId UShowControlSubsystem::GetStatId() const
 
 bool UShowControlSubsystem::IsTickable() const
 {
-	return !Fades.IsEmpty() || !Strobes.IsEmpty() || IsDMXOutputActive();
+	return !Fades.IsEmpty() || PendingAutoGo.IsSet() || !Strobes.IsEmpty() || IsDMXOutputActive();
 }
 
 void UShowControlSubsystem::Tick(float DeltaTime)
@@ -101,6 +106,7 @@ void UShowControlSubsystem::Tick(float DeltaTime)
 
 	// Fades first: a fade may change a fixture's Shutter, which changes its strobe rate this frame.
 	TickFades(DeltaTime);
+	TickAutoGo(DeltaTime);
 	TickStrobes(DeltaTime);
 	TickDMXOutput(DeltaTime);
 
@@ -183,7 +189,17 @@ void UShowControlSubsystem::RegisterFixture(ALightingFixtureActor* Fixture)
 	// palette the playing cue refers to could only be mixed now that the fixture is here.
 	const int32 Id = Fixture->GetFixtureId();
 	RefreshPlaybackReferences(Id);
-	if (PlaybackValues.Contains(Id) || (Programmer && (Programmer->FindValues(Id) || Programmer->IsHighlighted(Id))))
+	bool bPlaybackHolds = false;
+	for (int32 Index = 0; Index < PlaybackRuntime.Num(); ++Index)
+	{
+		if (PlaybackRuntime[Index].Output.Contains(Id))
+		{
+			TArray<int32> Ignored;
+			RefreshPlaybackOutput(Index, Ignored);
+			bPlaybackHolds = true;
+		}
+	}
+	if (bPlaybackHolds || PlaybackValues.Contains(Id) || (Programmer && (Programmer->FindValues(Id) || Programmer->IsHighlighted(Id))))
 	{
 		ResolveFixture(*Fixture);
 	}
@@ -339,34 +355,31 @@ const FShowCue* UShowControlSubsystem::FindCue(float CueNumber) const
 	return Index != INDEX_NONE ? &Cues[Index] : nullptr;
 }
 
-bool UShowControlSubsystem::StoreCue(float CueNumber, const FText& Label, float FadeTime)
+void UShowControlSubsystem::GetCueState(float CueNumber, StageCueTracking::FFixtureStates& OutState) const
 {
-	if (!StageCueRules::IsValidCueNumber(CueNumber))
-	{
-		UE_LOG(LogStageCraft, Warning, TEXT("StoreCue: %g is not a valid cue number; nothing was stored."), CueNumber);
-		return false;
-	}
+	StageCueTracking::StateAt(Cues, FindCueIndex(CueNumber), OutState);
+}
 
-	FShowCue Cue;
-	Cue.Number = StageCueRules::RoundCueNumber(CueNumber);
-	Cue.Label = StageCueRules::SanitizeLabel(Label);
-	Cue.FadeTime = StageCueRules::SanitizeFadeTime(FadeTime);
-
+TArray<FShowCueFixtureState> UShowControlSubsystem::CaptureLook() const
+{
 	// Palette references carry into the cue (Docs/ADR/0028 §3): what the programmer holds keeps the programmer's reference, the rest
 	// keeps the playing cue's. Not mid-fade: the output is then between two values, so no reference describes it.
-	const FShowCue* Playing = Fades.IsEmpty() ? FindCue(ActiveCueNumber) : nullptr;
-	const TArray<ALightingFixtureActor*> Recorded = GetFixtures();
-	for (ALightingFixtureActor* Fixture : Recorded)
+	StageCueTracking::FFixtureStates Playing;
+	if (Fades.IsEmpty())
 	{
-		FShowCueFixtureState& State = Cue.Fixtures.AddDefaulted_GetRef();
+		GetCueState(ActiveCueNumber, Playing);
+	}
+	TArray<FShowCueFixtureState> Look;
+	for (ALightingFixtureActor* Fixture : GetFixtures())
+	{
+		FShowCueFixtureState& State = Look.AddDefaulted_GetRef();
 		State.FixtureId = Fixture->GetFixtureId();
 		State.Attributes = GetRecordableValues(*Fixture);
 
 		const int32 Id = State.FixtureId;
 		const TMap<FGameplayTag, float>* Held = Programmer ? Programmer->FindValues(Id) : nullptr;
 		const TMap<FGameplayTag, FGuid>* HeldRefs = Programmer ? Programmer->FindReferences(Id) : nullptr;
-		const FShowCueFixtureState* PlayingState = Playing
-			? Playing->Fixtures.FindByPredicate([Id](const FShowCueFixtureState& Other) { return Other.FixtureId == Id; }) : nullptr;
+		const FShowCueFixtureState* PlayingState = Playing.Find(Id);
 		for (const TPair<FGameplayTag, float>& Pair : State.Attributes)
 		{
 			const bool bHeld = Held && Held->Contains(Pair.Key);
@@ -377,20 +390,85 @@ bool UShowControlSubsystem::StoreCue(float CueNumber, const FText& Label, float 
 			}
 		}
 	}
+	return Look;
+}
 
-	const int32 Existing = FindCueIndex(Cue.Number);
-	if (Existing != INDEX_NONE)
+bool UShowControlSubsystem::StoreCue(float CueNumber, const FText& Label, float FadeTime, EStageCueStoreMode Mode)
+{
+	if (!StageCueRules::IsValidCueNumber(CueNumber))
 	{
-		Cues[Existing] = MoveTemp(Cue);
+		UE_LOG(LogStageCraft, Warning, TEXT("StoreCue: %g is not a valid cue number; nothing was stored."), CueNumber);
+		return false;
+	}
+	const float Number = StageCueRules::RoundCueNumber(CueNumber);
+	const TArray<FShowCueFixtureState> Programmed = Programmer ? Programmer->GetEntries() : TArray<FShowCueFixtureState>();
+	if (Mode != EStageCueStoreMode::Look && Programmed.IsEmpty())
+	{
+		UE_LOG(LogStageCraft, Warning, TEXT("StoreCue: the programmer is empty, so a tracking store of cue %.3f has nothing to record."), Number);
+		return false;
+	}
+
+	int32 Index = FindCueIndex(Number);
+	const bool bExisting = Index != INDEX_NONE;
+	if (!bExisting)
+	{
+		const int32 Insert = Cues.IndexOfByPredicate([Number](const FShowCue& Other) { return Other.Number > Number; });
+		Index = Insert == INDEX_NONE ? Cues.Num() : Insert;
+	}
+
+	if (Mode == EStageCueStoreMode::Look)
+	{
+		// The whole look as a blocked cue, replacing the cue (what every store did before tracking, Docs/ADR/0026 §3).
+		FShowCue Cue;
+		Cue.Number = Number;
+		Cue.Label = StageCueRules::SanitizeLabel(Label);
+		Cue.FadeTime = StageCueRules::SanitizeFadeTime(FadeTime);
+		Cue.bBlock = true;
+		Cue.Fixtures = CaptureLook();
+		if (bExisting)
+		{
+			Cue.Timing = Cues[Index].Timing; // Re-recording a look keeps how the cue plays.
+			Cues[Index] = MoveTemp(Cue);
+		}
+		else
+		{
+			Cues.Insert(MoveTemp(Cue), Index);
+		}
 	}
 	else
 	{
-		const float Number = Cue.Number;
-		const int32 Insert = Cues.IndexOfByPredicate([Number](const FShowCue& Other) { return Other.Number > Number; });
-		Cues.Insert(MoveTemp(Cue), Insert == INDEX_NONE ? Cues.Num() : Insert);
+		// Tracking: only what the programmer holds, merged in. Cue Only first notes the look the next cue had, at this position.
+		StageCueTracking::FFixtureStates Before;
+		StageCueTracking::StateAt(Cues, bExisting ? Index : Index - 1, Before);
+		if (bExisting)
+		{
+			FShowCue& Cue = Cues[Index];
+			const FText NewLabel = StageCueRules::SanitizeLabel(Label);
+			Cue.Label = NewLabel.IsEmpty() ? Cue.Label : NewLabel;
+			StageCueTracking::MergeInto(Cue, Programmed);
+		}
+		else
+		{
+			FShowCue Cue;
+			Cue.Number = Number;
+			Cue.Label = StageCueRules::SanitizeLabel(Label);
+			Cue.FadeTime = StageCueRules::SanitizeFadeTime(FadeTime);
+			Cue.Fixtures = Programmed;
+			Cues.Insert(MoveTemp(Cue), Index);
+		}
+		if (Mode == EStageCueStoreMode::CueOnly)
+		{
+			StageCueTracking::KeepNextCue(Cues, Index, Before, Programmed, [this](int32 FixtureId, const FGameplayTag& Attribute, float& OutHome)
+			{
+				const ALightingFixtureActor* Fixture = FindFixture(FixtureId);
+				const float* Home = Fixture ? Fixture->GetHomeAttributes().Find(Attribute) : nullptr;
+				OutHome = Home ? *Home : 0.f;
+				return Home != nullptr;
+			});
+		}
 	}
 
-	UE_LOG(LogStageCraft, Log, TEXT("Stored cue %.3f (%d fixtures)."), StageCueRules::RoundCueNumber(CueNumber), Recorded.Num());
+	UE_LOG(LogStageCraft, Log, TEXT("Stored cue %.3f (%s, %d fixtures in the cue)."), Number, *UEnum::GetValueAsString(Mode), Cues[Index].Fixtures.Num());
 	OnCueListChanged.Broadcast();
 	return true;
 }
@@ -412,6 +490,48 @@ bool UShowControlSubsystem::UpdateCue(float CueNumber, const FText& Label, float
 	}
 	Cue.Label = NewLabel;
 	Cue.FadeTime = NewFade;
+	OnCueListChanged.Broadcast();
+	return true;
+}
+
+bool UShowControlSubsystem::UpdateCueTiming(float CueNumber, const FStageCueTiming& Timing)
+{
+	const int32 Index = FindCueIndex(CueNumber);
+	if (Index == INDEX_NONE)
+	{
+		return false;
+	}
+	FStageCueTiming Sanitized = Timing;
+	StageCueRules::SanitizeTiming(Sanitized);
+	if (Cues[Index].Timing.Equals(Sanitized))
+	{
+		return true;
+	}
+	Cues[Index].Timing = MoveTemp(Sanitized);
+	OnCueListChanged.Broadcast();
+	return true;
+}
+
+bool UShowControlSubsystem::SetCueBlocked(float CueNumber, bool bBlocked)
+{
+	const int32 Index = FindCueIndex(CueNumber);
+	if (Index == INDEX_NONE)
+	{
+		return false;
+	}
+	FShowCue& Cue = Cues[Index];
+	if (Cue.bBlock == bBlocked)
+	{
+		return true;
+	}
+	if (bBlocked)
+	{
+		// Block keeps the look: what the cue inherited is written into it, so cutting the inheritance changes nothing on stage.
+		StageCueTracking::FFixtureStates State;
+		StageCueTracking::StateAt(Cues, Index, State);
+		Cue.Fixtures = StageCueTracking::ToEntries(State);
+	}
+	Cue.bBlock = bBlocked;
 	OnCueListChanged.Broadcast();
 	return true;
 }
@@ -441,6 +561,7 @@ void UShowControlSubsystem::AssignSanitizedCues(const TArray<FShowCue>& InCues, 
 void UShowControlSubsystem::SetCues(const TArray<FShowCue>& InCues)
 {
 	FinishFade();
+	PendingAutoGo.Reset();
 	AssignSanitizedCues(InCues, TEXT("SetCues"));
 	ActiveCueNumber = -1.f;
 	// A loaded show starts with no cue playing; the fixtures keep the output they were restored with (RestoreActiveCue follows).
@@ -456,14 +577,20 @@ bool UShowControlSubsystem::RestoreActiveCue(float CueNumber)
 		return false;
 	}
 	FinishFade();
-	TArray<int32> Restored;
-	for (const FShowCueFixtureState& State : Cues[Index].Fixtures)
+	PendingAutoGo.Reset();
+	// The playback layer becomes the cue's tracked look exactly; fixtures it leaves out go back to their home look.
+	TArray<int32> Changed;
+	PlaybackValues.GetKeys(Changed);
+	PlaybackValues.Reset();
+	StageCueTracking::FFixtureStates State;
+	StageCueTracking::StateAt(Cues, Index, State);
+	for (const TPair<int32, FShowCueFixtureState>& Pair : State)
 	{
-		PlaybackValues.Add(State.FixtureId, ResolveReferences(State));
-		Restored.Add(State.FixtureId);
+		PlaybackValues.Add(Pair.Key, ResolveReferences(Pair.Value));
+		Changed.AddUnique(Pair.Key);
 	}
 	ActiveCueNumber = Cues[Index].Number;
-	ResolveFixtures(Restored);
+	ResolveFixtures(Changed);
 	OnCueListChanged.Broadcast();
 	return true;
 }
@@ -476,19 +603,23 @@ void UShowControlSubsystem::ReplaceCues(const TArray<FShowCue>& InCues)
 
 bool UShowControlSubsystem::GoToCue(float CueNumber)
 {
+	return PlayCue(FindCueIndex(CueNumber), ECueStart::Forward);
+}
+
+bool UShowControlSubsystem::PlayCue(int32 Index, ECueStart Start)
+{
 	if (ControlSource == EStageControlSource::External)
 	{
-		UE_LOG(LogStageCraft, Warning, TEXT("GoToCue(%.3g) ignored: fixtures are under external DMX control."), CueNumber);
+		UE_LOG(LogStageCraft, Warning, TEXT("A cue was asked to play while fixtures are under external DMX control; ignored."));
 		return false;
 	}
-
-	const int32 Index = FindCueIndex(CueNumber);
-	if (Index == INDEX_NONE)
+	if (!Cues.IsValidIndex(Index))
 	{
 		return false;
 	}
 
-	// A new Go while fading starts from wherever the fixtures are right now, like a console's cue take-over.
+	// A new start while fading starts from wherever the fixtures are right now, like a console's cue take-over.
+	PendingAutoGo.Reset();
 	if (!Fades.IsEmpty())
 	{
 		OnCueFinished.Broadcast(ActiveCueNumber);
@@ -496,35 +627,89 @@ bool UShowControlSubsystem::GoToCue(float CueNumber)
 	Fades.Reset();
 
 	const FShowCue& Cue = Cues[Index];
-	for (const FShowCueFixtureState& State : Cue.Fixtures)
+	StageCueTracking::FFixtureStates State;
+	StageCueTracking::StateAt(Cues, Index, State);
+
+	// Every fixture the cue's look or the playback layer names moves: to the look's value, or back home where the look is silent.
+	TArray<int32> FixtureIds;
+	State.GetKeys(FixtureIds);
+	for (const TPair<int32, TMap<FGameplayTag, float>>& Pair : PlaybackValues)
 	{
-		ALightingFixtureActor* Fixture = FindFixture(State.FixtureId);
+		FixtureIds.AddUnique(Pair.Key);
+	}
+	FadeDuration = 0.f;
+	for (const int32 FixtureId : FixtureIds)
+	{
+		const FShowCueFixtureState* Target = State.Find(FixtureId);
+		// Resolved once, at Go: the fade heads for the palettes' values as they are now, and its frames stay plain lerps.
+		TMap<FGameplayTag, float> Final = Target ? ResolveReferences(*Target) : TMap<FGameplayTag, float>();
+		ALightingFixtureActor* Fixture = FindFixture(FixtureId);
 		if (!Fixture)
 		{
-			continue; // Fixture was deleted after the cue was recorded; its values are kept in the cue.
+			// Not on stage (deleted after the cue was recorded): the layer simply takes the look, kept by ID for a re-spawn.
+			if (Final.IsEmpty())
+			{
+				PlaybackValues.Remove(FixtureId);
+			}
+			else
+			{
+				PlaybackValues.Add(FixtureId, MoveTemp(Final));
+			}
+			continue;
 		}
 
 		FAttributeFade& Fade = Fades.AddDefaulted_GetRef();
 		Fade.Fixture = Fixture;
-		// Resolved once, at Go: the fade heads for the palettes' values as they are now, and its frames stay plain lerps.
-		Fade.To = ResolveReferences(State);
+		Fade.To = Final;
+		if (const TMap<FGameplayTag, float>* Current = PlaybackValues.Find(FixtureId))
+		{
+			for (const TPair<FGameplayTag, float>& Held : *Current)
+			{
+				if (!Final.Contains(Held.Key))
+				{
+					const float* Home = Fixture->GetHomeAttributes().Find(Held.Key);
+					Fade.To.Add(Held.Key, Home ? *Home : Held.Value);
+				}
+			}
+		}
+		Fade.Final = MoveTemp(Final);
 		for (const TPair<FGameplayTag, float>& Pair : Fade.To)
 		{
 			// From the playback layer, not the output: a value the programmer holds is not where the cue's fade starts.
 			const float From = GetPlaybackValue(*Fixture, Pair.Key);
-			if (!FMath::IsNearlyEqual(From, Pair.Value))
+			if (FMath::IsNearlyEqual(From, Pair.Value))
 			{
-				Fade.Changing.Add({ Pair.Key, From, Pair.Value });
+				continue;
 			}
+			float Delay = 0.f;
+			float Duration = 0.f;
+			// Out time for intensity going down, a feature time, or the In time (Docs/ADR/0026 §2).
+			StageCueTiming::GetAttributeTiming(Cue, Pair.Key, Pair.Value < From, Delay, Duration);
+			Fade.Changing.Add({ Pair.Key, From, Pair.Value, Delay, Duration });
+			FadeDuration = FMath::Max(FadeDuration, Delay + Duration);
 		}
 	}
 
 	ActiveCueNumber = Cue.Number;
-	FadeDuration = Cue.FadeTime;
 	FadeElapsed = 0.f;
+	FadeCurve = Cue.Timing.Curve;
 	OnCueStarted.Broadcast(ActiveCueNumber);
 
-	if (FadeDuration <= KINDA_SMALL_NUMBER || Fades.IsEmpty())
+	// Back never runs a chain; a cue started forward arms the next cue's Follow or Wait (fired from the tick, never from here).
+	if (Start == ECueStart::Forward && Cues.IsValidIndex(Index + 1))
+	{
+		const FShowCue& Next = Cues[Index + 1];
+		if (Next.Timing.Trigger != EStageCueTrigger::Go)
+		{
+			FPendingAutoGo Pending;
+			Pending.CueNumber = Next.Number;
+			Pending.bAfterFinish = Next.Timing.Trigger == EStageCueTrigger::Follow;
+			Pending.Remaining = Pending.bAfterFinish ? 0.f : Next.Timing.WaitTime;
+			PendingAutoGo = Pending;
+		}
+	}
+
+	if (FadeDuration <= KINDA_SMALL_NUMBER)
 	{
 		CompleteFade();
 	}
@@ -533,11 +718,11 @@ bool UShowControlSubsystem::GoToCue(float CueNumber)
 
 bool UShowControlSubsystem::Go()
 {
-	for (const FShowCue& Cue : Cues)
+	for (int32 Index = 0; Index < Cues.Num(); ++Index)
 	{
-		if (Cue.Number > ActiveCueNumber + StageCueRules::NumberResolution * 0.5f)
+		if (Cues[Index].Number > ActiveCueNumber + StageCueRules::NumberResolution * 0.5f)
 		{
-			return GoToCue(Cue.Number);
+			return PlayCue(Index, ECueStart::Forward);
 		}
 	}
 	return false;
@@ -554,7 +739,7 @@ bool UShowControlSubsystem::Back()
 	{
 		if (Cues[Index].Number < ActiveCueNumber - StageCueRules::NumberResolution * 0.5f)
 		{
-			return GoToCue(Cues[Index].Number);
+			return PlayCue(Index, ECueStart::Back);
 		}
 	}
 	return false;
@@ -570,17 +755,39 @@ void UShowControlSubsystem::FinishFade()
 
 void UShowControlSubsystem::CompleteFade()
 {
+	const bool bMainOnly = IsMainOnlyMix();
 	for (const FAttributeFade& Fade : Fades)
 	{
 		if (ALightingFixtureActor* Fixture = Fade.Fixture.Get())
 		{
-			PlaybackValues.FindOrAdd(Fixture->GetFixtureId()).Append(Fade.To);
-			TMap<FGameplayTag, float> Final = Fade.To;
-			RemoveHeldAttributes(*Fixture, Final);
-			Fixture->SetAttributes(Final);
+			// The playback layer is the cue's look exactly; where it is silent the home look shows through.
+			if (Fade.Final.IsEmpty())
+			{
+				PlaybackValues.Remove(Fixture->GetFixtureId());
+			}
+			else
+			{
+				PlaybackValues.Add(Fixture->GetFixtureId(), Fade.Final);
+			}
+			if (bMainOnly)
+			{
+				TMap<FGameplayTag, float> Out = Fade.To;
+				RemoveHeldAttributes(*Fixture, Out);
+				Fixture->SetAttributes(Out);
+			}
+			else
+			{
+				ResolveFixture(*Fixture); // Playbacks or masters are in play: the whole mix decides.
+			}
 		}
 	}
 	Fades.Reset();
+	if (PendingAutoGo.IsSet() && PendingAutoGo->bAfterFinish)
+	{
+		// Follow: the next cue starts on the next tick, never inside this call (a chain of zero-time cues cannot recurse).
+		PendingAutoGo->bAfterFinish = false;
+		PendingAutoGo->Remaining = 0.f;
+	}
 	OnCueFinished.Broadcast(ActiveCueNumber);
 }
 
@@ -598,7 +805,8 @@ void UShowControlSubsystem::TickFades(float DeltaTime)
 		return;
 	}
 
-	const float Alpha = FadeElapsed / FadeDuration;
+	// With no playback up and the masters at full a frame goes straight onto the fixture; otherwise every frame is mixed (HTP, LTP, masters).
+	const bool bMainOnly = IsMainOnlyMix();
 	TMap<FGameplayTag, float> Frame;
 	for (const FAttributeFade& Fade : Fades)
 	{
@@ -611,13 +819,356 @@ void UShowControlSubsystem::TickFades(float DeltaTime)
 		Frame.Reset();
 		for (const FAttributeLerp& Lerp : Fade.Changing)
 		{
-			Frame.Add(Lerp.Attribute, FMath::Lerp(Lerp.From, Lerp.To, Alpha));
+			// Each attribute on its own delay and time; one not started yet is left alone.
+			const float Progress = StageCueTiming::GetProgress(FadeElapsed, Lerp.Delay, Lerp.Duration);
+			if (Progress > 0.f)
+			{
+				Frame.Add(Lerp.Attribute, FMath::Lerp(Lerp.From, Lerp.To, StageCueTiming::ApplyCurve(FadeCurve, Progress)));
+			}
+		}
+		if (Frame.IsEmpty())
+		{
+			continue;
 		}
 		// The playback layer follows the fade, so a take-over or a Clear mid-fade starts from where the cue is now.
 		PlaybackValues.FindOrAdd(Fixture->GetFixtureId()).Append(Frame);
-		RemoveHeldAttributes(*Fixture, Frame);
-		Fixture->SetAttributes(Frame);
+		if (bMainOnly)
+		{
+			RemoveHeldAttributes(*Fixture, Frame);
+			Fixture->SetAttributes(Frame);
+		}
+		else
+		{
+			ResolveFixture(*Fixture);
+		}
 	}
+}
+
+void UShowControlSubsystem::TickAutoGo(float DeltaTime)
+{
+	if (!PendingAutoGo.IsSet() || PendingAutoGo->bAfterFinish)
+	{
+		return;
+	}
+	PendingAutoGo->Remaining -= DeltaTime;
+	if (PendingAutoGo->Remaining > 0.f)
+	{
+		return;
+	}
+	const float Number = PendingAutoGo->CueNumber;
+	PendingAutoGo.Reset();
+	// The cue may have been deleted or renumbered since it was armed: then the chain simply stops.
+	PlayCue(FindCueIndex(Number), ECueStart::Forward);
+}
+
+// --- Playbacks and masters (Docs/ADR/0026 §6) ---
+
+bool UShowControlSubsystem::IsMainOnlyMix() const
+{
+	if (GetIntensityScale() != 1.f)
+	{
+		return false;
+	}
+	for (const FPlaybackRuntime& Runtime : PlaybackRuntime)
+	{
+		if (Runtime.IsActive())
+		{
+			return false;
+		}
+	}
+	return true;
+}
+
+void UShowControlSubsystem::RefreshPlaybackOutput(int32 Index, TArray<int32>& OutChanged)
+{
+	FPlaybackRuntime& Runtime = PlaybackRuntime[Index];
+	for (const TPair<int32, TMap<FGameplayTag, float>>& Pair : Runtime.Output)
+	{
+		OutChanged.AddUnique(Pair.Key);
+	}
+	Runtime.Output.Reset();
+	StageCueTracking::FFixtureStates State;
+	StageCueTracking::StateAt(Playbacks[Index].Cues, Runtime.CueIndex, State);
+	for (const TPair<int32, FShowCueFixtureState>& Pair : State)
+	{
+		Runtime.Output.Add(Pair.Key, ResolveReferences(Pair.Value));
+		OutChanged.AddUnique(Pair.Key);
+	}
+}
+
+void UShowControlSubsystem::ApplyPlaybackChange(int32 Index, TArray<int32> Changed)
+{
+	for (const TPair<int32, TMap<FGameplayTag, float>>& Pair : PlaybackRuntime[Index].Output)
+	{
+		Changed.AddUnique(Pair.Key);
+	}
+	ResolveFixtures(Changed);
+	OnDeskStateChanged.Broadcast();
+}
+
+bool UShowControlSubsystem::RecordPlayback(int32 Index, TConstArrayView<FShowCueFixtureState> Entries)
+{
+	if (!Playbacks.IsValidIndex(Index) || Entries.IsEmpty() || Playbacks[Index].Cues.Num() >= StagePlaybackRules::MaxCuesPerPlayback)
+	{
+		return false;
+	}
+	TArray<FShowCue>& List = Playbacks[Index].Cues;
+	FShowCue& Cue = List.AddDefaulted_GetRef();
+	Cue.Number = List.Num() > 1 ? FMath::FloorToFloat(List[List.Num() - 2].Number) + 1.f : 1.f;
+	Cue.FadeTime = 0.f; // A playback steps at once: its fader is the fade.
+	Cue.Fixtures = TArray<FShowCueFixtureState>(Entries);
+	if (!StageCueRules::IsValidCueNumber(Cue.Number))
+	{
+		List.Pop();
+		return false;
+	}
+	StageCueRules::SanitizeCueList(List);
+	TArray<int32> Changed;
+	if (PlaybackRuntime[Index].IsActive())
+	{
+		RefreshPlaybackOutput(Index, Changed); // A tracking cue recorded before the current one changes what it shows.
+		ApplyPlaybackChange(Index, MoveTemp(Changed));
+	}
+	OnPlaybacksChanged.Broadcast();
+	return true;
+}
+
+bool UShowControlSubsystem::ClearPlayback(int32 Index)
+{
+	if (!Playbacks.IsValidIndex(Index) || Playbacks[Index].Cues.IsEmpty())
+	{
+		return false;
+	}
+	ReleasePlayback(Index);
+	Playbacks[Index].Cues.Reset();
+	OnPlaybacksChanged.Broadcast();
+	return true;
+}
+
+bool UShowControlSubsystem::RenamePlayback(int32 Index, const FText& Name)
+{
+	if (!Playbacks.IsValidIndex(Index))
+	{
+		return false;
+	}
+	const FText Sanitized = StageCueRules::SanitizeLabel(Name);
+	if (!Playbacks[Index].Name.EqualTo(Sanitized))
+	{
+		Playbacks[Index].Name = Sanitized;
+		OnPlaybacksChanged.Broadcast();
+	}
+	return true;
+}
+
+void UShowControlSubsystem::SetPlaybacks(const TArray<FStagePlayback>& InPlaybacks)
+{
+	// A loaded show starts with every playback released; the masters stay where the desk has them.
+	TArray<int32> Changed;
+	for (int32 Index = 0; Index < PlaybackRuntime.Num(); ++Index)
+	{
+		for (const TPair<int32, TMap<FGameplayTag, float>>& Pair : PlaybackRuntime[Index].Output)
+		{
+			Changed.AddUnique(Pair.Key);
+		}
+		PlaybackRuntime[Index] = FPlaybackRuntime();
+	}
+	Playbacks = InPlaybacks;
+	const int32 Dropped = StagePlaybackRules::SanitizePlaybacks(Playbacks);
+	if (Dropped > 0)
+	{
+		UE_LOG(LogStageCraft, Warning, TEXT("SetPlaybacks: %d invalid playback cue(s) or playback(s) were dropped."), Dropped);
+	}
+	ResolveFixtures(Changed);
+	OnPlaybacksChanged.Broadcast();
+	OnDeskStateChanged.Broadcast();
+}
+
+void UShowControlSubsystem::ReplacePlaybacks(const TArray<FStagePlayback>& InPlaybacks)
+{
+	Playbacks = InPlaybacks;
+	StagePlaybackRules::SanitizePlaybacks(Playbacks);
+	TArray<int32> Changed;
+	for (int32 Index = 0; Index < PlaybackRuntime.Num(); ++Index)
+	{
+		FPlaybackRuntime& Runtime = PlaybackRuntime[Index];
+		if (!Playbacks[Index].Cues.IsValidIndex(Runtime.CueIndex))
+		{
+			Runtime.CueIndex = Playbacks[Index].Cues.IsEmpty() ? INDEX_NONE : Playbacks[Index].Cues.Num() - 1;
+		}
+		RefreshPlaybackOutput(Index, Changed);
+	}
+	ResolveFixtures(Changed);
+	OnPlaybacksChanged.Broadcast();
+	OnDeskStateChanged.Broadcast();
+}
+
+bool UShowControlSubsystem::SetPlaybackLevel(int32 Index, float Level)
+{
+	if (!PlaybackRuntime.IsValidIndex(Index) || !FMath::IsFinite(Level))
+	{
+		return false;
+	}
+	FPlaybackRuntime& Runtime = PlaybackRuntime[Index];
+	const float Clamped = FMath::Clamp(Level, 0.f, 1.f);
+	if (FMath::IsNearlyEqual(Runtime.Level, Clamped))
+	{
+		return true;
+	}
+	const bool bWasActive = Runtime.IsActive();
+	const bool bWasUp = Runtime.Level > UE_KINDA_SMALL_NUMBER;
+	Runtime.Level = Clamped;
+	TArray<int32> Changed;
+	if (!bWasUp && Clamped > UE_KINDA_SMALL_NUMBER && !Playbacks[Index].Cues.IsEmpty())
+	{
+		// A fader leaving 0 activates its playback (at its first cue if released) and takes LTP, like a console's fader start.
+		Runtime.Order = ++ActivationCounter;
+		if (Runtime.CueIndex == INDEX_NONE)
+		{
+			Runtime.CueIndex = 0;
+			RefreshPlaybackOutput(Index, Changed);
+		}
+	}
+	if (bWasActive || Runtime.IsActive())
+	{
+		ApplyPlaybackChange(Index, MoveTemp(Changed));
+	}
+	else
+	{
+		OnDeskStateChanged.Broadcast();
+	}
+	return true;
+}
+
+bool UShowControlSubsystem::SetPlaybackFlash(int32 Index, bool bDown)
+{
+	if (!PlaybackRuntime.IsValidIndex(Index))
+	{
+		return false;
+	}
+	FPlaybackRuntime& Runtime = PlaybackRuntime[Index];
+	if (Runtime.bFlash == bDown)
+	{
+		return true;
+	}
+	Runtime.bFlash = bDown;
+	TArray<int32> Changed;
+	if (bDown && !Playbacks[Index].Cues.IsEmpty())
+	{
+		Runtime.Order = ++ActivationCounter;
+		if (Runtime.CueIndex == INDEX_NONE)
+		{
+			Runtime.CueIndex = 0;
+			RefreshPlaybackOutput(Index, Changed);
+		}
+	}
+	ApplyPlaybackChange(Index, MoveTemp(Changed));
+	return true;
+}
+
+bool UShowControlSubsystem::PlaybackGo(int32 Index)
+{
+	if (!PlaybackRuntime.IsValidIndex(Index))
+	{
+		return false;
+	}
+	FPlaybackRuntime& Runtime = PlaybackRuntime[Index];
+	const int32 Next = Runtime.CueIndex == INDEX_NONE ? 0 : Runtime.CueIndex + 1;
+	if (!Playbacks[Index].Cues.IsValidIndex(Next))
+	{
+		return false; // At the end (or empty): a console's playback stops at its last cue.
+	}
+	Runtime.CueIndex = Next;
+	Runtime.Order = ++ActivationCounter;
+	TArray<int32> Changed;
+	RefreshPlaybackOutput(Index, Changed);
+	ApplyPlaybackChange(Index, MoveTemp(Changed));
+	return true;
+}
+
+bool UShowControlSubsystem::ReleasePlayback(int32 Index)
+{
+	if (!PlaybackRuntime.IsValidIndex(Index))
+	{
+		return false;
+	}
+	FPlaybackRuntime& Runtime = PlaybackRuntime[Index];
+	TArray<int32> Changed;
+	for (const TPair<int32, TMap<FGameplayTag, float>>& Pair : Runtime.Output)
+	{
+		Changed.Add(Pair.Key);
+	}
+	Runtime = FPlaybackRuntime();
+	ResolveFixtures(Changed);
+	OnDeskStateChanged.Broadcast();
+	return true;
+}
+
+float UShowControlSubsystem::GetPlaybackLevel(int32 Index) const
+{
+	return PlaybackRuntime.IsValidIndex(Index) ? PlaybackRuntime[Index].Level : 0.f;
+}
+
+bool UShowControlSubsystem::IsPlaybackFlashing(int32 Index) const
+{
+	return PlaybackRuntime.IsValidIndex(Index) && PlaybackRuntime[Index].bFlash;
+}
+
+int32 UShowControlSubsystem::GetPlaybackCueIndex(int32 Index) const
+{
+	return PlaybackRuntime.IsValidIndex(Index) ? PlaybackRuntime[Index].CueIndex : INDEX_NONE;
+}
+
+bool UShowControlSubsystem::IsPlaybackActive(int32 Index) const
+{
+	return PlaybackRuntime.IsValidIndex(Index) && PlaybackRuntime[Index].IsActive();
+}
+
+void UShowControlSubsystem::SetGrandMaster(float Level)
+{
+	const float Clamped = FMath::IsFinite(Level) ? FMath::Clamp(Level, 0.f, 1.f) : GrandMaster;
+	if (!FMath::IsNearlyEqual(Clamped, GrandMaster))
+	{
+		GrandMaster = Clamped;
+		ApplyMastersChange();
+	}
+}
+
+void UShowControlSubsystem::SetBlackout(bool bOn)
+{
+	if (bOn != bBlackout)
+	{
+		bBlackout = bOn;
+		ApplyMastersChange();
+	}
+}
+
+void UShowControlSubsystem::ApplyMastersChange()
+{
+	if (ControlSource == EStageControlSource::External)
+	{
+		// The console's values are not kept apart from the output: every universe is read again in full on its next frame, then scaled.
+		LastInputFrames.Reset();
+	}
+	ResolveAllFixtures();
+	OnDeskStateChanged.Broadcast();
+}
+
+void UShowControlSubsystem::ApplyMastersToInput(ALightingFixtureActor& Fixture) const
+{
+	const float Scale = GetIntensityScale();
+	if (Scale == 1.f)
+	{
+		return;
+	}
+	TMap<FGameplayTag, float> Scaled;
+	for (const TPair<FGameplayTag, float>& Pair : Fixture.GetAttributes())
+	{
+		if (StagePaletteRules::GetAttributeKind(Pair.Key) == EStagePaletteKind::Intensity)
+		{
+			Scaled.Add(Pair.Key, Pair.Value * Scale);
+		}
+	}
+	Fixture.SetAttributes(Scaled);
 }
 
 // --- DMX ---
@@ -650,6 +1201,7 @@ void UShowControlSubsystem::SetControlSource(EStageControlSource NewSource)
 	{
 		// The external console owns the fixtures from now on; a half-finished fade would fight it.
 		Fades.Reset();
+		PendingAutoGo.Reset();
 	}
 	ControlSource = NewSource;
 	// Frames received under the other source were never applied, so none may count as "unchanged".
@@ -720,6 +1272,16 @@ void UShowControlSubsystem::ResolveFixture(ALightingFixtureActor& Fixture)
 	Layers.Playback = bInternal ? PlaybackValues.Find(Id) : nullptr;
 	Layers.Programmer = GetProgrammerLayer(Fixture, ProgrammerScratch);
 	Layers.Highlight = bHighlighted ? &HighlightValues : nullptr;
+	for (const FPlaybackRuntime& Runtime : PlaybackRuntime)
+	{
+		const TMap<FGameplayTag, float>* Values = bInternal && Runtime.IsActive() ? Runtime.Output.Find(Id) : nullptr;
+		if (Values)
+		{
+			Layers.Playbacks.Add({ Values, Runtime.GetEffectiveLevel(), Runtime.Order });
+		}
+	}
+	// The masters scale intensity last, the programmer and highlight included (under External: what the user holds by hand).
+	Layers.IntensityScale = GetIntensityScale();
 
 	TArray<FGameplayTag> Attributes;
 	Fixture.GetAttributes().GetKeys(Attributes);
@@ -774,17 +1336,24 @@ float UShowControlSubsystem::GetPlaybackValue(const ALightingFixtureActor& Fixtu
 TMap<FGameplayTag, float> UShowControlSubsystem::GetRecordableValues(const ALightingFixtureActor& Fixture) const
 {
 	const int32 Id = Fixture.GetFixtureId();
-	if (!Programmer || !Programmer->IsHighlighted(Id))
+	if ((!Programmer || !Programmer->IsHighlighted(Id)) && GetIntensityScale() == 1.f)
 	{
 		return Fixture.GetAttributes();
 	}
-	// Highlighted: the output shows the highlight, so the look underneath is mixed again without it.
+	// Highlighted, or the masters are down: the output is not the look, so the look underneath is mixed again without them.
 	TMap<FGameplayTag, float> Values = Fixture.GetAttributes();
 	TMap<FGameplayTag, float> ProgrammerScratch;
 	StageShowMix::FFixtureLayers Layers;
 	Layers.Home = &Fixture.GetHomeAttributes();
 	Layers.Playback = PlaybackValues.Find(Id);
 	Layers.Programmer = GetProgrammerLayer(Fixture, ProgrammerScratch);
+	for (const FPlaybackRuntime& Runtime : PlaybackRuntime)
+	{
+		if (const TMap<FGameplayTag, float>* PlaybackLook = Runtime.IsActive() ? Runtime.Output.Find(Id) : nullptr)
+		{
+			Layers.Playbacks.Add({ PlaybackLook, Runtime.GetEffectiveLevel(), Runtime.Order });
+		}
+	}
 	TArray<FGameplayTag> Attributes;
 	Values.GetKeys(Attributes);
 	TMap<FGameplayTag, float> Mixed;
@@ -845,13 +1414,16 @@ const TMap<FGameplayTag, float>* UShowControlSubsystem::GetProgrammerLayer(const
 
 void UShowControlSubsystem::RefreshPlaybackReferences(int32 OnlyFixtureId)
 {
-	const FShowCue* Cue = ControlSource == EStageControlSource::Internal ? FindCue(ActiveCueNumber) : nullptr;
-	if (!Cue)
+	if (ControlSource != EStageControlSource::Internal || !FindCue(ActiveCueNumber))
 	{
 		return;
 	}
-	for (const FShowCueFixtureState& State : Cue->Fixtures)
+	// The playing cue's tracked look: a reference set by an earlier cue reaches this one too.
+	StageCueTracking::FFixtureStates Look;
+	GetCueState(ActiveCueNumber, Look);
+	for (const TPair<int32, FShowCueFixtureState>& Pair : Look)
 	{
+		const FShowCueFixtureState& State = Pair.Value;
 		if (State.PaletteRefs.IsEmpty() || (OnlyFixtureId != INDEX_NONE && State.FixtureId != OnlyFixtureId))
 		{
 			continue;
@@ -873,6 +1445,11 @@ void UShowControlSubsystem::HandlePalettesChanged()
 	// A fade holds the targets it resolved at Go; finishing it first lets the playing cue take the palettes' new values cleanly.
 	FinishFade();
 	RefreshPlaybackReferences();
+	for (int32 Index = 0; Index < PlaybackRuntime.Num(); ++Index)
+	{
+		TArray<int32> Ignored;
+		RefreshPlaybackOutput(Index, Ignored);
+	}
 	// Palette edits are rare user actions: re-mixing every fixture (only changed values are written) is simpler and as cheap as a
 	// switch back to Internal, and needs no second record of which fixture follows which palette (Docs/ADR/0028 §3).
 	ResolveAllFixtures();
@@ -904,6 +1481,7 @@ int32 UShowControlSubsystem::ReceiveDMXUniverse(int32 Universe, const TArray<uin
 		if (Fixture.IsValid() && !(Previous && AreFixtureChannelsUnchanged(*Fixture, *Previous, Channels)))
 		{
 			Fixture->ReadDMX(Channels);
+			ApplyMastersToInput(*Fixture.Get());
 			++Updated;
 		}
 	}

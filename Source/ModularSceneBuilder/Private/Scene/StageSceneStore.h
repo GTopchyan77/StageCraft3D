@@ -55,8 +55,11 @@ public:
 	 *    look. Older files load with an empty programmer, no groups and no cue playing.
 	 *  - 7: adds "palettes" and, on cue and programmer fixtures, "palettes" references (Docs/ADR/0028 §6). Older files load
 	 *    with the starter palettes and no references.
+	 *  - 8: cues carry their timing ("delay", "out", "times", "trigger", "wait", "curve") and "block" (Docs/ADR/0026 §5). Older
+	 *    cues were full snapshots and load as blocked cues. Adds "playbacks" (each used playback's index, name and cues); older
+	 *    files have empty playbacks.
 	 */
-	static constexpr int32 FormatVersion = 7;
+	static constexpr int32 FormatVersion = 8;
 	static constexpr int32 MaxGroups = StageFixtureGroupRules::MaxGroups;
 	/** The oldest version Parse still migrates. Older or newer files are refused as VersionMismatch and left untouched. */
 	static constexpr int32 MinReadableVersion = 1;

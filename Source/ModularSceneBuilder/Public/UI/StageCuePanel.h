@@ -10,7 +10,7 @@
 #include "StageCuePanel.generated.h"
 
 DECLARE_DELEGATE_TwoParams(FOnStageCueLabelCommitted, float /*CueNumber*/, const FText& /*Label*/);
-DECLARE_DELEGATE_TwoParams(FOnStageCueFadeCommitted, float /*CueNumber*/, float /*FadeTime*/);
+DECLARE_DELEGATE_ThreeParams(FOnStageCueTimeCommitted, float /*CueNumber*/, int32 /*FieldId*/, float /*Seconds*/);
 
 /** A cue row's label field. Commits on Enter or focus loss (not Escape), and says which cue it belongs to. */
 UCLASS()
@@ -31,17 +31,20 @@ private:
 	float CueNumber = 0.f;
 };
 
-/** A cue row's fade time field. Commits when the user finishes (Enter, focus loss, end of a drag), never while dragging. */
+/**
+ * One of a cue row's time fields (In, Out, Delay, Wait or a feature time; FieldId says which). Commits when the user finishes
+ * (Enter, focus loss, end of a drag), never while dragging.
+ */
 UCLASS()
 class MODULARSCENEBUILDER_API UStageCueFadeField : public USpinBox
 {
 	GENERATED_BODY()
 
 public:
-	void Configure(float InCueNumber);
+	void Configure(float InCueNumber, int32 InFieldId);
 
 	/** Bound by the owning panel. */
-	FOnStageCueFadeCommitted OnFadeCommitted;
+	FOnStageCueTimeCommitted OnTimeCommitted;
 
 private:
 	UFUNCTION()
@@ -51,14 +54,16 @@ private:
 	void HandleEndSliderMovement(float InValue);
 
 	float CueNumber = 0.f;
+	int32 FieldId = 0;
 };
 
 /**
  * The cue list dock panel (StageCraft.Panel.Cues, Docs/ADR/0011-cue-list-and-patch-sheet-export.md §2.6), laid out like a
  * console's playback and cue list windows:
  *  - transport: GO, BACK, the active cue and the control source (Internal cue list / External DMX);
- *  - record: cue number, label and fade time, and STORE (or RE-RECORD when that number exists);
- *  - the cue list: number, label and fade (edited in place), fixture count, GO TO and DELETE per cue; the active cue is marked.
+ *  - record: cue number, label and In time, the store mode (TRACK, CUE ONLY, LOOK; Docs/ADR/0026 §3) and STORE;
+ *  - the cue list: number, label, In / Out / Delay times, trigger (GO, FOLLOW, WAIT) and block (edited in place), fixture count,
+ *    GO TO and DELETE per cue; a row's detail line holds its feature times, wait time and curve. The active cue is marked.
  *
  * A view in the project's binding pattern:
  *  - Reads UShowControlSubsystem; owns no cue state.
@@ -88,6 +93,9 @@ private:
 	class UWidget* BuildRecordRow();
 	class UWidget* MakeColumnTitles();
 	class UWidget* MakeCueRow(const FShowCue& Cue, bool bActive, int32 RowIndex);
+	/** The row's detail line: feature times, wait time and curve. */
+	class UWidget* MakeCueDetailRow(const FShowCue& Cue, int32 RowIndex);
+	class UStageCueFadeField* MakeTimeField(float CueNumber, int32 FieldId, float Seconds, const FText& ToolTip);
 	class UStageChoiceButton* MakeButton(const FText& Label, const FText& ToolTip, int32 ChoiceIndex, bool bPrimary);
 	/** Outlined, or filled with the accent colour when highlighted (the primary action, or the chosen option of a segment). */
 	FButtonStyle MakeButtonStyle(bool bHighlighted) const;
@@ -125,7 +133,12 @@ private:
 	void HandleGoToPicked(int32 RowIndex);
 	void HandleDeletePicked(int32 RowIndex);
 	void HandleLabelCommitted(float CueNumber, const FText& Label);
-	void HandleFadeCommitted(float CueNumber, float FadeTime);
+	void HandleTimeCommitted(float CueNumber, int32 FieldId, float Seconds);
+	void HandleStoreModePicked(int32 ChoiceIndex);
+	void HandleTriggerPicked(int32 RowIndex);
+	void HandleBlockPicked(int32 RowIndex);
+	void HandleCurvePicked(int32 RowIndex);
+	void HandleDetailPicked(int32 RowIndex);
 
 	UPROPERTY(Transient)
 	TObjectPtr<class UVerticalBox> ListBody = nullptr;
@@ -165,6 +178,16 @@ private:
 
 	UPROPERTY(Transient)
 	TObjectPtr<class UStageChoiceButton> ExternalButton = nullptr;
+
+	/** One button per EStageCueStoreMode, in enum order. */
+	UPROPERTY(Transient)
+	TArray<TObjectPtr<class UStageChoiceButton>> StoreModeButtons;
+
+	/** How STORE records (view state; TRACK by default, as on a console). */
+	EStageCueStoreMode StoreMode = EStageCueStoreMode::Track;
+
+	/** Cues whose detail line is open (view state). */
+	TSet<float> ExpandedCues;
 
 	/** Cue numbers in list order, matched to a clicked row button by index. */
 	TArray<float> RowCueNumbers;

@@ -173,6 +173,18 @@ namespace StageEditHistory
 			return EStageCommandResult::Succeeded;
 		}
 
+		virtual EStageCommandResult SetPlaybacks(const TArray<FStagePlayback>& InPlaybacks) override
+		{
+			UShowControlSubsystem* Show = UWorld::GetSubsystem<UShowControlSubsystem>(Session.GetWorld());
+			if (!Show)
+			{
+				return EStageCommandResult::Invalid;
+			}
+			// The session marks itself dirty through OnPlaybacksChanged.
+			Show->ReplacePlaybacks(InPlaybacks);
+			return EStageCommandResult::Succeeded;
+		}
+
 		virtual EStageCommandResult SetPalettes(const TArray<FStagePalette>& Palettes) override
 		{
 			UStageShowLibrarySubsystem* Library = UWorld::GetSubsystem<UStageShowLibrarySubsystem>(Session.GetWorld());

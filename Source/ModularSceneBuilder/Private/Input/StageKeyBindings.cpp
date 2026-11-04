@@ -88,6 +88,7 @@ namespace StageKeyBindings
 				Make(C::CueBack, G::Show, LOCTEXT("CueBack", "Back"), LOCTEXT("CueBackTip", "Play the previous cue."), Ctrl(EKeys::BackSpace)),
 				Make(C::ClearProgrammer, G::Show, LOCTEXT("ClearProgrammer", "Clear Programmer"), LOCTEXT("ClearProgrammerTip", "Release every value set by hand: fixtures go back to the playing cue and their home look."), CtrlShift(EKeys::C)),
 				Make(C::Highlight, G::Show, LOCTEXT("Highlight", "Highlight"), LOCTEXT("HighlightTip", "Show the selected fixtures at full, in open white, to find them on stage. Press again to turn it off."), CtrlShift(EKeys::H)),
+				Make(C::Blackout, G::Show, LOCTEXT("Blackout", "Blackout"), LOCTEXT("BlackoutTip", "Take every light to zero at once, whatever plays or is held. Press again to bring them back."), CtrlShift(EKeys::B)),
 			};
 			check(Commands.Num() == Index(C::Count));
 			for (int32 Position = 0; Position < Commands.Num(); ++Position)

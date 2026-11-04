@@ -12,6 +12,10 @@ DECLARE_DYNAMIC_MULTICAST_DELEGATE(FOnShowFixturesChanged);
 DECLARE_DYNAMIC_MULTICAST_DELEGATE(FOnShowCueListChanged);
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FOnShowCueEvent, float, CueNumber);
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FOnShowControlSourceChanged, EStageControlSource, NewSource);
+/** A playback's recorded content or name changed (saved data: the stage has unsaved changes). */
+DECLARE_DYNAMIC_MULTICAST_DELEGATE(FOnShowPlaybacksChanged);
+/** Live desk state changed: a fader, a flash, a playback's position, the Grand Master or Blackout. Not saved, not undoable. */
+DECLARE_DYNAMIC_MULTICAST_DELEGATE(FOnShowDeskStateChanged);
 
 /**
  * Show control for one world: fixture registry (IDs; addresses are UStageDMXPatchSubsystem's), cue list with crossfade playback,
@@ -93,20 +97,40 @@ public:
 	// (Docs/ADR/0011-cue-list-and-patch-sheet-export.md §2.2). Every entry point applies StageCueRules.
 
 	/**
-	 * Records every fixture's current attributes as a cue. Overwrites the recorded look, label and fade of an existing cue with
-	 * the same number. False (nothing changes) for an invalid number (StageCueRules::IsValidCueNumber).
+	 * Records a cue (Docs/ADR/0026-cue-timing-tracking-playbacks.md §3):
+	 *  - Look: every fixture's current look (never the highlight) as a blocked cue, replacing a cue of that number (its timing kept);
+	 *  - Track: what the programmer holds, merged into the cue (a new cue, or an existing one; an empty Label keeps its label);
+	 *  - CueOnly: Track, and the next cue keeps its old values for what changed.
+	 * False (nothing changes) for an invalid number, or a tracking store with an empty programmer. Does not clear the programmer.
 	 */
 	UFUNCTION(BlueprintCallable, Category = "StageCraft|Show")
-	bool StoreCue(float CueNumber, const FText& Label, float FadeTime = 2.f);
+	bool StoreCue(float CueNumber, const FText& Label, float FadeTime = 2.f, EStageCueStoreMode Mode = EStageCueStoreMode::Look);
 
-	/** Changes a cue's label and fade time; its recorded look is kept. False if no cue has CueNumber. */
+	/** Changes a cue's label and In time; its recorded values are kept. False if no cue has CueNumber. */
 	UFUNCTION(BlueprintCallable, Category = "StageCraft|Show")
 	bool UpdateCue(float CueNumber, const FText& Label, float FadeTime);
+
+	/** Changes a cue's delay, Out time, feature times, trigger and curve (sanitized). False if no cue has CueNumber. */
+	UFUNCTION(BlueprintCallable, Category = "StageCraft|Show")
+	bool UpdateCueTiming(float CueNumber, const FStageCueTiming& Timing);
+
+	/**
+	 * Blocks a cue (it inherits nothing; the look it inherited is written into it, so nothing on stage changes) or unblocks it (it
+	 * inherits again). False if no cue has CueNumber.
+	 */
+	UFUNCTION(BlueprintCallable, Category = "StageCraft|Show")
+	bool SetCueBlocked(float CueNumber, bool bBlocked);
+
+	/** The tracked look at CueNumber (StageCueTracking::StateAt); empty for an unknown cue. */
+	void GetCueState(float CueNumber, TMap<int32, FShowCueFixtureState>& OutState) const;
 
 	UFUNCTION(BlueprintCallable, Category = "StageCraft|Show")
 	bool DeleteCue(float CueNumber);
 
-	/** Crossfades to the cue. Fails in External control mode or for an unknown number. */
+	/**
+	 * Fades to the cue's tracked look with its timing; the next cue's Follow or Wait trigger is armed. Fails in External control mode
+	 * or for an unknown number.
+	 */
 	UFUNCTION(BlueprintCallable, Category = "StageCraft|Show")
 	bool GoToCue(float CueNumber);
 
@@ -114,9 +138,13 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "StageCraft|Show")
 	bool Go();
 
-	/** Plays the cue before the active one, with that cue's fade time, like a console's Back key. False at the first cue. */
+	/** Plays the cue before the active one, with that cue's timing, like a console's Back key; arms no Follow or Wait. False at the first cue. */
 	UFUNCTION(BlueprintCallable, Category = "StageCraft|Show")
 	bool Back();
+
+	/** True while a Follow or Wait cue is waiting to start by itself. */
+	UFUNCTION(BlueprintPure, Category = "StageCraft|Show")
+	bool IsAutoGoArmed() const { return PendingAutoGo.IsSet(); }
 
 	/** The cue with CueNumber, or null. The pointer is valid until the cue list next changes. */
 	const FShowCue* FindCue(float CueNumber) const;
@@ -186,6 +214,58 @@ public:
 	/** What Fixture shows without the highlight: what a cue store and a palette record take (never the highlight). */
 	TMap<FGameplayTag, float> GetRecordableValues(const class ALightingFixtureActor& Fixture) const;
 
+	// --- Playbacks and masters (Docs/ADR/0026 §6) ---
+	// Edits (record, clear, rename) and live actions (level, flash, go, release, masters) from the UI go through
+	// AModularPlayerController, which asks the GameMode (EvaluateCueRequest) and records undo for edits only.
+
+	/** The StagePlaybackRules::Count playbacks' recorded content. */
+	const TArray<FStagePlayback>& GetPlaybacks() const { return Playbacks; }
+
+	/** Appends a cue to Index's list holding Entries (a tracking cue: what the programmer held). False for a bad index, no entries or a full list. */
+	bool RecordPlayback(int32 Index, TConstArrayView<FShowCueFixtureState> Entries);
+
+	/** Releases Index and deletes its cues. False for a bad index or an empty playback. */
+	bool ClearPlayback(int32 Index);
+
+	/** False for a bad index. An empty name is allowed (the desk shows the number). */
+	bool RenamePlayback(int32 Index, const FText& Name);
+
+	/** Replaces every playback's content: a load (SetPlaybacks releases them all) or an undo step (ReplacePlaybacks keeps live state). Sanitized. */
+	void SetPlaybacks(const TArray<FStagePlayback>& InPlaybacks);
+	void ReplacePlaybacks(const TArray<FStagePlayback>& InPlaybacks);
+
+	/** Fader level 0..1. Raising it from 0 activates the playback at its first cue and makes it the latest for LTP. False for a bad index. */
+	bool SetPlaybackLevel(int32 Index, float Level);
+
+	/** Flash: the playback at full while held (activating it like a fader). False for a bad index. */
+	bool SetPlaybackFlash(int32 Index, bool bDown);
+
+	/** Steps the playback to its next cue (its first when released) at once, and makes it the latest for LTP. False at the end or when empty. */
+	bool PlaybackGo(int32 Index);
+
+	/** Releases the playback: fader to 0, flash off, back before its first cue. False for a bad index. */
+	bool ReleasePlayback(int32 Index);
+
+	float GetPlaybackLevel(int32 Index) const;
+	bool IsPlaybackFlashing(int32 Index) const;
+	/** Index of the playback's current cue in its list; INDEX_NONE while released. */
+	int32 GetPlaybackCueIndex(int32 Index) const;
+	/** Whether the playback contributes to the stage now (fader up or flashed, at a cue). */
+	bool IsPlaybackActive(int32 Index) const;
+
+	/** Grand Master 0..1: scales every fixture's intensity last. Not saved: a stage always opens at full. */
+	void SetGrandMaster(float Level);
+	float GetGrandMaster() const { return GrandMaster; }
+
+	void SetBlackout(bool bOn);
+	bool IsBlackout() const { return bBlackout; }
+
+	UPROPERTY(BlueprintAssignable, Category = "StageCraft|Show")
+	FOnShowPlaybacksChanged OnPlaybacksChanged;
+
+	UPROPERTY(BlueprintAssignable, Category = "StageCraft|Show")
+	FOnShowDeskStateChanged OnDeskStateChanged;
+
 	// --- DMX ---
 
 	/** Installs (or with nullptr removes) the transport. The previous bridge is stopped. */
@@ -248,6 +328,9 @@ private:
 		FGameplayTag Attribute;
 		float From = 0.f;
 		float To = 0.f;
+		/** Seconds after the cue started before this attribute moves, and how long it takes (StageCueTiming::GetAttributeTiming). */
+		float Delay = 0.f;
+		float Duration = 0.f;
 	};
 
 	struct FAttributeFade
@@ -255,8 +338,42 @@ private:
 		TWeakObjectPtr<class ALightingFixtureActor> Fixture;
 		/** Attributes whose start and target differ: the only ones a fade frame writes, so unchanged ones cost nothing. */
 		TArray<FAttributeLerp> Changing;
-		/** Every value the cue recorded, applied once when the fade completes. */
+		/** Every target, applied once when the fade completes: the cue's look, and the home look where the cue is silent. */
 		TMap<FGameplayTag, float> To;
+		/** What the playback layer holds when the fade completes: the cue's look only, so the home look shows through elsewhere. */
+		TMap<FGameplayTag, float> Final;
+	};
+
+	/** How a cue was started: forward (Go, Go To, a Follow or Wait) arms the next cue's trigger; Back never does. */
+	enum class ECueStart : uint8
+	{
+		Forward,
+		Back,
+	};
+
+	/** One playback's live state (not saved). */
+	struct FPlaybackRuntime
+	{
+		float Level = 0.f;
+		bool bFlash = false;
+		int32 CueIndex = INDEX_NONE;
+		/** Activation order for LTP; the latest activated or stepped playback wins. */
+		uint32 Order = 0;
+		/** The current cue's tracked look, palette references resolved, per fixture ID. */
+		TMap<int32, TMap<FGameplayTag, float>> Output;
+
+		bool IsActive() const { return (Level > UE_KINDA_SMALL_NUMBER || bFlash) && CueIndex != INDEX_NONE; }
+		float GetEffectiveLevel() const { return bFlash ? 1.f : Level; }
+	};
+
+	/** The next cue waiting to start by itself (Docs/ADR/0026 §2). */
+	struct FPendingAutoGo
+	{
+		float CueNumber = 0.f;
+		/** Follow: waiting for the playing cue to finish; then Remaining is 0 and it fires on the next tick. */
+		bool bAfterFinish = false;
+		/** Seconds left before it starts. */
+		float Remaining = 0.f;
 	};
 
 	struct FStrobeState
@@ -271,8 +388,36 @@ private:
 	bool IsDMXOutputActive() const;
 	void TickStrobes(float DeltaTime);
 	void TickFades(float DeltaTime);
+	void TickAutoGo(float DeltaTime);
 	void TickDMXOutput(float DeltaTime);
 	void CompleteFade();
+
+	/** Starts Cues[Index]: fades every fixture of its tracked look (and of the playback layer) with the cue's timing. */
+	bool PlayCue(int32 Index, ECueStart Start);
+
+	/** Every fixture's look for a Look store, with the palette references that produced it. */
+	TArray<FShowCueFixtureState> CaptureLook() const;
+
+	/** Grand Master x Blackout: what intensity is scaled by last. */
+	float GetIntensityScale() const { return bBlackout ? 0.f : GrandMaster; }
+
+	/**
+	 * True when no playback is up and the masters are at full: a fade frame may then be written straight onto fixtures. Otherwise a
+	 * fading fixture is re-mixed, so HTP, LTP and the masters apply to every frame.
+	 */
+	bool IsMainOnlyMix() const;
+
+	/** Recomputes Index's Output from its current cue and adds every fixture it touched (before or after) to OutChanged. */
+	void RefreshPlaybackOutput(int32 Index, TArray<int32>& OutChanged);
+
+	/** Re-mixes the fixtures playback Index contributes to; broadcasts OnDeskStateChanged. */
+	void ApplyPlaybackChange(int32 Index, TArray<int32> Changed);
+
+	/** The masters changed: re-mix everything (Internal), or have the next DMX frames re-read in full and scaled (External). */
+	void ApplyMastersChange();
+
+	/** Scales Fixture's intensity attributes by the masters (External DMX input, which bypasses the mix). */
+	void ApplyMastersToInput(class ALightingFixtureActor& Fixture) const;
 	/** Ranks the fixtures (StageShadowBudget::SelectCasters) and switches only those whose shadows change. */
 	void UpdateShadowBudget();
 	void AssignSanitizedCues(const TArray<FShowCue>& InCues, const TCHAR* Source);
@@ -348,8 +493,19 @@ private:
 
 	TArray<FAttributeFade> Fades;
 	TArray<FStrobeState> Strobes;
+	/** The longest delay + duration of the running fade's attributes. */
 	float FadeDuration = 0.f;
 	float FadeElapsed = 0.f;
+	EStageCueCurve FadeCurve = EStageCueCurve::Linear;
+	TOptional<FPendingAutoGo> PendingAutoGo;
+
+	/** Saved: what each playback holds (StagePlaybackRules::Count of them). */
+	TArray<FStagePlayback> Playbacks;
+	/** Live: one per playback. */
+	TArray<FPlaybackRuntime> PlaybackRuntime;
+	uint32 ActivationCounter = 0;
+	float GrandMaster = 1.f;
+	bool bBlackout = false;
 	float ActiveCueNumber = -1.f;
 	float DMXOutputAccumulator = 0.f;
 	EStageControlSource ControlSource = EStageControlSource::Internal;

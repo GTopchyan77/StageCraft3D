@@ -128,4 +128,7 @@ struct FStageSceneDocument
 	 * read as the starter palettes, so every stage made before palettes existed has them.
 	 */
 	TArray<FStagePalette> Palettes;
+
+	/** The playback faders' recorded content (format version 8; Docs/ADR/0026 §6), StagePlaybackRules::Count of them. Older files: empty. */
+	TArray<FStagePlayback> Playbacks;
 };

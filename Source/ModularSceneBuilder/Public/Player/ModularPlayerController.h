@@ -338,13 +338,58 @@ public:
 	// Each asks AStageCraftGameModeBase::EvaluateCueRequest, then calls UShowControlSubsystem. Store, Update and Delete are
 	// recorded as one undo step each. A refusal is reported on OnRequestRejected and returns false.
 
-	/** Records the current look as cue CueNumber (re-records it if it exists). */
+	/**
+	 * Records cue CueNumber as Mode says (Docs/ADR/0026-cue-timing-tracking-playbacks.md §3): the whole look (Look, the default, as
+	 * every store did before tracking), or what the programmer holds (Track, CueOnly). The programmer is then cleared and the cue
+	 * plays, as one undo step. A tracking store with an empty programmer is refused.
+	 */
 	UFUNCTION(BlueprintCallable, Category = "StageCraft|Requests")
-	bool RequestStoreCue(float CueNumber, const FText& Label, float FadeTime);
+	bool RequestStoreCue(float CueNumber, const FText& Label, float FadeTime, EStageCueStoreMode Mode = EStageCueStoreMode::Look);
 
-	/** Changes an existing cue's label and fade time. */
+	/** Changes an existing cue's label and In time. */
 	UFUNCTION(BlueprintCallable, Category = "StageCraft|Requests")
 	bool RequestUpdateCue(float CueNumber, const FText& Label, float FadeTime);
+
+	/** Changes an existing cue's delay, Out time, feature times, trigger and curve. One undo step when something changed. */
+	UFUNCTION(BlueprintCallable, Category = "StageCraft|Requests")
+	bool RequestUpdateCueTiming(float CueNumber, const FStageCueTiming& Timing);
+
+	/** Blocks or unblocks a cue (blocking keeps the look on stage). One undo step when something changed. */
+	UFUNCTION(BlueprintCallable, Category = "StageCraft|Requests")
+	bool RequestSetCueBlocked(float CueNumber, bool bBlocked);
+
+	// --- Playbacks and masters (Docs/ADR/0026 §6) ---
+	// Each asks EvaluateCueRequest (PlaybackEdit, PlaybackLive or Masters, the playback's index as the number). Edits are undo steps;
+	// live actions (faders, flash, go, release, Grand Master, Blackout) are not, as on a console.
+
+	/** Records what the programmer holds as playback Index's next cue (a tracking cue) and clears the programmer: one undo step. */
+	UFUNCTION(BlueprintCallable, Category = "StageCraft|Requests")
+	bool RequestRecordPlayback(int32 Index);
+
+	/** Releases playback Index and deletes its cues: one undo step. */
+	UFUNCTION(BlueprintCallable, Category = "StageCraft|Requests")
+	bool RequestClearPlayback(int32 Index);
+
+	UFUNCTION(BlueprintCallable, Category = "StageCraft|Requests")
+	bool RequestRenamePlayback(int32 Index, const FText& Name);
+
+	UFUNCTION(BlueprintCallable, Category = "StageCraft|Requests")
+	bool RequestSetPlaybackLevel(int32 Index, float Level);
+
+	UFUNCTION(BlueprintCallable, Category = "StageCraft|Requests")
+	bool RequestPlaybackFlash(int32 Index, bool bDown);
+
+	UFUNCTION(BlueprintCallable, Category = "StageCraft|Requests")
+	bool RequestPlaybackGo(int32 Index);
+
+	UFUNCTION(BlueprintCallable, Category = "StageCraft|Requests")
+	bool RequestReleasePlayback(int32 Index);
+
+	UFUNCTION(BlueprintCallable, Category = "StageCraft|Requests")
+	bool RequestSetGrandMaster(float Level);
+
+	UFUNCTION(BlueprintCallable, Category = "StageCraft|Requests")
+	bool RequestSetBlackout(bool bOn);
 
 	UFUNCTION(BlueprintCallable, Category = "StageCraft|Requests")
 	bool RequestDeleteCue(float CueNumber);

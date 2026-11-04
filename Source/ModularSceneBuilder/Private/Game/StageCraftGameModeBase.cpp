@@ -105,7 +105,27 @@ FStageEconomyResultInfo AStageCraftGameModeBase::EvaluateCueRequest_Implementati
 		return FStageEconomyResultInfo::Ok();
 
 	case EStageCueRequest::SetControlSource:
+	case EStageCueRequest::Masters:
 		return FStageEconomyResultInfo::Ok();
+
+	case EStageCueRequest::PlaybackEdit:
+	case EStageCueRequest::PlaybackLive:
+	{
+		// The number is the playback's index (Docs/ADR/0026 §6).
+		const bool bValidIndex = FMath::IsFinite(CueNumber) && CueNumber >= 0.f && CueNumber < static_cast<float>(StagePlaybackRules::Count)
+			&& FMath::IsNearlyEqual(CueNumber, FMath::RoundToFloat(CueNumber));
+		if (!bValidIndex)
+		{
+			return FStageEconomyResultInfo::Fail(EStageEconomyResult::InvalidRequest, FText::Format(
+				LOCTEXT("BadPlayback", "Playbacks run from 1 to {0}."), FText::AsNumber(StagePlaybackRules::Count)));
+		}
+		if (Request == EStageCueRequest::PlaybackLive && Show->GetControlSource() == EStageControlSource::External)
+		{
+			return FStageEconomyResultInfo::Fail(EStageEconomyResult::SessionRuleViolation,
+				LOCTEXT("ExternalPlayback", "An external console is driving the fixtures. Switch to Internal to use the playbacks."));
+		}
+		return FStageEconomyResultInfo::Ok();
+	}
 	}
 
 	// Deny by default: a request kind added without a rule here is refused.

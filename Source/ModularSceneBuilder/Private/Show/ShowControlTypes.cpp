@@ -7,6 +7,26 @@
 
 #include UE_INLINE_GENERATED_CPP_BY_NAME(ShowControlTypes)
 
+bool FStageCueTiming::Equals(const FStageCueTiming& Other) const
+{
+	constexpr float Tolerance = 1e-4f;
+	if (!FMath::IsNearlyEqual(Delay, Other.Delay, Tolerance) || bHasOutTime != Other.bHasOutTime
+		|| (bHasOutTime && !FMath::IsNearlyEqual(OutTime, Other.OutTime, Tolerance)) || Trigger != Other.Trigger
+		|| !FMath::IsNearlyEqual(WaitTime, Other.WaitTime, Tolerance) || Curve != Other.Curve || FeatureTimes.Num() != Other.FeatureTimes.Num())
+	{
+		return false;
+	}
+	for (const TPair<EStagePaletteKind, float>& Pair : FeatureTimes)
+	{
+		const float* Theirs = Other.FeatureTimes.Find(Pair.Key);
+		if (!Theirs || !FMath::IsNearlyEqual(*Theirs, Pair.Value, Tolerance))
+		{
+			return false;
+		}
+	}
+	return true;
+}
+
 namespace StageCueRules
 {
 	/**
@@ -37,6 +57,33 @@ namespace StageCueRules
 	float SanitizeFadeTime(float FadeTime)
 	{
 		return FMath::IsFinite(FadeTime) ? FMath::Clamp(FadeTime, 0.f, MaxFadeTime) : 0.f;
+	}
+
+	int32 SanitizeTiming(FStageCueTiming& Timing)
+	{
+		Timing.Delay = SanitizeFadeTime(Timing.Delay);
+		Timing.OutTime = Timing.bHasOutTime ? SanitizeFadeTime(Timing.OutTime) : 0.f;
+		Timing.WaitTime = SanitizeFadeTime(Timing.WaitTime);
+		if (static_cast<uint8>(Timing.Trigger) > static_cast<uint8>(EStageCueTrigger::Wait))
+		{
+			Timing.Trigger = EStageCueTrigger::Go;
+		}
+		if (static_cast<uint8>(Timing.Curve) > static_cast<uint8>(EStageCueCurve::SCurve))
+		{
+			Timing.Curve = EStageCueCurve::Linear;
+		}
+		const int32 Before = Timing.FeatureTimes.Num();
+		for (auto It = Timing.FeatureTimes.CreateIterator(); It; ++It)
+		{
+			const uint8 Kind = static_cast<uint8>(It.Key());
+			if (Kind < static_cast<uint8>(EStagePaletteKind::Intensity) || Kind > static_cast<uint8>(EStagePaletteKind::Focus) || !FMath::IsFinite(It.Value()))
+			{
+				It.RemoveCurrent();
+				continue;
+			}
+			It.Value() = SanitizeFadeTime(It.Value());
+		}
+		return Before - Timing.FeatureTimes.Num();
 	}
 
 	FText SanitizeLabel(const FText& Label)
@@ -71,6 +118,7 @@ namespace StageCueRules
 				continue;
 			}
 			Cue.FadeTime = SanitizeFadeTime(Cue.FadeTime);
+			SanitizeTiming(Cue.Timing);
 			Cue.Label = SanitizeLabel(Cue.Label);
 			for (FShowCueFixtureState& State : Cue.Fixtures)
 			{
@@ -147,6 +195,26 @@ namespace StageFixtureGroupRules
 		}
 		Groups = MoveTemp(Kept);
 		return Before - Groups.Num();
+	}
+}
+
+namespace StagePlaybackRules
+{
+	int32 SanitizePlaybacks(TArray<FStagePlayback>& Playbacks)
+	{
+		int32 Dropped = FMath::Max(0, Playbacks.Num() - Count);
+		Playbacks.SetNum(Count);
+		for (FStagePlayback& Playback : Playbacks)
+		{
+			Playback.Name = StageCueRules::SanitizeLabel(Playback.Name);
+			Dropped += StageCueRules::SanitizeCueList(Playback.Cues);
+			if (Playback.Cues.Num() > MaxCuesPerPlayback)
+			{
+				Dropped += Playback.Cues.Num() - MaxCuesPerPlayback;
+				Playback.Cues.SetNum(MaxCuesPerPlayback);
+			}
+		}
+		return Dropped;
 	}
 }
 

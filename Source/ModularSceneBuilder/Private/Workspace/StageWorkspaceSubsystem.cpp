@@ -43,6 +43,7 @@
 
 const FString UStageWorkspaceSubsystem::DefaultLayoutName(TEXT("Default"));
 const FString UStageWorkspaceSubsystem::ViewportOnlyLayoutName(TEXT("Viewport Only"));
+const FString UStageWorkspaceSubsystem::LightingDeskLayoutName(TEXT("Lighting Desk"));
 
 namespace StageWorkspace
 {
@@ -673,7 +674,7 @@ void UStageWorkspaceSubsystem::HandlePanelHostChanged(const FGameplayTag& PanelT
 
 TArray<FString> UStageWorkspaceSubsystem::GetBuiltInLayouts() const
 {
-	return { DefaultLayoutName, ViewportOnlyLayoutName };
+	return { DefaultLayoutName, LightingDeskLayoutName, ViewportOnlyLayoutName };
 }
 
 TArray<FString> UStageWorkspaceSubsystem::GetUserLayouts() const
@@ -683,7 +684,8 @@ TArray<FString> UStageWorkspaceSubsystem::GetUserLayouts() const
 
 bool UStageWorkspaceSubsystem::IsBuiltInLayout(const FString& LayoutName) const
 {
-	return LayoutName.Equals(DefaultLayoutName, ESearchCase::IgnoreCase) || LayoutName.Equals(ViewportOnlyLayoutName, ESearchCase::IgnoreCase);
+	return LayoutName.Equals(DefaultLayoutName, ESearchCase::IgnoreCase) || LayoutName.Equals(ViewportOnlyLayoutName, ESearchCase::IgnoreCase)
+		|| LayoutName.Equals(LightingDeskLayoutName, ESearchCase::IgnoreCase);
 }
 
 EStageLayoutResult UStageWorkspaceSubsystem::ApplyLayout(const FString& LayoutName)
@@ -695,9 +697,21 @@ EStageLayoutResult UStageWorkspaceSubsystem::ApplyLayout(const FString& LayoutNa
 
 	if (IsBuiltInLayout(LayoutName))
 	{
-		const bool bDefault = LayoutName.Equals(DefaultLayoutName, ESearchCase::IgnoreCase);
-		Shell->ApplyLayout(bDefault ? FStageWorkspaceShell::MakeDefaultLayout() : FStageWorkspaceShell::MakeViewportOnlyLayout());
-		SetActiveLayout(bDefault ? DefaultLayoutName : ViewportOnlyLayoutName);
+		if (LayoutName.Equals(DefaultLayoutName, ESearchCase::IgnoreCase))
+		{
+			Shell->ApplyLayout(FStageWorkspaceShell::MakeDefaultLayout());
+			SetActiveLayout(DefaultLayoutName);
+		}
+		else if (LayoutName.Equals(LightingDeskLayoutName, ESearchCase::IgnoreCase))
+		{
+			Shell->ApplyLayout(FStageWorkspaceShell::MakeLightingDeskLayout());
+			SetActiveLayout(LightingDeskLayoutName);
+		}
+		else
+		{
+			Shell->ApplyLayout(FStageWorkspaceShell::MakeViewportOnlyLayout());
+			SetActiveLayout(ViewportOnlyLayoutName);
+		}
 		return EStageLayoutResult::Success;
 	}
 

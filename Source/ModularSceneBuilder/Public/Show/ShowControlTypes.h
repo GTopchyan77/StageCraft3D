@@ -56,9 +56,101 @@ struct MODULARSCENEBUILDER_API FShowCueFixtureState
 };
 
 /**
- * One lighting state. Phase 5 records full snapshots ("cue only"); tracking (storing only
- * changed values and inheriting the rest from previous cues) is a later extension that needs
- * no format change because unrecorded attributes are simply absent from the map.
+ * Which feature of a fixture an attribute belongs to: a palette's kind (Docs/ADR/0028-palettes-and-references.md §2), as a console's
+ * preset types, and the features a cue can time separately (Docs/ADR/0026 §2).
+ */
+UENUM(BlueprintType)
+enum class EStagePaletteKind : uint8
+{
+	/** Any attribute. */
+	All,
+	/** The dimmer and the cell dimmers. */
+	Intensity,
+	/** Pan and tilt. */
+	Position,
+	/** Emitters and filters, colour temperature, CTO, the colour wheel and the cell colours. */
+	Color,
+	/** Shutter, gobos, prisms, iris and blades: every attribute no other kind claims. */
+	Beam,
+	/** Zoom and frost. */
+	Focus,
+};
+
+/** What starts a cue (Docs/ADR/0026-cue-timing-tracking-playbacks.md §2). */
+UENUM(BlueprintType)
+enum class EStageCueTrigger : uint8
+{
+	/** A Go from the user. */
+	Go,
+	/** Starts when the cue before it has finished. */
+	Follow,
+	/** Starts WaitTime seconds after the cue before it was started. */
+	Wait,
+};
+
+/** How a cue's values move from start to target. */
+UENUM(BlueprintType)
+enum class EStageCueCurve : uint8
+{
+	Linear,
+	/** Eases in and out (smoothstep). */
+	SCurve	UMETA(DisplayName = "S-Curve"),
+};
+
+/** How a store records a cue (Docs/ADR/0026 §3). */
+UENUM(BlueprintType)
+enum class EStageCueStoreMode : uint8
+{
+	/** Every fixture's whole look, as a blocked cue that replaces the cue (what every store did before tracking). */
+	Look,
+	/** What the programmer holds, merged into the cue; it tracks into the cues that follow. */
+	Track,
+	/** Track, and the next cue keeps the old values, so the change stops at this cue. */
+	CueOnly,
+};
+
+/**
+ * A cue's timing beyond its In time (FShowCue::FadeTime), Docs/ADR/0026 §2. Sanitized by StageCueRules::SanitizeTiming; resolved
+ * per attribute by StageCueTiming::GetAttributeTiming.
+ */
+USTRUCT(BlueprintType)
+struct MODULARSCENEBUILDER_API FStageCueTiming
+{
+	GENERATED_BODY()
+
+	/** Seconds after the cue starts before anything in it moves. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Cue", meta = (ClampMin = "0.0", Units = "s"))
+	float Delay = 0.f;
+
+	/** Whether intensity going down has its own time (OutTime); otherwise it uses the In time. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Cue")
+	bool bHasOutTime = false;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Cue", meta = (ClampMin = "0.0", Units = "s", EditCondition = "bHasOutTime"))
+	float OutTime = 0.f;
+
+	/** Fade times per feature (never All), beating the In time; intensity going down still takes OutTime when set. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Cue")
+	TMap<EStagePaletteKind, float> FeatureTimes;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Cue")
+	EStageCueTrigger Trigger = EStageCueTrigger::Go;
+
+	/** Trigger Wait: seconds after the cue before this one was started. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Cue", meta = (ClampMin = "0.0", Units = "s"))
+	float WaitTime = 0.f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Cue")
+	EStageCueCurve Curve = EStageCueCurve::Linear;
+
+	/** Same timing (times compared to the cue number resolution's precision). */
+	bool Equals(const FStageCueTiming& Other) const;
+};
+
+/**
+ * One lighting state of a tracking cue list (Docs/ADR/0026 §3): a cue holds only what it changes; the look at a cue is every earlier
+ * cue's values back to the nearest blocked cue, with this cue's on top (StageCueTracking::StateAt). Unrecorded attributes are
+ * simply absent from the maps.
  */
 USTRUCT(BlueprintType)
 struct MODULARSCENEBUILDER_API FShowCue
@@ -72,9 +164,16 @@ struct MODULARSCENEBUILDER_API FShowCue
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Cue")
 	FText Label;
 
-	/** Crossfade time for every attribute in the cue. */
+	/** The In time: every attribute's fade unless Timing gives it another. */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Cue", meta = (ClampMin = "0.0", Units = "s"))
 	float FadeTime = 2.f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Cue")
+	FStageCueTiming Timing;
+
+	/** Inherits nothing from earlier cues: fixtures and attributes it does not hold go to their home look. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Cue")
+	bool bBlock = false;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Cue")
 	TArray<FShowCueFixtureState> Fixtures;
@@ -102,6 +201,9 @@ namespace StageCueRules
 	/** Clamped to 0..MaxFadeTime; a non-finite time becomes 0. */
 	MODULARSCENEBUILDER_API float SanitizeFadeTime(float FadeTime);
 
+	/** Every time clamped like SanitizeFadeTime; feature times only for Intensity..Focus (All and unknown kinds dropped). Returns how many were dropped. */
+	MODULARSCENEBUILDER_API int32 SanitizeTiming(FStageCueTiming& Timing);
+
 	/** Trimmed and cut to MaxLabelLength. */
 	MODULARSCENEBUILDER_API FText SanitizeLabel(const FText& Label);
 
@@ -118,14 +220,51 @@ enum class EStageCueRequest : uint8
 {
 	/** Record the current look as a cue (a new number, or re-record an existing one). */
 	Store,
-	/** Change an existing cue's label or fade time. */
+	/** Change an existing cue's label, timing or block. */
 	Update,
 	Delete,
 	/** Playback: Go, Back or Go To a cue. */
 	Play,
 	/** Switch between the internal cue list and external DMX. */
 	SetControlSource,
+	/** Record into, clear or rename a playback (the number is the playback's index). Undoable. */
+	PlaybackEdit,
+	/** Move a playback's fader, flash it, step it (Go) or release it (the number is the playback's index). Live, not undoable. */
+	PlaybackLive,
+	/** Grand Master and Blackout. Live, not undoable. */
+	Masters,
 };
+
+/**
+ * One playback fader's content (Docs/ADR/0026 §6): its own tracking cue list, recorded from the programmer and stepped by the
+ * playback's Go. Saved in scenes; its fader level, flash and position are live state (UShowControlSubsystem) and are not.
+ */
+USTRUCT(BlueprintType)
+struct MODULARSCENEBUILDER_API FStagePlayback
+{
+	GENERATED_BODY()
+
+	UPROPERTY(BlueprintReadOnly, Category = "Playback")
+	FText Name;
+
+	UPROPERTY(BlueprintReadOnly, Category = "Playback")
+	TArray<FShowCue> Cues;
+};
+
+/** What valid playbacks are (Docs/ADR/0026 §6). Pure, any thread. */
+namespace StagePlaybackRules
+{
+	/** Playback faders on the desk. */
+	inline constexpr int32 Count = 10;
+	inline constexpr int32 MaxCuesPerPlayback = 999;
+
+	/**
+	 * Repairs playbacks from an untrusted source (a file, an undo step): exactly Count of them (missing ones empty, extra ones dropped),
+	 * names trimmed and cut like cue labels, each cue list sanitized like the main one and cut to MaxCuesPerPlayback. Returns how many
+	 * cues and playbacks were dropped.
+	 */
+	MODULARSCENEBUILDER_API int32 SanitizePlaybacks(TArray<FStagePlayback>& Playbacks);
+}
 
 /** Who owns the fixture attributes right now. */
 UENUM(BlueprintType)
@@ -192,24 +331,6 @@ namespace StageFixtureGroupRules
 	 */
 	MODULARSCENEBUILDER_API int32 SanitizeGroups(TArray<FStageFixtureGroup>& Groups);
 }
-
-/** Which feature of a fixture a palette holds (Docs/ADR/0028-palettes-and-references.md §2), as a console's preset types. */
-UENUM(BlueprintType)
-enum class EStagePaletteKind : uint8
-{
-	/** Any attribute. */
-	All,
-	/** The dimmer and the cell dimmers. */
-	Intensity,
-	/** Pan and tilt. */
-	Position,
-	/** Emitters and filters, colour temperature, CTO, the colour wheel and the cell colours. */
-	Color,
-	/** Shutter, gobos, prisms, iris and blades: every attribute no other kind claims. */
-	Beam,
-	/** Zoom and frost. */
-	Focus,
-};
 
 /** How a palette is recorded from the selection. */
 UENUM(BlueprintType)

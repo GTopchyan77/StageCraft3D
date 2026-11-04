@@ -4,17 +4,74 @@
 
 namespace StageShowMix
 {
+	/** The value from the cue list and the playbacks: HTP for intensity, LTP by activation order for the rest. */
+	bool ResolvePlaybacks(const FGameplayTag& Attribute, bool bIntensity, const FFixtureLayers& Layers, float& OutValue)
+	{
+		const float* Main = Layers.Playback ? Layers.Playback->Find(Attribute) : nullptr;
+		if (bIntensity)
+		{
+			bool bHeld = Main != nullptr;
+			float Highest = Main ? *Main : 0.f;
+			for (const FPlaybackLayer& Playback : Layers.Playbacks)
+			{
+				if (const float* Value = Playback.Values ? Playback.Values->Find(Attribute) : nullptr)
+				{
+					Highest = bHeld ? FMath::Max(Highest, *Value * Playback.Level) : *Value * Playback.Level;
+					bHeld = true;
+				}
+			}
+			OutValue = Highest;
+			return bHeld;
+		}
+		const FPlaybackLayer* Latest = nullptr;
+		const float* LatestValue = nullptr;
+		for (const FPlaybackLayer& Playback : Layers.Playbacks)
+		{
+			const float* Value = Playback.Values ? Playback.Values->Find(Attribute) : nullptr;
+			if (Value && (!Latest || Playback.Order > Latest->Order))
+			{
+				Latest = &Playback;
+				LatestValue = Value;
+			}
+		}
+		if (const float* Value = LatestValue ? LatestValue : Main)
+		{
+			OutValue = *Value;
+			return true;
+		}
+		return false;
+	}
+
 	bool ResolveAttribute(const FGameplayTag& Attribute, const FFixtureLayers& Layers, float& OutValue)
 	{
-		for (const FAttributeMap* Layer : { Layers.Highlight, Layers.Programmer, Layers.Playback, Layers.Home })
+		// The kind is only needed when something can change intensity on its way through: playbacks (HTP) or the masters.
+		const bool bNeedsKind = !Layers.Playbacks.IsEmpty() || Layers.IntensityScale != 1.f;
+		const bool bIntensity = bNeedsKind && StagePaletteRules::GetAttributeKind(Attribute) == EStagePaletteKind::Intensity;
+		bool bFound = false;
+		for (const FAttributeMap* Layer : { Layers.Highlight, Layers.Programmer })
 		{
 			if (const float* Value = Layer ? Layer->Find(Attribute) : nullptr)
 			{
 				OutValue = *Value;
-				return true;
+				bFound = true;
+				break;
 			}
 		}
-		return false;
+		if (!bFound)
+		{
+			bFound = ResolvePlaybacks(Attribute, bIntensity, Layers, OutValue);
+		}
+		if (!bFound)
+		{
+			const float* Home = Layers.Home ? Layers.Home->Find(Attribute) : nullptr;
+			OutValue = Home ? *Home : OutValue;
+			bFound = Home != nullptr;
+		}
+		if (bFound && bIntensity)
+		{
+			OutValue *= Layers.IntensityScale;
+		}
+		return bFound;
 	}
 
 	bool IsHeldAbovePlayback(const FGameplayTag& Attribute, const FFixtureLayers& Layers)

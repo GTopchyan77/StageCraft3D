@@ -287,6 +287,131 @@ bool AModularPlayerController::RequestSelectGroup(FGuid GroupId)
 	return true;
 }
 
+// --- Playbacks and masters (Docs/ADR/0026-cue-timing-tracking-playbacks.md §6) ---
+
+bool AModularPlayerController::RequestRecordPlayback(int32 Index)
+{
+	UShowControlSubsystem* Show = ApproveCueRequest(EStageCueRequest::PlaybackEdit, static_cast<float>(Index));
+	UStageProgrammerSubsystem* Programmer = UWorld::GetSubsystem<UStageProgrammerSubsystem>(GetWorld());
+	if (!Show || !Programmer)
+	{
+		return false;
+	}
+	if (Programmer->IsEmpty())
+	{
+		ReportRejection(FStageEconomyResultInfo::Fail(EStageEconomyResult::InvalidRequest,
+			LOCTEXT("PlaybackNeedsProgrammer", "The programmer is empty: set the look you want on this fader first.")));
+		return false;
+	}
+	const TArray<FStagePlayback> Before = Show->GetPlaybacks();
+	TArray<FShowCueFixtureState> ProgrammerBefore = Programmer->GetEntries();
+	if (!Show->RecordPlayback(Index, ProgrammerBefore))
+	{
+		ReportRejection(FStageEconomyResultInfo::Fail(EStageEconomyResult::InvalidRequest, LOCTEXT("PlaybackFull", "This playback cannot take another cue.")));
+		return false;
+	}
+	// As a cue store: the recorded values leave the programmer, and both are one undo step.
+	const FText Description = FText::Format(LOCTEXT("RecordPlayback", "Record Playback {0}"), FText::AsNumber(Index + 1));
+	TArray<int32> FixtureIds;
+	for (const FShowCueFixtureState& Entry : ProgrammerBefore)
+	{
+		FixtureIds.Add(Entry.FixtureId);
+	}
+	Programmer->ClearAll();
+	TArray<TSharedRef<IStageEditCommand>> Commands;
+	Commands.Add(MakeShared<FStagePlaybacksCommand>(Description, Before, Show->GetPlaybacks()));
+	Commands.Add(MakeShared<FStageProgrammerCommand>(Description, MoveTemp(FixtureIds), MoveTemp(ProgrammerBefore), TArray<FShowCueFixtureState>()));
+	EditHistory->RecordAsOneStep(MoveTemp(Commands), Description);
+	return true;
+}
+
+bool AModularPlayerController::RequestClearPlayback(int32 Index)
+{
+	UShowControlSubsystem* Show = ApproveCueRequest(EStageCueRequest::PlaybackEdit, static_cast<float>(Index));
+	if (!Show)
+	{
+		return false;
+	}
+	const TArray<FStagePlayback> Before = Show->GetPlaybacks();
+	if (!Show->ClearPlayback(Index))
+	{
+		return false;
+	}
+	const FText Description = FText::Format(LOCTEXT("ClearPlayback", "Clear Playback {0}"), FText::AsNumber(Index + 1));
+	TArray<TSharedRef<IStageEditCommand>> Commands;
+	Commands.Add(MakeShared<FStagePlaybacksCommand>(Description, Before, Show->GetPlaybacks()));
+	EditHistory->RecordAsOneStep(MoveTemp(Commands), Description);
+	return true;
+}
+
+bool AModularPlayerController::RequestRenamePlayback(int32 Index, const FText& Name)
+{
+	UShowControlSubsystem* Show = ApproveCueRequest(EStageCueRequest::PlaybackEdit, static_cast<float>(Index));
+	if (!Show)
+	{
+		return false;
+	}
+	const TArray<FStagePlayback> Before = Show->GetPlaybacks();
+	if (!Show->RenamePlayback(Index, Name))
+	{
+		return false;
+	}
+	if (!Before[Index].Name.EqualTo(Show->GetPlaybacks()[Index].Name))
+	{
+		const FText Description = FText::Format(LOCTEXT("RenamePlayback", "Rename Playback {0}"), FText::AsNumber(Index + 1));
+		TArray<TSharedRef<IStageEditCommand>> Commands;
+		Commands.Add(MakeShared<FStagePlaybacksCommand>(Description, Before, Show->GetPlaybacks()));
+		EditHistory->RecordAsOneStep(MoveTemp(Commands), Description);
+	}
+	return true;
+}
+
+bool AModularPlayerController::RequestSetPlaybackLevel(int32 Index, float Level)
+{
+	UShowControlSubsystem* Show = ApproveCueRequest(EStageCueRequest::PlaybackLive, static_cast<float>(Index));
+	return Show && Show->SetPlaybackLevel(Index, Level);
+}
+
+bool AModularPlayerController::RequestPlaybackFlash(int32 Index, bool bDown)
+{
+	// Letting go of a flash is always allowed: a refusal must never leave a playback stuck at full.
+	UShowControlSubsystem* Show = bDown ? ApproveCueRequest(EStageCueRequest::PlaybackLive, static_cast<float>(Index))
+		: UWorld::GetSubsystem<UShowControlSubsystem>(GetWorld());
+	return Show && Show->SetPlaybackFlash(Index, bDown);
+}
+
+bool AModularPlayerController::RequestPlaybackGo(int32 Index)
+{
+	UShowControlSubsystem* Show = ApproveCueRequest(EStageCueRequest::PlaybackLive, static_cast<float>(Index));
+	return Show && Show->PlaybackGo(Index);
+}
+
+bool AModularPlayerController::RequestReleasePlayback(int32 Index)
+{
+	UShowControlSubsystem* Show = ApproveCueRequest(EStageCueRequest::PlaybackLive, static_cast<float>(Index));
+	return Show && Show->ReleasePlayback(Index);
+}
+
+bool AModularPlayerController::RequestSetGrandMaster(float Level)
+{
+	UShowControlSubsystem* Show = ApproveCueRequest(EStageCueRequest::Masters, 0.f);
+	if (Show)
+	{
+		Show->SetGrandMaster(Level);
+	}
+	return Show != nullptr;
+}
+
+bool AModularPlayerController::RequestSetBlackout(bool bOn)
+{
+	UShowControlSubsystem* Show = ApproveCueRequest(EStageCueRequest::Masters, 0.f);
+	if (Show)
+	{
+		Show->SetBlackout(bOn);
+	}
+	return Show != nullptr;
+}
+
 // --- Palettes (Docs/ADR/0028-palettes-and-references.md §4) ---
 
 namespace StageProgrammerRequests

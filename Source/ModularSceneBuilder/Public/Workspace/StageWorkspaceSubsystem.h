@@ -66,6 +66,8 @@ public:
 	/** Built-in layouts are defined in C++, never written to disk, and cannot be overwritten or deleted, so Reset always works. */
 	static const FString DefaultLayoutName;
 	static const FString ViewportOnlyLayoutName;
+	/** Built-in layout for running a show (Docs/ADR/0026 §6): viewport, playbacks, cues, groups, palettes and the inspector. */
+	static const FString LightingDeskLayoutName;
 
 	//~ Begin USubsystem Interface
 	virtual bool ShouldCreateSubsystem(UObject* Outer) const override;

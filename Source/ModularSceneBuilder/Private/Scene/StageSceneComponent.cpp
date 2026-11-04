@@ -124,6 +124,7 @@ FStageSceneDocument UStageSceneComponent::CaptureStage(const FString& Name) cons
 	if (const UShowControlSubsystem* Show = UWorld::GetSubsystem<UShowControlSubsystem>(GetWorld()))
 	{
 		Document.Cues = Show->GetCues();
+		Document.Playbacks = Show->GetPlaybacks();
 		if (Show->GetActiveCueNumber() >= 0.f && Show->FindCue(Show->GetActiveCueNumber()))
 		{
 			Document.ActiveCueNumber = Show->GetActiveCueNumber();
@@ -393,6 +394,7 @@ FStageSceneOperationResult UStageSceneComponent::ApplyDocument(const FStageScene
 	if (Show)
 	{
 		Show->SetCues(Document.Cues);
+		Show->SetPlaybacks(Document.Playbacks);
 	}
 	if (Programmer)
 	{

@@ -5777,7 +5777,7 @@ Gevor approved the Phase F plan (#59) and said "Go" for F2. F2 closes gap G4: St
   - CSV: `Saved/StageCraft/Benchmarks/FixtureBench_20261103-210141.csv`.
 - **Not verified by hand:** the Palettes panel by mouse (tabs, record buttons, tile apply, rename field, UPDATE/DELETE and the "used by" note), and Undo from the panel.
 
-**Commit:** uncommitted (working tree).
+**Commit:** `d1c1efb` (committed by Claude with Gevor's permission, 2026-11-03).
 
 **Known issues / follow-ups**
 - **A global colour palette holds a colour only.** Colour temperature, CTO and exact wheel slots need RECORD PER FIXTURE.
@@ -5787,3 +5787,251 @@ Gevor approved the Phase F plan (#59) and said "Go" for F2. F2 closes gap G4: St
 - **The assistant** has no palette intents yet.
 - **v7 files are refused by builds before #60** (VersionMismatch).
 - **Next:** F3 (cue timing, tracking, playbacks and masters; ADR 0026; scene v8).
+
+---
+
+## #61 — Phase F3a: cue timing (delay, In/Out, feature times, Follow/Wait, S-curve) and tracking cues (2026-11-03)
+
+**What & why**
+
+Gevor asked for Phase F3: cue timing, tracking, playbacks and masters. He approved the plan with "Go". F3a closes gaps G5 and G6 (`Docs/ADR/0026-cue-timing-tracking-playbacks.md` §2–5):
+- **G5:** a cue had one fade time.
+- **G6:** every cue was a full snapshot, so nothing tracked.
+
+F3b (playbacks, HTP/LTP, Grand Master and Blackout) follows as #62.
+
+**Timing** (`FStageCueTiming` on `FShowCue`; `FadeTime` stays the In time, so every existing reader is unchanged):
+- **Delay.**
+- **Out time** for intensity going down.
+- **Feature times** for Intensity, Position, Color, Beam and Focus (the F2 palette kinds).
+- **Trigger:** Go, Follow (starts when the previous cue finishes) or Wait n s (starts n s after the previous cue's Go).
+- **Curve:** Linear or S-curve.
+- **The fade engine** (`UShowControlSubsystem::PlayCue` / `TickFades`) gives each changing attribute its own delay and duration (`StageCueTiming::GetAttributeTiming`). A cue finishes when its longest move ends.
+- **Follow/Wait chains:**
+  - an armed automatic Go (`PendingAutoGo`) fires from the tick, never inside the call that started a cue, so zero-time chains cannot recurse;
+  - Back never arms one;
+  - a manual Go, Go To, a show load or switching to External DMX cancels it;
+  - the subsystem ticks only while a fade or an armed Go exists.
+
+**Tracking** (`Show/StageCueTracking.h`, pure):
+- A cue stores only what it changes. `StateAt` works out a cue's look from the nearest **blocked** cue forward; references carry through, and a later plain value drops them.
+- **Playing a cue** fades every fixture in its look or in the playback layer:
+  - values the look holds go to the look's value;
+  - values the look doesn't hold go back to the home look.
+
+  When the fade ends, the playback layer is exactly the look.
+- **Block** writes the inherited look into the cue, so nothing changes on stage, and stops inheritance. **Unblock** only clears the flag.
+- **Store modes** (`EStageCueStoreMode`):
+  - **Track:** merge what the programmer holds; refused when the programmer is empty.
+  - **Cue Only:** Track, plus the next cue keeps the old values, or home values.
+  - **Look:** a blocked snapshot of everything; this is the old store and stays the API default for the assistant and existing callers.
+  - The Cues panel defaults to TRACK.
+  - Every store still clears the programmer and plays the cue as one undo step.
+
+**Requests** (judged by `EvaluateCueRequest`, one undo step each, nothing recorded when nothing changed):
+- `RequestStoreCue(..., Mode)`
+- `RequestUpdateCueTiming`
+- `RequestSetCueBlocked`
+
+**Scene format v8:**
+- Each cue saves `delay`, `out`, `times`, `trigger`, `wait`, `curve` and `block`.
+- Bad values are dropped and counted in `InvalidCueEntries`.
+- **v3–v7 cues were snapshots, so they load blocked** and play as they did. The one difference: a fixture added after such a cue was recorded now goes home in that cue.
+- F3b adds its data to the same v8, because nothing between #61 and #62 is committed.
+
+**Cues panel:**
+- record row: IN, and the store-mode segments LOOK / TRACK / CUE ONLY; STORE becomes UPDATE (or RE-RECORD for LOOK) on an existing number;
+- columns: IN, OUT, DELAY, TRIGGER (a cycle button), BLK;
+- a "+" detail line per cue: INT, POS, COL, BEAM and FOC times (a time equal to In means "follow In"), WAIT and LINEAR/S-CURVE.
+
+**Dev command:** `StageCraft.Show.Cue Track|CueOnly <n>`, `Timing <n> delay= out= wait= trigger= curve= int= pos= col= beam= foc=`, `Block <n> On|Off`. List shows the timing.
+
+**Files changed**
+- **New:**
+  - `Docs/ADR/0026-cue-timing-tracking-playbacks.md`
+  - `Public/Show/StageCueTracking.h`, `Private/Show/StageCueTracking.cpp`
+  - `Private/Show/Tests/StageCueTrackingTests.cpp`
+- **Modified:**
+  - Show: `Public/Show/ShowControlTypes.h` (`EStagePaletteKind` moved above `FShowCue`; trigger, curve and store-mode enums; `FStageCueTiming`; `bBlock`; `SanitizeTiming`), `Private/Show/ShowControlTypes.cpp`.
+  - Subsystem: `Public/Subsystems/ShowControlSubsystem.h`, `Private/Subsystems/ShowControlSubsystem.cpp` (the cue section rewritten).
+  - Controller: `Public/Player/ModularPlayerController.h`, `Private/Player/ModularPlayerController.cpp`.
+  - Scenes: `Private/Scene/StageSceneStore.h`, `Private/Scene/StageSceneStore.cpp`.
+  - Cues panel: `Public/UI/StageCuePanel.h`, `Private/UI/StageCuePanel.cpp`.
+  - Console commands: `Private/Show/StageShowConsoleCommands.cpp`.
+  - Docs and records: `Docs/CURRENT_SYSTEMS.md`, `tasks/todo.md`, `STATE.md` (#60 commit line, this entry).
+
+**Verification**
+- **Builds:** Editor, Game and Shipping built with 0 warnings and 0 errors.
+- **Shipping UTF-16 scan:**
+  - absent: `StageCraft.Show.Cue`, the timing usage text, `StageCraft.Show.Palette`;
+  - present: "CUE ONLY", "Show or hide this cue".
+- **Automation:**
+  - All 167 earlier tests passed on the new engine before any new test was written.
+  - With the new tests, `RunAutomation.ps1 -ExpectedCount 170` gives 170/170 with an offscreen renderer and 170/170 with `-NullRHI`. User data unchanged (67 files).
+  - **New tests:**
+    - `StageCraft.Show.CueTracking` (pure): track-through, block, references through tracking, merge, Cue Only (old value, home value, fixture not on stage), timing per attribute, progress and S-curve, timing sanitizing.
+    - `StageCraft.Show.CueTiming` (world):
+      - delay with In and Position times mid-fade;
+      - the Out time for intensity down while pan tracks;
+      - a Follow then a Wait chain;
+      - Back arms nothing;
+      - a blocked cue sends the rest home;
+      - a manual Go cancels a chain;
+      - Track, Cue Only and Look stores; Block keeps the look; timing update.
+    - `StageCraft.Scene.CueTimingData`: v8 round trip, 9 hostile values dropped and counted, v7 cues load blocked.
+- **Scripted run R61a** on the Concert starter stage (user data restored and hash-checked):
+  - Three Track stores; then cue 2 got delay 1, a 4 s Position time and an S-curve; cue 3 got Follow and a 1 s Out time.
+  - Go from cue 1, pan measured against the S-curve: 9.26° at 2 s (expected about 9.4°), 40.9° at 3.5 s (expected about 41°).
+  - Cue 3 followed by itself: dimmer 0.3, pan 60 tracked from cue 2.
+  - Block 3 kept the look.
+  - Save, open Empty Stage, reload: cues, timing, block and the look are all restored.
+  - The Cues panel capture shows the new columns, FOLLOW lit, B lit on the blocked cue, and TRACK chosen.
+  - Artefacts: `%TEMP%\StageCraftRuns\R61a`.
+- **Benchmark** (`RunFixtureBench.ps1 -Counts 200,500`; the fade loop changed). Show tick while crossfading:
+
+  | Fixtures | #60 (mean / max) | #61 (mean / max) |
+  |---|---|---|
+  | 200 | 3.64 / 8.50 ms | 3.74 / 6.51 ms |
+  | 500 | 8.39 / 14.8 ms | 8.38 / 20.8 ms |
+
+  - Means are unchanged. The 500 maximum is a single frame (the eece06e baseline in #59 had 22.3).
+  - Idle tick 0.
+  - CSV: `Saved/StageCraft/Benchmarks/FixtureBench_20261103-213913.csv`.
+- **Not verified by hand:** the panel by mouse (time fields, the trigger cycle, BLK, the detail line, the store-mode segments).
+
+**Commit:** uncommitted (working tree), to be committed together with #62.
+
+**Known issues / follow-ups**
+- **The record row's cue number** is not refreshed after a store made outside the panel or a scene load, so it can offer UPDATE on an existing cue. This behaviour existed before (it said RE-RECORD).
+- **A palette edit or a fixture arriving during a fade** snaps the fade to its end (ADR 0028 §3).
+- **Next:** F3b (#62): playbacks, HTP/LTP, Grand Master and Blackout.
+
+---
+
+## #62 — Phase F3b: ten playback faders (HTP/LTP, Go, Flash, Record, Release), Grand Master and Blackout, Lighting Desk layout (2026-11-03)
+
+**What & why**
+
+This is the second half of Gevor's Phase F3 brief: the main stack plus 10 playback faders, HTP for dimmers and LTP for everything else, Flash, Grand Master and Blackout. It closes gap G7. Design: `Docs/ADR/0026-cue-timing-tracking-playbacks.md` §6, written out in full with this step.
+
+**Playbacks** (`FStagePlayback {Name, Cues}`, ten of them, held by `UShowControlSubsystem`):
+- Each owns its own tracking cue list.
+  - **REC** appends what the programmer holds as the next cue and clears the programmer (one undo step).
+  - **GO** steps through the list.
+- **Live state** (`FPlaybackRuntime`: level, flash, current cue, activation order and the resolved look) is neither saved nor undoable.
+  - A fader leaving 0, a flash going down or a GO activates the playback (at its first cue when released) and makes it the latest for LTP.
+  - REL releases it; a show load releases all of them.
+- *Deviation from the plan, recorded in the ADR:* there is no separate cue-list pool with an assignment picker. Each playback owns its list, which a console playback with its own stack covers. A playback steps at once (its fader is the fade); its cue timing is not played.
+
+**Mix** (`StageShowMix`, pure), from the bottom up:
+1. the home look;
+2. the main list and the active playbacks:
+   - **intensity HTP:** the highest of the main list and each playback × its level (1 while flashed);
+   - **everything else LTP**, by activation order, playbacks above the main list;
+3. the programmer;
+4. the highlight;
+5. intensity × Grand Master × (Blackout ? 0 : 1), the programmer and highlight included.
+
+**The fade loop** keeps its direct path while no playback is up and the masters are at full (`IsMainOnlyMix`). Otherwise every fading fixture is re-mixed each frame.
+
+**Masters and External DMX:**
+- Under External, the masters scale the incoming intensity, and a change makes the next frames re-read in full.
+- Playbacks are refused under External.
+
+**Recording:** a Look store and a palette record take the look without the masters (`GetRecordableValues`).
+
+**Requests** (`EvaluateCueRequest`):
+- `PlaybackEdit`, with an index check: REC, CLR, rename (`FStagePlaybacksCommand`).
+- `PlaybackLive`, refused under External: level, flash (letting go is never refused), GO, REL.
+- `Masters`: GM, Blackout.
+- **Key:** Blackout on Ctrl+Shift+B (SHOW category, works from any panel).
+
+**Scene format v8** (shared with #61):
+- `"playbacks"`: index, name and cues for each used playback.
+- Damaged entries are dropped and counted in `InvalidCueEntries`.
+- Levels and masters are not saved: a stage opens at full with everything released.
+
+**UI:**
+- **Playback panel** (`StageCraft.Panel.Playback`, Window > Playbacks & Masters..., floating 860×400; `DA_Panel_Playback` made by `Scripts/Content/create_playback_content.py`):
+  - ten strips: name, cue position, vertical fader, level, GO, FLASH (held; new `UStageFlashButton`), REC, REL, CLR;
+  - GM fader and BLACKOUT;
+  - strips are refreshed in place, so a dragged fader is never rebuilt.
+- **Built-in "Lighting Desk" layout** (Layout menu): viewport over the Playback, Cues and Faders tabs; Groups and Palettes on the right; Inspector and Outliner below them.
+
+**Dev commands:**
+- `StageCraft.Show.Playback <1..10> Record|Clear|Rename|Level|Flash|Go|Release|List`
+- `StageCraft.Show.Master GM|Blackout`
+- `StageCraft.Bench.Fixtures ... GM=<0..1>`, plus `RunFixtureBench.ps1 -GM`, to measure the fully mixed fade path.
+
+**Files changed**
+- **New:**
+  - `Public/UI/StagePlaybackPanel.h`, `Private/UI/StagePlaybackPanel.cpp`
+  - `Private/Show/Tests/StagePlaybackTests.cpp`
+  - `Scripts/Content/create_playback_content.py`
+  - `Content/StageCraft/UI/Panels/DA_Panel_Playback.uasset`
+- **Modified:**
+  - Show: `Public/Show/ShowControlTypes.h` (request kinds, `FStagePlayback`, `StagePlaybackRules`), `Private/Show/ShowControlTypes.cpp`, `Public/Show/StageShowMix.h`, `Private/Show/StageShowMix.cpp`.
+  - Subsystems: `Public/Subsystems/ShowControlSubsystem.h`, `Private/Subsystems/ShowControlSubsystem.cpp`, `Private/Subsystems/StageSessionSubsystem.cpp`.
+  - History: `Public/History/StageEditCommand.h`, `Public/History/StageShowCommands.h`, `Private/History/StageShowCommands.cpp`, `Private/History/StageEditHistoryComponent.cpp`.
+  - Controller and rules: `Public/Player/ModularPlayerController.h`, `Private/Player/ModularPlayerController.cpp`, `Private/Player/ModularPlayerControllerProgrammer.cpp`, `Private/Game/StageCraftGameModeBase.cpp`.
+  - Input: `Public/Input/StageKeyBindings.h`, `Private/Input/StageKeyBindings.cpp`, `Private/Input/StageShortcutRouting.cpp`.
+  - Scenes: `Public/Scene/StageSceneTypes.h`, `Private/Scene/StageSceneStore.h`, `Private/Scene/StageSceneStore.cpp`, `Private/Scene/StageSceneComponent.cpp`.
+  - Buttons: `Public/UI/StageToolButton.h`, `Private/UI/StageToolButton.cpp` (`UStageFlashButton`).
+  - Workspace: `Public/Workspace/StageWorkspaceTypes.h`, `Private/Workspace/StageWorkspaceTypes.cpp`, `Public/Workspace/StageWorkspaceSubsystem.h`, `Private/Workspace/StageWorkspaceSubsystem.cpp`, `Private/Workspace/StageWorkspaceShell.h`, `Private/Workspace/StageWorkspaceShell.cpp`, `Private/Workspace/SStageWorkspaceMenuBar.cpp`.
+  - Console commands and bench: `Private/Show/StageShowConsoleCommands.cpp`, `Private/Diagnostics/StageFixtureBenchmark.cpp`, `Scripts/Bench/RunFixtureBench.ps1`.
+  - Docs and records: `Docs/ADR/0026-cue-timing-tracking-playbacks.md`, `Docs/CURRENT_SYSTEMS.md`, `tasks/todo.md`, `STATE.md`.
+
+**Verification**
+- **Builds:** Editor, Game and Shipping built with 0 warnings and 0 errors.
+- **Shipping UTF-16 scan:**
+  - absent: `StageCraft.Show.Playback`, `StageCraft.Show.Master`, `StageCraft.Show.Cue`, `StageCraft.Bench.Fixtures`;
+  - present: "BLACKOUT", "Hold to bring this playback to full".
+- **Automation:** `RunAutomation.ps1 -ExpectedCount 173` gives 173/173 with an offscreen renderer and 173/173 with `-NullRHI`. User data unchanged (68 files).
+  - **New tests:**
+    - `StageCraft.Show.PlaybackMix` (pure):
+      - HTP against the main list;
+      - LTP by order;
+      - cell dimmers as intensity;
+      - the programmer above the playbacks;
+      - the Grand Master on the highlight and home look, but not on position;
+      - Blackout;
+      - the playback rules.
+    - `StageCraft.Show.Playbacks` (world):
+      - fader start and HTP;
+      - LTP by raising; flash and let go;
+      - GO through a tracking list and its end;
+      - Grand Master and Blackout;
+      - a Look store under GM records 0.6, not 0.3;
+      - a main fade mixed with a fader up, and the fader pulled mid-fade;
+      - release; clear and rename with undo and redo;
+      - a load releases; bad levels refused.
+    - `StageCraft.Scene.PlaybackData`: v8 round trip, 5 hostile entries dropped and counted, v7 gives ten empty playbacks.
+- **Scripted run R62a** on the Concert starter stage (user data restored and hash-checked):
+  1. Lighting Desk layout applied.
+  2. Main cue 1 stored with dimmer 0.2.
+  3. Playback 1 recorded (dimmer 1, pan 45); playback 2 recorded (pan −60), named Sweep.
+  4. P1 at 50% → dimmer 0.5, pan 45. P2 at 30% → pan −60 (LTP), dimmer stays 0.5 (HTP).
+  5. Flash P1 → 1.0, pan 45. GM 50% → 0.25. Blackout → 0, pan unchanged.
+  6. Saved, opened Empty Stage, reloaded: both playbacks back, released. P2 up → pan −60 over the main cue's 0.2.
+  - The capture shows the Lighting Desk with P1 and "2 Sweep" lit at 50% and 30%, GM 50% and BLACKOUT lit.
+  - Artefacts: `%TEMP%\StageCraftRuns\R62a`.
+- **Benchmark** (`RunFixtureBench.ps1 -Counts 200,500`). Show tick while crossfading:
+
+  | Path | 200 fixtures (mean / max) | 500 fixtures (mean / max) |
+  |---|---|---|
+  | Main only (GM=1) | 3.56 / 6.90 ms | 7.99 / 15.6 ms |
+  | Fully mixed (GM=0.9) | 4.00 / 8.92 ms | 8.92 / 18.2 ms |
+
+  - Main only is no regression against #60 (3.64 / 8.39 means).
+  - Fully mixed costs about 12% more, and only while a playback is up or the masters are down.
+  - CSVs: `Saved/StageCraft/Benchmarks/FixtureBench_20261103-220506.csv` (GM 1), `FixtureBench_20261103-220700.csv` (GM 0.9).
+- **Not verified by hand:** the Playback panel by mouse (fader drag, FLASH hold and release, REC/REL/CLR, GM, BLACKOUT), Ctrl+Shift+B, and the Lighting Desk from the Layout menu.
+
+**Commit:** uncommitted (working tree), together with #61.
+
+**Known issues / follow-ups**
+- **Fixtures without a dimmer channel are not mastered:** their intensity is in their colour levels. A virtual dimmer is a follow-up.
+- **A playback steps at once:** its cues' timing is not played.
+- **No playback renaming in the panel** (the console command and the API exist).
+- **Under External DMX**, a master change shows on the console's next frame.
+- **Next:** F4 effects (#63), F5 DMX output (#64).

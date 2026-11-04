@@ -114,6 +114,51 @@ TSharedRef<FTabManager::FLayout> FStageWorkspaceShell::MakeDefaultLayout()
 		);
 }
 
+TSharedRef<FTabManager::FLayout> FStageWorkspaceShell::MakeLightingDeskLayout()
+{
+	return NewPanelLayout()
+		->AddArea
+		(
+			FTabManager::NewPrimaryArea()->SetOrientation(Orient_Horizontal)
+			->Split
+			(
+				FTabManager::NewSplitter()->SetOrientation(Orient_Vertical)->SetSizeCoefficient(0.72f)
+				->Split
+				(
+					FTabManager::NewStack()->SetSizeCoefficient(0.58f)
+					->AddTab(ToTabId(StageCraftTags::Panel_Viewport), ETabState::OpenedTab)
+				)
+				->Split
+				(
+					// The desk in front; the cue list and the fader bank behind it, as on a console's playback wing.
+					FTabManager::NewStack()->SetSizeCoefficient(0.42f)
+					->AddTab(ToTabId(StageCraftTags::Panel_Playback), ETabState::OpenedTab)
+					->AddTab(ToTabId(StageCraftTags::Panel_Cues), ETabState::OpenedTab)
+					->AddTab(ToTabId(StageCraftTags::Panel_FaderBank), ETabState::OpenedTab)
+					->SetForegroundTab(ToTabId(StageCraftTags::Panel_Playback))
+				)
+			)
+			->Split
+			(
+				FTabManager::NewSplitter()->SetOrientation(Orient_Vertical)->SetSizeCoefficient(0.28f)
+				->Split
+				(
+					FTabManager::NewStack()->SetSizeCoefficient(0.5f)
+					->AddTab(ToTabId(StageCraftTags::Panel_Groups), ETabState::OpenedTab)
+					->AddTab(ToTabId(StageCraftTags::Panel_Palettes), ETabState::OpenedTab)
+					->SetForegroundTab(ToTabId(StageCraftTags::Panel_Groups))
+				)
+				->Split
+				(
+					FTabManager::NewStack()->SetSizeCoefficient(0.5f)
+					->AddTab(ToTabId(StageCraftTags::Panel_Inspector), ETabState::OpenedTab)
+					->AddTab(ToTabId(StageCraftTags::Panel_Outliner), ETabState::OpenedTab)
+					->SetForegroundTab(ToTabId(StageCraftTags::Panel_Inspector))
+				)
+			)
+		);
+}
+
 TSharedRef<FTabManager::FLayout> FStageWorkspaceShell::MakeViewportOnlyLayout()
 {
 	return NewPanelLayout()
@@ -500,6 +545,7 @@ void FStageWorkspaceShell::RegisterPanelSpawners()
 	FTabManager::RegisterDefaultTabWindowSize(FGameplayTag(StageCraftTags::Panel_Services).GetTagName(), FVector2D(560.0, 600.0));
 	FTabManager::RegisterDefaultTabWindowSize(FGameplayTag(StageCraftTags::Panel_Groups).GetTagName(), FVector2D(560.0, 420.0));
 	FTabManager::RegisterDefaultTabWindowSize(FGameplayTag(StageCraftTags::Panel_Palettes).GetTagName(), FVector2D(600.0, 460.0));
+	FTabManager::RegisterDefaultTabWindowSize(FGameplayTag(StageCraftTags::Panel_Playback).GetTagName(), FVector2D(860.0, 400.0));
 }
 
 void FStageWorkspaceShell::SyncReportedHosts()

@@ -85,11 +85,56 @@ namespace StageSceneStore
 		const TCHAR* Kind = TEXT("kind");
 		const TCHAR* Color = TEXT("color");
 		const TCHAR* Values = TEXT("values");
+
+		// Version 8: cue timing and tracking (Docs/ADR/0026 §5).
+		const TCHAR* Delay = TEXT("delay");
+		const TCHAR* Out = TEXT("out");
+		const TCHAR* Times = TEXT("times");
+		const TCHAR* Trigger = TEXT("trigger");
+		const TCHAR* Wait = TEXT("wait");
+		const TCHAR* Curve = TEXT("curve");
+		const TCHAR* Block = TEXT("block");
+		const TCHAR* Playbacks = TEXT("playbacks");
+		const TCHAR* Index = TEXT("index");
+	}
+
+	/** Cue triggers and curves by name in files, so a reordered enum never changes what a file means. Index = enum value. */
+	const TCHAR* const CueTriggerNames[] = { TEXT("Go"), TEXT("Follow"), TEXT("Wait") };
+	static_assert(UE_ARRAY_COUNT(CueTriggerNames) == static_cast<int32>(EStageCueTrigger::Wait) + 1, "Name every cue trigger.");
+	const TCHAR* const CueCurveNames[] = { TEXT("Linear"), TEXT("SCurve") };
+	static_assert(UE_ARRAY_COUNT(CueCurveNames) == static_cast<int32>(EStageCueCurve::SCurve) + 1, "Name every cue curve.");
+
+	/** Index of Name in Names; INDEX_NONE for a name this build does not know. */
+	int32 FindName(TConstArrayView<const TCHAR*> Names, const FString& Name)
+	{
+		for (int32 Index = 0; Index < Names.Num(); ++Index)
+		{
+			if (Name == Names[Index])
+			{
+				return Index;
+			}
+		}
+		return INDEX_NONE;
 	}
 
 	/** Palette kinds by name in files, so a reordered enum never changes what a file means. Index = EStagePaletteKind value. */
 	const TCHAR* const PaletteKindNames[] = { TEXT("All"), TEXT("Intensity"), TEXT("Position"), TEXT("Color"), TEXT("Beam"), TEXT("Focus") };
 	static_assert(UE_ARRAY_COUNT(PaletteKindNames) == static_cast<int32>(EStagePaletteKind::Focus) + 1, "Name every palette kind.");
+
+	/** The palette kind named Name in a file; false for a name this build does not know. */
+	bool ParsePaletteKind(const FString& Name, EStagePaletteKind& OutKind)
+	{
+		for (int32 Index = 0; Index < UE_ARRAY_COUNT(PaletteKindNames); ++Index)
+		{
+			if (Name == PaletteKindNames[Index])
+			{
+				OutKind = static_cast<EStagePaletteKind>(Index);
+				return true;
+			}
+		}
+		return false;
+	}
+
 
 	/** {"<tag>": value} for an attribute map. */
 	TSharedRef<FJsonObject> WriteAttributeValues(const TMap<FGameplayTag, float>& Values)
@@ -158,6 +203,25 @@ namespace StageSceneStore
 			Object->SetNumberField(Field::Number, Cue.Number);
 			Object->SetStringField(Field::Label, Cue.Label.ToString());
 			Object->SetNumberField(Field::Fade, Cue.FadeTime);
+			const FStageCueTiming& Timing = Cue.Timing;
+			Object->SetNumberField(Field::Delay, Timing.Delay);
+			if (Timing.bHasOutTime)
+			{
+				Object->SetNumberField(Field::Out, Timing.OutTime);
+			}
+			if (!Timing.FeatureTimes.IsEmpty())
+			{
+				const TSharedRef<FJsonObject> Times = MakeShared<FJsonObject>();
+				for (const TPair<EStagePaletteKind, float>& Pair : Timing.FeatureTimes)
+				{
+					Times->SetNumberField(PaletteKindNames[static_cast<int32>(Pair.Key)], Pair.Value);
+				}
+				Object->SetObjectField(Field::Times, Times);
+			}
+			Object->SetStringField(Field::Trigger, CueTriggerNames[static_cast<int32>(Timing.Trigger)]);
+			Object->SetNumberField(Field::Wait, Timing.WaitTime);
+			Object->SetStringField(Field::Curve, CueCurveNames[static_cast<int32>(Timing.Curve)]);
+			Object->SetBoolField(Field::Block, Cue.bBlock);
 			Object->SetArrayField(Field::Fixtures, Fixtures);
 			Array.Add(MakeShared<FJsonValueObject>(Object));
 		}
@@ -197,8 +261,80 @@ namespace StageSceneStore
 		return true;
 	}
 
+	/** A finite time within StageCueRules' range from Object's Field; false (counted) when present but not one. */
+	bool ReadTime(const FJsonObject& Object, const TCHAR* Name, float& OutTime, int32& InOutInvalid)
+	{
+		const TSharedPtr<FJsonValue> Value = Object.TryGetField(Name);
+		double Number = 0.0;
+		if (!Value.IsValid())
+		{
+			return false;
+		}
+		if (!Value->TryGetNumber(Number) || !FMath::IsFinite(Number) || Number < 0.0 || Number > StageCueRules::MaxFadeTime)
+		{
+			++InOutInvalid;
+			return false;
+		}
+		OutTime = static_cast<float>(Number);
+		return true;
+	}
+
+	/** A version 8 cue's timing and block. What cannot be read is dropped and counted; the cue keeps the default for it. */
+	void ReadCueTiming(const FJsonObject& Object, FShowCue& OutCue, int32& InOutInvalid)
+	{
+		FStageCueTiming& Timing = OutCue.Timing;
+		ReadTime(Object, Field::Delay, Timing.Delay, InOutInvalid);
+		Timing.bHasOutTime = ReadTime(Object, Field::Out, Timing.OutTime, InOutInvalid);
+		ReadTime(Object, Field::Wait, Timing.WaitTime, InOutInvalid);
+		const TSharedPtr<FJsonObject>* Times = nullptr;
+		if (Object.TryGetObjectField(Field::Times, Times) && Times->IsValid())
+		{
+			for (const TPair<FString, TSharedPtr<FJsonValue>>& Pair : (*Times)->Values)
+			{
+				EStagePaletteKind Kind = EStagePaletteKind::All;
+				float Time = 0.f;
+				if (!ParsePaletteKind(Pair.Key, Kind) || Kind == EStagePaletteKind::All)
+				{
+					++InOutInvalid;
+					continue;
+				}
+				if (ReadTime(**Times, *Pair.Key, Time, InOutInvalid))
+				{
+					Timing.FeatureTimes.Add(Kind, Time);
+				}
+			}
+		}
+		FString Name;
+		if (Object.TryGetStringField(Field::Trigger, Name))
+		{
+			const int32 Trigger = FindName(CueTriggerNames, Name);
+			InOutInvalid += Trigger == INDEX_NONE ? 1 : 0;
+			Timing.Trigger = Trigger == INDEX_NONE ? EStageCueTrigger::Go : static_cast<EStageCueTrigger>(Trigger);
+		}
+		if (Object.TryGetStringField(Field::Curve, Name))
+		{
+			const int32 Curve = FindName(CueCurveNames, Name);
+			InOutInvalid += Curve == INDEX_NONE ? 1 : 0;
+			Timing.Curve = Curve == INDEX_NONE ? EStageCueCurve::Linear : static_cast<EStageCueCurve>(Curve);
+		}
+		bool bBlock = false;
+		const TSharedPtr<FJsonValue> BlockValue = Object.TryGetField(Field::Block);
+		if (BlockValue.IsValid())
+		{
+			// A real boolean only: TryGetBool would read "yes" as true.
+			if (BlockValue->Type == EJson::Boolean && BlockValue->TryGetBool(bBlock))
+			{
+				OutCue.bBlock = bBlock;
+			}
+			else
+			{
+				++InOutInvalid;
+			}
+		}
+	}
+
 	/** One cue. False drops it (bad number); bad fixtures inside it are dropped and counted. */
-	bool ReadCue(const FJsonObject& Object, FShowCue& OutCue, int32& InOutInvalid)
+	bool ReadCue(const FJsonObject& Object, FShowCue& OutCue, int32 Version, int32& InOutInvalid)
 	{
 		double Number = 0.0;
 		if (!Object.TryGetNumberField(Field::Number, Number) || !StageCueRules::IsValidCueNumber(static_cast<float>(Number)))
@@ -213,6 +349,16 @@ namespace StageSceneStore
 
 		double Fade = 0.0;
 		OutCue.FadeTime = Object.TryGetNumberField(Field::Fade, Fade) ? StageCueRules::SanitizeFadeTime(static_cast<float>(Fade)) : 0.f;
+
+		// Migration 7 -> 8: cues were full snapshots of every fixture, so they play as blocked cues (Docs/ADR/0026 §3).
+		if (Version >= 8)
+		{
+			ReadCueTiming(Object, OutCue, InOutInvalid);
+		}
+		else
+		{
+			OutCue.bBlock = true;
+		}
 
 		const TArray<TSharedPtr<FJsonValue>>* Fixtures = nullptr;
 		if (Object.TryGetArrayField(Field::Fixtures, Fixtures))
@@ -237,7 +383,7 @@ namespace StageSceneStore
 	 * The cue list of a version 3 file. Tolerant like ReadEnvironment: what cannot be read is dropped and counted, the rest loads,
 	 * and the list is repaired by the same rules as every other cue entry (duplicates, order).
 	 */
-	TArray<FShowCue> ReadCues(const FJsonObject& Root, int32& InOutInvalid)
+	TArray<FShowCue> ReadCues(const FJsonObject& Root, int32 Version, int32 MaxCues, int32& InOutInvalid)
 	{
 		TArray<FShowCue> Cues;
 		const TArray<TSharedPtr<FJsonValue>>* Array = nullptr;
@@ -245,13 +391,13 @@ namespace StageSceneStore
 		{
 			return Cues;
 		}
-		Cues.Reserve(FMath::Min(Array->Num(), FStageSceneStore::MaxCues));
+		Cues.Reserve(FMath::Min(Array->Num(), MaxCues));
 		for (const TSharedPtr<FJsonValue>& Value : *Array)
 		{
 			const TSharedPtr<FJsonObject>* Object = nullptr;
 			FShowCue Cue;
-			if (Cues.Num() >= FStageSceneStore::MaxCues || !Value.IsValid() || !Value->TryGetObject(Object) || !Object->IsValid()
-				|| !ReadCue(**Object, Cue, InOutInvalid))
+			if (Cues.Num() >= MaxCues || !Value.IsValid() || !Value->TryGetObject(Object) || !Object->IsValid()
+				|| !ReadCue(**Object, Cue, Version, InOutInvalid))
 			{
 				++InOutInvalid;
 				continue;
@@ -359,6 +505,64 @@ namespace StageSceneStore
 		return Groups;
 	}
 
+	/** The playbacks that hold anything (Docs/ADR/0026 §6): {"index", "name", "cues"}, cues as in the main list. */
+	TArray<TSharedPtr<FJsonValue>> WritePlaybacks(const TArray<FStagePlayback>& Playbacks)
+	{
+		TArray<TSharedPtr<FJsonValue>> Array;
+		for (int32 Index = 0; Index < Playbacks.Num(); ++Index)
+		{
+			const FStagePlayback& Playback = Playbacks[Index];
+			if (Playback.Cues.IsEmpty() && Playback.Name.IsEmpty())
+			{
+				continue;
+			}
+			const TSharedRef<FJsonObject> Object = MakeShared<FJsonObject>();
+			Object->SetNumberField(Field::Index, Index);
+			Object->SetStringField(Field::Name, Playback.Name.ToString());
+			Object->SetArrayField(Field::Cues, WriteCues(Playback.Cues));
+			Array.Add(MakeShared<FJsonValueObject>(Object));
+		}
+		return Array;
+	}
+
+	/** The playbacks of a version 8 file: one entry per used playback, by index. Bad entries are dropped and counted. */
+	TArray<FStagePlayback> ReadPlaybacks(const FJsonObject& Root, int32 Version, int32& InOutInvalid)
+	{
+		TArray<FStagePlayback> Playbacks;
+		Playbacks.SetNum(StagePlaybackRules::Count);
+		const TArray<TSharedPtr<FJsonValue>>* Array = nullptr;
+		if (!Root.TryGetArrayField(Field::Playbacks, Array))
+		{
+			return Playbacks;
+		}
+		TSet<int32> Seen;
+		for (const TSharedPtr<FJsonValue>& Value : *Array)
+		{
+			const TSharedPtr<FJsonObject>* Object = nullptr;
+			double Index = -1.0;
+			bool bDuplicate = false;
+			if (!Value.IsValid() || !Value->TryGetObject(Object) || !Object->IsValid() || !(*Object)->TryGetNumberField(Field::Index, Index)
+				|| Index < 0.0 || Index >= StagePlaybackRules::Count || Index != FMath::FloorToDouble(Index))
+			{
+				++InOutInvalid;
+				continue;
+			}
+			Seen.Add(static_cast<int32>(Index), &bDuplicate);
+			if (bDuplicate)
+			{
+				++InOutInvalid;
+				continue;
+			}
+			FStagePlayback& Playback = Playbacks[static_cast<int32>(Index)];
+			FString Name;
+			(*Object)->TryGetStringField(Field::Name, Name);
+			Playback.Name = FText::FromString(Name);
+			Playback.Cues = ReadCues(**Object, Version, StagePlaybackRules::MaxCuesPerPlayback, InOutInvalid);
+		}
+		InOutInvalid += StagePlaybackRules::SanitizePlaybacks(Playbacks);
+		return Playbacks;
+	}
+
 	TArray<TSharedPtr<FJsonValue>> WritePalettes(const TArray<FStagePalette>& Palettes)
 	{
 		TArray<TSharedPtr<FJsonValue>> Array;
@@ -386,20 +590,6 @@ namespace StageSceneStore
 			Array.Add(MakeShared<FJsonValueObject>(Object));
 		}
 		return Array;
-	}
-
-	/** The palette kind named Name in a file; false for a name this build does not know. */
-	bool ParsePaletteKind(const FString& Name, EStagePaletteKind& OutKind)
-	{
-		for (int32 Index = 0; Index < UE_ARRAY_COUNT(PaletteKindNames); ++Index)
-		{
-			if (Name == PaletteKindNames[Index])
-			{
-				OutKind = static_cast<EStagePaletteKind>(Index);
-				return true;
-			}
-		}
-		return false;
 	}
 
 	/** One palette. False drops it (no valid id or an unknown kind); bad values inside are dropped and counted. */
@@ -832,6 +1022,7 @@ FString FStageSceneStore::Serialize(const FStageSceneDocument& Document)
 	Root->SetArrayField(Field::Programmer, Programmer);
 	Root->SetArrayField(Field::Groups, WriteGroups(Document.Groups));
 	Root->SetArrayField(Field::Palettes, WritePalettes(Document.Palettes));
+	Root->SetArrayField(Field::Playbacks, WritePlaybacks(Document.Playbacks));
 	if (Document.ActiveCueNumber.IsSet())
 	{
 		Root->SetNumberField(Field::ActiveCue, Document.ActiveCueNumber.GetValue());
@@ -893,7 +1084,7 @@ EStageSceneResult FStageSceneStore::Parse(const FString& Contents, FStageSceneDo
 	// Migration 2 -> 3: older stages had no saved cues; they open with an empty cue list.
 	if (Version >= 3)
 	{
-		OutDocument.Cues = ReadCues(*Root, OutReport.InvalidCueEntries);
+		OutDocument.Cues = ReadCues(*Root, Version, MaxCues, OutReport.InvalidCueEntries);
 	}
 	// Migration 5 -> 6: older stages have an empty programmer, no groups and no cue playing.
 	if (Version >= 6)
@@ -913,6 +1104,15 @@ EStageSceneResult FStageSceneStore::Parse(const FString& Contents, FStageSceneDo
 				++OutReport.InvalidShowEntries;
 			}
 		}
+	}
+	// Migration 7 -> 8: older stages have empty playbacks.
+	if (Version >= 8)
+	{
+		OutDocument.Playbacks = ReadPlaybacks(*Root, Version, OutReport.InvalidCueEntries);
+	}
+	else
+	{
+		OutDocument.Playbacks.SetNum(StagePlaybackRules::Count);
 	}
 	// Migration 6 -> 7: older stages (and every starter stage) get the starter palettes; a version 7 file has exactly its own.
 	OutDocument.Palettes = Version >= 7 ? ReadPalettes(*Root, OutReport.InvalidShowEntries) : StagePaletteRules::MakeStarterPalettes();

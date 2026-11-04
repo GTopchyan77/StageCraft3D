@@ -31,6 +31,7 @@ bool StageShortcutRouting::IsAppWideCommand(EStageInputCommand Command)
 	case EStageInputCommand::CueBack:
 	case EStageInputCommand::ClearProgrammer:
 	case EStageInputCommand::Highlight:
+	case EStageInputCommand::Blackout:
 		return true;
 	default:
 		return false;

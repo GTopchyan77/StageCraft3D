@@ -34,6 +34,7 @@ void UStageSessionSubsystem::Initialize(FSubsystemCollectionBase& Collection)
 	if (UShowControlSubsystem* Show = Collection.InitializeDependency<UShowControlSubsystem>())
 	{
 		Show->OnCueListChanged.AddUniqueDynamic(this, &ThisClass::HandleShowDataChanged);
+		Show->OnPlaybacksChanged.AddUniqueDynamic(this, &ThisClass::HandleShowDataChanged);
 		BoundShowControl = Show;
 	}
 	if (UStageProgrammerSubsystem* Programmer = Collection.InitializeDependency<UStageProgrammerSubsystem>())
@@ -79,6 +80,7 @@ void UStageSessionSubsystem::Deinitialize()
 	if (UShowControlSubsystem* Show = BoundShowControl.Get())
 	{
 		Show->OnCueListChanged.RemoveDynamic(this, &ThisClass::HandleShowDataChanged);
+		Show->OnPlaybacksChanged.RemoveDynamic(this, &ThisClass::HandleShowDataChanged);
 	}
 	BoundShowControl.Reset();
 	if (UStageProgrammerSubsystem* Programmer = BoundProgrammer.Get())

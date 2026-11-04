@@ -8,6 +8,7 @@
 
 #if !UE_BUILD_SHIPPING
 
+#include "Algo/Find.h"
 #include "Actors/LightingFixtureActor.h"
 #include "Components/SelectionComponent.h"
 #include "Components/SpotLightComponent.h"
@@ -150,14 +151,85 @@ namespace StageShowCommands
 			ShowControl->GetStrobingFixtureCount());
 	}
 
-	/** Cue requests through the controller (the Cue panel's path): Store <n> [fade] [label...], Update <n> <fade> [label...], Delete <n>, Go, Back, GoTo <n>, Source Internal|External, List. */
+	/**
+	 * Applies "key=value" pairs to a cue's timing (Docs/ADR/0026 §2): delay, out (or out=none), wait, trigger=Go|Follow|Wait,
+	 * curve=Linear|SCurve, and feature times int|pos|col|beam|foc (or =none). False on an unknown key or value.
+	 */
+	bool ParseTiming(TArrayView<const FString> Pairs, FStageCueTiming& InOutTiming)
+	{
+		for (const FString& Pair : Pairs)
+		{
+			FString Key;
+			FString Value;
+			if (!Pair.Split(TEXT("="), &Key, &Value))
+			{
+				return false;
+			}
+			float Seconds = 0.f;
+			const bool bNumber = LexTryParseString(Seconds, *Value);
+			const TPair<const TCHAR*, EStagePaletteKind> FeatureKeys[] = {
+				{ TEXT("int"), EStagePaletteKind::Intensity }, { TEXT("pos"), EStagePaletteKind::Position }, { TEXT("col"), EStagePaletteKind::Color },
+				{ TEXT("beam"), EStagePaletteKind::Beam }, { TEXT("foc"), EStagePaletteKind::Focus } };
+			const TPair<const TCHAR*, EStagePaletteKind>* Feature = Algo::FindByPredicate(FeatureKeys, [&Key](const TPair<const TCHAR*, EStagePaletteKind>& Each) { return Key == Each.Key; });
+			if (Key == TEXT("delay") && bNumber)
+			{
+				InOutTiming.Delay = Seconds;
+			}
+			else if (Key == TEXT("out"))
+			{
+				InOutTiming.bHasOutTime = bNumber;
+				InOutTiming.OutTime = bNumber ? Seconds : 0.f;
+			}
+			else if (Key == TEXT("wait") && bNumber)
+			{
+				InOutTiming.WaitTime = Seconds;
+			}
+			else if (Key == TEXT("trigger"))
+			{
+				const int64 Trigger = StaticEnum<EStageCueTrigger>()->GetValueByNameString(Value);
+				if (Trigger == INDEX_NONE)
+				{
+					return false;
+				}
+				InOutTiming.Trigger = static_cast<EStageCueTrigger>(Trigger);
+			}
+			else if (Key == TEXT("curve"))
+			{
+				const int64 Curve = StaticEnum<EStageCueCurve>()->GetValueByNameString(Value);
+				if (Curve == INDEX_NONE)
+				{
+					return false;
+				}
+				InOutTiming.Curve = static_cast<EStageCueCurve>(Curve);
+			}
+			else if (Feature && bNumber)
+			{
+				InOutTiming.FeatureTimes.Add(Feature->Value, Seconds);
+			}
+			else if (Feature && Value == TEXT("none"))
+			{
+				InOutTiming.FeatureTimes.Remove(Feature->Value);
+			}
+			else
+			{
+				return false;
+			}
+		}
+		return true;
+	}
+
+	/**
+	 * Cue requests through the controller (the Cue panel's path): Store|Track|CueOnly <n> [fade] [label...] (Store records the whole
+	 * look), Update <n> <fade> [label...], Timing <n> key=value..., Block <n> On|Off, Delete <n>, Go, Back, GoTo <n>,
+	 * Source Internal|External, List.
+	 */
 	void Cue(const TArray<FString>& Args, UWorld* World)
 	{
 		AModularPlayerController* Controller = GetController(World);
 		const UShowControlSubsystem* ShowControl = World ? World->GetSubsystem<UShowControlSubsystem>() : nullptr;
 		if (!Controller || !ShowControl || Args.IsEmpty())
 		{
-			UE_LOG(LogStageCraft, Display, TEXT("StageCraft.Show.Cue Store <n> [fade] [label] | Update <n> <fade> [label] | Delete <n> | Go | Back | GoTo <n> | Source Internal|External | List"));
+			UE_LOG(LogStageCraft, Display, TEXT("StageCraft.Show.Cue Store|Track|CueOnly <n> [fade] [label] | Update <n> <fade> [label] | Timing <n> key=value... | Block <n> On|Off | Delete <n> | Go | Back | GoTo <n> | Source Internal|External | List"));
 			return;
 		}
 
@@ -173,9 +245,21 @@ namespace StageShowCommands
 		}
 
 		bool bOk = false;
-		if (Verb == TEXT("Store") && bHasNumber)
+		const bool bStore = Verb == TEXT("Store") || Verb == TEXT("Track") || Verb == TEXT("CueOnly");
+		if (bStore && bHasNumber)
 		{
-			bOk = Controller->RequestStoreCue(Number, FText::FromString(Label), bHasFade ? Fade : 2.f);
+			const EStageCueStoreMode Mode = Verb == TEXT("Track") ? EStageCueStoreMode::Track
+				: (Verb == TEXT("CueOnly") ? EStageCueStoreMode::CueOnly : EStageCueStoreMode::Look);
+			bOk = Controller->RequestStoreCue(Number, FText::FromString(Label), bHasFade ? Fade : 2.f, Mode);
+		}
+		else if (Verb == TEXT("Timing") && bHasNumber && ShowControl->FindCue(Number))
+		{
+			FStageCueTiming Timing = ShowControl->FindCue(Number)->Timing;
+			bOk = ParseTiming(TArrayView<const FString>(Args).RightChop(2), Timing) && Controller->RequestUpdateCueTiming(Number, Timing);
+		}
+		else if (Verb == TEXT("Block") && bHasNumber && Args.Num() >= 3)
+		{
+			bOk = Controller->RequestSetCueBlocked(Number, Args[2] == TEXT("On"));
 		}
 		else if (Verb == TEXT("Update") && bHasNumber && bHasFade)
 		{
@@ -213,12 +297,21 @@ namespace StageShowCommands
 		}
 		for (const FShowCue& Each : ShowControl->GetCues())
 		{
-			UE_LOG(LogStageCraft, Display, TEXT("StageCraft.Show.Cue: %s%.3f \"%s\" fade %.2f s, %d fixtures."),
+			const FStageCueTiming& Timing = Each.Timing;
+			TArray<FString> Features;
+			for (const TPair<EStagePaletteKind, float>& Pair : Timing.FeatureTimes)
+			{
+				Features.Add(FString::Printf(TEXT("%s %.2f"), *UEnum::GetDisplayValueAsText(Pair.Key).ToString(), Pair.Value));
+			}
+			UE_LOG(LogStageCraft, Display, TEXT("StageCraft.Show.Cue: %s%.3f \"%s\" in %.2f s, out %s, delay %.2f, %s%s, %s, %s, %d fixtures%s%s."),
 				FMath::IsNearlyEqual(Each.Number, ShowControl->GetActiveCueNumber(), 0.0005f) ? TEXT("> ") : TEXT("  "),
-				Each.Number, *Each.Label.ToString(), Each.FadeTime, Each.Fixtures.Num());
+				Each.Number, *Each.Label.ToString(), Each.FadeTime, Timing.bHasOutTime ? *FString::SanitizeFloat(Timing.OutTime) : TEXT("=in"), Timing.Delay,
+				*UEnum::GetDisplayValueAsText(Timing.Trigger).ToString(), Timing.Trigger == EStageCueTrigger::Wait ? *FString::Printf(TEXT(" %.2f s"), Timing.WaitTime) : TEXT(""),
+				*UEnum::GetDisplayValueAsText(Timing.Curve).ToString(), Each.bBlock ? TEXT("blocked") : TEXT("tracking"), Each.Fixtures.Num(),
+				Features.IsEmpty() ? TEXT("") : TEXT(", features "), *FString::Join(Features, TEXT(", ")));
 		}
-		UE_LOG(LogStageCraft, Display, TEXT("StageCraft.Show.Cue: %d cues, active %.3f, %s, source %s."), ShowControl->GetCues().Num(),
-			ShowControl->GetActiveCueNumber(), ShowControl->IsFading() ? TEXT("fading") : TEXT("idle"),
+		UE_LOG(LogStageCraft, Display, TEXT("StageCraft.Show.Cue: %d cues, active %.3f, %s%s, source %s."), ShowControl->GetCues().Num(),
+			ShowControl->GetActiveCueNumber(), ShowControl->IsFading() ? TEXT("fading") : TEXT("idle"), ShowControl->IsAutoGoArmed() ? TEXT(", next cue armed") : TEXT(""),
 			*UEnum::GetValueAsString(ShowControl->GetControlSource()));
 	}
 
@@ -440,6 +533,100 @@ namespace StageShowCommands
 		}
 	}
 
+	/** Playback n (1..10): Record | Clear | Rename <name> | Level <0..1> | Flash On|Off | Go | Release | List. */
+	void PlaybackRequest(const TArray<FString>& Args, UWorld* World)
+	{
+		AModularPlayerController* Controller = GetController(World);
+		const UShowControlSubsystem* Show = World ? World->GetSubsystem<UShowControlSubsystem>() : nullptr;
+		if (!Controller || !Show)
+		{
+			return;
+		}
+		int32 Number = 0;
+		const bool bHasNumber = Args.Num() >= 2 && LexTryParseString(Number, *Args[0]);
+		const int32 Index = Number - 1;
+		const FString Verb = bHasNumber ? Args[1] : (Args.IsEmpty() ? TEXT("List") : Args[0]);
+		float Value = 0.f;
+		const bool bHasValue = Args.Num() >= 3 && LexTryParseString(Value, *Args[2]);
+		bool bOk = true;
+		if (bHasNumber && Verb == TEXT("Record"))
+		{
+			bOk = Controller->RequestRecordPlayback(Index);
+		}
+		else if (bHasNumber && Verb == TEXT("Clear"))
+		{
+			bOk = Controller->RequestClearPlayback(Index);
+		}
+		else if (bHasNumber && Verb == TEXT("Rename"))
+		{
+			bOk = Controller->RequestRenamePlayback(Index, FText::FromString(FString::Join(TArrayView<const FString>(Args).RightChop(2), TEXT(" "))));
+		}
+		else if (bHasNumber && Verb == TEXT("Level") && bHasValue)
+		{
+			bOk = Controller->RequestSetPlaybackLevel(Index, Value);
+		}
+		else if (bHasNumber && Verb == TEXT("Flash") && Args.Num() >= 3)
+		{
+			bOk = Controller->RequestPlaybackFlash(Index, Args[2] == TEXT("On"));
+		}
+		else if (bHasNumber && Verb == TEXT("Go"))
+		{
+			bOk = Controller->RequestPlaybackGo(Index);
+		}
+		else if (bHasNumber && Verb == TEXT("Release"))
+		{
+			bOk = Controller->RequestReleasePlayback(Index);
+		}
+		else if (Verb != TEXT("List"))
+		{
+			UE_LOG(LogStageCraft, Display, TEXT("Usage: StageCraft.Show.Playback <1..10> Record | Clear | Rename <name> | Level <0..1> | Flash On|Off | Go | Release, or List"));
+			return;
+		}
+		if (Verb != TEXT("List"))
+		{
+			UE_LOG(LogStageCraft, Display, TEXT("StageCraft.Show.Playback %s: %s."), *FString::Join(Args, TEXT(" ")), bOk ? TEXT("done") : TEXT("refused"));
+		}
+		for (int32 Each = 0; Each < Show->GetPlaybacks().Num(); ++Each)
+		{
+			const FStagePlayback& Playback = Show->GetPlaybacks()[Each];
+			if (Playback.Cues.IsEmpty() && !Show->IsPlaybackActive(Each))
+			{
+				continue;
+			}
+			UE_LOG(LogStageCraft, Display, TEXT("StageCraft.Show.Playback %d \"%s\": %d cue(s), at %d, level %.2f%s%s."), Each + 1, *Playback.Name.ToString(),
+				Playback.Cues.Num(), Show->GetPlaybackCueIndex(Each) + 1, Show->GetPlaybackLevel(Each), Show->IsPlaybackFlashing(Each) ? TEXT(", flash") : TEXT(""),
+				Show->IsPlaybackActive(Each) ? TEXT(", active") : TEXT(""));
+		}
+		UE_LOG(LogStageCraft, Display, TEXT("StageCraft.Show.Playback: Grand Master %.2f, blackout %s."), Show->GetGrandMaster(), Show->IsBlackout() ? TEXT("on") : TEXT("off"));
+	}
+
+	/** GM <0..1> | Blackout On|Off. */
+	void MasterRequest(const TArray<FString>& Args, UWorld* World)
+	{
+		AModularPlayerController* Controller = GetController(World);
+		float Value = 0.f;
+		bool bOk = false;
+		if (Controller && Args.Num() >= 2 && Args[0] == TEXT("GM") && LexTryParseString(Value, *Args[1]))
+		{
+			bOk = Controller->RequestSetGrandMaster(Value);
+		}
+		else if (Controller && Args.Num() >= 2 && Args[0] == TEXT("Blackout"))
+		{
+			bOk = Controller->RequestSetBlackout(Args[1] == TEXT("On"));
+		}
+		else
+		{
+			UE_LOG(LogStageCraft, Display, TEXT("Usage: StageCraft.Show.Master GM <0..1> | Blackout On|Off"));
+			return;
+		}
+		UE_LOG(LogStageCraft, Display, TEXT("StageCraft.Show.Master %s: %s."), *FString::Join(Args, TEXT(" ")), bOk ? TEXT("done") : TEXT("refused"));
+	}
+
+	FAutoConsoleCommandWithWorldAndArgs PlaybackCommand(TEXT("StageCraft.Show.Playback"),
+		TEXT("<1..10> Record | Clear | Rename <name> | Level <0..1> | Flash On|Off | Go | Release, or List (as the Playback panel)"),
+		FConsoleCommandWithWorldAndArgsDelegate::CreateStatic(&PlaybackRequest));
+	FAutoConsoleCommandWithWorldAndArgs MasterCommand(TEXT("StageCraft.Show.Master"), TEXT("GM <0..1> | Blackout On|Off (as the Playback panel's masters)"),
+		FConsoleCommandWithWorldAndArgsDelegate::CreateStatic(&MasterRequest));
 	FAutoConsoleCommandWithWorldAndArgs OutputCommand(TEXT("StageCraft.Show.Output"), TEXT("<fixture id>... Logs the fixtures' output values (cells left out)."),
 		FConsoleCommandWithWorldAndArgsDelegate::CreateStatic(&Output));
 	FAutoConsoleCommandWithWorldAndArgs PaletteCommand(TEXT("StageCraft.Show.Palette"),
@@ -451,7 +638,7 @@ namespace StageShowCommands
 		FConsoleCommandWithWorldAndArgsDelegate::CreateStatic(&Programmer));
 	FAutoConsoleCommandWithWorldAndArgs GroupCommand(TEXT("StageCraft.Show.Group"), TEXT("Record [name] | Select <n> | Update <n> | Delete <n> | List (validated, undoable like the Groups panel)"),
 		FConsoleCommandWithWorldAndArgsDelegate::CreateStatic(&Group));
-	FAutoConsoleCommandWithWorldAndArgs CueCommand(TEXT("StageCraft.Show.Cue"), TEXT("Store <n> [fade] [label] | Update <n> <fade> [label] | Delete <n> | Go | Back | GoTo <n> | Source Internal|External | List (validated, undoable like the Cue panel)."),
+	FAutoConsoleCommandWithWorldAndArgs CueCommand(TEXT("StageCraft.Show.Cue"), TEXT("Store|Track|CueOnly <n> [fade] [label] | Update <n> <fade> [label] | Timing <n> delay= out= wait= trigger= curve= int= pos= col= beam= foc= | Block <n> On|Off | Delete <n> | Go | Back | GoTo <n> | Source Internal|External | List (validated, undoable like the Cue panel)."),
 		FConsoleCommandWithWorldAndArgsDelegate::CreateStatic(&Cue));
 	FAutoConsoleCommandWithWorldAndArgs SetCommand(TEXT("StageCraft.Show.Set"), TEXT("<Attribute|Param> <value> Inspector-equivalent edit of the selected item (validated)."),
 		FConsoleCommandWithWorldAndArgsDelegate::CreateStatic(&Set));

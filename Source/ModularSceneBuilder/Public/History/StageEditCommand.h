@@ -86,6 +86,9 @@ public:
 
 	/** Replaces the show's palettes (Docs/ADR/0028-palettes-and-references.md §4). Invalid where there is no show library. */
 	virtual EStageCommandResult SetPalettes(const TArray<struct FStagePalette>& Palettes) { return EStageCommandResult::Invalid; }
+
+	/** Replaces the playbacks' recorded content; their live state carries on (Docs/ADR/0026 §6). Invalid where there is no show control. */
+	virtual EStageCommandResult SetPlaybacks(const TArray<struct FStagePlayback>& Playbacks) { return EStageCommandResult::Invalid; }
 };
 
 /**

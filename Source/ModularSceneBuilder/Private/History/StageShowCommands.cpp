@@ -93,6 +93,23 @@ EStageCommandResult FStageFixtureGroupsCommand::Redo(IStageItemEditor& Editor)
 	return Editor.SetFixtureGroups(After);
 }
 
+FStagePlaybacksCommand::FStagePlaybacksCommand(const FText& InDescription, TArray<FStagePlayback> InBefore, TArray<FStagePlayback> InAfter)
+	: Description(InDescription)
+	, Before(MoveTemp(InBefore))
+	, After(MoveTemp(InAfter))
+{
+}
+
+EStageCommandResult FStagePlaybacksCommand::Undo(IStageItemEditor& Editor)
+{
+	return Editor.SetPlaybacks(Before);
+}
+
+EStageCommandResult FStagePlaybacksCommand::Redo(IStageItemEditor& Editor)
+{
+	return Editor.SetPlaybacks(After);
+}
+
 FStagePalettesCommand::FStagePalettesCommand(const FText& InDescription, TArray<FStagePalette> InBefore, TArray<FStagePalette> InAfter)
 	: Description(InDescription)
 	, Before(MoveTemp(InBefore))

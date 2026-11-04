@@ -46,6 +46,22 @@ private:
 	TArray<FStageFixtureGroup> After;
 };
 
+/** The playbacks' recorded content changed (record, clear, rename). All playbacks before and after (Docs/ADR/0026 §6); live state is not part of it. */
+class MODULARSCENEBUILDER_API FStagePlaybacksCommand final : public IStageEditCommand
+{
+public:
+	FStagePlaybacksCommand(const FText& InDescription, TArray<FStagePlayback> InBefore, TArray<FStagePlayback> InAfter);
+
+	virtual FText GetDescription() const override { return Description; }
+	virtual EStageCommandResult Undo(IStageItemEditor& Editor) override;
+	virtual EStageCommandResult Redo(IStageItemEditor& Editor) override;
+
+private:
+	FText Description;
+	TArray<FStagePlayback> Before;
+	TArray<FStagePlayback> After;
+};
+
 /**
  * The palettes changed (record, update, rename, delete). Whole list before and after, like groups (Docs/ADR/0028-palettes-and-references.md
  * §4). A delete is batched with the cue and programmer steps that turned its references into values, so it undoes as one.
