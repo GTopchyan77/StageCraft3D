@@ -563,5 +563,7 @@ Gevor's choices: automation tests on a harness game instance (not AFunctionalTes
 - [ ] F3a manual verification (Gevor): Cues panel by mouse (time fields, trigger cycle, BLK, detail line, store modes)
 - [x] F3b 10 playbacks (own tracking lists, GO, FLASH, REC, REL), HTP/LTP, Grand Master and Blackout, Playback panel, Lighting Desk layout (ADR 0026, STATE.md #62)
 - [ ] F3b manual verification (Gevor): Playback panel by mouse (fader drag, FLASH hold, REC/REL/CLR, GM, BLACKOUT), Ctrl+Shift+B, Layout > Lighting Desk
-- [ ] F4 effects engine: templates, phase spread, wings and blocks, BPM and tap tempo, Effects panel, measured with Bench.Fixtures (ADR 0027, STATE.md #63)
-- [ ] F5 DMX output (Art-Net / sACN), per-fixture invert / swap pan and tilt, fixture schedule CSV import (ADR 0019 amendment, STATE.md #64)
+- [x] F4a effects engine (ADR 0027, STATE.md #63): waveforms (sine, cosine, square, ramps, triangle, random, circle, figure 8) for intensity, position, colour and beam; phase, spread, wings, blocks, direction and size fan; effect layer of the mix; effects in the programmer (undo, Clear, format v9); Effects panel with quick effects, live preview, TAP; Bench.Fixtures Effects=1|2
+- [ ] F4a manual verification (Gevor): Effects panel by mouse (quick effect on a selection, slider drags as one undo step each, TAP, STOP / STOP ALL), Window > Effects..., Lighting Desk's Effects tab
+- [ ] F4b effects in cues and playbacks (ADR 0027 §5, STATE.md #64): effect entries tracked through cues (Track, Cue Only, Look, Block, stop entries), fade in/out with the cue's In time, playback effects scaled by the fader, format v9
+- [ ] F5 DMX output (Art-Net / sACN), per-fixture invert / swap pan and tilt, fixture schedule CSV import (ADR 0019 amendment, STATE.md #65)

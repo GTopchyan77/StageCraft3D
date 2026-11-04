@@ -18,7 +18,9 @@ void UStageProgrammerSubsystem::Deinitialize()
 {
 	Entries.Reset();
 	Highlighted.Reset();
+	Effects.Reset();
 	OnFixturesChanged.Clear();
+	OnEffectsChanged.Clear();
 	Super::Deinitialize();
 }
 
@@ -53,6 +55,90 @@ void UStageProgrammerSubsystem::BroadcastValues(TConstArrayView<int32> FixtureId
 {
 	OnFixturesChanged.Broadcast(FixtureIds);
 	OnValuesChanged.Broadcast();
+}
+
+void UStageProgrammerSubsystem::BroadcastEffects()
+{
+	OnEffectsChanged.Broadcast();
+	OnValuesChanged.Broadcast();
+}
+
+const FStageEffectEntry* UStageProgrammerSubsystem::FindEffect(const FGuid& EffectId) const
+{
+	return Effects.FindByPredicate([&EffectId](const FStageEffectEntry& Entry) { return Entry.Id == EffectId; });
+}
+
+FGuid UStageProgrammerSubsystem::AddEffect(const FStageEffect& Effect, TConstArrayView<int32> FixtureIds)
+{
+	if (Effects.Num() >= StageEffectRules::MaxEffects)
+	{
+		return FGuid();
+	}
+	TArray<FStageEffectEntry> Candidate;
+	FStageEffectEntry& Entry = Candidate.AddDefaulted_GetRef();
+	Entry.Id = FGuid::NewGuid();
+	Entry.Effect = Effect;
+	Entry.FixtureIds = TArray<int32>(FixtureIds);
+	StageEffectRules::SanitizeEntries(Candidate);
+	if (Candidate.IsEmpty())
+	{
+		return FGuid();
+	}
+	const FGuid Id = Candidate[0].Id;
+	Effects.Add(MoveTemp(Candidate[0]));
+	BroadcastEffects();
+	return Id;
+}
+
+bool UStageProgrammerSubsystem::UpdateEffect(const FGuid& EffectId, const FStageEffect& Effect)
+{
+	FStageEffectEntry* Entry = Effects.FindByPredicate([&EffectId](const FStageEffectEntry& Candidate) { return Candidate.Id == EffectId; });
+	const FStageEffect Sanitized = StageEffectRules::SanitizeEffect(Effect);
+	if (!Entry || Entry->Effect.Equals(Sanitized))
+	{
+		return false;
+	}
+	Entry->Effect = Sanitized;
+	BroadcastEffects();
+	return true;
+}
+
+bool UStageProgrammerSubsystem::RemoveEffect(const FGuid& EffectId)
+{
+	if (Effects.RemoveAll([&EffectId](const FStageEffectEntry& Entry) { return Entry.Id == EffectId; }) == 0)
+	{
+		return false;
+	}
+	BroadcastEffects();
+	return true;
+}
+
+void UStageProgrammerSubsystem::SetEffects(TArray<FStageEffectEntry> InEffects)
+{
+	const int32 Dropped = StageEffectRules::SanitizeEntries(InEffects);
+	UE_CLOG(Dropped > 0, LogStageCraft, Warning, TEXT("Programmer: dropped %d invalid effect entries or fixture IDs."), Dropped);
+	if (AreEffectsEqual(Effects, InEffects))
+	{
+		return;
+	}
+	Effects = MoveTemp(InEffects);
+	BroadcastEffects();
+}
+
+bool UStageProgrammerSubsystem::AreEffectsEqual(TConstArrayView<FStageEffectEntry> A, TConstArrayView<FStageEffectEntry> B)
+{
+	if (A.Num() != B.Num())
+	{
+		return false;
+	}
+	for (int32 Index = 0; Index < A.Num(); ++Index)
+	{
+		if (A[Index].Id != B[Index].Id || A[Index].FixtureIds != B[Index].FixtureIds || !A[Index].Effect.Equals(B[Index].Effect))
+		{
+			return false;
+		}
+	}
+	return true;
 }
 
 const TMap<FGameplayTag, float>* UStageProgrammerSubsystem::FindValues(int32 FixtureId) const

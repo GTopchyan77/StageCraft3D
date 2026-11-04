@@ -8,11 +8,12 @@
 
 /**
  * How a fixture's output is made from its layers (Docs/ADR/0025-programmer-and-output-mix.md §2, Docs/ADR/0026 §6), lowest first:
- *   home look  <  main cue list and playback faders  <  programmer  <  highlight,  then the masters on intensity.
+ *   home look  <  main cue list and playback faders  <  programmer  <  effects  <  highlight,  then the masters on intensity.
  * Between the cue list and the playbacks, intensity (the Intensity kind: dimmer and cell dimmers) is HTP: the highest of the cue
  * list's value and each playback's value times its fader. Every other attribute is LTP: the playback activated last that holds it,
- * else the cue list. Above that each attribute takes the highest layer that holds it, and intensity is finally scaled by
- * IntensityScale (Grand Master x Blackout). UShowControlSubsystem is the only caller that writes the result onto fixtures. Pure,
+ * else the cue list. Above that each attribute takes the highest layer that holds it; a running effect (Docs/ADR/0027 §3) then
+ * adds to that value (position) or replaces it (intensity, colour, beam), and intensity is finally scaled by IntensityScale
+ * (Grand Master x Blackout). UShowControlSubsystem is the only caller that writes the result onto fixtures. Pure,
  * any thread; covered by StageCraft.Show.OutputMix and StageCraft.Show.PlaybackMix.
  */
 namespace StageShowMix
@@ -29,6 +30,18 @@ namespace StageShowMix
 		uint32 Order = 0;
 	};
 
+	/** An effect's output for one attribute (Docs/ADR/0027 §3). */
+	struct FEffectValue
+	{
+		/** Relative: degrees added to the static value. Absolute: the value itself. */
+		float Value = 0.f;
+		bool bRelative = false;
+		/** 0..1: how much of the effect shows (its fade in or out); the static value shows through the rest. */
+		float Weight = 1.f;
+	};
+
+	using FEffectMap = TMap<FGameplayTag, FEffectValue>;
+
 	/** One fixture's layers. Null means the layer holds nothing for this fixture. */
 	struct FFixtureLayers
 	{
@@ -38,6 +51,8 @@ namespace StageShowMix
 		/** Active playback faders that hold values for this fixture. */
 		TArray<FPlaybackLayer, TInlineAllocator<4>> Playbacks;
 		const FAttributeMap* Programmer = nullptr;
+		/** Running effects' output for this fixture, above the programmer and below the highlight. */
+		const FEffectMap* Effects = nullptr;
 		const FAttributeMap* Highlight = nullptr;
 		/** Grand Master x (Blackout ? 0 : 1), applied to intensity last. */
 		float IntensityScale = 1.f;

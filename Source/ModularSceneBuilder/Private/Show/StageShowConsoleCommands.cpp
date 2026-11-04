@@ -622,6 +622,118 @@ namespace StageShowCommands
 		UE_LOG(LogStageCraft, Display, TEXT("StageCraft.Show.Master %s: %s."), *FString::Join(Args, TEXT(" ")), bOk ? TEXT("done") : TEXT("refused"));
 	}
 
+	/** An enum value by its C++ name (case-insensitive); false for an unknown name. */
+	template <typename EnumType>
+	bool ParseEnum(const FString& Name, EnumType& OutValue)
+	{
+		const int64 Value = StaticEnum<EnumType>()->GetValueByNameString(Name, EGetByNameFlags::None);
+		if (Value == INDEX_NONE)
+		{
+			return false;
+		}
+		OutValue = static_cast<EnumType>(Value);
+		return true;
+	}
+
+	/** Applies "key=value" settings to Effect; false (with a log line) on the first one it cannot read. */
+	bool ApplyEffectSettings(TArrayView<const FString> Settings, FStageEffect& Effect)
+	{
+		for (const FString& Setting : Settings)
+		{
+			FString Key;
+			FString Text;
+			float Number = 0.f;
+			const bool bSplit = Setting.Split(TEXT("="), &Key, &Text);
+			const bool bNumber = bSplit && LexTryParseString(Number, *Text);
+			bool bOk = bSplit;
+			if (Key == TEXT("rate") && bNumber) { Effect.RateHz = Number; }
+			else if (Key == TEXT("bpm") && bNumber) { Effect.RateHz = StageEffectRules::BPMToHz(Number); }
+			else if (Key == TEXT("size") && bNumber) { Effect.Size = Number; }
+			else if (Key == TEXT("low") && bNumber) { Effect.Low = Number; }
+			else if (Key == TEXT("high") && bNumber) { Effect.High = Number; }
+			else if (Key == TEXT("phase") && bNumber) { Effect.Phase = Number; }
+			else if (Key == TEXT("spread") && bNumber) { Effect.Spread = Number; }
+			else if (Key == TEXT("duty") && bNumber) { Effect.Duty = Number; }
+			else if (Key == TEXT("wings") && bNumber) { Effect.Wings = FMath::RoundToInt(Number); }
+			else if (Key == TEXT("blocks") && bNumber) { Effect.Blocks = FMath::RoundToInt(Number); }
+			else if (Key == TEXT("wave")) { bOk = ParseEnum(Text, Effect.Waveform); }
+			else if (Key == TEXT("dir")) { bOk = ParseEnum(Text, Effect.Direction); }
+			else if (Key == TEXT("fan")) { bOk = ParseEnum(Text, Effect.SizeFan); }
+			else if (Key == TEXT("axis")) { bOk = ParseEnum(Text, Effect.Axis); }
+			else { bOk = false; }
+			if (!bOk)
+			{
+				UE_LOG(LogStageCraft, Display, TEXT("StageCraft.Show.Effect: cannot read \"%s\"."), *Setting);
+				return false;
+			}
+		}
+		return true;
+	}
+
+	/** Start <quick effect> [key=value...] | Set <n> key=value... | Stop <n>|All | List. */
+	void EffectRequest(const TArray<FString>& Args, UWorld* World)
+	{
+		AModularPlayerController* Controller = GetController(World);
+		const UStageProgrammerSubsystem* Programmer = World ? World->GetSubsystem<UStageProgrammerSubsystem>() : nullptr;
+		const UShowControlSubsystem* Show = World ? World->GetSubsystem<UShowControlSubsystem>() : nullptr;
+		if (!Controller || !Programmer || !Show)
+		{
+			return;
+		}
+		const FString Verb = Args.IsEmpty() ? TEXT("List") : Args[0];
+		int32 Number = 0;
+		const bool bHasNumber = Args.Num() >= 2 && LexTryParseString(Number, *Args[1]) && Programmer->GetEffects().IsValidIndex(Number - 1);
+		const FGuid Target = bHasNumber ? Programmer->GetEffects()[Number - 1].Id : FGuid();
+		bool bOk = true;
+		if (Verb == TEXT("Start") && Args.Num() >= 2)
+		{
+			const TArray<FStageEffect> Quick = StageEffectRules::MakeQuickEffects();
+			const FStageEffect* Found = Quick.FindByPredicate([&Args](const FStageEffect& Effect)
+			{
+				return Effect.Name.ToString().Replace(TEXT(" "), TEXT("")).Equals(Args[1], ESearchCase::IgnoreCase);
+			});
+			if (!Found)
+			{
+				UE_LOG(LogStageCraft, Display, TEXT("StageCraft.Show.Effect: no quick effect \"%s\"."), *Args[1]);
+				return;
+			}
+			FStageEffect Effect = *Found;
+			bOk = ApplyEffectSettings(TArrayView<const FString>(Args).RightChop(2), Effect) && Controller->RequestStartEffect(Effect).IsValid();
+		}
+		else if (Verb == TEXT("Set") && bHasNumber)
+		{
+			FStageEffect Effect = Programmer->GetEffects()[Number - 1].Effect;
+			bOk = ApplyEffectSettings(TArrayView<const FString>(Args).RightChop(2), Effect) && Controller->RequestUpdateEffect(Target, Effect);
+		}
+		else if (Verb == TEXT("Stop") && (bHasNumber || (Args.Num() >= 2 && Args[1] == TEXT("All"))))
+		{
+			bOk = Controller->RequestStopEffect(Target);
+		}
+		else if (Verb != TEXT("List"))
+		{
+			UE_LOG(LogStageCraft, Display, TEXT("Usage: StageCraft.Show.Effect Start <quick effect> [key=value...] | Set <n> key=value... | Stop <n>|All | List. ")
+				TEXT("Keys: rate bpm size low high phase spread duty wings blocks wave dir fan axis."));
+			return;
+		}
+		if (Verb != TEXT("List"))
+		{
+			UE_LOG(LogStageCraft, Display, TEXT("StageCraft.Show.Effect %s: %s."), *FString::Join(Args, TEXT(" ")), bOk ? TEXT("done") : TEXT("refused"));
+		}
+		for (int32 Index = 0; Index < Programmer->GetEffects().Num(); ++Index)
+		{
+			const FStageEffectEntry& Entry = Programmer->GetEffects()[Index];
+			const FStageEffect& Effect = Entry.Effect;
+			UE_LOG(LogStageCraft, Display, TEXT("StageCraft.Show.Effect %d \"%s\": %s %s on %d fixture(s), %.3f Hz (%.1f BPM), size %.1f, low %.2f high %.2f, phase %.0f, spread %.0f, wings %d, blocks %d, %s, clock %.3f."),
+				Index + 1, *Effect.Name.ToString(), *StaticEnum<EStageEffectTarget>()->GetNameStringByValue(static_cast<int64>(Effect.Target)),
+				*StaticEnum<EStageEffectWaveform>()->GetNameStringByValue(static_cast<int64>(Effect.Waveform)), Entry.FixtureIds.Num(), Effect.RateHz,
+				StageEffectRules::HzToBPM(Effect.RateHz), Effect.Size, Effect.Low, Effect.High, Effect.Phase, Effect.Spread, Effect.Wings, Effect.Blocks,
+				*StaticEnum<EStageEffectDirection>()->GetNameStringByValue(static_cast<int64>(Effect.Direction)), Show->GetEffectCycles(Entry.Id));
+		}
+	}
+
+	FAutoConsoleCommandWithWorldAndArgs EffectCommand(TEXT("StageCraft.Show.Effect"),
+		TEXT("Start <quick effect, e.g. Circle, DimmerChase> [key=value...] | Set <n> key=value... | Stop <n>|All | List (validated, undoable like the Effects panel)"),
+		FConsoleCommandWithWorldAndArgsDelegate::CreateStatic(&EffectRequest));
 	FAutoConsoleCommandWithWorldAndArgs PlaybackCommand(TEXT("StageCraft.Show.Playback"),
 		TEXT("<1..10> Record | Clear | Rename <name> | Level <0..1> | Flash On|Off | Go | Release, or List (as the Playback panel)"),
 		FConsoleCommandWithWorldAndArgsDelegate::CreateStatic(&PlaybackRequest));

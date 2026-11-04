@@ -480,6 +480,28 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "StageCraft|Requests")
 	bool RequestDeletePalette(FGuid PaletteId);
 
+	// Effect requests (Docs/ADR/0027-effects-engine.md §4): effects in the programmer, judged by EvaluateCueRequest (Effects), refused
+	// under External DMX. Start, commit and stop are one undo step each; previews (a control being dragged) are not.
+
+	/** Starts Effect on the selected fixtures, in selection order (the order its pattern runs). Returns its id; invalid when refused. */
+	UFUNCTION(BlueprintCallable, Category = "StageCraft|Requests")
+	FGuid RequestStartEffect(const FStageEffect& Effect);
+
+	/**
+	 * Changes a running effect at once without an undo step, while a control is dragged; the first preview remembers the effects as
+	 * they were, so the RequestUpdateEffect that ends the drag records one step from there.
+	 */
+	UFUNCTION(BlueprintCallable, Category = "StageCraft|Requests")
+	bool RequestPreviewEffect(FGuid EffectId, const FStageEffect& Effect);
+
+	/** Changes a running effect's settings (its fixtures and clock stay): one undo step, from before any preview. */
+	UFUNCTION(BlueprintCallable, Category = "StageCraft|Requests")
+	bool RequestUpdateEffect(FGuid EffectId, const FStageEffect& Effect);
+
+	/** Stops one effect, or every effect when EffectId is invalid. One undo step. */
+	UFUNCTION(BlueprintCallable, Category = "StageCraft|Requests")
+	bool RequestStopEffect(FGuid EffectId);
+
 	/**
 	 * Re-patches fixtures as ONE undoable step (the Patch panel's AUTO PATCH, FIX CONFLICTS and PATCH SELECTION, planned by
 	 * UStageDMXPatchSubsystem; Docs/ADR/0019 §2.3). All or nothing: every new universe and address is checked by the GameMode's
@@ -965,6 +987,12 @@ private:
 
 	EStageFanMode FanMode = EStageFanMode::Off;
 	bool bHighlightOn = false;
+
+	/** The programmer's effects before the first RequestPreviewEffect of a drag; RequestUpdateEffect records the step from here. */
+	TOptional<TArray<FStageEffectEntry>> EffectsBeforePreview;
+
+	/** Asks the GameMode about an effect request and returns the programmer, or null (refusal reported). */
+	class UStageProgrammerSubsystem* ApproveEffectRequest();
 
 	/** While RunCapturingRejections runs: where ReportRejection also copies each refusal. */
 	TArray<FStageEconomyResultInfo>* RejectionSink = nullptr;

@@ -6,6 +6,7 @@
 //
 //   StageCraft.Bench.Fixtures 50 200 500 [Seconds=10] [Fade=2] [Settle=3] [Zoom=1] [Item=<catalog asset name>] [GM=1]
 //   (GM below 1 measures fades mixed in full every frame, as with a playback up or the Grand Master down; Docs/ADR/0026 §6.)
+//   (Effects=1 runs a circle and a dimmer sine on every bench fixture through both phases, Effects=2 adds a rainbow; Docs/ADR/0027 §7.)
 //   (Zoom=0 keeps the zoom fixed: a cone change rebuilds the engine's light proxy, so zoom fades are measured apart.)
 //   StageCraft.Bench.Cancel
 //
@@ -37,6 +38,7 @@
 #include "Player/ModularPlayerController.h"
 #include "RenderTimer.h"
 #include "Subsystems/ShowControlSubsystem.h"
+#include "Subsystems/StageProgrammerSubsystem.h"
 #include "Subsystems/StageItemSubsystem.h"
 #include "Subsystems/StageSessionSubsystem.h"
 
@@ -66,6 +68,8 @@ namespace StageFixtureBenchmark
 		 * written straight onto the fixtures, so GM=0.9 measures that path. Put back to what it was afterwards.
 		 */
 		double GrandMaster = 1.0;
+		/** Effects on every bench fixture during both phases (Docs/ADR/0027 §7): 0 none, 1 circle + dimmer sine, 2 also a rainbow. */
+		int32 Effects = 0;
 	};
 
 	/** Per-frame samples of one measured phase, in milliseconds. */
@@ -328,6 +332,40 @@ namespace StageFixtureBenchmark
 			Show->FinishFade();
 			SavedGrandMaster = Show->GetGrandMaster();
 			Show->SetGrandMaster(static_cast<float>(Settings.GrandMaster));
+			StartEffects();
+		}
+
+		/** Effects=1|2: the programmer runs quick effects on every bench fixture; the user's own effects come back in Cleanup. */
+		void StartEffects()
+		{
+			UStageProgrammerSubsystem* Programmer = UWorld::GetSubsystem<UStageProgrammerSubsystem>(World.Get());
+			if (Settings.Effects <= 0 || !Programmer)
+			{
+				return;
+			}
+			SavedEffects = Programmer->GetEffects();
+			TArray<int32> FixtureIds;
+			for (const TWeakObjectPtr<ALightingFixtureActor>& Fixture : Spawned)
+			{
+				if (const ALightingFixtureActor* Live = Fixture.Get())
+				{
+					FixtureIds.Add(Live->GetFixtureId());
+				}
+			}
+			const TArray<FStageEffect> Quick = StageEffectRules::MakeQuickEffects();
+			const auto Start = [&](const TCHAR* Name)
+			{
+				if (const FStageEffect* Effect = Quick.FindByPredicate([Name](const FStageEffect& Candidate) { return Candidate.Name.ToString() == Name; }))
+				{
+					Programmer->AddEffect(*Effect, FixtureIds);
+				}
+			};
+			Start(TEXT("Circle"));
+			Start(TEXT("Dimmer Sine"));
+			if (Settings.Effects >= 2)
+			{
+				Start(TEXT("Rainbow"));
+			}
 		}
 
 		/** "Bench 500 crossfade": a timing region in an Unreal Insights trace (-trace=cpu,frame), so a profile can be cut to one phase. */
@@ -403,6 +441,14 @@ namespace StageFixtureBenchmark
 				{
 					Show->SetGrandMaster(SavedGrandMaster.GetValue());
 					SavedGrandMaster.Reset();
+				}
+				if (SavedEffects.IsSet())
+				{
+					if (UStageProgrammerSubsystem* Programmer = UWorld::GetSubsystem<UStageProgrammerSubsystem>(World.Get()))
+					{
+						Programmer->SetEffects(SavedEffects.GetValue());
+					}
+					SavedEffects.Reset();
 				}
 				const bool bHadActiveCue = SavedActiveCue >= 0.f && SavedCues.ContainsByPredicate([this](const FShowCue& Cue) { return FMath::IsNearlyEqual(Cue.Number, SavedActiveCue); });
 				if (bHadActiveCue)
@@ -487,6 +533,8 @@ namespace StageFixtureBenchmark
 		double StepSeconds = 0.0;
 		/** The Grand Master before the run, put back when it ends. */
 		TOptional<float> SavedGrandMaster;
+		/** The programmer's effects before the run (Effects=1|2), put back when it ends. */
+		TOptional<TArray<FStageEffectEntry>> SavedEffects;
 		int32 CountIndex = 0;
 		FRunResult Current;
 		TArray<FRunResult> Results;
@@ -541,9 +589,13 @@ namespace StageFixtureBenchmark
 				{
 					Out.GrandMaster = Number;
 				}
+				else if (Key.Equals(TEXT("Effects"), ESearchCase::IgnoreCase) && (Value == TEXT("0") || Value == TEXT("1") || Value == TEXT("2")))
+				{
+					Out.Effects = FCString::Atoi(*Value);
+				}
 				else
 				{
-					UE_LOG(LogStageCraft, Display, TEXT("StageCraft.Bench: ignored \"%s\" (Seconds 1..600, Fade 0.1..60, Settle 0..60, Zoom 0|1, Item=<asset name>, GM 0..1)."), *Arg);
+					UE_LOG(LogStageCraft, Display, TEXT("StageCraft.Bench: ignored \"%s\" (Seconds 1..600, Fade 0.1..60, Settle 0..60, Zoom 0|1, Item=<asset name>, GM 0..1, Effects 0|1|2)."), *Arg);
 				}
 				continue;
 			}

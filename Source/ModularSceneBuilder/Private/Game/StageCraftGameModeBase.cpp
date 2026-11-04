@@ -126,6 +126,15 @@ FStageEconomyResultInfo AStageCraftGameModeBase::EvaluateCueRequest_Implementati
 		}
 		return FStageEconomyResultInfo::Ok();
 	}
+
+	case EStageCueRequest::Effects:
+		// Effects are written over the cue look and need a static value to move around; the console owns both under External.
+		if (Show->GetControlSource() == EStageControlSource::External)
+		{
+			return FStageEconomyResultInfo::Fail(EStageEconomyResult::SessionRuleViolation,
+				LOCTEXT("ExternalEffects", "An external console is driving the fixtures. Switch to Internal to run effects."));
+		}
+		return FStageEconomyResultInfo::Ok();
 	}
 
 	// Deny by default: a request kind added without a rule here is refused.

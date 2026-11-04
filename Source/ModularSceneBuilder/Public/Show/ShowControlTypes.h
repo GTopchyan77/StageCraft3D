@@ -4,6 +4,7 @@
 
 #include "CoreMinimal.h"
 #include "GameplayTagContainer.h"
+#include "Show/StageEffectTypes.h"
 #include "ShowControlTypes.generated.h"
 
 /**
@@ -233,6 +234,8 @@ enum class EStageCueRequest : uint8
 	PlaybackLive,
 	/** Grand Master and Blackout. Live, not undoable. */
 	Masters,
+	/** Start, change or stop an effect in the programmer (Docs/ADR/0027). Undoable; refused under External DMX. */
+	Effects,
 };
 
 /**
@@ -276,22 +279,7 @@ enum class EStageControlSource : uint8
 	External	UMETA(DisplayName = "External (DMX In)"),
 };
 
-/**
- * How one edit spreads over several selected fixtures (Docs/ADR/0025-programmer-and-output-mix.md §4), as a console's fan.
- * The change made on the primary fixture is scaled per fixture by StageShowMix::FanFactor, in selection order.
- */
-UENUM(BlueprintType)
-enum class EStageFanMode : uint8
-{
-	/** Every fixture takes the value set. */
-	Off,
-	/** From minus the change on the first fixture to plus the change on the last; the middle keeps its value. */
-	Linear,
-	/** The ends take the full change, the middle none. */
-	V		UMETA(DisplayName = "V"),
-	/** The middle takes the full change, the ends none. */
-	InvertedV	UMETA(DisplayName = "Inverted V"),
-};
+// EStageFanMode lives in Show/StageEffectTypes.h: effects spread their size with it too (Docs/ADR/0027 §2).
 
 /**
  * A saved fixture selection, as on a console's group pool (Docs/ADR/0025 §5). Fixtures are named by FixtureId, in the order they

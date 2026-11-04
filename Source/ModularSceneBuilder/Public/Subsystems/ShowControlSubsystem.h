@@ -6,6 +6,7 @@
 #include "Engine/TimerHandle.h"
 #include "Subsystems/WorldSubsystem.h"
 #include "Show/ShowControlTypes.h"
+#include "Show/StageEffectRunner.h"
 #include "ShowControlSubsystem.generated.h"
 
 DECLARE_DYNAMIC_MULTICAST_DELEGATE(FOnShowFixturesChanged);
@@ -23,7 +24,7 @@ DECLARE_DYNAMIC_MULTICAST_DELEGATE(FOnShowDeskStateChanged);
  *
  * A world subsystem because fixtures are world actors and a show belongs to a venue (level).
  * Fixtures register themselves on BeginPlay, so nothing iterates the world. It ticks only while
- * a fade is running or DMX output is active (IsTickable), never at idle.
+ * a fade, an armed Follow/Wait, a strobe, an effect or DMX output is running (IsTickable), never at idle.
  *
  * Signal flow (Internal):  cue list -> fixture attributes -> visuals, and -> DMX bridge -> wire
  * Signal flow (External):  wire -> DMX bridge -> ReceiveDMXUniverse -> fixture attributes -> visuals
@@ -266,6 +267,16 @@ public:
 	UPROPERTY(BlueprintAssignable, Category = "StageCraft|Show")
 	FOnShowDeskStateChanged OnDeskStateChanged;
 
+	// --- Effects (Docs/ADR/0027-effects-engine.md §3) ---
+	// Effects run from the programmer (UStageProgrammerSubsystem::GetEffects); this subsystem keeps their clocks and writes them
+	// into the mix. Under External DMX they hold still and are not written: the console owns the fixtures.
+
+	/** True while an effect runs and is written (Internal control). */
+	bool AreEffectsLive() const { return EffectRunner.IsRunning() && ControlSource == EStageControlSource::Internal; }
+
+	/** The clock of a running effect in cycles (0 when it is not running), for previews. */
+	double GetEffectCycles(const FGuid& EffectId) const { return EffectRunner.GetCycles(EffectId); }
+
 	// --- DMX ---
 
 	/** Installs (or with nullptr removes) the transport. The previous bridge is stopped. */
@@ -389,6 +400,8 @@ private:
 	void TickStrobes(float DeltaTime);
 	void TickFades(float DeltaTime);
 	void TickAutoGo(float DeltaTime);
+	/** Writes every effect-driven fixture's effect attributes for this frame (the clocks were advanced at the start of Tick). */
+	void TickEffects();
 	void TickDMXOutput(float DeltaTime);
 	void CompleteFade();
 
@@ -425,8 +438,23 @@ private:
 
 	void HandleProgrammerFixturesChanged(TConstArrayView<int32> FixtureIds);
 
+	/** The programmer's effects changed: the runner takes them (clocks kept), and every fixture they drove or drive re-mixes. */
+	void HandleProgrammerEffectsChanged();
+
+	/** Finds the effects' fixtures again after one arrived, left or was renumbered. */
+	void RefreshEffectFixtures();
+
+	/** Which attributes ResolveFixture writes. */
+	enum class EResolveScope : uint8
+	{
+		/** Every attribute of the fixture. */
+		All,
+		/** Only those an effect drives on it: the per-frame effect write. */
+		EffectAttributes,
+	};
+
 	/** Re-mixes one fixture (ResolveFixtures). In External mode only the programmer and highlight are written, so the console's look stays. */
-	void ResolveFixture(class ALightingFixtureActor& Fixture);
+	void ResolveFixture(class ALightingFixtureActor& Fixture, EResolveScope Scope = EResolveScope::All);
 
 	/**
 	 * The values the highlight shows on Fixture: full dimmer, open shutter and the fixture's own full white. Stored in OutValues so
@@ -467,6 +495,10 @@ private:
 	TObjectPtr<class UStageProgrammerSubsystem> Programmer = nullptr;
 
 	FDelegateHandle ProgrammerChangedHandle;
+	FDelegateHandle ProgrammerEffectsHandle;
+
+	/** The running effects' clocks and per-fixture output (Docs/ADR/0027 §3). */
+	FStageEffectRunner EffectRunner;
 
 	/** The palettes references resolve against (Docs/ADR/0028). Resolved in Initialize; same world. */
 	UPROPERTY(Transient)

@@ -133,6 +133,7 @@ FStageSceneDocument UStageSceneComponent::CaptureStage(const FString& Name) cons
 	if (const UStageProgrammerSubsystem* Programmer = UWorld::GetSubsystem<UStageProgrammerSubsystem>(GetWorld()))
 	{
 		Document.Programmer = Programmer->GetEntries();
+		Document.ProgrammerEffects = Programmer->GetEffects();
 	}
 	if (const UStageShowLibrarySubsystem* Library = UWorld::GetSubsystem<UStageShowLibrarySubsystem>(GetWorld()))
 	{
@@ -399,6 +400,7 @@ FStageSceneOperationResult UStageSceneComponent::ApplyDocument(const FStageScene
 	if (Programmer)
 	{
 		Programmer->ReplaceAll({});
+		Programmer->SetEffects({});
 	}
 	// Before the fixtures register and before the active cue and the programmer are restored: all of them resolve palette
 	// references (Docs/ADR/0028 §6).
@@ -458,6 +460,8 @@ FStageSceneOperationResult UStageSceneComponent::ApplyDocument(const FStageScene
 	if (Programmer)
 	{
 		Programmer->ReplaceAll(Document.Programmer);
+		// After the fixtures registered, so the effects find them.
+		Programmer->SetEffects(Document.ProgrammerEffects);
 	}
 	if (Library)
 	{

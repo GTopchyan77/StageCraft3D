@@ -677,6 +677,236 @@ namespace StageSceneStore
 		return Palettes;
 	}
 
+	// --- Version 9: effects (Docs/ADR/0027-effects-engine.md §4) ---
+
+	namespace EffectField
+	{
+		const TCHAR* ProgrammerEffects = TEXT("programmerEffects");
+		const TCHAR* Target = TEXT("target");
+		const TCHAR* Waveform = TEXT("waveform");
+		const TCHAR* Attribute = TEXT("attribute");
+		const TCHAR* Axis = TEXT("axis");
+		const TCHAR* ColorMode = TEXT("colorMode");
+		const TCHAR* ColorA = TEXT("colorA");
+		const TCHAR* ColorB = TEXT("colorB");
+		const TCHAR* Low = TEXT("low");
+		const TCHAR* High = TEXT("high");
+		const TCHAR* Size = TEXT("size");
+		const TCHAR* Rate = TEXT("rate");
+		const TCHAR* Duty = TEXT("duty");
+		const TCHAR* Phase = TEXT("phase");
+		const TCHAR* Spread = TEXT("spread");
+		const TCHAR* Wings = TEXT("wings");
+		const TCHAR* Blocks = TEXT("blocks");
+		const TCHAR* Direction = TEXT("direction");
+		const TCHAR* SizeFan = TEXT("sizeFan");
+	}
+
+	/** Effect settings by name in files, so a reordered enum never changes what a file means. Index = enum value. */
+	const TCHAR* const EffectTargetNames[] = { TEXT("Intensity"), TEXT("Position"), TEXT("Color"), TEXT("Beam") };
+	static_assert(UE_ARRAY_COUNT(EffectTargetNames) == static_cast<int32>(EStageEffectTarget::Beam) + 1, "Name every effect target.");
+	const TCHAR* const EffectWaveformNames[] = { TEXT("Sine"), TEXT("Cosine"), TEXT("Square"), TEXT("RampUp"), TEXT("RampDown"), TEXT("Triangle"),
+		TEXT("Random"), TEXT("Circle"), TEXT("Figure8") };
+	static_assert(UE_ARRAY_COUNT(EffectWaveformNames) == static_cast<int32>(EStageEffectWaveform::Figure8) + 1, "Name every waveform.");
+	const TCHAR* const EffectAxisNames[] = { TEXT("Pan"), TEXT("Tilt"), TEXT("Both") };
+	static_assert(UE_ARRAY_COUNT(EffectAxisNames) == static_cast<int32>(EStageEffectAxis::Both) + 1, "Name every effect axis.");
+	const TCHAR* const EffectColorModeNames[] = { TEXT("Crossfade"), TEXT("Rainbow") };
+	static_assert(UE_ARRAY_COUNT(EffectColorModeNames) == static_cast<int32>(EStageEffectColorMode::Rainbow) + 1, "Name every colour mode.");
+	const TCHAR* const EffectDirectionNames[] = { TEXT("Forward"), TEXT("Reverse"), TEXT("Bounce") };
+	static_assert(UE_ARRAY_COUNT(EffectDirectionNames) == static_cast<int32>(EStageEffectDirection::Bounce) + 1, "Name every direction.");
+	const TCHAR* const FanModeNames[] = { TEXT("Off"), TEXT("Linear"), TEXT("V"), TEXT("InvertedV") };
+	static_assert(UE_ARRAY_COUNT(FanModeNames) == static_cast<int32>(EStageFanMode::InvertedV) + 1, "Name every fan mode.");
+
+	TArray<TSharedPtr<FJsonValue>> WriteColor(const FLinearColor& Color)
+	{
+		TArray<TSharedPtr<FJsonValue>> Channels;
+		Channels.Add(MakeShared<FJsonValueNumber>(Color.R));
+		Channels.Add(MakeShared<FJsonValueNumber>(Color.G));
+		Channels.Add(MakeShared<FJsonValueNumber>(Color.B));
+		return Channels;
+	}
+
+	TArray<TSharedPtr<FJsonValue>> WriteEffects(const TArray<FStageEffectEntry>& Entries)
+	{
+		TArray<TSharedPtr<FJsonValue>> Array;
+		for (const FStageEffectEntry& Entry : Entries)
+		{
+			const FStageEffect& Effect = Entry.Effect;
+			const TSharedRef<FJsonObject> Object = MakeShared<FJsonObject>();
+			Object->SetStringField(Field::Id, Entry.Id.ToString(EGuidFormats::DigitsWithHyphens));
+			Object->SetStringField(Field::Name, Effect.Name.ToString());
+			TArray<TSharedPtr<FJsonValue>> Fixtures;
+			for (const int32 FixtureId : Entry.FixtureIds)
+			{
+				Fixtures.Add(MakeShared<FJsonValueNumber>(FixtureId));
+			}
+			Object->SetArrayField(Field::Fixtures, Fixtures);
+			Object->SetStringField(EffectField::Target, EffectTargetNames[static_cast<int32>(Effect.Target)]);
+			Object->SetStringField(EffectField::Waveform, EffectWaveformNames[static_cast<int32>(Effect.Waveform)]);
+			if (Effect.Attribute.IsValid())
+			{
+				Object->SetStringField(EffectField::Attribute, Effect.Attribute.ToString());
+			}
+			Object->SetStringField(EffectField::Axis, EffectAxisNames[static_cast<int32>(Effect.Axis)]);
+			Object->SetStringField(EffectField::ColorMode, EffectColorModeNames[static_cast<int32>(Effect.ColorMode)]);
+			Object->SetArrayField(EffectField::ColorA, WriteColor(Effect.ColorA));
+			Object->SetArrayField(EffectField::ColorB, WriteColor(Effect.ColorB));
+			Object->SetNumberField(EffectField::Low, Effect.Low);
+			Object->SetNumberField(EffectField::High, Effect.High);
+			Object->SetNumberField(EffectField::Size, Effect.Size);
+			Object->SetNumberField(EffectField::Rate, Effect.RateHz);
+			Object->SetNumberField(EffectField::Duty, Effect.Duty);
+			Object->SetNumberField(EffectField::Phase, Effect.Phase);
+			Object->SetNumberField(EffectField::Spread, Effect.Spread);
+			Object->SetNumberField(EffectField::Wings, Effect.Wings);
+			Object->SetNumberField(EffectField::Blocks, Effect.Blocks);
+			Object->SetStringField(EffectField::Direction, EffectDirectionNames[static_cast<int32>(Effect.Direction)]);
+			Object->SetStringField(EffectField::SizeFan, FanModeNames[static_cast<int32>(Effect.SizeFan)]);
+			Array.Add(MakeShared<FJsonValueObject>(Object));
+		}
+		return Array;
+	}
+
+	/** An enum field by name: absent keeps the default; an unknown name keeps it too and is counted. */
+	template <typename EnumType>
+	void ReadEffectEnum(const FJsonObject& Object, const TCHAR* Name, TConstArrayView<const TCHAR*> Names, EnumType& InOutValue, int32& InOutInvalid)
+	{
+		FString Text;
+		if (!Object.TryGetStringField(Name, Text))
+		{
+			return;
+		}
+		const int32 Index = FindName(Names, Text);
+		if (Index == INDEX_NONE)
+		{
+			++InOutInvalid;
+			return;
+		}
+		InOutValue = static_cast<EnumType>(Index);
+	}
+
+	/** A number field: absent keeps the default; one that is not a finite number keeps it too and is counted (ranges: SanitizeEffect). */
+	template <typename NumberType>
+	void ReadEffectNumber(const FJsonObject& Object, const TCHAR* Name, NumberType& InOutValue, int32& InOutInvalid)
+	{
+		const TSharedPtr<FJsonValue> Value = Object.TryGetField(Name);
+		if (!Value.IsValid())
+		{
+			return;
+		}
+		double Number = 0.0;
+		if (!Value->TryGetNumber(Number) || !FMath::IsFinite(Number) || FMath::Abs(Number) > 1.0e6)
+		{
+			++InOutInvalid;
+			return;
+		}
+		InOutValue = static_cast<NumberType>(Number);
+	}
+
+	void ReadEffectColor(const FJsonObject& Object, const TCHAR* Name, FLinearColor& InOutColor, int32& InOutInvalid)
+	{
+		const TArray<TSharedPtr<FJsonValue>>* Channels = nullptr;
+		if (!Object.TryGetArrayField(Name, Channels))
+		{
+			return;
+		}
+		double Values[3] = { 0.0, 0.0, 0.0 };
+		bool bValid = Channels->Num() == 3;
+		for (int32 Index = 0; bValid && Index < 3; ++Index)
+		{
+			bValid = (*Channels)[Index].IsValid() && (*Channels)[Index]->TryGetNumber(Values[Index]) && FMath::IsFinite(Values[Index]);
+		}
+		if (!bValid)
+		{
+			++InOutInvalid;
+			return;
+		}
+		InOutColor = FLinearColor(static_cast<float>(Values[0]), static_cast<float>(Values[1]), static_cast<float>(Values[2]));
+	}
+
+	/** One effect entry. False drops it (no valid id); bad settings inside fall back to their defaults and are counted. */
+	bool ReadEffect(const FJsonObject& Object, FStageEffectEntry& OutEntry, int32& InOutInvalid)
+	{
+		FString Id;
+		if (!Object.TryGetStringField(Field::Id, Id) || !FGuid::Parse(Id, OutEntry.Id) || !OutEntry.Id.IsValid())
+		{
+			return false;
+		}
+		FStageEffect& Effect = OutEntry.Effect;
+		FString Name;
+		Object.TryGetStringField(Field::Name, Name);
+		Effect.Name = FText::FromString(Name);
+
+		const TArray<TSharedPtr<FJsonValue>>* Fixtures = nullptr;
+		if (Object.TryGetArrayField(Field::Fixtures, Fixtures))
+		{
+			for (const TSharedPtr<FJsonValue>& Fixture : *Fixtures)
+			{
+				double FixtureId = 0.0;
+				if (OutEntry.FixtureIds.Num() >= StageEffectRules::MaxFixturesPerEffect || !Fixture.IsValid() || !Fixture->TryGetNumber(FixtureId)
+					|| !FMath::IsFinite(FixtureId) || FixtureId < 1.0 || FixtureId > static_cast<double>(MAX_int32))
+				{
+					++InOutInvalid;
+					continue;
+				}
+				OutEntry.FixtureIds.Add(static_cast<int32>(FixtureId));
+			}
+		}
+
+		ReadEffectEnum(Object, EffectField::Target, EffectTargetNames, Effect.Target, InOutInvalid);
+		ReadEffectEnum(Object, EffectField::Waveform, EffectWaveformNames, Effect.Waveform, InOutInvalid);
+		ReadEffectEnum(Object, EffectField::Axis, EffectAxisNames, Effect.Axis, InOutInvalid);
+		ReadEffectEnum(Object, EffectField::ColorMode, EffectColorModeNames, Effect.ColorMode, InOutInvalid);
+		ReadEffectEnum(Object, EffectField::Direction, EffectDirectionNames, Effect.Direction, InOutInvalid);
+		ReadEffectEnum(Object, EffectField::SizeFan, FanModeNames, Effect.SizeFan, InOutInvalid);
+		FString Attribute;
+		if (Object.TryGetStringField(EffectField::Attribute, Attribute))
+		{
+			Effect.Attribute = FGameplayTag::RequestGameplayTag(FName(*Attribute), /*ErrorIfNotFound=*/ false);
+			if (!StageEffectRules::IsBeamAttribute(Effect.Attribute))
+			{
+				++InOutInvalid; // SanitizeEffect gives a Beam effect Zoom instead.
+			}
+		}
+		ReadEffectColor(Object, EffectField::ColorA, Effect.ColorA, InOutInvalid);
+		ReadEffectColor(Object, EffectField::ColorB, Effect.ColorB, InOutInvalid);
+		ReadEffectNumber(Object, EffectField::Low, Effect.Low, InOutInvalid);
+		ReadEffectNumber(Object, EffectField::High, Effect.High, InOutInvalid);
+		ReadEffectNumber(Object, EffectField::Size, Effect.Size, InOutInvalid);
+		ReadEffectNumber(Object, EffectField::Rate, Effect.RateHz, InOutInvalid);
+		ReadEffectNumber(Object, EffectField::Duty, Effect.Duty, InOutInvalid);
+		ReadEffectNumber(Object, EffectField::Phase, Effect.Phase, InOutInvalid);
+		ReadEffectNumber(Object, EffectField::Spread, Effect.Spread, InOutInvalid);
+		ReadEffectNumber(Object, EffectField::Wings, Effect.Wings, InOutInvalid);
+		ReadEffectNumber(Object, EffectField::Blocks, Effect.Blocks, InOutInvalid);
+		return true;
+	}
+
+	/** The effects in Name (a version 9 file), repaired by StageEffectRules (duplicates, bounds, ranges). */
+	TArray<FStageEffectEntry> ReadEffects(const FJsonObject& Owner, const TCHAR* Name, int32& InOutInvalid)
+	{
+		TArray<FStageEffectEntry> Entries;
+		const TArray<TSharedPtr<FJsonValue>>* Array = nullptr;
+		if (!Owner.TryGetArrayField(Name, Array))
+		{
+			return Entries;
+		}
+		for (const TSharedPtr<FJsonValue>& Value : *Array)
+		{
+			const TSharedPtr<FJsonObject>* Object = nullptr;
+			FStageEffectEntry Entry;
+			if (Entries.Num() >= StageEffectRules::MaxEffects || !Value.IsValid() || !Value->TryGetObject(Object) || !Object->IsValid()
+				|| !ReadEffect(**Object, Entry, InOutInvalid))
+			{
+				++InOutInvalid;
+				continue;
+			}
+			Entries.Add(MoveTemp(Entry));
+		}
+		InOutInvalid += StageEffectRules::SanitizeEntries(Entries);
+		return Entries;
+	}
+
 	TSharedRef<FJsonObject> WriteEnvironment(const FStageEnvironmentSettings& Settings)
 	{
 		const TSharedRef<FJsonObject> Object = MakeShared<FJsonObject>();
@@ -1020,6 +1250,7 @@ FString FStageSceneStore::Serialize(const FStageSceneDocument& Document)
 		Programmer.Add(WriteFixtureState(State));
 	}
 	Root->SetArrayField(Field::Programmer, Programmer);
+	Root->SetArrayField(EffectField::ProgrammerEffects, WriteEffects(Document.ProgrammerEffects));
 	Root->SetArrayField(Field::Groups, WriteGroups(Document.Groups));
 	Root->SetArrayField(Field::Palettes, WritePalettes(Document.Palettes));
 	Root->SetArrayField(Field::Playbacks, WritePlaybacks(Document.Playbacks));
@@ -1104,6 +1335,11 @@ EStageSceneResult FStageSceneStore::Parse(const FString& Contents, FStageSceneDo
 				++OutReport.InvalidShowEntries;
 			}
 		}
+	}
+	// Migration 8 -> 9: older stages have no effects running.
+	if (Version >= 9)
+	{
+		OutDocument.ProgrammerEffects = ReadEffects(*Root, EffectField::ProgrammerEffects, OutReport.InvalidShowEntries);
 	}
 	// Migration 7 -> 8: older stages have empty playbacks.
 	if (Version >= 8)

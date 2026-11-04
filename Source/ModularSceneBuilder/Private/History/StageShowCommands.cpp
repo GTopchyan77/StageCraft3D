@@ -126,3 +126,20 @@ EStageCommandResult FStagePalettesCommand::Redo(IStageItemEditor& Editor)
 {
 	return Editor.SetPalettes(After);
 }
+
+FStageProgrammerEffectsCommand::FStageProgrammerEffectsCommand(const FText& InDescription, TArray<FStageEffectEntry> InBefore, TArray<FStageEffectEntry> InAfter)
+	: Description(InDescription)
+	, Before(MoveTemp(InBefore))
+	, After(MoveTemp(InAfter))
+{
+}
+
+EStageCommandResult FStageProgrammerEffectsCommand::Undo(IStageItemEditor& Editor)
+{
+	return Editor.SetProgrammerEffects(Before);
+}
+
+EStageCommandResult FStageProgrammerEffectsCommand::Redo(IStageItemEditor& Editor)
+{
+	return Editor.SetProgrammerEffects(After);
+}

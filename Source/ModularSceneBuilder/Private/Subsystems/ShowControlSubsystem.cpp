@@ -47,6 +47,7 @@ void UShowControlSubsystem::Initialize(FSubsystemCollectionBase& Collection)
 	if (Programmer)
 	{
 		ProgrammerChangedHandle = Programmer->OnFixturesChanged.AddUObject(this, &ThisClass::HandleProgrammerFixturesChanged);
+		ProgrammerEffectsHandle = Programmer->OnEffectsChanged.AddUObject(this, &ThisClass::HandleProgrammerEffectsChanged);
 	}
 	Library = Collection.InitializeDependency<UStageShowLibrarySubsystem>();
 	if (Library)
@@ -67,8 +68,11 @@ void UShowControlSubsystem::Deinitialize()
 	if (Programmer)
 	{
 		Programmer->OnFixturesChanged.Remove(ProgrammerChangedHandle);
+		Programmer->OnEffectsChanged.Remove(ProgrammerEffectsHandle);
 	}
 	ProgrammerChangedHandle.Reset();
+	ProgrammerEffectsHandle.Reset();
+	EffectRunner = FStageEffectRunner();
 	Programmer = nullptr;
 	if (Library)
 	{
@@ -94,7 +98,7 @@ TStatId UShowControlSubsystem::GetStatId() const
 
 bool UShowControlSubsystem::IsTickable() const
 {
-	return !Fades.IsEmpty() || PendingAutoGo.IsSet() || !Strobes.IsEmpty() || IsDMXOutputActive();
+	return !Fades.IsEmpty() || PendingAutoGo.IsSet() || !Strobes.IsEmpty() || AreEffectsLive() || IsDMXOutputActive();
 }
 
 void UShowControlSubsystem::Tick(float DeltaTime)
@@ -104,8 +108,18 @@ void UShowControlSubsystem::Tick(float DeltaTime)
 	const double TickStart = FPlatformTime::Seconds();
 #endif
 
-	// Fades first: a fade may change a fixture's Shutter, which changes its strobe rate this frame.
+	// The effect clocks move first, so a fading fixture an effect also drives is mixed with this frame's effect value. Fades before
+	// strobes: a fade may change a fixture's Shutter, which changes its strobe rate this frame.
+	const bool bEffectsLive = AreEffectsLive();
+	if (bEffectsLive)
+	{
+		EffectRunner.Advance(DeltaTime);
+	}
 	TickFades(DeltaTime);
+	if (bEffectsLive)
+	{
+		TickEffects();
+	}
 	TickAutoGo(DeltaTime);
 	TickStrobes(DeltaTime);
 	TickDMXOutput(DeltaTime);
@@ -203,6 +217,14 @@ void UShowControlSubsystem::RegisterFixture(ALightingFixtureActor* Fixture)
 	{
 		ResolveFixture(*Fixture);
 	}
+	if (EffectRunner.IsRunning())
+	{
+		RefreshEffectFixtures();
+		if (EffectRunner.DrivesFixture(Id))
+		{
+			ResolveFixture(*Fixture);
+		}
+	}
 	MarkShadowBudgetDirty();
 	OnFixturesChanged.Broadcast();
 }
@@ -211,6 +233,10 @@ void UShowControlSubsystem::UnregisterFixture(ALightingFixtureActor* Fixture)
 {
 	if (Fixtures.Remove(Fixture) > 0)
 	{
+		if (EffectRunner.IsRunning())
+		{
+			RefreshEffectFixtures();
+		}
 		Fades.RemoveAll([Fixture](const FAttributeFade& Fade) { return Fade.Fixture == Fixture; });
 		Strobes.RemoveAll([Fixture](const FStrobeState& State) { return State.Fixture == Fixture; });
 		ShadowSwitchTimes.Remove(Fixture);
@@ -865,7 +891,8 @@ void UShowControlSubsystem::TickAutoGo(float DeltaTime)
 
 bool UShowControlSubsystem::IsMainOnlyMix() const
 {
-	if (GetIntensityScale() != 1.f)
+	// An effect sits above the cue in the mix (Docs/ADR/0027 §3), so a fade frame must go through it too.
+	if (GetIntensityScale() != 1.f || AreEffectsLive())
 	{
 		return false;
 	}
@@ -1221,6 +1248,60 @@ void UShowControlSubsystem::HandleProgrammerFixturesChanged(TConstArrayView<int3
 	ResolveFixtures(FixtureIds);
 }
 
+// --- Effects (Docs/ADR/0027-effects-engine.md §3) ---
+
+void UShowControlSubsystem::HandleProgrammerEffectsChanged()
+{
+	if (!Programmer)
+	{
+		return;
+	}
+	// Every fixture an effect drove or now drives re-mixes once in full, so a stopped effect leaves its fixtures on their static look.
+	TSet<int32> Touched;
+	for (const FStageEffectRunner::FDrivenFixture& Driven : EffectRunner.GetDrivenFixtures())
+	{
+		Touched.Add(Driven.FixtureId);
+	}
+	EffectRunner.SetEffects(Programmer->GetEffects(), [this](int32 FixtureId) { return FindFixture(FixtureId); });
+	for (const FStageEffectRunner::FDrivenFixture& Driven : EffectRunner.GetDrivenFixtures())
+	{
+		Touched.Add(Driven.FixtureId);
+	}
+	ResolveFixtures(Touched.Array());
+}
+
+void UShowControlSubsystem::RefreshEffectFixtures()
+{
+	EffectRunner.RefreshFixtures([this](int32 FixtureId) { return FindFixture(FixtureId); });
+}
+
+void UShowControlSubsystem::TickEffects()
+{
+	TArray<ALightingFixtureActor*, TInlineAllocator<4>> Renumbered;
+	for (const FStageEffectRunner::FDrivenFixture& Driven : EffectRunner.GetDrivenFixtures())
+	{
+		ALightingFixtureActor* Fixture = Driven.Fixture.Get();
+		if (!Fixture)
+		{
+			continue;
+		}
+		if (Fixture->GetFixtureId() != Driven.FixtureId)
+		{
+			Renumbered.Add(Fixture); // The effect names the old ID, so the fixture leaves it.
+			continue;
+		}
+		ResolveFixture(*Fixture, EResolveScope::EffectAttributes);
+	}
+	if (!Renumbered.IsEmpty())
+	{
+		RefreshEffectFixtures();
+		for (ALightingFixtureActor* Fixture : Renumbered)
+		{
+			ResolveFixture(*Fixture);
+		}
+	}
+}
+
 void UShowControlSubsystem::ResolveFixtures(TConstArrayView<int32> FixtureIds)
 {
 	for (const int32 FixtureId : FixtureIds)
@@ -1254,7 +1335,7 @@ void UShowControlSubsystem::MakeHighlightValues(const ALightingFixtureActor& Fix
 	}
 }
 
-void UShowControlSubsystem::ResolveFixture(ALightingFixtureActor& Fixture)
+void UShowControlSubsystem::ResolveFixture(ALightingFixtureActor& Fixture, EResolveScope Scope)
 {
 	const int32 Id = Fixture.GetFixtureId();
 	TMap<FGameplayTag, float> HighlightValues;
@@ -1282,9 +1363,21 @@ void UShowControlSubsystem::ResolveFixture(ALightingFixtureActor& Fixture)
 	}
 	// The masters scale intensity last, the programmer and highlight included (under External: what the user holds by hand).
 	Layers.IntensityScale = GetIntensityScale();
+	StageShowMix::FEffectMap EffectValues;
+	if (bInternal && EffectRunner.Evaluate(Fixture, EffectValues))
+	{
+		Layers.Effects = &EffectValues;
+	}
 
 	TArray<FGameplayTag> Attributes;
-	Fixture.GetAttributes().GetKeys(Attributes);
+	if (Scope == EResolveScope::EffectAttributes)
+	{
+		EffectValues.GetKeys(Attributes);
+	}
+	else
+	{
+		Fixture.GetAttributes().GetKeys(Attributes);
+	}
 	TMap<FGameplayTag, float> Mixed;
 	StageShowMix::ResolveFixture(Attributes, Layers, Mixed);
 	// SetAttributes stores and applies only the values that differ from the output.
@@ -1336,11 +1429,12 @@ float UShowControlSubsystem::GetPlaybackValue(const ALightingFixtureActor& Fixtu
 TMap<FGameplayTag, float> UShowControlSubsystem::GetRecordableValues(const ALightingFixtureActor& Fixture) const
 {
 	const int32 Id = Fixture.GetFixtureId();
-	if ((!Programmer || !Programmer->IsHighlighted(Id)) && GetIntensityScale() == 1.f)
+	if ((!Programmer || !Programmer->IsHighlighted(Id)) && GetIntensityScale() == 1.f && !(AreEffectsLive() && EffectRunner.DrivesFixture(Id)))
 	{
 		return Fixture.GetAttributes();
 	}
-	// Highlighted, or the masters are down: the output is not the look, so the look underneath is mixed again without them.
+	// Highlighted, the masters are down or an effect moves it: the output is not the look, so the look underneath is mixed again
+	// without them (an effect is recorded as an effect, never as the value it happened to show).
 	TMap<FGameplayTag, float> Values = Fixture.GetAttributes();
 	TMap<FGameplayTag, float> ProgrammerScratch;
 	StageShowMix::FFixtureLayers Layers;

@@ -350,8 +350,10 @@ bool FStageHistoryCuesTest::RunTest(const FString& Parameters)
 	Show->SetControlSource(EStageControlSource::External);
 	TestFalse(TEXT("Rules: playback under external DMX is refused"), Allowed(EStageCueRequest::Play, 0.f));
 	TestTrue(TEXT("Rules: storing under external DMX is allowed"), Allowed(EStageCueRequest::Store, 3.f));
+	TestFalse(TEXT("Rules: effects under external DMX are refused (Docs/ADR/0027)"), Allowed(EStageCueRequest::Effects, 0.f));
 	TestFalse(TEXT("Go To under external DMX"), Show->GoToCue(1.f));
 	Show->SetControlSource(EStageControlSource::Internal);
+	TestTrue(TEXT("Rules: effects under internal control are allowed"), Allowed(EStageCueRequest::Effects, 0.f));
 
 	// ReplaceCues (undo) keeps playback; SetCues (loading) resets it and repairs the list.
 	const TArray<FShowCue> Snapshot = Show->GetCues();

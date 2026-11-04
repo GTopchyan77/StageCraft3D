@@ -80,3 +80,22 @@ private:
 	TArray<FStagePalette> Before;
 	TArray<FStagePalette> After;
 };
+
+/**
+ * The programmer's effects changed (start, edit, stop, Clear). Every effect before and after (Docs/ADR/0027-effects-engine.md §4); a
+ * Clear is batched with the programmer's values so it undoes as one. Covered by StageCraft.Show.Effects.
+ */
+class MODULARSCENEBUILDER_API FStageProgrammerEffectsCommand final : public IStageEditCommand
+{
+public:
+	FStageProgrammerEffectsCommand(const FText& InDescription, TArray<FStageEffectEntry> InBefore, TArray<FStageEffectEntry> InAfter);
+
+	virtual FText GetDescription() const override { return Description; }
+	virtual EStageCommandResult Undo(IStageItemEditor& Editor) override;
+	virtual EStageCommandResult Redo(IStageItemEditor& Editor) override;
+
+private:
+	FText Description;
+	TArray<FStageEffectEntry> Before;
+	TArray<FStageEffectEntry> After;
+};

@@ -58,8 +58,9 @@ public:
 	 *  - 8: cues carry their timing ("delay", "out", "times", "trigger", "wait", "curve") and "block" (Docs/ADR/0026 §5). Older
 	 *    cues were full snapshots and load as blocked cues. Adds "playbacks" (each used playback's index, name and cues); older
 	 *    files have empty playbacks.
+	 *  - 9: adds "programmerEffects", the effects running in the programmer (Docs/ADR/0027 §4). Older files load with none.
 	 */
-	static constexpr int32 FormatVersion = 8;
+	static constexpr int32 FormatVersion = 9;
 	static constexpr int32 MaxGroups = StageFixtureGroupRules::MaxGroups;
 	/** The oldest version Parse still migrates. Older or newer files are refused as VersionMismatch and left untouched. */
 	static constexpr int32 MinReadableVersion = 1;

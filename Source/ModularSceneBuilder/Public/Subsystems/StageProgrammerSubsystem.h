@@ -9,7 +9,9 @@
 
 /** Fixtures whose programmer values or highlight changed; UShowControlSubsystem re-mixes exactly these. */
 DECLARE_MULTICAST_DELEGATE_OneParam(FOnStageProgrammerFixturesChanged, TConstArrayView<int32> /*FixtureIds*/);
-/** The programmer's values changed (not the highlight): the stage has unsaved changes, panels refresh their counts. */
+/** The programmer's running effects changed (Docs/ADR/0027 §3); UShowControlSubsystem restarts its effect runner from them. */
+DECLARE_MULTICAST_DELEGATE(FOnStageProgrammerEffectsChanged);
+/** The programmer's values or effects changed (not the highlight): the stage has unsaved changes, panels refresh their counts. */
 DECLARE_DYNAMIC_MULTICAST_DELEGATE(FOnStageProgrammerValuesChanged);
 
 /**
@@ -73,6 +75,35 @@ public:
 	UFUNCTION(BlueprintPure, Category = "StageCraft|Programmer")
 	bool IsEmpty() const { return Entries.IsEmpty(); }
 
+	// --- Effects (Docs/ADR/0027-effects-engine.md §3) ---
+
+	/** The running effects, in the order they were started (a later one wins an attribute both drive). */
+	const TArray<FStageEffectEntry>& GetEffects() const { return Effects; }
+
+	const FStageEffectEntry* FindEffect(const FGuid& EffectId) const;
+
+	bool HasEffects() const { return !Effects.IsEmpty(); }
+
+	/**
+	 * Starts Effect (sanitized) on FixtureIds in that order. Returns the new entry's id, or an invalid id (nothing added) when no
+	 * fixture ID is valid or StageEffectRules::MaxEffects are running.
+	 */
+	FGuid AddEffect(const FStageEffect& Effect, TConstArrayView<int32> FixtureIds);
+
+	/** Changes a running effect's settings (sanitized); its fixtures and clock stay. False when unknown or nothing changed. */
+	bool UpdateEffect(const FGuid& EffectId, const FStageEffect& Effect);
+
+	/** Stops one effect. False when unknown. */
+	bool RemoveEffect(const FGuid& EffectId);
+
+	/** Replaces every effect (undo, redo, scene load, Clear); sanitized by StageEffectRules::SanitizeEntries. */
+	void SetEffects(TArray<FStageEffectEntry> InEffects);
+
+	/** True when A and B hold the same effects in the same order. */
+	static bool AreEffectsEqual(TConstArrayView<FStageEffectEntry> A, TConstArrayView<FStageEffectEntry> B);
+
+	FOnStageProgrammerEffectsChanged OnEffectsChanged;
+
 	// --- Highlight ---
 
 	/** The fixtures shown at full, open white on top of everything (never stored, never saved). Empty turns the highlight off. */
@@ -102,8 +133,10 @@ private:
 	void MergeValues(int32 FixtureId, const TMap<FGameplayTag, float>& InValues, const FGuid& PaletteId);
 
 	void BroadcastValues(TConstArrayView<int32> FixtureIds);
+	void BroadcastEffects();
 
 	/** Per fixture ID: its values and palette references (FixtureId in the entry matches the key). */
 	TMap<int32, FShowCueFixtureState> Entries;
 	TSet<int32> Highlighted;
+	TArray<FStageEffectEntry> Effects;
 };

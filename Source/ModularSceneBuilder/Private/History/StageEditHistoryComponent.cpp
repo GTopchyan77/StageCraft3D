@@ -173,6 +173,18 @@ namespace StageEditHistory
 			return EStageCommandResult::Succeeded;
 		}
 
+		virtual EStageCommandResult SetProgrammerEffects(const TArray<FStageEffectEntry>& InEffects) override
+		{
+			UStageProgrammerSubsystem* Programmer = UWorld::GetSubsystem<UStageProgrammerSubsystem>(Session.GetWorld());
+			if (!Programmer)
+			{
+				return EStageCommandResult::Invalid;
+			}
+			// The show control restarts its effects (OnEffectsChanged); the session marks itself dirty through OnValuesChanged.
+			Programmer->SetEffects(InEffects);
+			return EStageCommandResult::Succeeded;
+		}
+
 		virtual EStageCommandResult SetPlaybacks(const TArray<FStagePlayback>& InPlaybacks) override
 		{
 			UShowControlSubsystem* Show = UWorld::GetSubsystem<UShowControlSubsystem>(Session.GetWorld());

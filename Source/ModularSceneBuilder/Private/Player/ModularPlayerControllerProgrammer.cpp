@@ -142,18 +142,32 @@ FStageEconomyResultInfo AModularPlayerController::RequestProgrammerChange(TConst
 bool AModularPlayerController::RequestClearProgrammer()
 {
 	UStageProgrammerSubsystem* Programmer = UWorld::GetSubsystem<UStageProgrammerSubsystem>(GetWorld());
-	if (!Programmer || Programmer->IsEmpty())
+	if (!Programmer || (Programmer->IsEmpty() && !Programmer->HasEffects()))
 	{
 		return false;
 	}
+	// Clear empties the whole programmer, values and effects, as one undo step (Docs/ADR/0027 §4).
+	const FText Description = LOCTEXT("ClearProgrammer", "Clear Programmer");
 	TArray<FShowCueFixtureState> Before = Programmer->GetEntries();
 	TArray<int32> FixtureIds;
 	for (const FShowCueFixtureState& Entry : Before)
 	{
 		FixtureIds.Add(Entry.FixtureId);
 	}
+	TArray<FStageEffectEntry> EffectsBefore = Programmer->GetEffects();
 	Programmer->ClearAll();
-	EditHistory->RecordProgrammerChange(LOCTEXT("ClearProgrammer", "Clear Programmer"), FixtureIds, Before);
+	Programmer->SetEffects({});
+	EffectsBeforePreview.Reset();
+	TArray<TSharedRef<IStageEditCommand>> Commands;
+	if (!Before.IsEmpty())
+	{
+		Commands.Add(MakeShared<FStageProgrammerCommand>(Description, MoveTemp(FixtureIds), MoveTemp(Before), TArray<FShowCueFixtureState>()));
+	}
+	if (!EffectsBefore.IsEmpty())
+	{
+		Commands.Add(MakeShared<FStageProgrammerEffectsCommand>(Description, MoveTemp(EffectsBefore), TArray<FStageEffectEntry>()));
+	}
+	EditHistory->RecordAsOneStep(MoveTemp(Commands), Description);
 	return true;
 }
 
@@ -410,6 +424,118 @@ bool AModularPlayerController::RequestSetBlackout(bool bOn)
 		Show->SetBlackout(bOn);
 	}
 	return Show != nullptr;
+}
+
+// --- Effects (Docs/ADR/0027-effects-engine.md §4) ---
+
+UStageProgrammerSubsystem* AModularPlayerController::ApproveEffectRequest()
+{
+	UStageProgrammerSubsystem* Programmer = UWorld::GetSubsystem<UStageProgrammerSubsystem>(GetWorld());
+	if (!Programmer || !ApproveCueRequest(EStageCueRequest::Effects, 0.f))
+	{
+		return nullptr;
+	}
+	return Programmer;
+}
+
+FGuid AModularPlayerController::RequestStartEffect(const FStageEffect& Effect)
+{
+	UStageProgrammerSubsystem* Programmer = ApproveEffectRequest();
+	if (!Programmer)
+	{
+		return FGuid();
+	}
+	TArray<int32> FixtureIds;
+	for (const ALightingFixtureActor* Fixture : GetSelectedFixtures())
+	{
+		FixtureIds.AddUnique(Fixture->GetFixtureId());
+	}
+	if (FixtureIds.IsEmpty())
+	{
+		ReportRejection(FStageEconomyResultInfo::Fail(EStageEconomyResult::InvalidRequest,
+			LOCTEXT("EffectNeedsFixtures", "Select the fixtures the effect should run on first.")));
+		return FGuid();
+	}
+	TArray<FStageEffectEntry> Before = Programmer->GetEffects();
+	const FGuid Id = Programmer->AddEffect(Effect, FixtureIds);
+	if (!Id.IsValid())
+	{
+		ReportRejection(FStageEconomyResultInfo::Fail(EStageEconomyResult::InvalidRequest, FText::Format(
+			LOCTEXT("EffectsFull", "The programmer runs at most {0} effects. Stop one first."), FText::AsNumber(StageEffectRules::MaxEffects))));
+		return FGuid();
+	}
+	EffectsBeforePreview.Reset();
+	const FStageEffectEntry* Started = Programmer->FindEffect(Id);
+	const FText Description = FText::Format(LOCTEXT("StartEffect", "Start Effect: {0}"), Started ? Started->Effect.Name : FText::GetEmpty());
+	TArray<TSharedRef<IStageEditCommand>> Commands;
+	Commands.Add(MakeShared<FStageProgrammerEffectsCommand>(Description, MoveTemp(Before), Programmer->GetEffects()));
+	EditHistory->RecordAsOneStep(MoveTemp(Commands), Description);
+	return Id;
+}
+
+bool AModularPlayerController::RequestPreviewEffect(FGuid EffectId, const FStageEffect& Effect)
+{
+	UStageProgrammerSubsystem* Programmer = ApproveEffectRequest();
+	if (!Programmer || !Programmer->FindEffect(EffectId))
+	{
+		return false;
+	}
+	if (!EffectsBeforePreview.IsSet())
+	{
+		EffectsBeforePreview = Programmer->GetEffects();
+	}
+	Programmer->UpdateEffect(EffectId, Effect);
+	return true;
+}
+
+bool AModularPlayerController::RequestUpdateEffect(FGuid EffectId, const FStageEffect& Effect)
+{
+	UStageProgrammerSubsystem* Programmer = ApproveEffectRequest();
+	if (!Programmer || !Programmer->FindEffect(EffectId))
+	{
+		EffectsBeforePreview.Reset();
+		return false;
+	}
+	TArray<FStageEffectEntry> Before = EffectsBeforePreview.IsSet() ? MoveTemp(EffectsBeforePreview.GetValue()) : Programmer->GetEffects();
+	EffectsBeforePreview.Reset();
+	Programmer->UpdateEffect(EffectId, Effect);
+	if (UStageProgrammerSubsystem::AreEffectsEqual(Before, Programmer->GetEffects()))
+	{
+		return true; // Dragged back to where it was: nothing to undo.
+	}
+	const FStageEffectEntry* Changed = Programmer->FindEffect(EffectId);
+	const FText Description = FText::Format(LOCTEXT("EditEffect", "Edit Effect: {0}"), Changed ? Changed->Effect.Name : FText::GetEmpty());
+	TArray<TSharedRef<IStageEditCommand>> Commands;
+	Commands.Add(MakeShared<FStageProgrammerEffectsCommand>(Description, MoveTemp(Before), Programmer->GetEffects()));
+	EditHistory->RecordAsOneStep(MoveTemp(Commands), Description);
+	return true;
+}
+
+bool AModularPlayerController::RequestStopEffect(FGuid EffectId)
+{
+	UStageProgrammerSubsystem* Programmer = ApproveEffectRequest();
+	if (!Programmer)
+	{
+		return false;
+	}
+	EffectsBeforePreview.Reset();
+	TArray<FStageEffectEntry> Before = Programmer->GetEffects();
+	const FStageEffectEntry* Stopped = EffectId.IsValid() ? Programmer->FindEffect(EffectId) : nullptr;
+	const FText Description = Stopped ? FText::Format(LOCTEXT("StopEffect", "Stop Effect: {0}"), Stopped->Effect.Name)
+		: LOCTEXT("StopEffects", "Stop All Effects");
+	const bool bChanged = EffectId.IsValid() ? Programmer->RemoveEffect(EffectId) : !Before.IsEmpty();
+	if (!bChanged)
+	{
+		return false;
+	}
+	if (!EffectId.IsValid())
+	{
+		Programmer->SetEffects({});
+	}
+	TArray<TSharedRef<IStageEditCommand>> Commands;
+	Commands.Add(MakeShared<FStageProgrammerEffectsCommand>(Description, MoveTemp(Before), Programmer->GetEffects()));
+	EditHistory->RecordAsOneStep(MoveTemp(Commands), Description);
+	return true;
 }
 
 // --- Palettes (Docs/ADR/0028-palettes-and-references.md §4) ---

@@ -217,6 +217,9 @@ void SStageWorkspaceMenuBar::FillReportSection(FMenuBuilder& MenuBuilder, const 
 	MenuBuilder.AddMenuEntry(LOCTEXT("ShowPlayback", "Playbacks && Masters..."),
 		LOCTEXT("ShowPlaybackTip", "Show the Playback panel: ten playback faders with Go, Flash, Record and Release, the Grand Master and Blackout."), FSlateIcon(),
 		FUIAction(FExecuteAction::CreateSP(this, &SStageWorkspaceMenuBar::ShowPanel, FGameplayTag(StageCraftTags::Panel_Playback))));
+	MenuBuilder.AddMenuEntry(LOCTEXT("ShowEffects", "Effects..."),
+		LOCTEXT("ShowEffectsTip", "Show the Effects panel: circles, chases, waves and rainbows on the selected fixtures, with rate, size, phase and spread."), FSlateIcon(),
+		FUIAction(FExecuteAction::CreateSP(this, &SStageWorkspaceMenuBar::ShowPanel, FGameplayTag(StageCraftTags::Panel_Effects))));
 	MenuBuilder.AddMenuEntry(LOCTEXT("OpenReportsFolder", "Open Reports Folder"), FText::FromString(Report->GetOutputDirectory()), FSlateIcon(),
 		FUIAction(FExecuteAction::CreateLambda([Directory = Report->GetOutputDirectory()]() { OpenFolder(Directory); })));
 	MenuBuilder.EndSection();

@@ -5899,7 +5899,7 @@ F3b (playbacks, HTP/LTP, Grand Master and Blackout) follows as #62.
   - CSV: `Saved/StageCraft/Benchmarks/FixtureBench_20261103-213913.csv`.
 - **Not verified by hand:** the panel by mouse (time fields, the trigger cycle, BLK, the detail line, the store-mode segments).
 
-**Commit:** uncommitted (working tree), to be committed together with #62.
+**Commit:** `3902468` (together with #62).
 
 **Known issues / follow-ups**
 - **The record row's cue number** is not refreshed after a store made outside the panel or a scene load, so it can offer UPDATE on an existing cue. This behaviour existed before (it said RE-RECORD).
@@ -6027,7 +6027,7 @@ This is the second half of Gevor's Phase F3 brief: the main stack plus 10 playba
   - CSVs: `Saved/StageCraft/Benchmarks/FixtureBench_20261103-220506.csv` (GM 1), `FixtureBench_20261103-220700.csv` (GM 0.9).
 - **Not verified by hand:** the Playback panel by mouse (fader drag, FLASH hold and release, REC/REL/CLR, GM, BLACKOUT), Ctrl+Shift+B, and the Lighting Desk from the Layout menu.
 
-**Commit:** uncommitted (working tree), together with #61.
+**Commit:** `3902468` (together with #61).
 
 **Known issues / follow-ups**
 - **Fixtures without a dimmer channel are not mastered:** their intensity is in their colour levels. A virtual dimmer is a follow-up.
@@ -6035,3 +6035,118 @@ This is the second half of Gevor's Phase F3 brief: the main stack plus 10 playba
 - **No playback renaming in the panel** (the console command and the API exist).
 - **Under External DMX**, a master change shows on the console's next frame.
 - **Next:** F4 effects (#63), F5 DMX output (#64).
+
+---
+
+## #63 — Phase F4a: effects engine (waveforms, spread, wings, blocks), effects in the programmer, Effects panel (2026-11-04)
+
+**What & why**
+
+This is the first half of Gevor's Phase F4 brief ("Effects Engine & Motion Patterns"): procedural waveforms for intensity, position, colour and beam; spread, phase offset and fan across fixtures; an Effects panel with speed (Hz/BPM), size, phase, direction and chase/strobe patterns; FX state in the programmer. It closes most of gap G8. Storing effects in cues and playbacks (with tracking) is F4b (#64), because it touches the tracking engine and the cue format and is tested on its own. Design: `Docs/ADR/0027-effects-engine.md`.
+
+**The effect** (`FStageEffect`, `Public/Show/StageEffectTypes.h`):
+- **Target:** Intensity (every intensity attribute: dimmer, cell dimmers), Position (pan/tilt), Color, Beam (one beam or focus attribute).
+- **Waveform:** Sine, Cosine, Square (with duty: chases and strobes), Ramp Up, Ramp Down, Triangle, Random, Circle, Figure 8.
+- **Levels:** Intensity and Beam swing between Low and High as fractions of **each fixture's own range**; Position swings Size degrees either side of the static position; Color fades A→B or runs the rainbow, matched by each fixture (`MatchColor`: emitters, CMY, nearest wheel slot).
+- **Spread:** Phase (start), Spread (degrees across the fixtures: 360 = a chase), Wings (mirrored parts), Blocks (fixtures moving together), Direction (Forward, Reverse, Bounce without a jump), and the existing fan modes on the size.
+- **Rate** in Hz, shown as BPM; TAP in the panel.
+- `EStageFanMode` moved into the new header (ShowControlTypes.h includes it), so effects reuse it.
+
+**The maths** (`StageEffects`, pure, no world): pattern step after wings and blocks, offset, wave position with direction, waveform sample. Random is seeded by the fixture's step and the cycle, so it is the same on every run (Rules §54), shared within a block and symmetrical across wings.
+
+**The mix** (`StageShowMix`): a new effect layer **above the programmer and below the highlight**; masters still last.
+- Position effects are **relative** (added to the static value); intensity, colour and beam are **absolute** (replace it). Each value has a weight (fade in/out; always 1 in F4a, used by F4b).
+- The highlight beats an effect; the Grand Master and Blackout scale an intensity effect.
+
+**The runner** (`FStageEffectRunner`, owned by `UShowControlSubsystem`, which stays the only writer):
+- Keeps each effect's clock in **cycles**, advanced by its own rate, so a rate change never jumps the pattern and an edit keeps the clock.
+- Finds the driven fixtures on change and on fixture register/unregister, never per frame; per frame only the driven fixtures' driven attributes are mixed (`ResolveFixture` scope `EffectAttributes`).
+- The subsystem ticks while an effect runs under Internal control (`AreEffectsLive`); with an effect live, fades go through the full mix (`IsMainOnlyMix` false). With none running nothing changes.
+- A renumbered fixture leaves its effects; a destroyed one drops out. Under External DMX effects hold still and are not written.
+- Recording (Look store, palette record) takes the static look, never an effect's momentary value.
+
+**The programmer** (`UStageProgrammerSubsystem`) holds effect entries (`FStageEffectEntry {Id, Effect, FixtureIds}`): `AddEffect`, `UpdateEffect`, `RemoveEffect`, `SetEffects`, `OnEffectsChanged` (plus `OnValuesChanged` for dirty and panels). **Clear** removes values and effects as one undo step.
+
+**Requests** (`AModularPlayerController`, judged by `EvaluateCueRequest` with the new `EStageCueRequest::Effects`, refused under External):
+- `RequestStartEffect` (the selection, in selection order), `RequestUpdateEffect`, `RequestStopEffect` (invalid id = all): one undo step each (`FStageProgrammerEffectsCommand`, `IStageItemEditor::SetProgrammerEffects`).
+- `RequestPreviewEffect`: live while a slider is dragged, no step; the release commits one step from before the first preview.
+- Validation: `StageEffectRules::SanitizeEffect` / `SanitizeEntries` (finite, rate ≤ 25 Hz, size ≤ 270°, phase/spread ±3600°, wings 1–16, blocks 1–512, levels and colours 0–1, real beam attributes, ≤ 64 effects of ≤ 4096 unique positive fixture ids) on every entry: request, undo step, file.
+
+**Scene format v9:** `"programmerEffects"` with every setting, enums by name. An entry without a valid id is dropped; an unknown name or bad number falls back to that setting's default; each counted in `InvalidShowEntries`. v1–v8 load with no effects; v9 files are refused by builds before #63.
+
+**UI:**
+- **Effects panel** (`StageCraft.Panel.Effects`, Window > Effects..., floating 900×460, a tab of the Lighting Desk layout; `DA_Panel_Effects` from `Scripts/Content/create_effects_content.py`):
+  - 12 quick effects (Circle, Figure 8, Pan Sweep, Tilt Wave, Dimmer Sine, Dimmer Chase, Strobe, Random Sparkle, Rainbow, Colour Fade, Iris Pulse, Zoom Breathe) start on the selection in one click;
+  - the editor of the chosen effect: WAVE, DIR, FAN, AXIS, COLOUR, A, B, BEAM choices (only those that apply), RATE (Hz · BPM, with TAP), SIZE, LOW, HIGH, PHASE, SPREAD, DUTY, WINGS, BLOCKS;
+  - a live preview (`UStageEffectPreview` / `SStageEffectPreview`): one cycle of the wave and a dot per fixture (circle and figure 8 as their pan/tilt path, kept round);
+  - the running list with STOP and STOP ALL.
+- **Dev command** (compiled out of Shipping): `StageCraft.Show.Effect Start <quick effect> [key=value...] | Set <n> key=value... | Stop <n>|All | List`.
+- **Bench:** `StageCraft.Bench.Fixtures ... Effects=0|1|2` and `RunFixtureBench.ps1 -Effects` (1: circle + dimmer sine on every bench fixture; 2: also a rainbow).
+
+**Files changed**
+- **New:**
+  - `Docs/ADR/0027-effects-engine.md`
+  - `Public/Show/StageEffectTypes.h`, `Private/Show/StageEffectTypes.cpp`
+  - `Public/Show/StageEffects.h`, `Private/Show/StageEffects.cpp`
+  - `Public/Show/StageEffectRunner.h`, `Private/Show/StageEffectRunner.cpp`
+  - `Public/UI/StageEffectsPanel.h`, `Private/UI/StageEffectsPanel.cpp`
+  - `Public/UI/StageEffectPreview.h`, `Private/UI/StageEffectPreview.cpp`, `Private/UI/SStageEffectPreview.h`, `Private/UI/SStageEffectPreview.cpp`
+  - `Private/Show/Tests/StageEffectTests.cpp`
+  - `Scripts/Content/create_effects_content.py`, `Content/StageCraft/UI/Panels/DA_Panel_Effects.uasset`
+- **Modified:**
+  - Show: `Public/Show/ShowControlTypes.h` (`EStageFanMode` moved out, `EStageCueRequest::Effects`), `Public/Show/StageShowMix.h`, `Private/Show/StageShowMix.cpp`.
+  - Subsystems: `Public/Subsystems/ShowControlSubsystem.h`, `Private/Subsystems/ShowControlSubsystem.cpp`, `Public/Subsystems/StageProgrammerSubsystem.h`, `Private/Subsystems/StageProgrammerSubsystem.cpp`.
+  - History: `Public/History/StageEditCommand.h`, `Public/History/StageShowCommands.h`, `Private/History/StageShowCommands.cpp`, `Private/History/StageEditHistoryComponent.cpp`.
+  - Controller and rules: `Public/Player/ModularPlayerController.h`, `Private/Player/ModularPlayerControllerProgrammer.cpp`, `Private/Game/StageCraftGameModeBase.cpp`.
+  - Scenes: `Public/Scene/StageSceneTypes.h`, `Private/Scene/StageSceneStore.h`, `Private/Scene/StageSceneStore.cpp`, `Private/Scene/StageSceneComponent.cpp`.
+  - Workspace: `Public/Workspace/StageWorkspaceTypes.h`, `Private/Workspace/StageWorkspaceTypes.cpp`, `Private/Workspace/StageWorkspaceShell.cpp`, `Private/Workspace/SStageWorkspaceMenuBar.cpp`.
+  - Console and bench: `Private/Show/StageShowConsoleCommands.cpp`, `Private/Diagnostics/StageFixtureBenchmark.cpp`, `Scripts/Bench/RunFixtureBench.ps1`.
+  - Tests: `Private/History/Tests/StageHistoryWorldTests.cpp` (the Effects rule under External and Internal).
+  - Records: `Docs/CURRENT_SYSTEMS.md`, `tasks/todo.md`, `STATE.md` (also the #61/#62 commit hash `3902468`).
+
+**Verification**
+- **Builds:** Editor, Game and Shipping built with 0 warnings and 0 errors (final Game/Shipping build after the last panel fix).
+- **Shipping UTF-16 scan:**
+  - absent: `StageCraft.Show.Effect`, `StageCraft.Show.Playback`, `StageCraft.Bench.Fixtures`, the Effect command's usage text;
+  - present: "STOP ALL", "Tap in time: the rate follows your beat".
+- **Automation:** `RunAutomation.ps1 -ExpectedCount 179` gives 179/179 with an offscreen renderer and 179/179 with `-NullRHI`. User data unchanged (70 files).
+  - **New tests:**
+    - `StageCraft.Show.EffectWaves` (pure): every waveform at its key points, wrap and negative positions; Random holds within a cycle, repeats, stays in range, changes per cycle and per fixture step; Circle stays on the unit circle; Figure 8's tilt at twice the rate.
+    - `StageCraft.Show.EffectSpread` (pure): spread offsets, two wings mirrored, blocks of two, phase, single fixture, out-of-range index; Forward/Reverse chase order; Bounce without a jump at the turn; fan V; levels; rainbow and crossfade colours.
+    - `StageCraft.Show.EffectRules` (pure): every clamp and fallback (rate, spread, NaN size, Low, wings/blocks, unknown enum, colour, Beam attribute, name); entry repair (bad id, duplicate id, bad and duplicate fixture IDs, empty entries; drops counted exactly); MaxEffects; BPM; quick effects valid and named apart.
+    - `StageCraft.Show.EffectMix` (pure): relative on the programmer, absolute, weight for both, masters on an intensity effect, highlight above, no static value.
+    - `StageCraft.Show.Effects` (world, 3 movers): a circle relative to a programmer pan (clock 0 and a quarter cycle); recording takes the static look; a dimmer chase on its own clock steps in selection order; the Grand Master scales it; the highlight beats it; an edit keeps the clock; undo and redo; a renumbered fixture leaves the effect; a destroyed fixture; External holds still and stops the tick; stop restores the static look and stops the tick; no valid fixtures, no effect.
+    - `StageCraft.Scene.EffectData`: v9 round trip of every setting; a hostile file (bad ids, non-objects, bad fixtures, unknown names, out-of-range numbers, a non-beam attribute, a duplicate id, no fixtures) keeps one effect with defaults and counts ≥ 12 drops; a v8 file reads no effects.
+    - `StageCraft.History.*` cue rules: `Effects` refused under External, allowed under Internal.
+- **Scripted run R63a** on the Concert starter stage, Lighting Desk layout with the Effects tab (user data restored and hash-checked):
+  1. Fixtures 1–5 selected; Circle started: fixture 1 pan 17.5° / tilt 17.8° at an eighth of a cycle, pan 25.0° / tilt 0.2° at a quarter.
+  2. Dimmer Chase: one fixture on at a time, fixture 2 then fixture 3; set to 120 BPM, duty 0.2.
+  3. Rainbow: the wheel-only movers on different wheel slots (3, 7, 4, 2, 7, 6, 5 over two reads).
+  4. GM 0.5: the chased fixture at 0.5.
+  5. Rainbow stopped; saved R63Fx; Empty Stage; reloaded: Circle and Dimmer Chase back with their settings; Stop All: fixture 1 back to pan 0, tilt 0, dimmer 1.
+  - Captures: the panel with the CIRCLE wave lit, the running list and the viewport's rainbow beams; after reload the Dimmer Chase square wave with one dot high and four low.
+  - **R63b** after two panel fixes (the circle preview drawn as a wide ellipse; the TAP button shortening the RATE slider): the circle is round with the five fixtures spread round it (spread 360°), and the sliders line up.
+  - Artefacts: `%TEMP%\StageCraftRuns\R63a`, `R63b`.
+- **Benchmark** (`RunFixtureBench.ps1 -Counts 200,500`), show tick mean:
+
+  | Case | 200 fixtures | 500 fixtures |
+  |---|---|---|
+  | F3 commit `3902468` (worktree A/B, two runs today) | 4.25, 3.82 ms (crossfade) | 9.92, 9.53 ms (crossfade) |
+  | F4a, no effect running (four runs today) | 3.91, 3.99, 3.78, 3.76 ms (crossfade) | 8.49, 8.85, 8.52, 8.11 ms (crossfade) |
+  | F4a, `-Effects 1`: circle + dimmer sine on every fixture | 3.70 ms idle, 4.49 ms crossfade | 10.2 ms idle, 11.3 ms crossfade |
+  | F4a, `-Effects 2`: also a rainbow | 4.11 ms idle, 4.63 ms crossfade | 9.82 ms idle, 11.2 ms crossfade |
+
+  - **No regression** on the existing path: back to back today, F4a without effects is at or below the F3 commit. (Today's machine is slower than when #62 recorded 3.56 / 7.99 ms, which is why the A/B was run.)
+  - **Effects cost about what a continuous crossfade of every fixture costs** (~19 µs per driven fixture per frame, most of it the fixture's own visual update), and only while effects run. The rainbow's colour matching adds little.
+  - CSVs: `Saved/StageCraft/Benchmarks/FixtureBench_20261104-150631.csv` (none), `-150827` (Effects 1), `-151028` (Effects 2), `-152140` (A/B current); baseline CSVs were in the removed worktree.
+- **Not verified by hand:** the Effects panel by mouse (a quick effect on a selection, slider drags as one undo step each, TAP, the choice rows, STOP / STOP ALL), Window > Effects..., and Ctrl+Z after each.
+
+**Commit:** uncommitted (working tree).
+
+**Known issues / follow-ups**
+- **Effects live in the programmer only.** Cues and playbacks storing effects, with tracking and fades, is F4b (#64).
+- **No saved effect pool and no global speed master** (ADR 0027 §8): the quick effects and, with F4b, cues cover the brief.
+- **The rate slider tops out at 10 Hz** (quadratic, for fine slow control); faster rates (to 25 Hz) come from TAP, the Strobe quick effect or the console.
+- **Colour A/B are eight preset colours**, not a picker.
+- **Fixtures without a dimmer channel** still ignore the Grand Master (ADR 0026 §8).
+- **Next:** F4b (#64), then F5 DMX output (#65).
