@@ -90,8 +90,8 @@ public:
 	/** Replaces the playbacks' recorded content; their live state carries on (Docs/ADR/0026 §6). Invalid where there is no show control. */
 	virtual EStageCommandResult SetPlaybacks(const TArray<struct FStagePlayback>& Playbacks) { return EStageCommandResult::Invalid; }
 
-	/** Replaces the programmer's running effects (Docs/ADR/0027 §3). Invalid where there is no programmer. */
-	virtual EStageCommandResult SetProgrammerEffects(const TArray<struct FStageEffectEntry>& Effects) { return EStageCommandResult::Invalid; }
+	/** Replaces the programmer's effects and stops (Docs/ADR/0027 §3, §5). Invalid where there is no programmer. */
+	virtual EStageCommandResult SetProgrammerEffects(const struct FStageProgrammerEffects& Effects) { return EStageCommandResult::Invalid; }
 };
 
 /**

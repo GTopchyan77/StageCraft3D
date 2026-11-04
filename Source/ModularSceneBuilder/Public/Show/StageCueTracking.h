@@ -38,6 +38,30 @@ namespace StageCueTracking
 	 */
 	MODULARSCENEBUILDER_API int32 KeepNextCue(TArray<FShowCue>& Cues, int32 Index, const FFixtureStates& Before, TConstArrayView<FShowCueFixtureState> Entries,
 		TFunctionRef<bool(int32 /*FixtureId*/, const FGameplayTag& /*Attribute*/, float& /*OutHome*/)> HomeValue);
+
+	// --- Effects (Docs/ADR/0027-effects-engine.md §5) ---
+
+	/**
+	 * The effects running at Cues[Index]: from the nearest blocked cue at or before Index, each cue's effects start (a later entry
+	 * with the same id replaces the earlier one and moves to the end, so it wins an attribute) and its stops end them. Empty for an
+	 * index out of range. Cues must be sorted.
+	 */
+	MODULARSCENEBUILDER_API void EffectsAt(TConstArrayView<FShowCue> Cues, int32 Index, TArray<FStageEffectEntry>& OutEffects);
+
+	/**
+	 * Track store of effects: each of Effects replaces the cue's entry with its id (or is appended) and drops a stop of that id; each
+	 * of Stops is added unless already there and drops the cue's effect of that id.
+	 */
+	MODULARSCENEBUILDER_API void MergeEffectsInto(FShowCue& Cue, TConstArrayView<FStageEffectEntry> Effects, TConstArrayView<FGuid> Stops);
+
+	/**
+	 * Cue Only for effects: the cue after Index keeps the effects it had before Effects and Stops were stored at Index. For each id
+	 * stored that the next cue does not name itself (as an effect or a stop), the next cue gets Before's entry of that id (the
+	 * effect as it ran), or a stop when Before had none. Nothing when there is no next cue or it is blocked. Returns how many
+	 * entries it wrote.
+	 */
+	MODULARSCENEBUILDER_API int32 KeepNextCueEffects(TArray<FShowCue>& Cues, int32 Index, TConstArrayView<FStageEffectEntry> Before,
+		TConstArrayView<FStageEffectEntry> Effects, TConstArrayView<FGuid> Stops);
 }
 
 /** Cue timing per attribute (Docs/ADR/0026 §2). Pure, any thread; covered by StageCraft.Show.CueTracking and StageCraft.Show.CueTiming. */
@@ -48,6 +72,9 @@ namespace StageCueTiming
 	 * down (bGoingDown) when the cue has one, else the attribute's feature time, else the In time (FadeTime).
 	 */
 	MODULARSCENEBUILDER_API void GetAttributeTiming(const FShowCue& Cue, const FGameplayTag& Attribute, bool bGoingDown, float& OutDelay, float& OutDuration);
+
+	/** GetAttributeTiming for a whole feature (Kind Intensity..Focus): how an effect on that feature fades in a cue (Docs/ADR/0027 §5). */
+	MODULARSCENEBUILDER_API void GetFeatureTiming(const FShowCue& Cue, EStagePaletteKind Kind, bool bGoingDown, float& OutDelay, float& OutDuration);
 
 	/** How far a move with Delay and Duration is at Elapsed seconds, 0..1 (a zero duration jumps at its delay). */
 	MODULARSCENEBUILDER_API float GetProgress(float Elapsed, float Delay, float Duration);

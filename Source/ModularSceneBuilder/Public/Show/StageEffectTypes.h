@@ -192,6 +192,21 @@ struct MODULARSCENEBUILDER_API FStageEffectEntry
 	TArray<int32> FixtureIds;
 };
 
+/**
+ * What the programmer holds of effects (Docs/ADR/0027 §5): the effects it runs, and stops over effects that cues and playbacks run.
+ * One undo state (FStageProgrammerEffectsCommand), saved in scenes. An id is never both an effect and a stop.
+ */
+struct MODULARSCENEBUILDER_API FStageProgrammerEffects
+{
+	TArray<FStageEffectEntry> Effects;
+	TArray<FGuid> Stops;
+
+	bool IsEmpty() const { return Effects.IsEmpty() && Stops.IsEmpty(); }
+
+	/** The same effects (every setting) and stops in the same order. */
+	bool Equals(const FStageProgrammerEffects& Other) const;
+};
+
 /** What valid effects are (Docs/ADR/0027 §5). Pure, any thread; covered by StageCraft.Show.EffectRules. */
 namespace StageEffectRules
 {
@@ -224,6 +239,15 @@ namespace StageEffectRules
 	 * sanitizes each effect. Returns how many entries and fixture IDs were dropped.
 	 */
 	MODULARSCENEBUILDER_API int32 SanitizeEntries(TArray<FStageEffectEntry>& Entries);
+
+	/** True when A and B hold the same effects (every setting and fixture) in the same order. */
+	MODULARSCENEBUILDER_API bool AreEntriesEqual(TConstArrayView<FStageEffectEntry> A, TConstArrayView<FStageEffectEntry> B);
+
+	/**
+	 * Repairs stop entries (ids of effects to end, Docs/ADR/0027 §5): drops invalid ids, later duplicates, ids Effects (the same
+	 * cue's or programmer's own effects) start, and ids past MaxEffects. Returns how many were dropped.
+	 */
+	MODULARSCENEBUILDER_API int32 SanitizeStops(TArray<FGuid>& Stops, TConstArrayView<FStageEffectEntry> Effects);
 
 	/** The one-click effects of the Effects panel (Docs/ADR/0027 §6), named. */
 	MODULARSCENEBUILDER_API TArray<FStageEffect> MakeQuickEffects();

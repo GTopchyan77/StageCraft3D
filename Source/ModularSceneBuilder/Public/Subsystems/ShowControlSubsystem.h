@@ -222,8 +222,11 @@ public:
 	/** The StagePlaybackRules::Count playbacks' recorded content. */
 	const TArray<FStagePlayback>& GetPlaybacks() const { return Playbacks; }
 
-	/** Appends a cue to Index's list holding Entries (a tracking cue: what the programmer held). False for a bad index, no entries or a full list. */
-	bool RecordPlayback(int32 Index, TConstArrayView<FShowCueFixtureState> Entries);
+	/**
+	 * Appends a cue to Index's list holding Entries and Effects (a tracking cue: what the programmer held, its effects and stops).
+	 * False for a bad index, nothing to record or a full list.
+	 */
+	bool RecordPlayback(int32 Index, TConstArrayView<FShowCueFixtureState> Entries, const FStageProgrammerEffects& Effects = FStageProgrammerEffects());
 
 	/** Releases Index and deletes its cues. False for a bad index or an empty playback. */
 	bool ClearPlayback(int32 Index);
@@ -267,15 +270,28 @@ public:
 	UPROPERTY(BlueprintAssignable, Category = "StageCraft|Show")
 	FOnShowDeskStateChanged OnDeskStateChanged;
 
-	// --- Effects (Docs/ADR/0027-effects-engine.md §3) ---
-	// Effects run from the programmer (UStageProgrammerSubsystem::GetEffects); this subsystem keeps their clocks and writes them
-	// into the mix. Under External DMX they hold still and are not written: the console owns the fixtures.
+	// --- Effects (Docs/ADR/0027-effects-engine.md §3, §5) ---
+	// Effects run from the main cue list's active cue, the active playbacks and the programmer (whose stops hold any of them off);
+	// this subsystem keeps their clocks and fades and writes them into the mix. Under External DMX they hold still and are not
+	// written: the console owns the fixtures.
 
-	/** True while an effect runs and is written (Internal control). */
+	/** True while an effect runs (or fades out) and is written (Internal control). */
 	bool AreEffectsLive() const { return EffectRunner.IsRunning() && ControlSource == EStageControlSource::Internal; }
 
 	/** The clock of a running effect in cycles (0 when it is not running), for previews. */
 	double GetEffectCycles(const FGuid& EffectId) const { return EffectRunner.GetCycles(EffectId); }
+
+	/** The fade weight of a running effect now, 0..1 (0 when it is not running). */
+	float GetEffectWeight(const FGuid& EffectId) const { return EffectRunner.GetWeight(EffectId); }
+
+	/** Every running effect with its source, in mix order. */
+	void GetRunningEffects(TArray<FStageRunningEffect>& OutEffects) const { EffectRunner.GetRunning(OutEffects); }
+
+	/**
+	 * The effect with EffectId that the main cue list's active cue or an active playback runs (the latest playback first), whether or
+	 * not the programmer stops or overrides it. Null when none does. Valid until the next cue, playback or cue list change.
+	 */
+	const FStageEffectEntry* FindShowEffect(const FGuid& EffectId) const;
 
 	// --- DMX ---
 
@@ -372,6 +388,8 @@ private:
 		uint32 Order = 0;
 		/** The current cue's tracked look, palette references resolved, per fixture ID. */
 		TMap<int32, TMap<FGameplayTag, float>> Output;
+		/** The current cue's tracked effects (StageCueTracking::EffectsAt). */
+		TArray<FStageEffectEntry> Effects;
 
 		bool IsActive() const { return (Level > UE_KINDA_SMALL_NUMBER || bFlash) && CueIndex != INDEX_NONE; }
 		float GetEffectiveLevel() const { return bFlash ? 1.f : Level; }
@@ -438,8 +456,18 @@ private:
 
 	void HandleProgrammerFixturesChanged(TConstArrayView<int32> FixtureIds);
 
-	/** The programmer's effects changed: the runner takes them (clocks kept), and every fixture they drove or drive re-mixes. */
+	/** The programmer's effects or stops changed: the effects re-gather at once (RefreshEffectSources). */
 	void HandleProgrammerEffectsChanged();
+
+	/**
+	 * Hands the runner every source's effects (Docs/ADR/0027 §5): the main list's, the active playbacks' in activation order, the
+	 * programmer's, the same id once as its latest, the programmer's stops left out. TimedBy (the cue being played) fades what it
+	 * changes; null changes it at once. When anything but a fader's scale changed, every fixture the effects drove or drive re-mixes.
+	 */
+	void RefreshEffectSources(const FShowCue* TimedBy);
+
+	/** Every effect running on stage now and not fading out, in mix order (a Look store records them). */
+	TArray<FStageEffectEntry> CaptureEffects() const;
 
 	/** Finds the effects' fixtures again after one arrived, left or was renumbered. */
 	void RefreshEffectFixtures();
@@ -497,8 +525,11 @@ private:
 	FDelegateHandle ProgrammerChangedHandle;
 	FDelegateHandle ProgrammerEffectsHandle;
 
-	/** The running effects' clocks and per-fixture output (Docs/ADR/0027 §3). */
+	/** The running effects' clocks, fades and per-fixture output (Docs/ADR/0027 §3, §5). */
 	FStageEffectRunner EffectRunner;
+
+	/** The main cue list's effects at the active cue (StageCueTracking::EffectsAt): changed by Go, Back, Go To, restore and load only. */
+	TArray<FStageEffectEntry> MainEffects;
 
 	/** The palettes references resolve against (Docs/ADR/0028). Resolved in Initialize; same world. */
 	UPROPERTY(Transient)

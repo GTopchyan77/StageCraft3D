@@ -76,9 +76,9 @@ namespace StageEffectTests
 		virtual EStageCommandResult SetItemTransform(const FGuid&, const FTransform&) override { return EStageCommandResult::Invalid; }
 		virtual EStageCommandResult SetItemParameter(const FGuid&, const FGameplayTag&, const FStageParameterValue&) override { return EStageCommandResult::Invalid; }
 
-		virtual EStageCommandResult SetProgrammerEffects(const TArray<FStageEffectEntry>& Effects) override
+		virtual EStageCommandResult SetProgrammerEffects(const FStageProgrammerEffects& Effects) override
 		{
-			World.GetSubsystem<UStageProgrammerSubsystem>()->SetEffects(Effects);
+			World.GetSubsystem<UStageProgrammerSubsystem>()->SetEffectState(Effects);
 			return EStageCommandResult::Succeeded;
 		}
 
@@ -389,7 +389,7 @@ bool FStageShowEffectsTest::RunTest(const FString& Parameters)
 	TestEqual(TEXT("Highlight off: the chase again"), A->GetAttribute(Dimmer), 0.f);
 
 	// An edit keeps the clock; undo and redo restore the effects exactly.
-	const TArray<FStageEffectEntry> BeforeEdit = Programmer->GetEffects();
+	const FStageProgrammerEffects BeforeEdit = Programmer->GetEffectState();
 	const float ClockBefore = static_cast<float>(Show->GetEffectCycles(ChaseId));
 	FStageEffect Faster = Chase;
 	Faster.RateHz = 2.f;
@@ -397,7 +397,7 @@ bool FStageShowEffectsTest::RunTest(const FString& Parameters)
 	TestFalse(TEXT("The same edit again changes nothing"), Programmer->UpdateEffect(ChaseId, Faster));
 	TestEqual(TEXT("The edit kept the clock"), static_cast<float>(Show->GetEffectCycles(ChaseId)), ClockBefore, 1e-5f);
 	FEffectsEditor Editor(*Scoped.World);
-	FStageProgrammerEffectsCommand Step(FText::FromString(TEXT("Edit")), BeforeEdit, Programmer->GetEffects());
+	FStageProgrammerEffectsCommand Step(FText::FromString(TEXT("Edit")), BeforeEdit, Programmer->GetEffectState());
 	TestTrue(TEXT("Undo"), Step.Undo(Editor) == EStageCommandResult::Succeeded && Programmer->GetEffects()[1].Effect.RateHz == 1.f);
 	TestTrue(TEXT("Redo"), Step.Redo(Editor) == EStageCommandResult::Succeeded && Programmer->GetEffects()[1].Effect.RateHz == 2.f);
 

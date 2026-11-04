@@ -6141,7 +6141,7 @@ This is the first half of Gevor's Phase F4 brief ("Effects Engine & Motion Patte
   - CSVs: `Saved/StageCraft/Benchmarks/FixtureBench_20261104-150631.csv` (none), `-150827` (Effects 1), `-151028` (Effects 2), `-152140` (A/B current); baseline CSVs were in the removed worktree.
 - **Not verified by hand:** the Effects panel by mouse (a quick effect on a selection, slider drags as one undo step each, TAP, the choice rows, STOP / STOP ALL), Window > Effects..., and Ctrl+Z after each.
 
-**Commit:** uncommitted (working tree).
+**Commit:** `065d0cf` (committed by Gevor, 2026-11-04).
 
 **Known issues / follow-ups**
 - **Effects live in the programmer only.** Cues and playbacks storing effects, with tracking and fades, is F4b (#64).
@@ -6150,3 +6150,100 @@ This is the first half of Gevor's Phase F4 brief ("Effects Engine & Motion Patte
 - **Colour A/B are eight preset colours**, not a picker.
 - **Fixtures without a dimmer channel** still ignore the Grand Master (ADR 0026 §8).
 - **Next:** F4b (#64), then F5 DMX output (#65).
+
+
+---
+
+## #64 — Phase F4b: effects in cues and playbacks (tracking, fades, morph, stops), scene format v10 (2026-11-04)
+
+**What & why**
+
+Gevor's Phase F4b brief: running effects recorded into cues, playback cues and submasters (a one-cue playback); effects that start, fade in and out, and track or block through cue lists; scene format v10. It completes F4 (gap G8). Design: `Docs/ADR/0027-effects-engine.md` §5.
+
+**Data and tracking** (`Public/Show/ShowControlTypes.h`, `Public/Show/StageCueTracking.h`):
+- `FShowCue` gains `Effects` (`FStageEffectEntry`, as in the programmer) and `EffectStops` (ids it ends). `StageCueRules::SanitizeCueEffects` (also run by `SanitizeCueList`) applies the effect rules; `StageEffectRules::SanitizeStops` keeps stops valid, unique, never an id the same cue starts, at most 64.
+- `StageCueTracking::EffectsAt`: from the nearest blocked cue forward, a cue's effects start (the same id replaces and moves last, so it wins an attribute) and its stops end them. `MergeEffectsInto` (Track) and `KeepNextCueEffects` (Cue Only: the next cue gets the old version back, or a stop for a new effect) mirror the value functions. `StageCueTiming::GetFeatureTiming` gives an effect its feature's time.
+
+**Stores** (`UShowControlSubsystem::StoreCue`, `RecordPlayback`; controller `RequestStoreCue`, `RequestRecordPlayback`):
+- Track merges the programmer's effects and stops into the cue; Cue Only also keeps the next cue; Look records every running effect (`CaptureEffects`); Block writes the inherited effects into the cue and clears its stops; Record Playback takes the programmer's effects and stops.
+- A tracking store or record needs values, an effect or a stop in the programmer. Afterwards the programmer is emptied of values, effects and stops in the same undo step (`AModularPlayerController::AddProgrammerClear`, also used by Clear). The cue becomes the playing one first, so a stored effect carries on under the same id and clock.
+
+**Sources at run time** (`UShowControlSubsystem::RefreshEffectSources`): the main list's effects at the active cue (`MainEffects`, changed by Go, Back, Go To, restore, load), then each active playback's (`FPlaybackRuntime::Effects`) in activation order, then the programmer's; the same id runs once as its latest; the programmer's stops leave ids out. A playback's intensity effects are scaled by its fader (`FSourcedEntry::IntensityScale`); a fader move only rescales (no re-mix).
+
+**Runner** (`FStageEffectRunner`, rewritten around sourced entries):
+- `SetEffects(Entries, FindFixture, TimedBy)`: with a cue (Go, Back) an effect that starts fades its weight in, one that stops fades out and is then dropped (its fixtures re-mixed in full from the tick), and one whose settings change morphs (old and new settings evaluated on the same clock and blended, the rate blended too); timing from the cue's feature time, delay and curve, the Out time for intensity effects stopping. Without a cue changes are immediate. An unchanged effect keeps any fade it is in; one fading out finishes. Returns whether anything but a scale changed.
+- `StageShowMix::ComposeEffect`: two effects on one attribute compose by weight (one fading in over another crossfades); at weight 1 it is F4a's "later wins".
+- `GetRunning` (with source and whether stopping), `GetWeight`.
+
+**The programmer over cue effects** (`UStageProgrammerSubsystem`): `FStageProgrammerEffects {Effects, Stops}` is the undo state (`FStageProgrammerEffectsCommand`, `IStageItemEditor::SetProgrammerEffects`) and is saved; `AddEffectStop`, `TakeEffect`, `GetEffectState` / `SetEffectState`.
+- `RequestStopEffect` stops any running effect: the programmer's leaves, a cue's or playback's gets a stop (a store records it; Clear brings it back). Stop All does both for everything.
+- New `RequestEditEffect`: takes a cue's or playback's effect into the programmer under its id (same clock, no jump), one undo step; a Track store writes it back.
+
+**Scene format v10** (`Private/Scene/StageSceneStore.*`, `Public/Scene/StageSceneTypes.h`, `Private/Scene/StageSceneComponent.cpp`): each cue (main list and playbacks) may hold `"effects"` (as `"programmerEffects"`) and `"effectStops"`; root `"programmerEffectStops"`. Bad entries are dropped and counted (cue ones in `InvalidCueEntries`, programmer ones in `InvalidShowEntries`). v1–v9 load with no cue effects; v10 files are refused by builds before #64.
+
+**UI:**
+- Effects panel: the running list shows every source's effects with their source (PRG, CUE, PB n), EDIT for a cue's or playback's effect and STOP for any; a cue's effect shows read-only in the editor until EDIT; refreshes on cue start, cue list and desk changes too.
+- Cues panel: an FX column (effects started or changed, stops as "-n") with the names in its tooltip.
+- Playback panel: a strip whose playback holds effects shows "FX" after its cue position.
+- Dev command: `StageCraft.Show.Effect` numbers the running effects of every source, adds `Edit <n>`, lists sources, weights, effects fading out and programmer stops; `StageCraft.Show.Cue List` shows each cue's effects and stops.
+- Bench: `StageCraft.Bench.Fixtures ... Effects=3` (and `RunFixtureBench.ps1 -Effects 3`): cue A holds a circle and a dimmer sine, cue B a bigger circle, the sine and a rainbow, so every crossfade morphs, fades in and fades out effects. Effects=1|2 now start from an empty programmer (the user's effects come back afterwards).
+
+**Files changed**
+- **New:** `Private/Show/Tests/StageCueEffectTests.cpp` (Show.EffectTracking, Show.CueEffects, Scene.CueEffectData).
+- **Modified:**
+  - Show: `Public/Show/ShowControlTypes.h`, `Private/Show/ShowControlTypes.cpp` (cue effects, `SanitizeCueEffects`), `Public/Show/StageEffectTypes.h`, `Private/Show/StageEffectTypes.cpp` (`FStageProgrammerEffects`, `AreEntriesEqual`, `SanitizeStops`), `Public/Show/StageCueTracking.h`, `Private/Show/StageCueTracking.cpp`, `Public/Show/StageEffectRunner.h`, `Private/Show/StageEffectRunner.cpp`, `Public/Show/StageShowMix.h`, `Private/Show/StageShowMix.cpp` (`ComposeEffect`), `Private/Show/StageShowConsoleCommands.cpp`.
+  - Subsystems: `Public/Subsystems/ShowControlSubsystem.h`, `Private/Subsystems/ShowControlSubsystem.cpp`, `Public/Subsystems/StageProgrammerSubsystem.h`, `Private/Subsystems/StageProgrammerSubsystem.cpp`.
+  - History: `Public/History/StageEditCommand.h`, `Public/History/StageShowCommands.h`, `Private/History/StageShowCommands.cpp`, `Private/History/StageEditHistoryComponent.cpp`.
+  - Controller: `Public/Player/ModularPlayerController.h`, `Private/Player/ModularPlayerController.cpp`, `Private/Player/ModularPlayerControllerProgrammer.cpp`.
+  - Scenes: `Public/Scene/StageSceneTypes.h`, `Private/Scene/StageSceneStore.h`, `Private/Scene/StageSceneStore.cpp`, `Private/Scene/StageSceneComponent.cpp`.
+  - UI: `Public/UI/StageEffectsPanel.h`, `Private/UI/StageEffectsPanel.cpp`, `Private/UI/StageCuePanel.cpp`, `Private/UI/StagePlaybackPanel.cpp`.
+  - Bench: `Private/Diagnostics/StageFixtureBenchmark.cpp`, `Scripts/Bench/RunFixtureBench.ps1`.
+  - Tests: `Private/Show/Tests/StageEffectTests.cpp` (the undo state type).
+  - Records: `Docs/ADR/0027-effects-engine.md` (§5), `Docs/CURRENT_SYSTEMS.md`, `tasks/todo.md`, `STATE.md` (also the #63 commit hash `065d0cf`).
+- No content assets, maps or input actions changed.
+
+
+**Verification**
+- **Builds:** Editor, Game and Shipping, 0 warnings and 0 errors (Game rebuilt after the last bench edit; Shipping after the last panel edit).
+- **Shipping UTF-16 scan** (both byte alignments): absent `StageCraft.Show.Effect`, `StageCraft.Show.Cue`, `StageCraft.Bench.Fixtures`, the new console texts "fading out, weight" and "effect stops"; present "STOP ALL", "This playback holds effects", the EDIT tooltip and the `programmerEffectStops` field name.
+- **Automation:** `RunAutomation.ps1 -ExpectedCount 182`: 182/182 with an offscreen renderer and 182/182 with `-NullRHI` (run again after the last edits); user data unchanged.
+  - `StageCraft.Show.EffectTracking` (pure): tracking (start, track, stop, replace moves last, block, out of range); Track merge (effect drops its stop, stop drops its effect); Cue Only (old version back, new effect stopped, stopped effect restarted, next cue naming the id, blocked or no next cue); `SanitizeCueEffects` / `SanitizeStops` drop counts, MaxEffects, `SanitizeCueList`; feature timing (feature time, delay, Out time for intensity going down); `ComposeEffect` (absolute, relative, weight 1, mixed); the runner without fixtures (change flag, scale-only is no change, fade out and release, fade in, an unrelated change keeps the fade, stop and back from its weight, immediate change, delay, S-curve, morph keeps weight and blends the rate, zero time).
+  - `StageCraft.Show.CueEffects` (world, 3 movers): a Track store of an effect only, then the cue runs it on the same clock without a jump; Go to 1 fades in (half the circle at half time); Go to 2 morphs (size 30 half way, weight never dips); Go to 3 fades the circle out and a chase in, then the pan back to static; Go to a blocked cue stops an intensity effect over the Out time, then no tick; Back fades with cue 3's time; restore is immediate; a programmer stop holds a cue effect off and Clear brings it back; TakeEffect keeps the clock, edit live, Track store writes it back; a stored stop; Cue Only stops a new effect at the next cue; Look store records the running effect; Block writes the inherited effects and no stops; a playback with an effect only: runs while up, intensity scaled by the fader (0.5, then 1), release and flash; External holds still.
+  - `StageCraft.Scene.CueEffectData`: v10 round trip of cue effects, cue stops, a playback cue's effect and stop and the programmer's stops; a hostile file (bad ids, non-objects, a stop of the cue's own effect, a duplicate, unreadable stops) keeps the good entries and counts 6 cue and 2 programmer drops; a v9 file reads no cue effects or stops.
+- **Scripted run R64a** (Concert starter stage, Lighting Desk layout, user data restored and hash-checked):
+  1. A Circle on fixtures 1–5 stored with `Cue Track 11`: the programmer cleared, the circle then ran from the cue list on the same clock.
+  2. A Dimmer Chase stored in cue 12; `Effect Stop 1` stopped the cue's circle with a programmer stop; `Cue Track 13` recorded it (cue 13: 0 effects, 1 stop).
+  3. `GoTo 11` from 13: after 1 s the circle fading in at weight 0.50 and the chase fading out at 0.50. `Go` to 12: after 1 s the chase at 0.33 of its 3 s, the circle carrying on at 1.00, the chase's clock carrying on from before (4.5 cycles later). `Go` to 13: the circle fading out (0.51 after 0.5 s of 1 s), then gone and fixture 1 back to pan 0, tilt 0.
+  4. `Effect Edit 1` took the chase into the programmer (same clock), `Set 1 bpm=120`, `Cue Track 12` wrote it back (cue 12 now 2 Hz).
+  5. A Rainbow on fixtures 6 and 7 recorded on playback 1, level 0.5: it ran from "playback 1".
+  6. Saved R64Fx, Empty Stage, reloaded: cues 11–13 with 1, 1 and 1-stop effects; `GoTo 12` ran the circle and the 2 Hz chase from the cue list.
+  - **R64b** after one panel fix (in R64a the running list's longer lines ran under the EDIT button; the list is now 220 px wide with shorter lines clipped to their button): the Effects panel's running list (Circle · CUE, Dimmer Chase · CUE, Rainbow · PB 1, each with EDIT and STOP; the cue effect shown read-only with the EDIT hint), the Cues panel's FX column (1, 1, -1) and playback 1 showing "1/1 FX" at 50 %.
+  - Artefacts: `%TEMP%\StageCraftRuns\R64a`, `R64b`.
+- **Benchmark** (`RunFixtureBench.ps1 -Counts 200,500`, show tick mean; A/B against `065d0cf` in a worktree, alternating, the same afternoon):
+
+  | Case | 200 fixtures | 500 fixtures |
+  |---|---|---|
+  | `065d0cf`, no effects, crossfade (two runs) | 3.78, 4.29 ms | 9.01, 9.09 ms |
+  | F4b, no effects, crossfade (two runs) | 4.24, 3.69 ms | 8.32, 8.87 ms |
+  | `065d0cf`, `-Effects 1`, idle / crossfade | 3.92 / 4.57 ms | 10.5 / 11.9 ms |
+  | F4b, `-Effects 1`, idle / crossfade | 3.77 / 4.11 ms | 8.70 / 11.0 ms |
+  | F4b, `-Effects 3` (effects in the cues: fade, morph, start and stop on every Go), idle / crossfade | 3.57 / 4.69 ms | 8.94 / 11.2 ms |
+
+  - **No regression:** without effects F4b averages 3.97 / 8.60 ms against 4.03 / 9.05 ms; with programmer effects it is at or below F4a.
+  - **Cue effects cost what programmer effects cost:** fading, morphing and starting or stopping effects on every Go adds nothing measurable over the same effects running steadily.
+  - Frame, game-thread and GPU totals differ between the trees even idle (no show tick): the worktree has no saved workspace layout or user settings (fewer panels, other scalability), so only the show tick compares like with like.
+  - **A bench bug found and fixed on the way:** the first `-Effects 3` run showed 36 ms frames at 500 fixtures with a 9 ms show tick; its CSV had 226 cues started in 225 frames. The bench stored its two looks while the effects ran, and a Look store records the static look under an effect, while the bench writes its looks straight onto the fixtures; so both cues held the same look, every Go finished at once and the bench went again every frame (a full re-mix each time, outside the show tick). The bench now stores the looks first and adds the effects with Track stores (5 Gos in the phase, as for the other modes).
+  - CSVs: `Saved/StageCraft/Benchmarks/FixtureBench_20261104-1735*` to `-174722.csv`; the baseline's CSVs were in the removed worktree.
+- **Not verified by hand:** the Effects panel's EDIT and STOP on a cue effect by mouse with Ctrl+Z, the FX column tooltip, the playback FX marker, STOP ALL over cue effects.
+
+
+**Commit:** uncommitted (working tree).
+
+**Known issues / follow-ups**
+- **A changed fixture list snaps** during a morph (the new list at once); only the settings blend.
+- **A playback's effects follow its fader at once** (its cues have no fade time, as its values); its intensity effects replace the intensity below them (latest wins), not HTP (ADR 0027 §5).
+- **The main list's running effects change on Go, Back, Go To and restore only**, as its values do: editing the cue list (or undoing a store) does not restart them until the next cue.
+- **A programmer stop or Clear is immediate**, not timed.
+- **No effect pool and no speed master** (ADR 0027 §8).
+- **Manual checks for Gevor:** the Effects panel's EDIT and STOP on a cue effect, the FX column and tooltip, the playback FX marker, by mouse with Ctrl+Z.
+- **Next:** F5 DMX output (#65).

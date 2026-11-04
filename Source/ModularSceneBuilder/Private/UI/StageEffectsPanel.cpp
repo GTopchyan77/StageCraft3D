@@ -2,6 +2,7 @@
 
 #include "UI/StageEffectsPanel.h"
 
+#include "Algo/Compare.h"
 #include "Blueprint/WidgetTree.h"
 #include "Components/Border.h"
 #include "Components/ButtonSlot.h"
@@ -39,6 +40,8 @@ namespace StageEffectsPanel
 	constexpr float ValueWidth = 104.f;
 	constexpr float TapWidth = 40.f;
 	constexpr float SideWidth = 168.f;
+	/** The running list: wider, as each line has a source and EDIT and STOP buttons. */
+	constexpr float RunningWidth = 220.f;
 	/** The rate slider is quadratic up to this, for fine control of slow effects; faster rates come from TAP or the console. */
 	constexpr float SliderMaxRateHz = 10.f;
 	constexpr float MaxSliderSize = 180.f;
@@ -394,7 +397,7 @@ UWidget* UStageEffectsPanel::BuildRunningColumn()
 {
 	const UStageCraftUITheme& UITheme = GetTheme();
 	USizeBox* Width = WidgetTree->ConstructWidget<USizeBox>(USizeBox::StaticClass());
-	Width->SetWidthOverride(StageEffectsPanel::SideWidth);
+	Width->SetWidthOverride(StageEffectsPanel::RunningWidth);
 	UVerticalBox* Column = WidgetTree->ConstructWidget<UVerticalBox>(UVerticalBox::StaticClass());
 	Width->SetContent(Column);
 	UHorizontalBox* Title = WidgetTree->ConstructWidget<UHorizontalBox>(UHorizontalBox::StaticClass());
@@ -403,7 +406,7 @@ UWidget* UStageEffectsPanel::BuildRunningColumn()
 		TextSlot->SetSize(FSlateChildSize(ESlateSizeRule::Fill));
 		TextSlot->SetVerticalAlignment(VAlign_Center);
 	}
-	UStageChoiceButton* StopAll = MakeButton(LOCTEXT("StopAll", "STOP ALL"), LOCTEXT("StopAllTip", "Stop every effect in the programmer (one undo step)."), 0, false);
+	UStageChoiceButton* StopAll = MakeButton(LOCTEXT("StopAll", "STOP ALL"), LOCTEXT("StopAllTip", "Stop every running effect, the programmer's and the cues' (one undo step). Clear brings the cues' effects back."), 0, false);
 	StopAll->OnPicked.BindUObject(this, &ThisClass::HandleStopAllPicked);
 	Title->AddChildToHorizontalBox(StopAll);
 	Column->AddChildToVerticalBox(Title);
@@ -425,17 +428,10 @@ void UStageEffectsPanel::RebuildRunningList()
 {
 	using namespace StageCraftWidgetStyle;
 	const UStageCraftUITheme& UITheme = GetTheme();
-	const UStageProgrammerSubsystem* Subsystem = Programmer.Get();
 	RunningList->ClearChildren();
 	RunningRows.Reset();
-	ListedIds.Reset();
-	if (!Subsystem)
+	for (int32 Index = 0; Index < Listed.Num(); ++Index)
 	{
-		return;
-	}
-	for (int32 Index = 0; Index < Subsystem->GetEffects().Num(); ++Index)
-	{
-		ListedIds.Add(Subsystem->GetEffects()[Index].Id);
 		UBorder* Frame = WidgetTree->ConstructWidget<UBorder>(UBorder::StaticClass());
 		Frame->SetPadding(FMargin(2.f));
 		UHorizontalBox* Line = WidgetTree->ConstructWidget<UHorizontalBox>(UHorizontalBox::StaticClass());
@@ -447,19 +443,26 @@ void UStageEffectsPanel::RebuildRunningList()
 		Pick->OnPicked.BindUObject(this, &ThisClass::HandleRunningPicked);
 		UTextBlock* Label = MakeText(FText::GetEmpty(), 7, TEXT("Regular"), UITheme.TextPrimary);
 		Label->SetTextOverflowPolicy(ETextOverflowPolicy::Ellipsis);
+		Pick->SetClipping(EWidgetClipping::ClipToBounds);
 		Pick->AddChild(Label);
 		if (UHorizontalBoxSlot* PickSlot = Line->AddChildToHorizontalBox(Pick))
 		{
 			PickSlot->SetSize(FSlateChildSize(ESlateSizeRule::Fill));
 		}
-		UStageChoiceButton* Stop = MakeButton(LOCTEXT("Stop", "STOP"), LOCTEXT("StopTip", "Stop this effect (one undo step)."), Index, false);
+		UStageChoiceButton* Edit = MakeButton(LOCTEXT("Edit", "EDIT"),
+			LOCTEXT("EditTip", "Take this cue's effect into the programmer to change it live (one undo step); store the cue to keep the change."), Index, false);
+		Edit->OnPicked.BindUObject(this, &ThisClass::HandleEditPicked);
+		Edit->SetVisibility(Listed[Index].Source == EStageEffectSource::Programmer ? ESlateVisibility::Collapsed : ESlateVisibility::Visible);
+		Line->AddChildToHorizontalBox(Edit);
+		UStageChoiceButton* Stop = MakeButton(LOCTEXT("Stop", "STOP"),
+			LOCTEXT("StopTip", "Stop this effect (one undo step). A cue's effect is held off by the programmer: store to record the stop, Clear to bring it back."), Index, false);
 		Stop->OnPicked.BindUObject(this, &ThisClass::HandleStopPicked);
 		Line->AddChildToHorizontalBox(Stop);
 		if (UVerticalBoxSlot* RowSlot = RunningList->AddChildToVerticalBox(Frame))
 		{
 			RowSlot->SetPadding(FMargin(0.f, 0.f, 0.f, 2.f));
 		}
-		RunningRows.Add({ Frame, Label });
+		RunningRows.Add({ Frame, Label, Edit });
 	}
 }
 
@@ -477,6 +480,10 @@ void UStageEffectsPanel::NativeConstruct()
 	if (ShowSubsystem)
 	{
 		ShowSubsystem->OnControlSourceChanged.AddUniqueDynamic(this, &ThisClass::HandleControlSourceChanged);
+		// Cues and playbacks start and stop effects too (Docs/ADR/0027 §5).
+		ShowSubsystem->OnCueStarted.AddUniqueDynamic(this, &ThisClass::HandleCueEvent);
+		ShowSubsystem->OnCueListChanged.AddUniqueDynamic(this, &ThisClass::HandleShowChanged);
+		ShowSubsystem->OnDeskStateChanged.AddUniqueDynamic(this, &ThisClass::HandleShowChanged);
 	}
 	Refresh();
 }
@@ -490,6 +497,9 @@ void UStageEffectsPanel::NativeDestruct()
 	if (UShowControlSubsystem* ShowSubsystem = ShowControl.Get())
 	{
 		ShowSubsystem->OnControlSourceChanged.RemoveDynamic(this, &ThisClass::HandleControlSourceChanged);
+		ShowSubsystem->OnCueStarted.RemoveDynamic(this, &ThisClass::HandleCueEvent);
+		ShowSubsystem->OnCueListChanged.RemoveDynamic(this, &ThisClass::HandleShowChanged);
+		ShowSubsystem->OnDeskStateChanged.RemoveDynamic(this, &ThisClass::HandleShowChanged);
 	}
 	if (const UWorld* World = GetWorld())
 	{
@@ -510,6 +520,16 @@ void UStageEffectsPanel::HandleControlSourceChanged(EStageControlSource NewSourc
 	RequestRefresh();
 }
 
+void UStageEffectsPanel::HandleShowChanged()
+{
+	RequestRefresh();
+}
+
+void UStageEffectsPanel::HandleCueEvent(float CueNumber)
+{
+	RequestRefresh();
+}
+
 void UStageEffectsPanel::RequestRefresh()
 {
 	UWorld* World = GetWorld();
@@ -524,7 +544,22 @@ void UStageEffectsPanel::RequestRefresh()
 const FStageEffectEntry* UStageEffectsPanel::FindSelected() const
 {
 	const UStageProgrammerSubsystem* Subsystem = Programmer.Get();
-	return Subsystem && SelectedEffectId.IsValid() ? Subsystem->FindEffect(SelectedEffectId) : nullptr;
+	if (!Subsystem || !SelectedEffectId.IsValid())
+	{
+		return nullptr;
+	}
+	if (const FStageEffectEntry* Own = Subsystem->FindEffect(SelectedEffectId))
+	{
+		return Own;
+	}
+	const FStageRunningEffect* Shown = Listed.FindByPredicate([this](const FStageRunningEffect& Effect) { return Effect.Entry.Id == SelectedEffectId; });
+	return Shown ? &Shown->Entry : nullptr;
+}
+
+bool UStageEffectsPanel::IsSelectedEditable() const
+{
+	const UStageProgrammerSubsystem* Subsystem = Programmer.Get();
+	return Subsystem && SelectedEffectId.IsValid() && Subsystem->FindEffect(SelectedEffectId);
 }
 
 bool UStageEffectsPanel::GetPreviewState(FStageEffect& OutEffect, int32& OutCount, double& OutCycles) const
@@ -550,37 +585,42 @@ void UStageEffectsPanel::Refresh()
 	{
 		return;
 	}
-	// The editor follows the effect it showed; when that one stopped, the newest running effect.
+	// Every source's effects (Docs/ADR/0027 §5), without those fading out: they are already gone as far as the user is concerned.
+	TArray<FStageRunningEffect> Running;
+	Show->GetRunningEffects(Running);
+	Running.RemoveAll([](const FStageRunningEffect& Effect) { return Effect.bStopping; });
+	const bool bSameSet = Running.Num() == Listed.Num() && Algo::Compare(Running, Listed, [](const FStageRunningEffect& A, const FStageRunningEffect& B)
+	{
+		return A.Entry.Id == B.Entry.Id && A.Source == B.Source && A.Playback == B.Playback;
+	});
+	Listed = MoveTemp(Running);
+	if (!bSameSet)
+	{
+		RebuildRunningList();
+	}
+
+	// The editor follows the effect it showed; when that one stopped, the newest of the programmer's, else the newest running.
 	if (!FindSelected())
 	{
-		SelectedEffectId = Subsystem->HasEffects() ? Subsystem->GetEffects().Last().Id : FGuid();
+		SelectedEffectId = Subsystem->HasEffects() ? Subsystem->GetEffects().Last().Id : (Listed.IsEmpty() ? FGuid() : Listed.Last().Entry.Id);
 	}
 	const bool bEnabled = Show->GetControlSource() == EStageControlSource::Internal;
-	const int32 Count = Subsystem->GetEffects().Num();
+	const int32 Count = Listed.Num();
 	StatusText->SetText(!bEnabled ? LOCTEXT("External", "An external console is driving the fixtures: effects hold still.")
 		: Count == 0 ? LOCTEXT("NoneRunning", "No effect running.")
+		: FindSelected() && !IsSelectedEditable() ? LOCTEXT("FromCue", "This effect runs from a cue or playback: EDIT takes it into the programmer.")
 		: FText::Format(LOCTEXT("Running", "{0} running · TAP the rate in time with the music."), FText::AsNumber(Count)));
 	RefreshRunningList(bEnabled);
-	RefreshEditor(FindSelected(), bEnabled);
+	RefreshEditor(FindSelected(), bEnabled && IsSelectedEditable());
 }
 
 void UStageEffectsPanel::RefreshRunningList(bool bEnabled)
 {
 	using namespace StageCraftWidgetStyle;
-	const UStageProgrammerSubsystem* Subsystem = Programmer.Get();
-	TArray<FGuid> Ids;
-	for (const FStageEffectEntry& Entry : Subsystem->GetEffects())
-	{
-		Ids.Add(Entry.Id);
-	}
-	if (Ids != ListedIds)
-	{
-		RebuildRunningList();
-	}
 	const UStageCraftUITheme& UITheme = GetTheme();
-	for (int32 Index = 0; Index < RunningRows.Num() && Index < Subsystem->GetEffects().Num(); ++Index)
+	for (int32 Index = 0; Index < RunningRows.Num() && Index < Listed.Num(); ++Index)
 	{
-		const FStageEffectEntry& Entry = Subsystem->GetEffects()[Index];
+		const FStageEffectEntry& Entry = Listed[Index].Entry;
 		const bool bSelected = Entry.Id == SelectedEffectId;
 		if (UBorder* Frame = RunningRows[Index].Frame.Get())
 		{
@@ -590,7 +630,11 @@ void UStageEffectsPanel::RefreshRunningList(bool bEnabled)
 		}
 		if (UTextBlock* Label = RunningRows[Index].Label.Get())
 		{
-			Label->SetText(FText::Format(LOCTEXT("RunningLine", "{0}  · {1} fx · {2} Hz"), Entry.Effect.Name, FText::AsNumber(Entry.FixtureIds.Num()),
+			const FStageRunningEffect& Effect = Listed[Index];
+			const FText Source = Effect.Source == EStageEffectSource::Programmer ? LOCTEXT("SourceProgrammer", "PRG")
+				: Effect.Source == EStageEffectSource::Playback ? FText::Format(LOCTEXT("SourcePlayback", "PB {0}"), FText::AsNumber(Effect.Playback + 1))
+				: LOCTEXT("SourceCue", "CUE");
+			Label->SetText(FText::Format(LOCTEXT("RunningLine", "{0} · {1} · {2} Hz"), Entry.Effect.Name, Source,
 				FText::AsNumber(Entry.Effect.RateHz, &StageEffectsPanel::RateFormat())));
 		}
 	}
@@ -845,9 +889,9 @@ void UStageEffectsPanel::HandleSliderReleased()
 
 void UStageEffectsPanel::HandleRunningPicked(int32 Index)
 {
-	if (const UStageProgrammerSubsystem* Subsystem = Programmer.Get(); Subsystem && Subsystem->GetEffects().IsValidIndex(Index))
+	if (Listed.IsValidIndex(Index))
 	{
-		SelectedEffectId = Subsystem->GetEffects()[Index].Id;
+		SelectedEffectId = Listed[Index].Entry.Id;
 		TapTimes.Reset();
 	}
 	RequestRefresh();
@@ -855,11 +899,21 @@ void UStageEffectsPanel::HandleRunningPicked(int32 Index)
 
 void UStageEffectsPanel::HandleStopPicked(int32 Index)
 {
-	const UStageProgrammerSubsystem* Subsystem = Programmer.Get();
 	AModularPlayerController* Controller = GetStageController();
-	if (Subsystem && Controller && Subsystem->GetEffects().IsValidIndex(Index))
+	if (Controller && Listed.IsValidIndex(Index))
 	{
-		Controller->RequestStopEffect(Subsystem->GetEffects()[Index].Id);
+		Controller->RequestStopEffect(Listed[Index].Entry.Id);
+	}
+	RequestRefresh();
+}
+
+void UStageEffectsPanel::HandleEditPicked(int32 Index)
+{
+	AModularPlayerController* Controller = GetStageController();
+	if (Controller && Listed.IsValidIndex(Index) && Controller->RequestEditEffect(Listed[Index].Entry.Id))
+	{
+		SelectedEffectId = Listed[Index].Entry.Id;
+		TapTimes.Reset();
 	}
 	RequestRefresh();
 }

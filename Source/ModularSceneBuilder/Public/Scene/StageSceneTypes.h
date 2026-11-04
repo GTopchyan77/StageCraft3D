@@ -120,6 +120,9 @@ struct FStageSceneDocument
 	/** The effects running in the programmer (format version 9; Docs/ADR/0027 §4). Sanitized. Older files read as none. */
 	TArray<FStageEffectEntry> ProgrammerEffects;
 
+	/** Ids of cue or playback effects the programmer stops (format version 10; Docs/ADR/0027 §5). Sanitized. Older files read as none. */
+	TArray<FGuid> ProgrammerEffectStops;
+
 	/** The show fixture groups (format version 6). Sanitized (StageFixtureGroupRules). Older files read as no groups. */
 	TArray<FStageFixtureGroup> Groups;
 

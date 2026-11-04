@@ -127,7 +127,7 @@ EStageCommandResult FStagePalettesCommand::Redo(IStageItemEditor& Editor)
 	return Editor.SetPalettes(After);
 }
 
-FStageProgrammerEffectsCommand::FStageProgrammerEffectsCommand(const FText& InDescription, TArray<FStageEffectEntry> InBefore, TArray<FStageEffectEntry> InAfter)
+FStageProgrammerEffectsCommand::FStageProgrammerEffectsCommand(const FText& InDescription, FStageProgrammerEffects InBefore, FStageProgrammerEffects InAfter)
 	: Description(InDescription)
 	, Before(MoveTemp(InBefore))
 	, After(MoveTemp(InAfter))

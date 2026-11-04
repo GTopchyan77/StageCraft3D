@@ -359,8 +359,12 @@ void UStagePlaybackPanel::Refresh()
 		}
 		if (UTextBlock* Cue = Strip.Cue.Get())
 		{
-			Cue->SetText(Playback.Cues.IsEmpty() ? LOCTEXT("EmptyPlayback", "empty")
-				: FText::Format(LOCTEXT("CuePosition", "{0}/{1}"), CueIndex == INDEX_NONE ? FText::FromString(TEXT("-")) : FText::AsNumber(CueIndex + 1), FText::AsNumber(Playback.Cues.Num())));
+			// FX: the playback holds effects (Docs/ADR/0027 §5), which run while it is up.
+			const bool bHasEffects = Playback.Cues.ContainsByPredicate([](const FShowCue& Each) { return !Each.Effects.IsEmpty(); });
+			const FText Position = Playback.Cues.IsEmpty() ? LOCTEXT("EmptyPlayback", "empty")
+				: FText::Format(LOCTEXT("CuePosition", "{0}/{1}"), CueIndex == INDEX_NONE ? FText::FromString(TEXT("-")) : FText::AsNumber(CueIndex + 1), FText::AsNumber(Playback.Cues.Num()));
+			Cue->SetText(bHasEffects ? FText::Format(LOCTEXT("CuePositionFx", "{0} FX"), Position) : Position);
+			Cue->SetToolTipText(bHasEffects ? LOCTEXT("PlaybackFxTip", "This playback holds effects: they run while it is up, their intensity scaled by the fader.") : FText::GetEmpty());
 		}
 		if (UStageValueSlider* Fader = Strip.Fader.Get())
 		{

@@ -124,12 +124,19 @@ namespace StageCueRules
 			{
 				StagePaletteRules::SanitizeReferences(State);
 			}
+			SanitizeCueEffects(Cue);
 			Kept.Add(MoveTemp(Cue));
 		}
 		// Stable, so the order of equal-looking input never decides which duplicate survived (that was decided above).
 		Kept.StableSort([](const FShowCue& A, const FShowCue& B) { return A.Number < B.Number; });
 		Cues = MoveTemp(Kept);
 		return Before - Cues.Num();
+	}
+
+	int32 SanitizeCueEffects(FShowCue& Cue)
+	{
+		const int32 Dropped = StageEffectRules::SanitizeEntries(Cue.Effects);
+		return Dropped + StageEffectRules::SanitizeStops(Cue.EffectStops, Cue.Effects);
 	}
 }
 

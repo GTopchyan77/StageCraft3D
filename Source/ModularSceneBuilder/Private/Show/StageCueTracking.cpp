@@ -112,14 +112,106 @@ namespace StageCueTracking
 		}
 		return Written;
 	}
+
+	void EffectsAt(TConstArrayView<FShowCue> Cues, int32 Index, TArray<FStageEffectEntry>& OutEffects)
+	{
+		OutEffects.Reset();
+		if (!Cues.IsValidIndex(Index))
+		{
+			return;
+		}
+		int32 First = Index;
+		while (First > 0 && !Cues[First].bBlock)
+		{
+			--First;
+		}
+		for (int32 CueIndex = First; CueIndex <= Index; ++CueIndex)
+		{
+			const FShowCue& Cue = Cues[CueIndex];
+			for (const FGuid& Stop : Cue.EffectStops)
+			{
+				OutEffects.RemoveAll([&Stop](const FStageEffectEntry& Running) { return Running.Id == Stop; });
+			}
+			for (const FStageEffectEntry& Entry : Cue.Effects)
+			{
+				OutEffects.RemoveAll([&Entry](const FStageEffectEntry& Running) { return Running.Id == Entry.Id; });
+				OutEffects.Add(Entry);
+			}
+		}
+	}
+
+	void MergeEffectsInto(FShowCue& Cue, TConstArrayView<FStageEffectEntry> Effects, TConstArrayView<FGuid> Stops)
+	{
+		for (const FStageEffectEntry& Entry : Effects)
+		{
+			Cue.EffectStops.Remove(Entry.Id);
+			if (FStageEffectEntry* Existing = Cue.Effects.FindByPredicate([&Entry](const FStageEffectEntry& Own) { return Own.Id == Entry.Id; }))
+			{
+				*Existing = Entry;
+			}
+			else
+			{
+				Cue.Effects.Add(Entry);
+			}
+		}
+		for (const FGuid& Stop : Stops)
+		{
+			Cue.Effects.RemoveAll([&Stop](const FStageEffectEntry& Own) { return Own.Id == Stop; });
+			Cue.EffectStops.AddUnique(Stop);
+		}
+	}
+
+	int32 KeepNextCueEffects(TArray<FShowCue>& Cues, int32 Index, TConstArrayView<FStageEffectEntry> Before,
+		TConstArrayView<FStageEffectEntry> Effects, TConstArrayView<FGuid> Stops)
+	{
+		if (!Cues.IsValidIndex(Index + 1) || Cues[Index + 1].bBlock)
+		{
+			return 0;
+		}
+		FShowCue& Next = Cues[Index + 1];
+		TArray<FGuid> Stored;
+		for (const FStageEffectEntry& Entry : Effects)
+		{
+			Stored.AddUnique(Entry.Id);
+		}
+		for (const FGuid& Stop : Stops)
+		{
+			Stored.AddUnique(Stop);
+		}
+
+		TArray<FStageEffectEntry> KeptEffects;
+		TArray<FGuid> KeptStops;
+		for (const FGuid& Id : Stored)
+		{
+			const auto HasId = [&Id](const FStageEffectEntry& Entry) { return Entry.Id == Id; };
+			if (Next.Effects.ContainsByPredicate(HasId) || Next.EffectStops.Contains(Id))
+			{
+				continue; // The next cue decides this effect itself: the change never reached it.
+			}
+			if (const FStageEffectEntry* Old = Before.FindByPredicate(HasId))
+			{
+				KeptEffects.Add(*Old);
+			}
+			else if (Effects.ContainsByPredicate(HasId))
+			{
+				KeptStops.Add(Id); // New at Index: it ends there.
+			}
+		}
+		MergeEffectsInto(Next, KeptEffects, KeptStops);
+		return KeptEffects.Num() + KeptStops.Num();
+	}
 }
 
 namespace StageCueTiming
 {
 	void GetAttributeTiming(const FShowCue& Cue, const FGameplayTag& Attribute, bool bGoingDown, float& OutDelay, float& OutDuration)
 	{
+		GetFeatureTiming(Cue, StagePaletteRules::GetAttributeKind(Attribute), bGoingDown, OutDelay, OutDuration);
+	}
+
+	void GetFeatureTiming(const FShowCue& Cue, EStagePaletteKind Kind, bool bGoingDown, float& OutDelay, float& OutDuration)
+	{
 		const FStageCueTiming& Timing = Cue.Timing;
-		const EStagePaletteKind Kind = StagePaletteRules::GetAttributeKind(Attribute);
 		OutDelay = Timing.Delay;
 		if (Kind == EStagePaletteKind::Intensity && bGoingDown && Timing.bHasOutTime)
 		{

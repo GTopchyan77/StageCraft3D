@@ -59,8 +59,10 @@ public:
 	 *    cues were full snapshots and load as blocked cues. Adds "playbacks" (each used playback's index, name and cues); older
 	 *    files have empty playbacks.
 	 *  - 9: adds "programmerEffects", the effects running in the programmer (Docs/ADR/0027 §4). Older files load with none.
+	 *  - 10: cues (main list and playbacks) may hold "effects" and "effectStops"; adds "programmerEffectStops" (Docs/ADR/0027 §5).
+	 *    Older files load with no cue effects and no stops.
 	 */
-	static constexpr int32 FormatVersion = 9;
+	static constexpr int32 FormatVersion = 10;
 	static constexpr int32 MaxGroups = StageFixtureGroupRules::MaxGroups;
 	/** The oldest version Parse still migrates. Older or newer files are refused as VersionMismatch and left untouched. */
 	static constexpr int32 MinReadableVersion = 1;

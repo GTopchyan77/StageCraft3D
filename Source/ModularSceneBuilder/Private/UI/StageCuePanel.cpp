@@ -31,6 +31,7 @@ namespace StageCuePanel
 	constexpr float NumberWidth = 64.f;
 	constexpr float FadeWidth = 58.f;
 	constexpr float FixturesWidth = 44.f;
+	constexpr float EffectsWidth = 36.f;
 	constexpr float RowButtonWidth = 58.f;
 	constexpr float DefaultFadeTime = 2.f;
 	constexpr float TimeWidth = 44.f;
@@ -422,6 +423,7 @@ UWidget* UStageCuePanel::MakeColumnTitles()
 	AddTitle(LOCTEXT("TriggerColumn", "TRIGGER"), TriggerWidth, 4.f);
 	AddTitle(LOCTEXT("BlockColumn", "BLK"), ToggleWidth, 4.f);
 	AddTitle(LOCTEXT("FixturesColumn", "FIXT."), FixturesWidth, 6.f);
+	AddTitle(LOCTEXT("EffectsColumn", "FX"), EffectsWidth, 4.f);
 	AddTitle(FText::GetEmpty(), ToggleWidth + RowButtonWidth * 2.f + 8.f, 6.f);
 	return Row;
 }
@@ -505,6 +507,26 @@ UWidget* UStageCuePanel::MakeCueRow(const FShowCue& Cue, bool bActive, int32 Row
 	Fixtures->SetJustification(ETextJustify::Right);
 	Fixtures->SetToolTipText(LOCTEXT("FixturesTip", "Fixtures this cue changes (a tracking cue holds only its changes; earlier cues give the rest)."));
 	AddCell(MakeCell(*Fixtures, FixturesWidth), 6.f, false);
+
+	// Effects the cue starts or changes, and stops (Docs/ADR/0027 §5): "2", "-1", "2 -1"; empty when it touches none.
+	TArray<FString> EffectNames;
+	for (const FStageEffectEntry& Entry : Cue.Effects)
+	{
+		EffectNames.Add(Entry.Effect.Name.ToString());
+	}
+	FString EffectsLabel = Cue.Effects.IsEmpty() ? FString() : FString::FromInt(Cue.Effects.Num());
+	if (!Cue.EffectStops.IsEmpty())
+	{
+		EffectsLabel += FString::Printf(TEXT("%s-%d"), EffectsLabel.IsEmpty() ? TEXT("") : TEXT(" "), Cue.EffectStops.Num());
+	}
+	UTextBlock* Effects = MakeText(FText::FromString(EffectsLabel), 8, TEXT("Regular"), Palette.TextSecondary);
+	Effects->SetJustification(ETextJustify::Right);
+	Effects->SetToolTipText(Cue.Effects.IsEmpty() && Cue.EffectStops.IsEmpty()
+		? LOCTEXT("NoEffectsTip", "Effects: this cue starts and stops none (effects from earlier cues carry on).")
+		: FText::Format(LOCTEXT("EffectsTip", "Effects this cue starts or changes: {0}. Effects it stops: {1}. They track into the cues that follow."),
+			EffectNames.IsEmpty() ? LOCTEXT("EffectsNone", "none") : FText::FromString(FString::Join(EffectNames, TEXT(", "))),
+			FText::AsNumber(Cue.EffectStops.Num())));
+	AddCell(MakeCell(*Effects, EffectsWidth), 4.f, false);
 
 	const bool bExpanded = ExpandedCues.Contains(Cue.Number);
 	UStageChoiceButton* Detail = MakeButton(bExpanded ? LOCTEXT("Collapse", "-") : LOCTEXT("Expand", "+"),

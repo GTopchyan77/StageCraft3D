@@ -303,12 +303,12 @@ namespace StageShowCommands
 			{
 				Features.Add(FString::Printf(TEXT("%s %.2f"), *UEnum::GetDisplayValueAsText(Pair.Key).ToString(), Pair.Value));
 			}
-			UE_LOG(LogStageCraft, Display, TEXT("StageCraft.Show.Cue: %s%.3f \"%s\" in %.2f s, out %s, delay %.2f, %s%s, %s, %s, %d fixtures%s%s."),
+			UE_LOG(LogStageCraft, Display, TEXT("StageCraft.Show.Cue: %s%.3f \"%s\" in %.2f s, out %s, delay %.2f, %s%s, %s, %s, %d fixtures, %d effects, %d effect stops%s%s."),
 				FMath::IsNearlyEqual(Each.Number, ShowControl->GetActiveCueNumber(), 0.0005f) ? TEXT("> ") : TEXT("  "),
 				Each.Number, *Each.Label.ToString(), Each.FadeTime, Timing.bHasOutTime ? *FString::SanitizeFloat(Timing.OutTime) : TEXT("=in"), Timing.Delay,
 				*UEnum::GetDisplayValueAsText(Timing.Trigger).ToString(), Timing.Trigger == EStageCueTrigger::Wait ? *FString::Printf(TEXT(" %.2f s"), Timing.WaitTime) : TEXT(""),
 				*UEnum::GetDisplayValueAsText(Timing.Curve).ToString(), Each.bBlock ? TEXT("blocked") : TEXT("tracking"), Each.Fixtures.Num(),
-				Features.IsEmpty() ? TEXT("") : TEXT(", features "), *FString::Join(Features, TEXT(", ")));
+				Each.Effects.Num(), Each.EffectStops.Num(), Features.IsEmpty() ? TEXT("") : TEXT(", features "), *FString::Join(Features, TEXT(", ")));
 		}
 		UE_LOG(LogStageCraft, Display, TEXT("StageCraft.Show.Cue: %d cues, active %.3f, %s%s, source %s."), ShowControl->GetCues().Num(),
 			ShowControl->GetActiveCueNumber(), ShowControl->IsFading() ? TEXT("fading") : TEXT("idle"), ShowControl->IsAutoGoArmed() ? TEXT(", next cue armed") : TEXT(""),
@@ -670,7 +670,7 @@ namespace StageShowCommands
 		return true;
 	}
 
-	/** Start <quick effect> [key=value...] | Set <n> key=value... | Stop <n>|All | List. */
+	/** Start <quick effect> [key=value...] | Set <n> key=value... | Edit <n> | Stop <n>|All | List. */
 	void EffectRequest(const TArray<FString>& Args, UWorld* World)
 	{
 		AModularPlayerController* Controller = GetController(World);
@@ -682,8 +682,12 @@ namespace StageShowCommands
 		}
 		const FString Verb = Args.IsEmpty() ? TEXT("List") : Args[0];
 		int32 Number = 0;
-		const bool bHasNumber = Args.Num() >= 2 && LexTryParseString(Number, *Args[1]) && Programmer->GetEffects().IsValidIndex(Number - 1);
-		const FGuid Target = bHasNumber ? Programmer->GetEffects()[Number - 1].Id : FGuid();
+		// Every source's running effects (Docs/ADR/0027 §5), not those fading out: the numbers List shows.
+		TArray<FStageRunningEffect> Running;
+		Show->GetRunningEffects(Running);
+		Running.RemoveAll([](const FStageRunningEffect& Effect) { return Effect.bStopping; });
+		const bool bHasNumber = Args.Num() >= 2 && LexTryParseString(Number, *Args[1]) && Running.IsValidIndex(Number - 1);
+		const FGuid Target = bHasNumber ? Running[Number - 1].Entry.Id : FGuid();
 		bool bOk = true;
 		if (Verb == TEXT("Start") && Args.Num() >= 2)
 		{
@@ -702,8 +706,12 @@ namespace StageShowCommands
 		}
 		else if (Verb == TEXT("Set") && bHasNumber)
 		{
-			FStageEffect Effect = Programmer->GetEffects()[Number - 1].Effect;
+			FStageEffect Effect = Running[Number - 1].Entry.Effect;
 			bOk = ApplyEffectSettings(TArrayView<const FString>(Args).RightChop(2), Effect) && Controller->RequestUpdateEffect(Target, Effect);
+		}
+		else if (Verb == TEXT("Edit") && bHasNumber)
+		{
+			bOk = Controller->RequestEditEffect(Target);
 		}
 		else if (Verb == TEXT("Stop") && (bHasNumber || (Args.Num() >= 2 && Args[1] == TEXT("All"))))
 		{
@@ -711,7 +719,7 @@ namespace StageShowCommands
 		}
 		else if (Verb != TEXT("List"))
 		{
-			UE_LOG(LogStageCraft, Display, TEXT("Usage: StageCraft.Show.Effect Start <quick effect> [key=value...] | Set <n> key=value... | Stop <n>|All | List. ")
+			UE_LOG(LogStageCraft, Display, TEXT("Usage: StageCraft.Show.Effect Start <quick effect> [key=value...] | Set <n> key=value... | Edit <n> | Stop <n>|All | List. ")
 				TEXT("Keys: rate bpm size low high phase spread duty wings blocks wave dir fan axis."));
 			return;
 		}
@@ -719,12 +727,27 @@ namespace StageShowCommands
 		{
 			UE_LOG(LogStageCraft, Display, TEXT("StageCraft.Show.Effect %s: %s."), *FString::Join(Args, TEXT(" ")), bOk ? TEXT("done") : TEXT("refused"));
 		}
-		for (int32 Index = 0; Index < Programmer->GetEffects().Num(); ++Index)
+		Show->GetRunningEffects(Running);
+		for (const FStageRunningEffect& Effect : Running)
 		{
-			const FStageEffectEntry& Entry = Programmer->GetEffects()[Index];
+			if (Effect.bStopping)
+			{
+				UE_LOG(LogStageCraft, Display, TEXT("StageCraft.Show.Effect - \"%s\" fading out, weight %.2f."), *Effect.Entry.Effect.Name.ToString(), Show->GetEffectWeight(Effect.Entry.Id));
+			}
+		}
+		Running.RemoveAll([](const FStageRunningEffect& Effect) { return Effect.bStopping; });
+		if (!Programmer->GetEffectStops().IsEmpty())
+		{
+			UE_LOG(LogStageCraft, Display, TEXT("StageCraft.Show.Effect: the programmer stops %d cue or playback effect(s)."), Programmer->GetEffectStops().Num());
+		}
+		for (int32 Index = 0; Index < Running.Num(); ++Index)
+		{
+			const FStageEffectEntry& Entry = Running[Index].Entry;
 			const FStageEffect& Effect = Entry.Effect;
-			UE_LOG(LogStageCraft, Display, TEXT("StageCraft.Show.Effect %d \"%s\": %s %s on %d fixture(s), %.3f Hz (%.1f BPM), size %.1f, low %.2f high %.2f, phase %.0f, spread %.0f, wings %d, blocks %d, %s, clock %.3f."),
-				Index + 1, *Effect.Name.ToString(), *StaticEnum<EStageEffectTarget>()->GetNameStringByValue(static_cast<int64>(Effect.Target)),
+			const FString Source = Running[Index].Source == EStageEffectSource::Programmer ? FString(TEXT("programmer"))
+				: Running[Index].Source == EStageEffectSource::Playback ? FString::Printf(TEXT("playback %d"), Running[Index].Playback + 1) : FString(TEXT("cue list"));
+			UE_LOG(LogStageCraft, Display, TEXT("StageCraft.Show.Effect %d \"%s\" (%s, weight %.2f): %s %s on %d fixture(s), %.3f Hz (%.1f BPM), size %.1f, low %.2f high %.2f, phase %.0f, spread %.0f, wings %d, blocks %d, %s, clock %.3f."),
+				Index + 1, *Effect.Name.ToString(), *Source, Show->GetEffectWeight(Entry.Id),*StaticEnum<EStageEffectTarget>()->GetNameStringByValue(static_cast<int64>(Effect.Target)),
 				*StaticEnum<EStageEffectWaveform>()->GetNameStringByValue(static_cast<int64>(Effect.Waveform)), Entry.FixtureIds.Num(), Effect.RateHz,
 				StageEffectRules::HzToBPM(Effect.RateHz), Effect.Size, Effect.Low, Effect.High, Effect.Phase, Effect.Spread, Effect.Wings, Effect.Blocks,
 				*StaticEnum<EStageEffectDirection>()->GetNameStringByValue(static_cast<int64>(Effect.Direction)), Show->GetEffectCycles(Entry.Id));
@@ -732,7 +755,7 @@ namespace StageShowCommands
 	}
 
 	FAutoConsoleCommandWithWorldAndArgs EffectCommand(TEXT("StageCraft.Show.Effect"),
-		TEXT("Start <quick effect, e.g. Circle, DimmerChase> [key=value...] | Set <n> key=value... | Stop <n>|All | List (validated, undoable like the Effects panel)"),
+		TEXT("Start <quick effect, e.g. Circle, DimmerChase> [key=value...] | Set <n> key=value... | Edit <n> | Stop <n>|All | List (validated, undoable like the Effects panel)"),
 		FConsoleCommandWithWorldAndArgsDelegate::CreateStatic(&EffectRequest));
 	FAutoConsoleCommandWithWorldAndArgs PlaybackCommand(TEXT("StageCraft.Show.Playback"),
 		TEXT("<1..10> Record | Clear | Rename <name> | Level <0..1> | Flash On|Off | Go | Release, or List (as the Playback panel)"),

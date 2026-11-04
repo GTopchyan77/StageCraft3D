@@ -96,6 +96,51 @@ namespace StageSceneStore
 		const TCHAR* Block = TEXT("block");
 		const TCHAR* Playbacks = TEXT("playbacks");
 		const TCHAR* Index = TEXT("index");
+
+		// Version 10: effects in cues, stops in cues and the programmer (Docs/ADR/0027 §5).
+		const TCHAR* Effects = TEXT("effects");
+		const TCHAR* EffectStops = TEXT("effectStops");
+		const TCHAR* ProgrammerEffectStops = TEXT("programmerEffectStops");
+	}
+
+	// Effects are written and read the same way in cues as in the programmer; both are defined with the version 9 code below.
+	TArray<TSharedPtr<FJsonValue>> WriteEffects(const TArray<FStageEffectEntry>& Entries);
+	TArray<FStageEffectEntry> ReadEffects(const FJsonObject& Owner, const TCHAR* Name, int32& InOutInvalid);
+
+	/** Effect ids (stops) as strings. */
+	TArray<TSharedPtr<FJsonValue>> WriteEffectStops(const TArray<FGuid>& Stops)
+	{
+		TArray<TSharedPtr<FJsonValue>> Array;
+		Array.Reserve(Stops.Num());
+		for (const FGuid& Stop : Stops)
+		{
+			Array.Add(MakeShared<FJsonValueString>(Stop.ToString(EGuidFormats::DigitsWithHyphens)));
+		}
+		return Array;
+	}
+
+	/** The stops in Name (a version 10 file): unreadable ids dropped and counted, then repaired against Effects (SanitizeStops). */
+	TArray<FGuid> ReadEffectStops(const FJsonObject& Owner, const TCHAR* Name, TConstArrayView<FStageEffectEntry> Effects, int32& InOutInvalid)
+	{
+		TArray<FGuid> Stops;
+		const TArray<TSharedPtr<FJsonValue>>* Array = nullptr;
+		if (!Owner.TryGetArrayField(Name, Array))
+		{
+			return Stops;
+		}
+		for (const TSharedPtr<FJsonValue>& Value : *Array)
+		{
+			FString Text;
+			FGuid Id;
+			if (Stops.Num() >= StageEffectRules::MaxEffects || !Value.IsValid() || !Value->TryGetString(Text) || !FGuid::Parse(Text, Id) || !Id.IsValid())
+			{
+				++InOutInvalid;
+				continue;
+			}
+			Stops.Add(Id);
+		}
+		InOutInvalid += StageEffectRules::SanitizeStops(Stops, Effects);
+		return Stops;
 	}
 
 	/** Cue triggers and curves by name in files, so a reordered enum never changes what a file means. Index = enum value. */
@@ -223,6 +268,14 @@ namespace StageSceneStore
 			Object->SetStringField(Field::Curve, CueCurveNames[static_cast<int32>(Timing.Curve)]);
 			Object->SetBoolField(Field::Block, Cue.bBlock);
 			Object->SetArrayField(Field::Fixtures, Fixtures);
+			if (!Cue.Effects.IsEmpty())
+			{
+				Object->SetArrayField(Field::Effects, WriteEffects(Cue.Effects));
+			}
+			if (!Cue.EffectStops.IsEmpty())
+			{
+				Object->SetArrayField(Field::EffectStops, WriteEffectStops(Cue.EffectStops));
+			}
 			Array.Add(MakeShared<FJsonValueObject>(Object));
 		}
 		return Array;
@@ -375,6 +428,13 @@ namespace StageSceneStore
 				}
 				OutCue.Fixtures.Add(MoveTemp(State));
 			}
+		}
+
+		// Migration 9 -> 10: older cues hold no effects (Docs/ADR/0027 §5).
+		if (Version >= 10)
+		{
+			OutCue.Effects = ReadEffects(Object, Field::Effects, InOutInvalid);
+			OutCue.EffectStops = ReadEffectStops(Object, Field::EffectStops, OutCue.Effects, InOutInvalid);
 		}
 		return true;
 	}
@@ -1251,6 +1311,7 @@ FString FStageSceneStore::Serialize(const FStageSceneDocument& Document)
 	}
 	Root->SetArrayField(Field::Programmer, Programmer);
 	Root->SetArrayField(EffectField::ProgrammerEffects, WriteEffects(Document.ProgrammerEffects));
+	Root->SetArrayField(Field::ProgrammerEffectStops, WriteEffectStops(Document.ProgrammerEffectStops));
 	Root->SetArrayField(Field::Groups, WriteGroups(Document.Groups));
 	Root->SetArrayField(Field::Palettes, WritePalettes(Document.Palettes));
 	Root->SetArrayField(Field::Playbacks, WritePlaybacks(Document.Playbacks));
@@ -1340,6 +1401,11 @@ EStageSceneResult FStageSceneStore::Parse(const FString& Contents, FStageSceneDo
 	if (Version >= 9)
 	{
 		OutDocument.ProgrammerEffects = ReadEffects(*Root, EffectField::ProgrammerEffects, OutReport.InvalidShowEntries);
+	}
+	// Migration 9 -> 10: no stops in the programmer.
+	if (Version >= 10)
+	{
+		OutDocument.ProgrammerEffectStops = ReadEffectStops(*Root, Field::ProgrammerEffectStops, OutDocument.ProgrammerEffects, OutReport.InvalidShowEntries);
 	}
 	// Migration 7 -> 8: older stages have empty playbacks.
 	if (Version >= 8)

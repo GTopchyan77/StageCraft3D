@@ -62,6 +62,28 @@ namespace StageShowMix
 		return true;
 	}
 
+	void ComposeEffect(FEffectValue& Into, const FEffectValue& Over)
+	{
+		const float Below = FMath::Clamp(Into.Weight, 0.f, 1.f);
+		const float Above = FMath::Clamp(Over.Weight, 0.f, 1.f);
+		if (Into.bRelative != Over.bRelative || Above >= 1.f)
+		{
+			Into = Over;
+			return;
+		}
+		if (Over.bRelative)
+		{
+			// Offsets: Into's share that Over leaves, plus Over's own, both already weighted.
+			Into.Value = Into.Value * Below * (1.f - Above) + Over.Value * Above;
+			Into.Weight = 1.f;
+			return;
+		}
+		// s -> lerp(s, a, wa) -> lerp(.., b, wb) is lerp(s, V, W) with W = 1 - (1 - wa)(1 - wb).
+		const float Weight = 1.f - (1.f - Below) * (1.f - Above);
+		Into.Value = Weight > UE_SMALL_NUMBER ? (Into.Value * Below * (1.f - Above) + Over.Value * Above) / Weight : Over.Value;
+		Into.Weight = Weight;
+	}
+
 	bool ResolveAttribute(const FGameplayTag& Attribute, const FFixtureLayers& Layers, float& OutValue)
 	{
 		// The kind is only needed when something can change intensity on its way through: playbacks (HTP) or the masters.

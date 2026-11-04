@@ -2,7 +2,7 @@
 
 - **Status:** accepted.
   - F4a (the engine, programmer effects, the Effects panel): implemented with STATE.md #63.
-  - F4b (effects stored in cues and playbacks, with tracking): planned, STATE.md #64.
+  - F4b (effects stored in cues and playbacks, with tracking and fades): §5, STATE.md #64.
 - **Related:**
   - ADR 0025 (programmer and output mix), ADR 0026 (cue timing, tracking, playbacks and masters), ADR 0028 (palettes), ADR 0003 (undo).
   - tasks/todo.md Phase 34 (gap G8).
@@ -101,12 +101,53 @@ Under External they hold still and are not written; the GameMode refuses effect 
   dropped; an unknown name or a bad number falls back to the default for that setting; each is counted in `InvalidShowEntries`.
   Files v1–v8 load with no effects. v9 files are refused by builds before #63.
 
-## 5. F4b (planned, STATE.md #64)
+## 5. Effects in cues and playbacks (F4b, STATE.md #64)
 
-Cues and playback cues hold effect entries too, tracking like values: a later cue with the same id replaces the effect, a stop entry
-ends it, Block starts from none; Track store carries the programmer's effects into the cue, Cue Only adds a stop in the next cue, Look
-captures every running effect. An effect fades its weight in and out over its cue's In time. A playback's effects scale their
-intensity by its fader.
+- **Data.** `FShowCue` gains `Effects` (`FStageEffectEntry`, as in the programmer) and `EffectStops` (ids of effects the cue ends).
+  `StageCueRules::SanitizeCueEffects` applies the programmer's rules to both (at most `MaxEffects` of each, unique valid ids, a stop
+  never names an effect of the same cue). Playback cues are `FShowCue`s, so they hold effects too.
+- **Tracking** (`StageCueTracking::EffectsAt`, pure): from the nearest blocked cue forward, an effect starts at the cue that holds it;
+  a later cue with the same id replaces it (and moves it to the end of the order: the latest wins an attribute); a stop ends it. A
+  blocked cue starts from no effects.
+- **Stores.**
+  - **Track** merges the programmer's effects (same id replaces) and stops into the cue (`MergeEffectsInto`); an effect removes a
+    stop of its id and the other way round.
+  - **Cue Only** also gives the next cue, for each stored id it does not name itself, the effect as it ran before the store, or a
+    stop when the effect is new (`KeepNextCueEffects`), so the change ends at this cue.
+  - **Look** records every effect running on stage (not those fading out).
+  - **Block** writes the effects the cue inherited into it, like its values.
+  - **Record Playback** puts the programmer's effects and stops into the new playback cue.
+  - A store or record clears the programmer's values, effects and stops, all one undo step with the cue change. A tracking store
+    needs values, an effect or a stop in the programmer.
+- **Sources at run time.** The show subsystem hands the runner one list: the main cue list's effects at the active cue, then each
+  active playback's effects in activation order, then the programmer's. The same id in several places runs once, as the latest
+  (programmer, else the latest playback, else the main list); the programmer's stops remove ids from every source. The main list's
+  effects change on Go, Back, Go To and restore only (as its values do), a playback's on its Go, record, flash, level and release.
+- **The programmer over cue effects.**
+  - **Stop** on a running effect removes it from the programmer and, if a cue or playback runs that id, adds a programmer stop, so it
+    stops live and a store records the stop. Stop All does both for every effect. Clear brings cue effects back.
+  - **Edit** copies a cue's or playback's effect into the programmer under the same id (one undo step): it takes over without a jump
+    (same clock) and a Track store writes it back.
+  - The programmer's effects and stops are one undo state (`FStageProgrammerEffectsCommand`) and are saved in scenes.
+- **Fades** (`FStageEffectRunner`). Every effect has a weight (§3). A change made by a cue (Go, Back with that cue's timing) is timed
+  by the cue: the target's feature time or the In time, the Out time for intensity effects stopping, the cue's delay and curve
+  (`StageCueTiming::GetFeatureTiming`).
+  - A new effect fades its weight in from 0, a stopped one fades it out to 0 and is then dropped.
+  - The same id with other settings **morphs**: both settings are evaluated on the same clock and blended, and the rate is blended,
+    so a circle that grows between cues grows smoothly. A changed fixture list takes the new list at once.
+  - Changes from the programmer, a playback, Go To, restore and load are immediate. A change that leaves an effect as it was keeps
+    any fade it is in.
+  - Two effects on one attribute compose in order (`StageShowMix::ComposeEffect`): a later one over an earlier one by its weight, so
+    an effect fading in over another one crossfades instead of jumping. With every weight at 1 this is §3's "later wins".
+- **Playback faders.** A playback's intensity effects are scaled by its level (as its intensity is); its other effects apply fully
+  while it is up. A level change updates the scale without re-finding fixtures.
+- **Scene format v10:** each cue (main list and playbacks) may hold `"effects"` (written as `"programmerEffects"`) and `"effectStops"`
+  (ids); the programmer's stops are `"programmerEffectStops"`. Bad entries are dropped and counted in `InvalidShowEntries`. Files
+  v1–v9 load with no cue effects; v10 files are refused by builds before #64.
+- **Panels.** The Cues panel shows each cue's effects and stops in an FX column; the Effects panel's running list names each
+  effect's source (Programmer, Cue n, PB n) with EDIT and STOP; a playback that holds effects shows FX on its strip.
+- **Alternative rejected:** a playback's intensity effect combining HTP with the values below it. The latest-wins layer of §3 is
+  simpler to predict, and HTP effects can come later without a format change.
 
 ## 6. UI
 
@@ -126,7 +167,9 @@ intensity by its fader.
 ## 7. Measured cost
 
 `StageCraft.Bench.Fixtures ... Effects=1|2` (and `RunFixtureBench.ps1 -Effects`) runs a circle and a dimmer sine (2: also a rainbow)
-on every bench fixture through the idle and crossfade phases. Numbers are in STATE.md #63.
+on every bench fixture through the idle and crossfade phases. Numbers are in STATE.md #63. `Effects=3` (F4b) stores the effects in
+the two bench cues instead (the bigger circle and a rainbow in B), so every crossfade fades, morphs and starts or stops them; its
+cost equals `Effects=1` (STATE.md #64).
 
 ## 8. Alternatives rejected
 

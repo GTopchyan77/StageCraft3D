@@ -42,6 +42,13 @@ namespace StageShowMix
 
 	using FEffectMap = TMap<FGameplayTag, FEffectValue>;
 
+	/**
+	 * Puts Over on top of Into, where two effects drive one attribute (Docs/ADR/0027 §5): the result applied to a static value equals
+	 * applying Into, then Over, each by its weight. So Over at weight 1 replaces Into (the later effect wins), and one fading in over
+	 * another crossfades. A relative and an absolute value do not mix: Over replaces Into.
+	 */
+	MODULARSCENEBUILDER_API void ComposeEffect(FEffectValue& Into, const FEffectValue& Over);
+
 	/** One fixture's layers. Null means the layer holds nothing for this fixture. */
 	struct FFixtureLayers
 	{

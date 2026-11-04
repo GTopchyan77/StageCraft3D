@@ -498,9 +498,19 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "StageCraft|Requests")
 	bool RequestUpdateEffect(FGuid EffectId, const FStageEffect& Effect);
 
-	/** Stops one effect, or every effect when EffectId is invalid. One undo step. */
+	/**
+	 * Stops one running effect, or every one when EffectId is invalid (Docs/ADR/0027 §5): the programmer's own leave it, and one a cue
+	 * or playback runs is held off by a stop in the programmer (a store records it; Clear brings it back). One undo step.
+	 */
 	UFUNCTION(BlueprintCallable, Category = "StageCraft|Requests")
 	bool RequestStopEffect(FGuid EffectId);
+
+	/**
+	 * Takes the effect EffectId that a cue or playback runs into the programmer under its own id, so it can be edited live without a
+	 * jump and a Track store writes it back. One undo step. False when no cue or playback runs it.
+	 */
+	UFUNCTION(BlueprintCallable, Category = "StageCraft|Requests")
+	bool RequestEditEffect(FGuid EffectId);
 
 	/**
 	 * Re-patches fixtures as ONE undoable step (the Patch panel's AUTO PATCH, FIX CONFLICTS and PATCH SELECTION, planned by
@@ -989,10 +999,16 @@ private:
 	bool bHighlightOn = false;
 
 	/** The programmer's effects before the first RequestPreviewEffect of a drag; RequestUpdateEffect records the step from here. */
-	TOptional<TArray<FStageEffectEntry>> EffectsBeforePreview;
+	TOptional<FStageProgrammerEffects> EffectsBeforePreview;
 
 	/** Asks the GameMode about an effect request and returns the programmer, or null (refusal reported). */
 	class UStageProgrammerSubsystem* ApproveEffectRequest();
+
+	/** Records one undo step from Before to the programmer's effects and stops now. */
+	void RecordEffectsStep(const FText& Description, FStageProgrammerEffects Before, const class UStageProgrammerSubsystem& Programmer);
+
+	/** Empties the programmer (values, effects, stops) and adds the undo commands for it to OutCommands (a Clear, a store, a record). */
+	void AddProgrammerClear(class UStageProgrammerSubsystem& Programmer, const FText& Description, TArray<TSharedRef<class IStageEditCommand>>& OutCommands);
 
 	/** While RunCapturingRejections runs: where ReportRejection also copies each refusal. */
 	TArray<FStageEconomyResultInfo>* RejectionSink = nullptr;

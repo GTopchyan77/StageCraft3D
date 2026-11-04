@@ -6,6 +6,7 @@
 #include "Blueprint/UserWidget.h"
 #include "Engine/TimerHandle.h"
 #include "Show/ShowControlTypes.h"
+#include "Show/StageEffectRunner.h"
 #include "Styling/SlateTypes.h"
 #include "StageEffectsPanel.generated.h"
 
@@ -85,6 +86,8 @@ private:
 	{
 		TWeakObjectPtr<class UBorder> Frame;
 		TWeakObjectPtr<class UTextBlock> Label;
+		/** EDIT: shown for an effect a cue or playback runs. */
+		TWeakObjectPtr<class UWidget> Edit;
 	};
 
 	void BuildTree();
@@ -103,6 +106,8 @@ private:
 
 	/** The effect the editor shows, or null (none running, or it stopped). */
 	const FStageEffectEntry* FindSelected() const;
+	/** Whether the selected effect is the programmer's (editable); a cue's or playback's is shown read-only until EDIT takes it. */
+	bool IsSelectedEditable() const;
 	bool GetPreviewState(FStageEffect& OutEffect, int32& OutCount, double& OutCycles) const;
 
 	void RequestRefresh();
@@ -135,6 +140,13 @@ private:
 	void HandleSliderMoved(int32 SliderIndex, float Value);
 	void HandleRunningPicked(int32 Index);
 	void HandleStopPicked(int32 Index);
+	void HandleEditPicked(int32 Index);
+
+	UFUNCTION()
+	void HandleShowChanged();
+
+	UFUNCTION()
+	void HandleCueEvent(float CueNumber);
 	void HandleStopAllPicked(int32 ChoiceIndex);
 	void HandleTapPicked(int32 ChoiceIndex);
 
@@ -142,8 +154,8 @@ private:
 	TArray<FSettingRow> SettingRows;
 	TArray<FChoiceRow> ChoiceRows;
 	TArray<FRunningRow> RunningRows;
-	/** The effect IDs the running list was built for; a different set rebuilds it. */
-	TArray<FGuid> ListedIds;
+	/** The effects the running list shows (every source, not those fading out), as of the last refresh; a different set rebuilds it. */
+	TArray<FStageRunningEffect> Listed;
 
 	UPROPERTY(Transient)
 	TObjectPtr<class UTextBlock> EditorTitle = nullptr;

@@ -178,6 +178,17 @@ struct MODULARSCENEBUILDER_API FShowCue
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Cue")
 	TArray<FShowCueFixtureState> Fixtures;
+
+	/**
+	 * Effects this cue starts or changes (Docs/ADR/0027-effects-engine.md §5); they track into the cues that follow until a cue
+	 * replaces (same id) or stops them. Sanitized by StageCueRules::SanitizeCueEffects.
+	 */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Cue")
+	TArray<FStageEffectEntry> Effects;
+
+	/** Ids of effects running from earlier cues that end at this cue. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Cue")
+	TArray<FGuid> EffectStops;
 };
 
 /**
@@ -213,6 +224,12 @@ namespace StageCueRules
 	 * of a number, rounds numbers, sanitizes fades and labels, and sorts by number. Returns how many cues were dropped.
 	 */
 	MODULARSCENEBUILDER_API int32 SanitizeCueList(TArray<FShowCue>& Cues);
+
+	/**
+	 * The cue's effects and stops made valid (StageEffectRules::SanitizeEntries and SanitizeStops). SanitizeCueList applies it to
+	 * every cue; a reader that reports drops calls it itself. Returns how many entries, fixture IDs and stops were dropped.
+	 */
+	MODULARSCENEBUILDER_API int32 SanitizeCueEffects(FShowCue& Cue);
 }
 
 /** A cue request a player makes, judged by AStageCraftGameModeBase::EvaluateCueRequest. */

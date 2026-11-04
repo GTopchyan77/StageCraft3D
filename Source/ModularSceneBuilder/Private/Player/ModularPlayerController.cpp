@@ -2003,7 +2003,7 @@ bool AModularPlayerController::RequestStoreCue(float CueNumber, const FText& Lab
 		return false;
 	}
 	const UStageProgrammerSubsystem* ProgrammerState = UWorld::GetSubsystem<UStageProgrammerSubsystem>(GetWorld());
-	if (Mode != EStageCueStoreMode::Look && (!ProgrammerState || ProgrammerState->IsEmpty()))
+	if (Mode != EStageCueStoreMode::Look && (!ProgrammerState || (ProgrammerState->IsEmpty() && ProgrammerState->GetEffectState().IsEmpty())))
 	{
 		ReportRejection(FStageEconomyResultInfo::Fail(EStageEconomyResult::InvalidRequest,
 			LOCTEXT("TrackNeedsProgrammer", "The programmer is empty: set some values first, or store the whole LOOK.")));
@@ -2021,25 +2021,16 @@ bool AModularPlayerController::RequestStoreCue(float CueNumber, const FText& Lab
 		return false;
 	}
 
-	// As on a console, the stored values leave the programmer (Docs/ADR/0025 §6). The new cue becomes the playing one, so what the
-	// stage shows does not change; the store and the clear are one undo step.
+	// As on a console, the stored values, effects and stops leave the programmer (Docs/ADR/0025 §6, ADR 0027 §5). The new cue becomes
+	// the playing one first, so what the stage shows does not change (a stored effect keeps its clock: the cue runs the same id); the
+	// store and the clear are one undo step.
 	TArray<TSharedRef<IStageEditCommand>> Commands;
 	Commands.Add(MakeShared<FStageCueListCommand>(Description, Before, Show->GetCues()));
-	if (UStageProgrammerSubsystem* Programmer = UWorld::GetSubsystem<UStageProgrammerSubsystem>(GetWorld()); Programmer && !Programmer->IsEmpty())
+	Show->RestoreActiveCue(CueNumber);
+	if (UStageProgrammerSubsystem* Programmer = UWorld::GetSubsystem<UStageProgrammerSubsystem>(GetWorld());
+		Programmer && (!Programmer->IsEmpty() || !Programmer->GetEffectState().IsEmpty()))
 	{
-		TArray<FShowCueFixtureState> ProgrammerBefore = Programmer->GetEntries();
-		TArray<int32> FixtureIds;
-		for (const FShowCueFixtureState& Entry : ProgrammerBefore)
-		{
-			FixtureIds.Add(Entry.FixtureId);
-		}
-		Show->RestoreActiveCue(CueNumber);
-		Programmer->ClearAll();
-		Commands.Add(MakeShared<FStageProgrammerCommand>(Description, MoveTemp(FixtureIds), MoveTemp(ProgrammerBefore), TArray<FShowCueFixtureState>()));
-	}
-	else
-	{
-		Show->RestoreActiveCue(CueNumber);
+		AddProgrammerClear(*Programmer, Description, Commands);
 	}
 	EditHistory->RecordAsOneStep(MoveTemp(Commands), Description);
 	return true;

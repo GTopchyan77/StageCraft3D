@@ -96,11 +96,36 @@ public:
 	/** Stops one effect. False when unknown. */
 	bool RemoveEffect(const FGuid& EffectId);
 
-	/** Replaces every effect (undo, redo, scene load, Clear); sanitized by StageEffectRules::SanitizeEntries. */
+	/** Replaces every effect (sanitized by StageEffectRules::SanitizeEntries); stops naming none of them stay. */
 	void SetEffects(TArray<FStageEffectEntry> InEffects);
 
 	/** True when A and B hold the same effects in the same order. */
 	static bool AreEffectsEqual(TConstArrayView<FStageEffectEntry> A, TConstArrayView<FStageEffectEntry> B);
+
+	// --- Stops over cue and playback effects (Docs/ADR/0027-effects-engine.md §5) ---
+
+	/** Ids of cue or playback effects the programmer stops: they do not run while held, and a store records them as stops. */
+	const TArray<FGuid>& GetEffectStops() const { return EffectStops; }
+
+	bool HasEffectStops() const { return !EffectStops.IsEmpty(); }
+
+	/** The effects and stops as one state (undo, stores, scenes). */
+	FStageProgrammerEffects GetEffectState() const;
+
+	/** Replaces the effects and stops (undo, redo, scene load, Clear, a store); sanitized. */
+	void SetEffectState(FStageProgrammerEffects InState);
+
+	/**
+	 * Stops EffectId wherever it runs: the programmer's own effect of that id leaves and a stop is held. False (nothing changes) for
+	 * an invalid id, one already stopped, or StageEffectRules::MaxEffects stops held.
+	 */
+	bool AddEffectStop(const FGuid& EffectId);
+
+	/**
+	 * Takes Entry (a cue's or playback's effect) into the programmer under its own id, so the show runs it from here on the same clock:
+	 * replaces an effect of that id and drops a stop of it. False when Entry is invalid, the programmer is full or nothing changed.
+	 */
+	bool TakeEffect(const FStageEffectEntry& Entry);
 
 	FOnStageProgrammerEffectsChanged OnEffectsChanged;
 
@@ -139,4 +164,5 @@ private:
 	TMap<int32, FShowCueFixtureState> Entries;
 	TSet<int32> Highlighted;
 	TArray<FStageEffectEntry> Effects;
+	TArray<FGuid> EffectStops;
 };

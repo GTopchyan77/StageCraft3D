@@ -19,6 +19,7 @@ void UStageProgrammerSubsystem::Deinitialize()
 	Entries.Reset();
 	Highlighted.Reset();
 	Effects.Reset();
+	EffectStops.Reset();
 	OnFixturesChanged.Clear();
 	OnEffectsChanged.Clear();
 	Super::Deinitialize();
@@ -117,28 +118,84 @@ void UStageProgrammerSubsystem::SetEffects(TArray<FStageEffectEntry> InEffects)
 {
 	const int32 Dropped = StageEffectRules::SanitizeEntries(InEffects);
 	UE_CLOG(Dropped > 0, LogStageCraft, Warning, TEXT("Programmer: dropped %d invalid effect entries or fixture IDs."), Dropped);
-	if (AreEffectsEqual(Effects, InEffects))
+	TArray<FGuid> Stops = EffectStops;
+	StageEffectRules::SanitizeStops(Stops, InEffects);
+	if (AreEffectsEqual(Effects, InEffects) && Stops == EffectStops)
 	{
 		return;
 	}
 	Effects = MoveTemp(InEffects);
+	EffectStops = MoveTemp(Stops);
 	BroadcastEffects();
+}
+
+FStageProgrammerEffects UStageProgrammerSubsystem::GetEffectState() const
+{
+	FStageProgrammerEffects State;
+	State.Effects = Effects;
+	State.Stops = EffectStops;
+	return State;
+}
+
+void UStageProgrammerSubsystem::SetEffectState(FStageProgrammerEffects InState)
+{
+	const int32 Dropped = StageEffectRules::SanitizeEntries(InState.Effects) + StageEffectRules::SanitizeStops(InState.Stops, InState.Effects);
+	UE_CLOG(Dropped > 0, LogStageCraft, Warning, TEXT("Programmer: dropped %d invalid effect entries, fixture IDs or stops."), Dropped);
+	if (AreEffectsEqual(Effects, InState.Effects) && EffectStops == InState.Stops)
+	{
+		return;
+	}
+	Effects = MoveTemp(InState.Effects);
+	EffectStops = MoveTemp(InState.Stops);
+	BroadcastEffects();
+}
+
+bool UStageProgrammerSubsystem::AddEffectStop(const FGuid& EffectId)
+{
+	if (!EffectId.IsValid() || EffectStops.Contains(EffectId) || EffectStops.Num() >= StageEffectRules::MaxEffects)
+	{
+		return false;
+	}
+	Effects.RemoveAll([&EffectId](const FStageEffectEntry& Entry) { return Entry.Id == EffectId; });
+	EffectStops.Add(EffectId);
+	BroadcastEffects();
+	return true;
+}
+
+bool UStageProgrammerSubsystem::TakeEffect(const FStageEffectEntry& Entry)
+{
+	TArray<FStageEffectEntry> Candidate = { Entry };
+	StageEffectRules::SanitizeEntries(Candidate);
+	if (Candidate.IsEmpty())
+	{
+		return false;
+	}
+	FStageEffectEntry* Existing = Effects.FindByPredicate([&Entry](const FStageEffectEntry& Own) { return Own.Id == Entry.Id; });
+	if (!Existing && Effects.Num() >= StageEffectRules::MaxEffects)
+	{
+		return false;
+	}
+	const bool bStopDropped = EffectStops.Remove(Entry.Id) > 0;
+	if (Existing)
+	{
+		const bool bSame = StageEffectRules::AreEntriesEqual(MakeArrayView(Existing, 1), Candidate);
+		if (bSame && !bStopDropped)
+		{
+			return false;
+		}
+		*Existing = MoveTemp(Candidate[0]);
+	}
+	else
+	{
+		Effects.Add(MoveTemp(Candidate[0]));
+	}
+	BroadcastEffects();
+	return true;
 }
 
 bool UStageProgrammerSubsystem::AreEffectsEqual(TConstArrayView<FStageEffectEntry> A, TConstArrayView<FStageEffectEntry> B)
 {
-	if (A.Num() != B.Num())
-	{
-		return false;
-	}
-	for (int32 Index = 0; Index < A.Num(); ++Index)
-	{
-		if (A[Index].Id != B[Index].Id || A[Index].FixtureIds != B[Index].FixtureIds || !A[Index].Effect.Equals(B[Index].Effect))
-		{
-			return false;
-		}
-	}
-	return true;
+	return StageEffectRules::AreEntriesEqual(A, B);
 }
 
 const TMap<FGameplayTag, float>* UStageProgrammerSubsystem::FindValues(int32 FixtureId) const

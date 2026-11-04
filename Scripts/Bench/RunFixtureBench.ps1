@@ -26,8 +26,8 @@ param(
     [string]$Item = '',
     # Grand Master during the run: below 1 every fade frame goes through the full mix (HTP, LTP, masters; ADR 0026 section 6).
     [double]$GM = 1,
-    # Effects on every bench fixture: 0 none, 1 circle + dimmer sine, 2 also a rainbow (ADR 0027 section 7).
-    [ValidateSet(0, 1, 2)]
+    # Effects on every bench fixture: 0 none, 1 circle + dimmer sine, 2 also a rainbow, 3 held by the two cues (fade and morph on every Go; ADR 0027 sections 5 and 7).
+    [ValidateSet(0, 1, 2, 3)]
     [int]$Effects = 0,
     [int]$ResX = 1600,
     [int]$ResY = 900,

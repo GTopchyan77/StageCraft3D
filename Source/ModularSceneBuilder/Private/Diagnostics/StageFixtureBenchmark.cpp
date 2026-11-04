@@ -6,7 +6,8 @@
 //
 //   StageCraft.Bench.Fixtures 50 200 500 [Seconds=10] [Fade=2] [Settle=3] [Zoom=1] [Item=<catalog asset name>] [GM=1]
 //   (GM below 1 measures fades mixed in full every frame, as with a playback up or the Grand Master down; Docs/ADR/0026 §6.)
-//   (Effects=1 runs a circle and a dimmer sine on every bench fixture through both phases, Effects=2 adds a rainbow; Docs/ADR/0027 §7.)
+//   (Effects=1 runs a circle and a dimmer sine on every bench fixture through both phases, Effects=2 adds a rainbow, Effects=3 stores them in the two cues instead (circle and dimmer sine in A, a bigger
+//   circle, dimmer sine and rainbow in B), so every crossfade fades, morphs and starts or stops effects; Docs/ADR/0027 §5, §7.)
 //   (Zoom=0 keeps the zoom fixed: a cone change rebuilds the engine's light proxy, so zoom fades are measured apart.)
 //   StageCraft.Bench.Cancel
 //
@@ -68,7 +69,7 @@ namespace StageFixtureBenchmark
 		 * written straight onto the fixtures, so GM=0.9 measures that path. Put back to what it was afterwards.
 		 */
 		double GrandMaster = 1.0;
-		/** Effects on every bench fixture during both phases (Docs/ADR/0027 §7): 0 none, 1 circle + dimmer sine, 2 also a rainbow. */
+		/** Effects on every bench fixture during both phases (Docs/ADR/0027 §7): 0 none, 1 circle + dimmer sine, 2 also a rainbow, 3 held by the cues. */
 		int32 Effects = 0;
 	};
 
@@ -323,27 +324,47 @@ namespace StageFixtureBenchmark
 		void StoreCues()
 		{
 			UShowControlSubsystem* Show = UWorld::GetSubsystem<UShowControlSubsystem>(World.Get());
+			UStageProgrammerSubsystem* Programmer = UWorld::GetSubsystem<UStageProgrammerSubsystem>(World.Get());
+			const bool bCueEffects = Settings.Effects == 3 && Programmer;
 			ApplyLook(false);
 			Show->StoreCue(CueA, FText::FromString(TEXT("Bench A")), Settings.FadeSeconds);
 			ApplyLook(true);
 			Show->StoreCue(CueB, FText::FromString(TEXT("Bench B")), Settings.FadeSeconds);
+			if (bCueEffects)
+			{
+				// The looks are stored first: a Look store with effects running records the static look under them, and ApplyLook
+				// writes the fixtures directly, so both cues would hold the same look and every Go would finish at once. The effects
+				// then go into the cues with Track stores, which keep each cue's values.
+				StartEffects();
+				Show->StoreCue(CueA, FText::GetEmpty(), Settings.FadeSeconds, EStageCueStoreMode::Track);
+				// Cue B: the same circle bigger (a morph on every Go) and a rainbow that starts and stops.
+				for (const FStageEffectEntry& Entry : TArray<FStageEffectEntry>(Programmer->GetEffects()))
+				{
+					if (Entry.Effect.Target == EStageEffectTarget::Position)
+					{
+						FStageEffect Bigger = Entry.Effect;
+						Bigger.Size *= 2.f;
+						Programmer->UpdateEffect(Entry.Id, Bigger);
+					}
+				}
+				StartEffect(*Programmer, TEXT("Rainbow"));
+				Show->StoreCue(CueB, FText::GetEmpty(), Settings.FadeSeconds, EStageCueStoreMode::Track);
+				Programmer->SetEffectState(FStageProgrammerEffects()); // From here the cues run them.
+			}
 			// Idle starts from a settled look with no fade running.
 			Show->GoToCue(CueA);
 			Show->FinishFade();
 			SavedGrandMaster = Show->GetGrandMaster();
 			Show->SetGrandMaster(static_cast<float>(Settings.GrandMaster));
-			StartEffects();
+			if (!bCueEffects)
+			{
+				StartEffects();
+			}
 		}
 
-		/** Effects=1|2: the programmer runs quick effects on every bench fixture; the user's own effects come back in Cleanup. */
-		void StartEffects()
+		/** Starts the quick effect Name on every bench fixture. */
+		void StartEffect(UStageProgrammerSubsystem& Programmer, const TCHAR* Name) const
 		{
-			UStageProgrammerSubsystem* Programmer = UWorld::GetSubsystem<UStageProgrammerSubsystem>(World.Get());
-			if (Settings.Effects <= 0 || !Programmer)
-			{
-				return;
-			}
-			SavedEffects = Programmer->GetEffects();
 			TArray<int32> FixtureIds;
 			for (const TWeakObjectPtr<ALightingFixtureActor>& Fixture : Spawned)
 			{
@@ -353,18 +374,30 @@ namespace StageFixtureBenchmark
 				}
 			}
 			const TArray<FStageEffect> Quick = StageEffectRules::MakeQuickEffects();
-			const auto Start = [&](const TCHAR* Name)
+			if (const FStageEffect* Effect = Quick.FindByPredicate([Name](const FStageEffect& Candidate) { return Candidate.Name.ToString() == Name; }))
 			{
-				if (const FStageEffect* Effect = Quick.FindByPredicate([Name](const FStageEffect& Candidate) { return Candidate.Name.ToString() == Name; }))
-				{
-					Programmer->AddEffect(*Effect, FixtureIds);
-				}
-			};
-			Start(TEXT("Circle"));
-			Start(TEXT("Dimmer Sine"));
-			if (Settings.Effects >= 2)
+				Programmer.AddEffect(*Effect, FixtureIds);
+			}
+		}
+
+		/**
+		 * Effects=1|2|3: the programmer runs quick effects on every bench fixture (with 3 only while the cues are stored); the user's
+		 * own effects and stops come back in Cleanup.
+		 */
+		void StartEffects()
+		{
+			UStageProgrammerSubsystem* Programmer = UWorld::GetSubsystem<UStageProgrammerSubsystem>(World.Get());
+			if (Settings.Effects <= 0 || !Programmer)
 			{
-				Start(TEXT("Rainbow"));
+				return;
+			}
+			SavedEffects = Programmer->GetEffectState();
+			Programmer->SetEffectState(FStageProgrammerEffects());
+			StartEffect(*Programmer, TEXT("Circle"));
+			StartEffect(*Programmer, TEXT("Dimmer Sine"));
+			if (Settings.Effects == 2)
+			{
+				StartEffect(*Programmer, TEXT("Rainbow"));
 			}
 		}
 
@@ -446,7 +479,7 @@ namespace StageFixtureBenchmark
 				{
 					if (UStageProgrammerSubsystem* Programmer = UWorld::GetSubsystem<UStageProgrammerSubsystem>(World.Get()))
 					{
-						Programmer->SetEffects(SavedEffects.GetValue());
+						Programmer->SetEffectState(SavedEffects.GetValue());
 					}
 					SavedEffects.Reset();
 				}
@@ -533,8 +566,8 @@ namespace StageFixtureBenchmark
 		double StepSeconds = 0.0;
 		/** The Grand Master before the run, put back when it ends. */
 		TOptional<float> SavedGrandMaster;
-		/** The programmer's effects before the run (Effects=1|2), put back when it ends. */
-		TOptional<TArray<FStageEffectEntry>> SavedEffects;
+		/** The programmer's effects and stops before the run (Effects=1|2|3), put back when it ends. */
+		TOptional<FStageProgrammerEffects> SavedEffects;
 		int32 CountIndex = 0;
 		FRunResult Current;
 		TArray<FRunResult> Results;
@@ -589,13 +622,13 @@ namespace StageFixtureBenchmark
 				{
 					Out.GrandMaster = Number;
 				}
-				else if (Key.Equals(TEXT("Effects"), ESearchCase::IgnoreCase) && (Value == TEXT("0") || Value == TEXT("1") || Value == TEXT("2")))
+				else if (Key.Equals(TEXT("Effects"), ESearchCase::IgnoreCase) && (Value == TEXT("0") || Value == TEXT("1") || Value == TEXT("2") || Value == TEXT("3")))
 				{
 					Out.Effects = FCString::Atoi(*Value);
 				}
 				else
 				{
-					UE_LOG(LogStageCraft, Display, TEXT("StageCraft.Bench: ignored \"%s\" (Seconds 1..600, Fade 0.1..60, Settle 0..60, Zoom 0|1, Item=<asset name>, GM 0..1, Effects 0|1|2)."), *Arg);
+					UE_LOG(LogStageCraft, Display, TEXT("StageCraft.Bench: ignored \"%s\" (Seconds 1..600, Fade 0.1..60, Settle 0..60, Zoom 0|1, Item=<asset name>, GM 0..1, Effects 0|1|2|3)."), *Arg);
 				}
 				continue;
 			}

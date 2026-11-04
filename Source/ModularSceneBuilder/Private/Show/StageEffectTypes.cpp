@@ -17,6 +17,11 @@ bool FStageEffect::Equals(const FStageEffect& Other) const
 		&& Spread == Other.Spread && Wings == Other.Wings && Blocks == Other.Blocks && Direction == Other.Direction && SizeFan == Other.SizeFan;
 }
 
+bool FStageProgrammerEffects::Equals(const FStageProgrammerEffects& Other) const
+{
+	return StageEffectRules::AreEntriesEqual(Effects, Other.Effects) && Stops == Other.Stops;
+}
+
 namespace StageEffectRules
 {
 	namespace
@@ -136,6 +141,47 @@ namespace StageEffectRules
 			Kept.Add(MoveTemp(Entry));
 		}
 		Entries = MoveTemp(Kept);
+		return Dropped;
+	}
+
+	bool AreEntriesEqual(TConstArrayView<FStageEffectEntry> A, TConstArrayView<FStageEffectEntry> B)
+	{
+		if (A.Num() != B.Num())
+		{
+			return false;
+		}
+		for (int32 Index = 0; Index < A.Num(); ++Index)
+		{
+			if (A[Index].Id != B[Index].Id || A[Index].FixtureIds != B[Index].FixtureIds || !A[Index].Effect.Equals(B[Index].Effect))
+			{
+				return false;
+			}
+		}
+		return true;
+	}
+
+	int32 SanitizeStops(TArray<FGuid>& Stops, TConstArrayView<FStageEffectEntry> Effects)
+	{
+		int32 Dropped = 0;
+		TSet<FGuid> Seen;
+		TArray<FGuid> Kept;
+		Kept.Reserve(FMath::Min(Stops.Num(), MaxEffects));
+		for (const FGuid& Id : Stops)
+		{
+			bool bSeen = false;
+			if (Id.IsValid() && Kept.Num() < MaxEffects)
+			{
+				Seen.Add(Id, &bSeen);
+			}
+			const bool bStarted = Effects.ContainsByPredicate([&Id](const FStageEffectEntry& Entry) { return Entry.Id == Id; });
+			if (!Id.IsValid() || bSeen || bStarted || Kept.Num() >= MaxEffects)
+			{
+				++Dropped;
+				continue;
+			}
+			Kept.Add(Id);
+		}
+		Stops = MoveTemp(Kept);
 		return Dropped;
 	}
 

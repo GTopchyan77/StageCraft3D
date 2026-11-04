@@ -73,6 +73,7 @@ void UShowControlSubsystem::Deinitialize()
 	ProgrammerChangedHandle.Reset();
 	ProgrammerEffectsHandle.Reset();
 	EffectRunner = FStageEffectRunner();
+	MainEffects.Reset();
 	Programmer = nullptr;
 	if (Library)
 	{
@@ -111,14 +112,17 @@ void UShowControlSubsystem::Tick(float DeltaTime)
 	// The effect clocks move first, so a fading fixture an effect also drives is mixed with this frame's effect value. Fades before
 	// strobes: a fade may change a fixture's Shutter, which changes its strobe rate this frame.
 	const bool bEffectsLive = AreEffectsLive();
+	TArray<int32> ReleasedByEffects;
 	if (bEffectsLive)
 	{
-		EffectRunner.Advance(DeltaTime);
+		EffectRunner.Advance(DeltaTime, ReleasedByEffects);
 	}
 	TickFades(DeltaTime);
 	if (bEffectsLive)
 	{
 		TickEffects();
+		// An effect that finished fading out leaves its fixtures: they go back to their static look in full.
+		ResolveFixtures(ReleasedByEffects);
 	}
 	TickAutoGo(DeltaTime);
 	TickStrobes(DeltaTime);
@@ -428,7 +432,8 @@ bool UShowControlSubsystem::StoreCue(float CueNumber, const FText& Label, float 
 	}
 	const float Number = StageCueRules::RoundCueNumber(CueNumber);
 	const TArray<FShowCueFixtureState> Programmed = Programmer ? Programmer->GetEntries() : TArray<FShowCueFixtureState>();
-	if (Mode != EStageCueStoreMode::Look && Programmed.IsEmpty())
+	const FStageProgrammerEffects ProgrammedEffects = Programmer ? Programmer->GetEffectState() : FStageProgrammerEffects();
+	if (Mode != EStageCueStoreMode::Look && Programmed.IsEmpty() && ProgrammedEffects.IsEmpty())
 	{
 		UE_LOG(LogStageCraft, Warning, TEXT("StoreCue: the programmer is empty, so a tracking store of cue %.3f has nothing to record."), Number);
 		return false;
@@ -451,6 +456,8 @@ bool UShowControlSubsystem::StoreCue(float CueNumber, const FText& Label, float 
 		Cue.FadeTime = StageCueRules::SanitizeFadeTime(FadeTime);
 		Cue.bBlock = true;
 		Cue.Fixtures = CaptureLook();
+		Cue.Effects = CaptureEffects(); // Every effect on stage, as it runs (Docs/ADR/0027 §5).
+		StageCueRules::SanitizeCueEffects(Cue);
 		if (bExisting)
 		{
 			Cue.Timing = Cues[Index].Timing; // Re-recording a look keeps how the cue plays.
@@ -466,6 +473,8 @@ bool UShowControlSubsystem::StoreCue(float CueNumber, const FText& Label, float 
 		// Tracking: only what the programmer holds, merged in. Cue Only first notes the look the next cue had, at this position.
 		StageCueTracking::FFixtureStates Before;
 		StageCueTracking::StateAt(Cues, bExisting ? Index : Index - 1, Before);
+		TArray<FStageEffectEntry> EffectsBefore;
+		StageCueTracking::EffectsAt(Cues, bExisting ? Index : Index - 1, EffectsBefore);
 		if (bExisting)
 		{
 			FShowCue& Cue = Cues[Index];
@@ -482,8 +491,16 @@ bool UShowControlSubsystem::StoreCue(float CueNumber, const FText& Label, float 
 			Cue.Fixtures = Programmed;
 			Cues.Insert(MoveTemp(Cue), Index);
 		}
+		// The programmer's effects and stops track like its values (Docs/ADR/0027 §5).
+		StageCueTracking::MergeEffectsInto(Cues[Index], ProgrammedEffects.Effects, ProgrammedEffects.Stops);
+		StageCueRules::SanitizeCueEffects(Cues[Index]);
 		if (Mode == EStageCueStoreMode::CueOnly)
 		{
+			StageCueTracking::KeepNextCueEffects(Cues, Index, EffectsBefore, ProgrammedEffects.Effects, ProgrammedEffects.Stops);
+			if (Cues.IsValidIndex(Index + 1))
+			{
+				StageCueRules::SanitizeCueEffects(Cues[Index + 1]);
+			}
 			StageCueTracking::KeepNextCue(Cues, Index, Before, Programmed, [this](int32 FixtureId, const FGameplayTag& Attribute, float& OutHome)
 			{
 				const ALightingFixtureActor* Fixture = FindFixture(FixtureId);
@@ -556,6 +573,10 @@ bool UShowControlSubsystem::SetCueBlocked(float CueNumber, bool bBlocked)
 		StageCueTracking::FFixtureStates State;
 		StageCueTracking::StateAt(Cues, Index, State);
 		Cue.Fixtures = StageCueTracking::ToEntries(State);
+		TArray<FStageEffectEntry> Effects;
+		StageCueTracking::EffectsAt(Cues, Index, Effects);
+		Cue.Effects = MoveTemp(Effects);
+		Cue.EffectStops.Reset(); // A blocked cue starts from no effects: nothing before it is left to stop.
 	}
 	Cue.bBlock = bBlocked;
 	OnCueListChanged.Broadcast();
@@ -592,6 +613,11 @@ void UShowControlSubsystem::SetCues(const TArray<FShowCue>& InCues)
 	ActiveCueNumber = -1.f;
 	// A loaded show starts with no cue playing; the fixtures keep the output they were restored with (RestoreActiveCue follows).
 	PlaybackValues.Reset();
+	if (!MainEffects.IsEmpty())
+	{
+		MainEffects.Reset();
+		RefreshEffectSources(nullptr);
+	}
 	OnCueListChanged.Broadcast();
 }
 
@@ -617,6 +643,8 @@ bool UShowControlSubsystem::RestoreActiveCue(float CueNumber)
 	}
 	ActiveCueNumber = Cues[Index].Number;
 	ResolveFixtures(Changed);
+	StageCueTracking::EffectsAt(Cues, Index, MainEffects);
+	RefreshEffectSources(nullptr);
 	OnCueListChanged.Broadcast();
 	return true;
 }
@@ -719,6 +747,9 @@ bool UShowControlSubsystem::PlayCue(int32 Index, ECueStart Start)
 	ActiveCueNumber = Cue.Number;
 	FadeElapsed = 0.f;
 	FadeCurve = Cue.Timing.Curve;
+	// The cue's effects fade in, out or morph with its timing (Docs/ADR/0027 §5), alongside its values.
+	StageCueTracking::EffectsAt(Cues, Index, MainEffects);
+	RefreshEffectSources(&Cue);
 	OnCueStarted.Broadcast(ActiveCueNumber);
 
 	// Back never runs a chain; a cue started forward arms the next cue's Follow or Wait (fired from the tick, never from here).
@@ -921,6 +952,7 @@ void UShowControlSubsystem::RefreshPlaybackOutput(int32 Index, TArray<int32>& Ou
 		Runtime.Output.Add(Pair.Key, ResolveReferences(Pair.Value));
 		OutChanged.AddUnique(Pair.Key);
 	}
+	StageCueTracking::EffectsAt(Playbacks[Index].Cues, Runtime.CueIndex, Runtime.Effects);
 }
 
 void UShowControlSubsystem::ApplyPlaybackChange(int32 Index, TArray<int32> Changed)
@@ -930,12 +962,14 @@ void UShowControlSubsystem::ApplyPlaybackChange(int32 Index, TArray<int32> Chang
 		Changed.AddUnique(Pair.Key);
 	}
 	ResolveFixtures(Changed);
+	// A playback's effects start, stop and rescale with it at once: its fader is its fade (Docs/ADR/0027 §5).
+	RefreshEffectSources(nullptr);
 	OnDeskStateChanged.Broadcast();
 }
 
-bool UShowControlSubsystem::RecordPlayback(int32 Index, TConstArrayView<FShowCueFixtureState> Entries)
+bool UShowControlSubsystem::RecordPlayback(int32 Index, TConstArrayView<FShowCueFixtureState> Entries, const FStageProgrammerEffects& Effects)
 {
-	if (!Playbacks.IsValidIndex(Index) || Entries.IsEmpty() || Playbacks[Index].Cues.Num() >= StagePlaybackRules::MaxCuesPerPlayback)
+	if (!Playbacks.IsValidIndex(Index) || (Entries.IsEmpty() && Effects.IsEmpty()) || Playbacks[Index].Cues.Num() >= StagePlaybackRules::MaxCuesPerPlayback)
 	{
 		return false;
 	}
@@ -944,6 +978,8 @@ bool UShowControlSubsystem::RecordPlayback(int32 Index, TConstArrayView<FShowCue
 	Cue.Number = List.Num() > 1 ? FMath::FloorToFloat(List[List.Num() - 2].Number) + 1.f : 1.f;
 	Cue.FadeTime = 0.f; // A playback steps at once: its fader is the fade.
 	Cue.Fixtures = TArray<FShowCueFixtureState>(Entries);
+	Cue.Effects = Effects.Effects;
+	Cue.EffectStops = Effects.Stops;
 	if (!StageCueRules::IsValidCueNumber(Cue.Number))
 	{
 		List.Pop();
@@ -1006,6 +1042,7 @@ void UShowControlSubsystem::SetPlaybacks(const TArray<FStagePlayback>& InPlaybac
 		UE_LOG(LogStageCraft, Warning, TEXT("SetPlaybacks: %d invalid playback cue(s) or playback(s) were dropped."), Dropped);
 	}
 	ResolveFixtures(Changed);
+	RefreshEffectSources(nullptr);
 	OnPlaybacksChanged.Broadcast();
 	OnDeskStateChanged.Broadcast();
 }
@@ -1025,6 +1062,7 @@ void UShowControlSubsystem::ReplacePlaybacks(const TArray<FStagePlayback>& InPla
 		RefreshPlaybackOutput(Index, Changed);
 	}
 	ResolveFixtures(Changed);
+	RefreshEffectSources(nullptr);
 	OnPlaybacksChanged.Broadcast();
 	OnDeskStateChanged.Broadcast();
 }
@@ -1126,6 +1164,7 @@ bool UShowControlSubsystem::ReleasePlayback(int32 Index)
 	}
 	Runtime = FPlaybackRuntime();
 	ResolveFixtures(Changed);
+	RefreshEffectSources(nullptr);
 	OnDeskStateChanged.Broadcast();
 	return true;
 }
@@ -1252,22 +1291,98 @@ void UShowControlSubsystem::HandleProgrammerFixturesChanged(TConstArrayView<int3
 
 void UShowControlSubsystem::HandleProgrammerEffectsChanged()
 {
-	if (!Programmer)
+	RefreshEffectSources(nullptr);
+}
+
+void UShowControlSubsystem::RefreshEffectSources(const FShowCue* TimedBy)
+{
+	// One list, latest source last: the same id runs once, as the latest (Docs/ADR/0027 §5).
+	TArray<FStageEffectRunner::FSourcedEntry> Sourced;
+	const auto Add = [&Sourced](const FStageEffectEntry& Entry, EStageEffectSource Source, int32 Playback, float Scale)
 	{
-		return;
+		Sourced.RemoveAll([&Entry](const FStageEffectRunner::FSourcedEntry& Earlier) { return Earlier.Entry.Id == Entry.Id; });
+		Sourced.Add({ Entry, Source, Playback, Scale });
+	};
+	for (const FStageEffectEntry& Entry : MainEffects)
+	{
+		Add(Entry, EStageEffectSource::Cue, INDEX_NONE, 1.f);
 	}
+	TArray<int32, TInlineAllocator<StagePlaybackRules::Count>> ActivePlaybacks;
+	for (int32 Index = 0; Index < PlaybackRuntime.Num(); ++Index)
+	{
+		if (PlaybackRuntime[Index].IsActive() && !PlaybackRuntime[Index].Effects.IsEmpty())
+		{
+			ActivePlaybacks.Add(Index);
+		}
+	}
+	ActivePlaybacks.Sort([this](int32 A, int32 B) { return PlaybackRuntime[A].Order < PlaybackRuntime[B].Order; });
+	for (const int32 Index : ActivePlaybacks)
+	{
+		for (const FStageEffectEntry& Entry : PlaybackRuntime[Index].Effects)
+		{
+			Add(Entry, EStageEffectSource::Playback, Index, PlaybackRuntime[Index].GetEffectiveLevel());
+		}
+	}
+	if (Programmer)
+	{
+		for (const FStageEffectEntry& Entry : Programmer->GetEffects())
+		{
+			Add(Entry, EStageEffectSource::Programmer, INDEX_NONE, 1.f);
+		}
+		for (const FGuid& Stop : Programmer->GetEffectStops())
+		{
+			Sourced.RemoveAll([&Stop](const FStageEffectRunner::FSourcedEntry& Entry) { return Entry.Entry.Id == Stop; });
+		}
+	}
+
 	// Every fixture an effect drove or now drives re-mixes once in full, so a stopped effect leaves its fixtures on their static look.
+	// A fader move only rescales: the tick writes the new values, so nothing is re-mixed here.
 	TSet<int32> Touched;
 	for (const FStageEffectRunner::FDrivenFixture& Driven : EffectRunner.GetDrivenFixtures())
 	{
 		Touched.Add(Driven.FixtureId);
 	}
-	EffectRunner.SetEffects(Programmer->GetEffects(), [this](int32 FixtureId) { return FindFixture(FixtureId); });
+	if (!EffectRunner.SetEffects(Sourced, [this](int32 FixtureId) { return FindFixture(FixtureId); }, TimedBy))
+	{
+		return;
+	}
 	for (const FStageEffectRunner::FDrivenFixture& Driven : EffectRunner.GetDrivenFixtures())
 	{
 		Touched.Add(Driven.FixtureId);
 	}
 	ResolveFixtures(Touched.Array());
+}
+
+const FStageEffectEntry* UShowControlSubsystem::FindShowEffect(const FGuid& EffectId) const
+{
+	const auto HasId = [&EffectId](const FStageEffectEntry& Entry) { return Entry.Id == EffectId; };
+	const FStageEffectEntry* Found = nullptr;
+	uint32 FoundOrder = 0;
+	for (const FPlaybackRuntime& Runtime : PlaybackRuntime)
+	{
+		const FStageEffectEntry* Entry = Runtime.IsActive() ? Runtime.Effects.FindByPredicate(HasId) : nullptr;
+		if (Entry && (!Found || Runtime.Order > FoundOrder))
+		{
+			Found = Entry;
+			FoundOrder = Runtime.Order;
+		}
+	}
+	return Found ? Found : MainEffects.FindByPredicate(HasId);
+}
+
+TArray<FStageEffectEntry> UShowControlSubsystem::CaptureEffects() const
+{
+	TArray<FStageRunningEffect> Running;
+	EffectRunner.GetRunning(Running);
+	TArray<FStageEffectEntry> Captured;
+	for (const FStageRunningEffect& Effect : Running)
+	{
+		if (!Effect.bStopping)
+		{
+			Captured.Add(Effect.Entry);
+		}
+	}
+	return Captured;
 }
 
 void UShowControlSubsystem::RefreshEffectFixtures()
