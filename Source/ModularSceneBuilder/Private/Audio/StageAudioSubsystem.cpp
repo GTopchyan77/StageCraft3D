@@ -10,6 +10,7 @@
 #include "Engine/Engine.h"
 #include "Engine/GameInstance.h"
 #include "Engine/World.h"
+#include "Misc/App.h"
 #include "Kismet/GameplayStatics.h"
 #include "ModularSceneBuilder.h"
 #include "Settings/StageCraftUserSettings.h"
@@ -53,6 +54,8 @@ void UStageAudioSubsystem::Initialize(FSubsystemCollectionBase& Collection)
 	BuildCueTable();
 	RequestCueSounds();
 	ApplyMasterGain();
+	UnfocusedVolumeBefore = FApp::GetUnfocusedVolumeMultiplier();
+	ApplyBackgroundPlayback();
 
 	// PIE worlds can own their own audio device, and travel may bring a new one; the override must follow.
 	PostLoadMapHandle = FCoreUObjectDelegates::PostLoadMapWithWorld.AddUObject(this, &ThisClass::HandlePostLoadMap);
@@ -68,6 +71,7 @@ void UStageAudioSubsystem::Deinitialize()
 
 	FlushPendingSave();
 	ReleaseMixer();
+	FApp::SetUnfocusedVolumeMultiplier(UnfocusedVolumeBefore);
 
 	if (CueLoadHandle.IsValid())
 	{
@@ -210,9 +214,30 @@ void UStageAudioSubsystem::ToggleMute()
 	SetMuted(!IsMuted());
 }
 
+bool UStageAudioSubsystem::IsPlayedInBackground() const
+{
+	return !Settings || Settings->IsAudioPlayedInBackground();
+}
+
+void UStageAudioSubsystem::SetPlayedInBackground(bool bPlay)
+{
+	if (Settings && Settings->SetAudioPlayedInBackground(bPlay))
+	{
+		HandleSettingsChanged();
+	}
+}
+
+void UStageAudioSubsystem::ApplyBackgroundPlayback()
+{
+	// The engine's own default (BaseEngine [Audio] UnfocusedVolumeMultiplier=0) silences the app, and every tap on its output,
+	// the moment another window has focus (Phase G0, ADR 0029 §2 A7).
+	FApp::SetUnfocusedVolumeMultiplier(IsPlayedInBackground() ? 1.f : 0.f);
+}
+
 void UStageAudioSubsystem::HandleSettingsChanged()
 {
 	ApplyMasterGain();
+	ApplyBackgroundPlayback();
 	ScheduleSave();
 	OnAudioSettingsChanged.Broadcast();
 }

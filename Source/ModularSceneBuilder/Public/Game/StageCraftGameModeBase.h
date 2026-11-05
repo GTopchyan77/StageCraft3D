@@ -4,6 +4,7 @@
 
 #include "CoreMinimal.h"
 #include "GameFramework/GameModeBase.h"
+#include "Audio/StageAudioReactiveTypes.h"
 #include "Data/StageParameterTypes.h"
 #include "Economy/StageEconomyTypes.h"
 #include "Game/StageSessionTypes.h"
@@ -70,6 +71,13 @@ public:
 	/** May Player import model files into the Library? Off when SessionRules.bAllowModelImport is false. */
 	UFUNCTION(BlueprintNativeEvent, BlueprintCallable, Category = "StageCraft|Rules")
 	FStageEconomyResultInfo EvaluateModelImport(const APlayerController* Player) const;
+
+	/**
+	 * May Player change the audio-reactive source, file, transport or settings (Docs/ADR/0029 §5)? Allowed for any player by
+	 * default; a mode that must not listen to the PC's audio refuses here. Without a GameMode every audio request is refused.
+	 */
+	UFUNCTION(BlueprintNativeEvent, BlueprintCallable, Category = "StageCraft|Rules")
+	FStageEconomyResultInfo EvaluateAudioRequest(const APlayerController* Player, EStageAudioRequest Request) const;
 
 	UFUNCTION(BlueprintPure, Category = "StageCraft|Rules")
 	const FStageSessionRules& GetSessionRules() const { return SessionRules; }

@@ -37,6 +37,8 @@ void UStageCraftUserSettings::SetToDefaults()
 	DMXOutput = FStageDMXOutputSettings();
 	DMXOutput.Cid = Cid;
 	SanitizeDMXOutput();
+	AudioReactive = FStageAudioReactiveSettings();
+	bPlayAudioInBackground = true;
 	ResetInputToDefaults();
 }
 
@@ -52,6 +54,7 @@ void UStageCraftUserSettings::LoadSettings(bool bForceReload)
 	RenderSettings = StageRender::Sanitize(RenderSettings);
 	DMXInput = StageDMXInput::Sanitize(DMXInput);
 	SanitizeDMXOutput();
+	AudioReactive = StageAudioReactive::Sanitize(AudioReactive);
 	// A hand-edited ini can only select a toolbar preset; anything else falls back to the default.
 	GridSnapCm = StageViewMath::SanitizeGridSnap(GridSnapCm);
 	AngleSnapDegrees = StageViewMath::SanitizeAngleSnap(AngleSnapDegrees);
@@ -246,6 +249,21 @@ bool UStageCraftUserSettings::SetDMXOutputSettings(const FStageDMXOutputSettings
 	Sanitized.Cid = DMXOutput.Cid; // This PC's source identity is not a setting.
 	const bool bChanged = !(DMXOutput == Sanitized);
 	DMXOutput = Sanitized;
+	return bChanged;
+}
+
+bool UStageCraftUserSettings::SetAudioReactiveSettings(const FStageAudioReactiveSettings& Settings)
+{
+	const FStageAudioReactiveSettings Sanitized = StageAudioReactive::Sanitize(Settings);
+	const bool bChanged = !(AudioReactive == Sanitized);
+	AudioReactive = Sanitized;
+	return bChanged;
+}
+
+bool UStageCraftUserSettings::SetAudioPlayedInBackground(bool bPlay)
+{
+	const bool bChanged = bPlayAudioInBackground != bPlay;
+	bPlayAudioInBackground = bPlay;
 	return bChanged;
 }
 

@@ -9,6 +9,7 @@
 #include "AI/StageAICommandSubsystem.h"
 #include "AI/StageVoiceInputComponent.h"
 #include "Algo/AllOf.h"
+#include "Audio/StageAudioSubsystem.h"
 #include "Audio/StageEditorAudioFeedbackComponent.h"
 #include "Blueprint/UserWidget.h"
 #include "Components/SceneComponent.h"
@@ -60,6 +61,7 @@
 #include "Marketplace/StageMarketplaceSubsystem.h"
 #include "Scene/StageSceneComponent.h"
 #include "Services/StageAIToolSubsystem.h"
+#include "Subsystems/StageAudioReactiveSubsystem.h"
 #include "Subsystems/StageDMXNetworkSubsystem.h"
 #include "Sketch/StageSketchBuilder.h"
 #include "Sketch/StageSketchGenerator.h"
@@ -1688,6 +1690,106 @@ FStageEconomyResultInfo AModularPlayerController::RequestApplyDMXOutputSettings(
 		return Refusal;
 	}
 	return FStageEconomyResultInfo::Ok();
+}
+
+namespace ModularPlayerControllerAudio
+{
+	/** The GameMode's verdict on an audio request, and the subsystem it applies to. Fails without either. */
+	FStageEconomyResultInfo Judge(const AModularPlayerController& Controller, const AStageCraftGameModeBase* GameMode,
+		UStageAudioReactiveSubsystem* Audio, EStageAudioRequest Request)
+	{
+		if (!GameMode || !Audio)
+		{
+			return FStageEconomyResultInfo::Fail(EStageEconomyResult::InvalidRequest,
+				NSLOCTEXT("ModularPlayerController", "NoAudioReactive", "Audio-reactive lighting is not available here."));
+		}
+		return GameMode->EvaluateAudioRequest(&Controller, Request);
+	}
+
+	FStageEconomyResultInfo ToResult(bool bOk, const FText& Error)
+	{
+		return bOk ? FStageEconomyResultInfo::Ok() : FStageEconomyResultInfo::Fail(EStageEconomyResult::InvalidRequest, Error);
+	}
+}
+
+FStageEconomyResultInfo AModularPlayerController::RequestSetAudioSource(EStageAudioSource Source)
+{
+	UStageAudioReactiveSubsystem* Audio = UWorld::GetSubsystem<UStageAudioReactiveSubsystem>(GetWorld());
+	FStageEconomyResultInfo Result = ModularPlayerControllerAudio::Judge(*this, GetStageGameMode(), Audio, EStageAudioRequest::SetSource);
+	if (Result.IsSuccess())
+	{
+		FText Error;
+		Result = ModularPlayerControllerAudio::ToResult(Audio->SetSource(Source, Error), Error);
+	}
+	if (!Result.IsSuccess())
+	{
+		ReportRejection(Result);
+	}
+	return Result;
+}
+
+FStageEconomyResultInfo AModularPlayerController::RequestOpenAudioFile(const FString& Path)
+{
+	UStageAudioReactiveSubsystem* Audio = UWorld::GetSubsystem<UStageAudioReactiveSubsystem>(GetWorld());
+	FStageEconomyResultInfo Result = ModularPlayerControllerAudio::Judge(*this, GetStageGameMode(), Audio, EStageAudioRequest::OpenFile);
+	if (Result.IsSuccess())
+	{
+		FText Error;
+		Result = ModularPlayerControllerAudio::ToResult(Audio->OpenFile(Path, Error), Error);
+	}
+	if (!Result.IsSuccess())
+	{
+		ReportRejection(Result);
+	}
+	return Result;
+}
+
+FStageEconomyResultInfo AModularPlayerController::RequestAudioTransport(const FStageAudioTransportRequest& Request)
+{
+	UStageAudioReactiveSubsystem* Audio = UWorld::GetSubsystem<UStageAudioReactiveSubsystem>(GetWorld());
+	FStageEconomyResultInfo Result = ModularPlayerControllerAudio::Judge(*this, GetStageGameMode(), Audio, EStageAudioRequest::Transport);
+	if (Result.IsSuccess())
+	{
+		FText Error;
+		Result = ModularPlayerControllerAudio::ToResult(Audio->Transport(Request, Error), Error);
+	}
+	if (!Result.IsSuccess())
+	{
+		ReportRejection(Result);
+	}
+	return Result;
+}
+
+FStageEconomyResultInfo AModularPlayerController::RequestApplyAudioSettings(const FStageAudioReactiveSettings& Settings)
+{
+	UStageAudioReactiveSubsystem* Audio = UWorld::GetSubsystem<UStageAudioReactiveSubsystem>(GetWorld());
+	FStageEconomyResultInfo Result = ModularPlayerControllerAudio::Judge(*this, GetStageGameMode(), Audio, EStageAudioRequest::ApplySettings);
+	if (Result.IsSuccess())
+	{
+		FText Error;
+		Result = ModularPlayerControllerAudio::ToResult(Audio->ApplySettings(Settings, Error), Error);
+	}
+	if (!Result.IsSuccess())
+	{
+		ReportRejection(Result);
+	}
+	return Result;
+}
+
+FStageEconomyResultInfo AModularPlayerController::RequestSetPlayAudioInBackground(bool bPlay)
+{
+	const AStageCraftGameModeBase* GameMode = GetStageGameMode();
+	UStageAudioSubsystem* Sound = GetGameInstance() ? GetGameInstance()->GetSubsystem<UStageAudioSubsystem>() : nullptr;
+	FStageEconomyResultInfo Result = GameMode && Sound
+		? GameMode->EvaluateAudioRequest(this, EStageAudioRequest::SetPlayInBackground)
+		: FStageEconomyResultInfo::Fail(EStageEconomyResult::InvalidRequest, LOCTEXT("NoBackgroundAudio", "Audio settings are not available here."));
+	if (!Result.IsSuccess())
+	{
+		ReportRejection(Result);
+		return Result;
+	}
+	Sound->SetPlayedInBackground(bPlay);
+	return Result;
 }
 
 int32 AModularPlayerController::RequestDuplicateSelection()

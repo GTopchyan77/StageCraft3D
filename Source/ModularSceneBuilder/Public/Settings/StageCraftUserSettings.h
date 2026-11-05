@@ -4,6 +4,7 @@
 
 #include "CoreMinimal.h"
 #include "GameFramework/GameUserSettings.h"
+#include "Audio/StageAudioReactiveTypes.h"
 #include "Input/StageKeyBindings.h"
 #include "Render/StageRenderTypes.h"
 #include "Show/StageDMXNetworkTypes.h"
@@ -131,6 +132,22 @@ public:
 	/** Sanitized (StageDMXOutput::Sanitize); the stored Cid is kept. Returns true if the stored value changed. Does not save. */
 	bool SetDMXOutputSettings(const FStageDMXOutputSettings& Settings);
 
+	/** Audio-reactive lighting of this PC (UStageAudioReactiveSubsystem is the only writer), always sanitized. */
+	const FStageAudioReactiveSettings& GetAudioReactiveSettings() const { return AudioReactive; }
+
+	/** Sanitized (StageAudioReactive::Sanitize). Returns true if the stored value changed. Does not save. */
+	bool SetAudioReactiveSettings(const FStageAudioReactiveSettings& Settings);
+
+	/**
+	 * Keep StageCraft's sound (and therefore the music analysis) playing while another window has focus (Docs/ADR/0029 §2 A7).
+	 * The engine mutes an unfocused app by default, which would stop the lights the moment the operator clicks into a browser.
+	 * UStageAudioSubsystem applies it.
+	 */
+	bool IsAudioPlayedInBackground() const { return bPlayAudioInBackground; }
+
+	/** Returns true if the stored value changed. Does not save. */
+	bool SetAudioPlayedInBackground(bool bPlay);
+
 private:
 	void ResetAudioToDefaults();
 	void SanitizeAudio();
@@ -184,6 +201,12 @@ private:
 
 	/** Sanitizes DMXOutput and gives it a Cid when it has none; a reset to defaults keeps the Cid (the same sACN source). */
 	void SanitizeDMXOutput();
+
+	UPROPERTY(Config)
+	FStageAudioReactiveSettings AudioReactive;
+
+	UPROPERTY(Config)
+	bool bPlayAudioInBackground = true;
 
 	/** Only the commands whose keys differ from the defaults (FStageKeyBindings::ToOverrides). */
 	UPROPERTY(Config)

@@ -154,6 +154,15 @@ FStageEconomyResultInfo AStageCraftGameModeBase::EvaluateModelImport_Implementat
 	return FStageEconomyResultInfo::Ok();
 }
 
+FStageEconomyResultInfo AStageCraftGameModeBase::EvaluateAudioRequest_Implementation(const APlayerController* Player, EStageAudioRequest Request) const
+{
+	if (!Player)
+	{
+		return FStageEconomyResultInfo::Fail(EStageEconomyResult::InvalidRequest, LOCTEXT("NoAudioPlayer", "Audio-reactive lighting is not available."));
+	}
+	return FStageEconomyResultInfo::Ok();
+}
+
 FStageEconomyResultInfo AStageCraftGameModeBase::EvaluateParameterChange_Implementation(const APlayerController* Player, const UObject* Target, FGameplayTag ParameterId, const FStageParameterValue& Value) const
 {
 	const UStageEconomySubsystem* Economy = GetEconomy();

@@ -68,6 +68,16 @@ public class ModularSceneBuilder : ModuleRules
 			PublicSystemLibraries.Add("crypt32.lib");
 		}
 
+		// ADR 0029: audio-reactive lighting. SignalProcessing gives the FFT. Music files are decoded by Windows Media Foundation
+		// directly (source reader; Phase G0 showed the engine's media players refuse MP3/FLAC or cannot place a beat) and the PC's
+		// output is captured with WASAPI loopback; both are Windows system libraries, no plugin.
+		// AudioExtensions: the file is played by a USoundWaveProcedural subclass (IAudioProxyDataFactory).
+		PrivateDependencyModuleNames.AddRange(new string[] { "SignalProcessing", "AudioExtensions" });
+		if (Target.Platform == UnrealTargetPlatform.Win64)
+		{
+			PublicSystemLibraries.AddRange(new string[] { "ole32.lib", "mfplat.lib", "mfreadwrite.lib", "mfuuid.lib" });
+		}
+
 		// The DMX Engine plugin is deliberately not a dependency: StageCraft reads Art-Net and sACN itself (ADR 0019 section 3).
 
 		// Uncomment if you are using online features

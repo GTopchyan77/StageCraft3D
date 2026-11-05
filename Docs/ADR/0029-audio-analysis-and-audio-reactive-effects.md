@@ -1,6 +1,9 @@
 # ADR 0029: Audio analysis and audio-reactive effects
 
-- **Status:** proposed (draft 2026-11-05, STATE.md #67). Not approved, not implemented. Spike G0 done (STATE.md #68, §2.1): it changed the file source (§3) and the module dependencies (§11).
+- **Status:** approved by Gevor 2026-11-05. Drafted in STATE.md #67.
+  - Spike G0 done (STATE.md #68, §2.1): it changed the file source (§3) and the module dependencies (§11).
+  - G1 implemented (STATE.md #69, §13): sources, analyser, subsystem, settings, requests.
+  - G2 and G3 not started.
 - **Related:**
   - ADR 0027 (effects engine; this ADR amends §2 and §4 with an audio setting on `FStageEffect`).
   - ADR 0025 / 0026 (the output mix and its masters; the show control stays the only writer).
@@ -148,7 +151,12 @@ The maths is pure and has no engine state (`StageAudioAnalysis::`):
   - an **Audio** panel: source picker, device, meters for the four bands and the level, BPM with confidence and a beat lamp, latency, a file transport bar;
   - an **AUDIO** row in the Effects panel's editor;
   - six audio quick effects: bass pulse, beat chase, high strobe sparkle, hue per bar, swing on the beat, mid-driven zoom.
-- **Dev console** (`#if !UE_BUILD_SHIPPING`): `StageCraft.Audio.Source`, `StageCraft.Audio.Status`, `StageCraft.Audio.TestSignal bpm=128`.
+- **Dev console** (`#if !UE_BUILD_SHIPPING`), built in G1 as `StageCraft.Music.*` because `StageCraft.Audio.*` already holds the UI-sound commands, including its own `Status`:
+  - `StageCraft.Music.Source Off|Input|SystemAudio|TestSignal [BPM=n]|File <path>`;
+  - `StageCraft.Music.Status`;
+  - `StageCraft.Music.Transport`;
+  - `StageCraft.Music.Settings`;
+  - `StageCraft.Music.Devices`.
 
 ## 6. Decision: privacy
 
@@ -209,3 +217,55 @@ Audio-triggered intensity and strobe can flash very fast, and with DMX OUT on th
 ## 12. Rollback
 
 Set `Mode = Off` on every effect (v11 files keep loading), then remove `Audio/` and the panel. The effects engine needs no change to fall back: Off is today's behaviour.
+
+## 13. G1 implementation notes (STATE.md #69)
+
+How G1 realised §3 and §5, and where it differs in detail.
+
+### Files
+All under `Source/ModularSceneBuilder`:
+
+| File | Role |
+|---|---|
+| `Public/Audio/StageAudioReactiveTypes.h` | Enums, `FStageAudioFeatures`, settings, status |
+| `Public/Audio/StageAudioAnalysis.h` | The pure maths |
+| `Private/Audio/StageAudioTap.h` | The SPSC ring and the triple buffer |
+| `Private/Audio/StageAudioAnalyzer.h` | The thread |
+| `Private/Audio/StageAudioFileDecoder.h` | Media Foundation |
+| `Private/Audio/StageAudioFileSound.h` | `USoundWaveProcedural` |
+| `Private/Audio/StageAudioCaptureSources.h` | WASAPI loopback and AudioCaptureCore input |
+| `Public/Subsystems/StageAudioReactiveSubsystem.h` | The world subsystem |
+| `Private/Audio/StageAudioReactiveConsoleCommands.cpp` | Dev commands |
+
+**Module dependencies:** `SignalProcessing` and `AudioExtensions`. `AudioExtensions` is needed by any `USoundWaveProcedural` subclass.
+
+### Timing: the heard delay
+Every frame carries `Timestamp` = the moment the audience hears the audio it describes. The analyser holds each frame until then, so a reader always gets the music of "now".
+
+The delay from tap to audience (`StageAudioReactive::GetHeardDelaySeconds`):
+- **File:** `FileOutputDelayMs` (default 78 ms, the G0 mixer-to-loopback measurement) plus the user's offset. The file is tapped in the procedural sound's render callback, before the engine's output buffering.
+- **Input and SystemAudio:** the user's offset only (default 0). That audio has already been heard, so its features are late by the detection time; `FStageAudioFeatures::PhaseAt(now)` carries the beat phase forward at the tempo.
+
+### Analysis
+- **Tempo envelope** = low-band (below 250 Hz) flux in plain magnitude + 0.35 × the full log flux.
+  - The log compression G0 used for onsets made an off-beat hat's faint low end rise as much as a kick, so 90 BPM with hats read as 180. With plain magnitude in the low band it reads 90.
+- **Absolute onset floor** (flux 0.1): a steady tone's rounding noise was producing onsets.
+- **Beat phase:**
+  - a comb fit places the beat;
+  - a least-squares fit of the onsets on that grid refines the period and the beat time;
+  - the phase is pulled 20 % of its error per frame;
+  - the beat counter never runs backwards.
+- **Measured on generated kicks** (tests):
+  - 90–174 BPM within 0.07 BPM, with or without off-beat hats;
+  - beats 5–8 ms from the kicks;
+  - onset decision latency 26 ms;
+  - analyser 0.3 % of one core;
+  - noise confidence 0.14.
+
+### Sources and state
+- **State:** `EStageAudioSourceState` gained `Starting`, for a file or system audio opening on its own thread. Results reach the game thread through the task graph and are matched to the current source by a generation number, so a late result for a replaced source is ignored.
+- **Each source start gets a fresh tap.** A render or capture callback still running for the old source writes into a tap nobody reads.
+- **Seek** restarts the decoder at the position, and with it the analysis. The tempo window refills, about 3 s before a BPM is reported.
+- **Background audio** is `UStageCraftUserSettings::bPlayAudioInBackground`, on by default. `UStageAudioSubsystem` applies it through `FApp::SetUnfocusedVolumeMultiplier` and restores the previous value on `Deinitialize`, because PIE shares it with the editor.
+- **GameMode gate:** `AStageCraftGameModeBase::EvaluateAudioRequest(Player, EStageAudioRequest)`, a BlueprintNativeEvent. By default it allows any player and refuses no player.
+

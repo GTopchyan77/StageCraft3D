@@ -4,6 +4,7 @@
 
 #include "CoreMinimal.h"
 #include "GameFramework/PlayerController.h"
+#include "Audio/StageAudioReactiveTypes.h"
 #include "Bridge/StageBridgeTypes.h"
 #include "Data/StageParameterTypes.h"
 #include "Economy/StageEconomyTypes.h"
@@ -549,6 +550,30 @@ public:
 	 * or only changes the universes it sends when just the muted ones changed. A failed restart is reported on OnRequestRejected.
 	 */
 	FStageEconomyResultInfo RequestApplyDMXOutputSettings(const struct FStageDMXOutputSettings& Settings);
+
+	/**
+	 * Switches the audio-reactive source (Docs/ADR/0029 §3, §5): Off, Input, SystemAudio or TestSignal; a file is chosen with
+	 * RequestOpenAudioFile. Judged by the GameMode (EvaluateAudioRequest). A source that cannot start (no device, not on this
+	 * platform) is reported on OnRequestRejected and left Failed. A live device action, remembered on this PC: not undoable.
+	 */
+	UFUNCTION(BlueprintCallable, Category = "StageCraft|Requests")
+	FStageEconomyResultInfo RequestSetAudioSource(EStageAudioSource Source);
+
+	/** Plays a music file as the audio-reactive source. A file that cannot be used is reported on OnRequestRejected; nothing changes. */
+	UFUNCTION(BlueprintCallable, Category = "StageCraft|Requests")
+	FStageEconomyResultInfo RequestOpenAudioFile(const FString& Path);
+
+	/** Play, pause, stop, seek or loop the open music file. */
+	UFUNCTION(BlueprintCallable, Category = "StageCraft|Requests")
+	FStageEconomyResultInfo RequestAudioTransport(const FStageAudioTransportRequest& Request);
+
+	/** Replaces this PC's audio-reactive settings (sanitized and saved); a running source follows them. */
+	UFUNCTION(BlueprintCallable, Category = "StageCraft|Requests")
+	FStageEconomyResultInfo RequestApplyAudioSettings(const FStageAudioReactiveSettings& Settings);
+
+	/** Keep StageCraft sounding (and the music analysed) while another window has focus. Saved on this PC. */
+	UFUNCTION(BlueprintCallable, Category = "StageCraft|Requests")
+	FStageEconomyResultInfo RequestSetPlayAudioInBackground(bool bPlay);
 
 	/**
 	 * Imports model files into the Library (files dropped on a panel, Import Model...). The GameMode decides whether imports are

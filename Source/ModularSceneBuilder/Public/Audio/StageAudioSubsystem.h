@@ -61,6 +61,16 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "StageCraft|Audio")
 	void ToggleMute();
 
+	/**
+	 * Whether StageCraft keeps sounding while another window has focus (UStageCraftUserSettings::IsAudioPlayedInBackground,
+	 * Docs/ADR/0029 §2 A7). On by default: music and its analysis must not stop when the operator clicks into a browser.
+	 */
+	UFUNCTION(BlueprintPure, Category = "StageCraft|Audio")
+	bool IsPlayedInBackground() const;
+
+	/** Applies (FApp::SetUnfocusedVolumeMultiplier) and saves. Gameplay code changes it through AModularPlayerController. */
+	void SetPlayedInBackground(bool bPlay);
+
 	/** Any audio preference changed (from UI, console or code). Views read the getters back. */
 	UPROPERTY(BlueprintAssignable, Category = "StageCraft|Audio")
 	FOnStageAudioSettingsChanged OnAudioSettingsChanged;
@@ -79,6 +89,7 @@ private:
 	void RequestCueSounds();
 	void HandlePostLoadMap(class UWorld* LoadedWorld);
 	void ApplyMasterGain();
+	void ApplyBackgroundPlayback();
 	void ReleaseMixer();
 	void HandleSettingsChanged();
 	void ScheduleSave();
@@ -105,4 +116,7 @@ private:
 
 	FTSTicker::FDelegateHandle PendingSaveHandle;
 	FDelegateHandle PostLoadMapHandle;
+
+	/** The process-wide unfocused volume before this subsystem changed it, restored on Deinitialize (PIE shares it with the editor). */
+	float UnfocusedVolumeBefore = 1.f;
 };
