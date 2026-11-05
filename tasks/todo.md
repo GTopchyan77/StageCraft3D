@@ -580,7 +580,7 @@ Gevor's choices: automation tests on a harness game instance (not AFunctionalTes
 ## Phase 35 - Audio-reactive lighting, assistant v2, realistic stages and crowds (requested by Gevor 2026-11-05; roadmap `Docs/Roadmap/2026-11-05-realism-audio-assistant.md`; STATE.md #67; ADR 0029, ADR 0030 proposed)
 - [x] Roadmap and proposed ADRs 0029 (audio analysis, audio-reactive effects) and 0030 (assistant knowledge, live context, diagnostics, tools) (STATE.md #67)
 - [ ] Gevor's decisions: approve ADR 0029; approve ADR 0030 (default online model, key policy for a shipped product); crowd and band art source (MetaHuman / Fab / commissioned); performance target (no-regression gate or a named reference scene and GPU)
-- [ ] G0 spike: WmfMedia MP3/WAV/FLAC in Shipping through a tapped submix; WASAPI loopback prototype; source latencies; AudioSynesthesia onset comparison
+- [x] G0 spike: WmfMedia MP3/WAV/FLAC in Shipping through a tapped submix; WASAPI loopback prototype; source latencies; AudioSynesthesia onset comparison (STATE.md #68: done in Development and Shipping; results in ADR 0029 §2.1)
 - [ ] G1 audio sources and analyser: tap ring buffer, analyser thread, pure bands / onsets / tempo / beat phase, UStageAudioReactiveSubsystem, per-PC settings, requests, dev commands, tests
 - [ ] G2 audio in effects: FStageEffectAudio (Sync, Modulate, Trigger), scene format v11, Effects panel AUDIO row, audio quick effects, Audio panel, Bench.Fixtures Audio=1
 - [ ] G3 flash limiter (3 Hz default), AUDIO master and KILL, Listening indicator, latency offset; manual check with real music on every source (Gevor)

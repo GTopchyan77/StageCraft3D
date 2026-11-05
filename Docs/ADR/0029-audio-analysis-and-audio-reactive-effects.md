@@ -1,6 +1,6 @@
 # ADR 0029: Audio analysis and audio-reactive effects
 
-- **Status:** proposed (draft 2026-11-05, STATE.md #67). Not approved, not implemented. Spike G0 must confirm the facts marked **(G0)** before G1 starts.
+- **Status:** proposed (draft 2026-11-05, STATE.md #67). Not approved, not implemented. Spike G0 done (STATE.md #68, §2.1): it changed the file source (§3) and the module dependencies (§11).
 - **Related:**
   - ADR 0027 (effects engine; this ADR amends §2 and §4 with an audio setting on `FStageEffect`).
   - ADR 0025 / 0026 (the output mix and its masters; the show control stays the only writer).
@@ -30,7 +30,36 @@ What exists:
 | A3 | `UMediaSoundComponent` offers `SetEnableEnvelopeFollowing`, `GetSpectralData` and `GetNormalizedSpectralData`. | `Runtime/MediaAssets/Public/MediaSoundComponent.h:109-117` | Media playback has analysis of its own. It covers only media, so it is not the shared path (§3). |
 | A4 | The AudioCapture plugin and `AudioCaptureCore` have **no loopback** (system output) capture. The source tree has no match for "loopback". | `Plugins/Runtime/AudioCapture`, `Runtime/AudioCaptureImplementations` | Capturing what the PC plays (a browser, Spotify) needs WASAPI loopback code of our own, Windows only. |
 | A5 | WmfMedia, ElectraPlayer, AudioSynesthesia, MassCrowd, AnimToTexture and MetaHuman plugins ship with 5.8. | `Engine/Plugins/...` | Recorded for later phases; none is a dependency yet. |
-| A6 | **(G0)** WmfMedia plays a local `.mp3`, `.wav` and `.flac` through `UMediaPlayer` in a **Shipping** build, and `UMediaSoundComponent` output can be sent to a chosen submix. | to be measured | If not, files are decoded by a small WAV reader of our own plus the Media path for MP3 only, or MP3 is dropped. |
+| A6 | **Measured in G0, partly false.** WmfMedia refuses `.mp3` and `.flac` by extension: its factory's list has wav, aac, m4a, wma, mp4 and video containers ("none of the enabled media player plug-ins support it"). ElectraPlayer (off by default) opens `.mp3`, but not bare `.flac`. | `WmfMediaFactoryModule.cpp:153-170`, `ElectraPlayerFactoryModule.cpp:185`; G0 runs | Files are decoded by Media Foundation directly (§2.1, §3); the media framework is not used. |
+| A7 | **Measured in G0.** The engine mutes an unfocused app: `BaseEngine.ini [Audio] UnfocusedVolumeMultiplier=0.0`. This also silences every submix tap: the analysis goes dead when the operator clicks into a browser. | `BaseEngine.ini:1771`, `FApp::GetUnfocusedVolumeMultiplier`; G0 runs | StageCraft sets `FApp::SetUnfocusedVolumeMultiplier` from a user setting (default 1: keep playing). |
+
+### 2.1 G0 measurements (STATE.md #68)
+
+**Setup:**
+- **Signal:** a 20 s synthetic 120 BPM track: a kick every 0.5 s from exactly 1.000 s, an off-beat hi-hat, a chord pad and a noise floor. It was saved as WAV, FLAC, MP3 (320k, 44.1 kHz) and M4A (AAC 256k).
+- **Device:** 48 kHz stereo float.
+- **Builds:** each run used one process of the spike worktree, `spike/g0-audio`. Every number below was taken in Development `-game`, and the format, tap, loopback and detector numbers were **repeated in a packaged Shipping build** with the same results.
+- **Accuracy:** truth is sample-accurate to ±1 ms (the threshold-crossing bias was measured on the files with ffmpeg and subtracted).
+
+| Question | Result |
+|---|---|
+| **Formats: our own Media Foundation decoder** (`IMFSourceReader` → float; `mfplat`, `mfreadwrite`, `mfuuid`) | WAV, FLAC, MP3 and M4A all decode, in Development and Shipping. A 20 s file takes 54–133 ms (150–370× real time). Encoder priming is **not** trimmed: MP3 +39 ms, AAC +21 ms against the file's timeline. |
+| **Formats: media framework** | WMF plays WAV only (of the four). Electra plays MP3. Both work in Shipping. |
+| **Start latency** (play → first sample of the kick rendered by the mixer) | Procedural wave fed with the decoded PCM: 3 ms (Development), 16 ms (Shipping) for WAV. The MP3 adds its 39 ms priming. WMF: 20–36 ms after `IsPlaying`. Electra: 71–86 ms. |
+| **The player's clock** (`UMediaPlayer::GetTime`) | WMF steps in 100 ms increments. Electra runs about 250 ms ahead of what the mixer renders. **Neither can place a beat**: song position must come from samples we count. |
+| **Submix tap** (`ISubmixBufferListener` on the main submix) | 1024 frames per callback, every 21.3 ms on average (19–31 ms). |
+| **Engine output delay** | The kick reaches Windows' loopback stream 78 ms (73–83, sd 3) after the mixer rendered it. So the engine's own output buffering is about 78 ms. |
+| **WASAPI loopback** (shared mode, default render device) | Works in Development and Shipping: 48 kHz stereo float, 480-frame packets every 10 ms, QPC stamps steady, one discontinuity flag at start, silent packets flagged. The detector finds 37–38 of 38 kicks on it. |
+| **Microphone** (`AudioCaptureCore`, USB device) | 480-frame callbacks every 10 ms at 48 kHz. The acoustic path (speaker to mic) could not be measured: the mic heard almost nothing (peak 0.0007). Left for a manual check. |
+| **Onset detectors** on the tapped stream: 38 kicks + 38 hats, decision latency = the last sample a detector needed minus the true onset | **Ours, flux 2048/512 Hann, log magnitude:** 38/38 kicks, 36–38 hats, 0–2 false positives, **27 ms** mean (20–41), 1.2 ms CPU per second of audio. Ours 1024/256: 13–16 ms but misses kicks and 4–6 false positives. AudioSynesthesia `FOnsetStrengthAnalyzer` defaults (4096/1024, lag 4): 38/38, 1–4 false positives, **64 ms** (52–80), 0.4 ms CPU per second. Synesthesia at 2048/512, lag 1: 25 ms with 5–6 false positives. |
+
+**What it decides:**
+- **File source.** Decode with Media Foundation on a worker, play the PCM through our own procedural sound, and analyse that same PCM **before** it is played. The analysis can then be lined up with what the audience hears: features are held back by the measured output delay, about 78 ms minus the detection latency, rather than arriving late.
+  - Encoder priming then costs nothing: the lights follow the samples we actually play.
+  - The song position is exact.
+  - No media plugin and no extension list are needed.
+- **Detector.** Our flux at 2048/512 is the onset stage. AudioSynesthesia adds a plugin for no gain in accuracy, and its default settings are more than twice as slow.
+- **Unfocused mute** (A7) becomes a setting.
 
 ## 3. Decision: sources, and one analysis path
 
@@ -38,7 +67,7 @@ What exists:
 
 | Source | How | Notes |
 |---|---|---|
-| File | `UMediaPlayer` + `UMediaSoundComponent` sent to `SM_StageMusic`, tapped by A1 | Transport: play, pause, seek, loop. The listener hears it. |
+| File | `FStageAudioFileDecoder` (Windows Media Foundation source reader: WAV, FLAC, MP3, AAC/M4A, WMA) on a worker, streaming PCM in chunks to our procedural sound and, ahead of the output, to the tap (§2.1) | Transport: play, pause, seek, loop, with an exact sample position. The listener hears it. Changed by G0 from `UMediaPlayer`. |
 | Input | `AudioCaptureCore` device (line in, interface, mic) | Analysed only. Not played back, so no feedback loop. |
 | SystemAudio | `FStageLoopbackCapture` (Windows WASAPI loopback, `#if PLATFORM_WINDOWS`) | **This is how YouTube is used:** the user plays it in a browser and StageCraft listens to the PC's output. |
 | TestSignal | A deterministic generator: a kick at a set BPM plus band tones | Tests, the benchmark and a demo without music. |
@@ -62,7 +91,8 @@ The maths is pure and has no engine state (`StageAudioAnalysis::`):
 
 **Rejected for the shared path:**
 - **`UMediaSoundComponent` spectral data (A3):** media only, and no tempo.
-- **AudioSynesthesia:** UObject analysers made for Blueprint, and a plugin dependency. Whether its real-time analysers could replace our onset stage is checked in G0, but tempo and beat phase are ours either way.
+- **AudioSynesthesia:** UObject analysers made for Blueprint, and a plugin dependency. G0 ran its streaming `FOnsetStrengthAnalyzer` against ours (§2.1). It was no more accurate, was 64 ms late at its defaults, and was noisier when made fast. Tempo and beat phase are ours either way.
+- **`UMediaPlayer` for files (WmfMedia, Electra):** each plays only part of the formats (A6), and neither clock can place a beat (§2.1).
 
 ## 4. Decision: audio in the effects engine (amends ADR 0027 §2 and §4)
 
@@ -168,7 +198,7 @@ Audio-triggered intensity and strobe can flash very fast, and with DMX OUT on th
 
 ## 11. Consequences
 
-- New Private `Audio/` files, two engine module dependencies (`SignalProcessing`, `MediaAssets`), WmfMedia enabled if G0 confirms A6, and on Windows `ole32` (already linked).
+- New Private `Audio/` files and one engine module dependency (`SignalProcessing`). On Windows: `ole32`, `mfplat`, `mfreadwrite` and `mfuuid` system libraries. No media plugin and no AudioSynesthesia (G0, §2.1).
 - Scene format v11.
 - **Follow-ups:**
   - songs saved with a show, and beat-triggered cues;

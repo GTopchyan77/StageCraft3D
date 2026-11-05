@@ -6512,7 +6512,7 @@ Gevor asked (2026-11-05) for a structured, multi-phase roadmap for three feature
 
 **Verification:** documents only; no build or test needed. API facts in ADR 0030 §8 were checked against the current Claude API reference. Engine facts in ADR 0029 §2 were checked in `C:/Program Files/Epic Games/UE_5.8`. Facts not yet proven are marked (G0) / (H0) for the spikes.
 
-**Commit:** uncommitted (working tree).
+**Commit:** `54725ff`.
 
 **Known issues / follow-ups**
 - **Waiting on Gevor:**
@@ -6521,3 +6521,86 @@ Gevor asked (2026-11-05) for a structured, multi-phase roadmap for three feature
   - the crowd and band art source (MetaHuman, Fab or commissioned);
   - the performance target.
 - ADR 0031 (stage realism and crowds) is written in I0, after the asset decision.
+
+## #68 — Phase G0: audio spike (file formats, submix tap, WASAPI loopback, onset detectors) measured in Development and Shipping (2026-11-05)
+
+**What & why**
+Gevor: "Start Phase G0". G0 is the spike that ADR 0029 required before any audio code is designed for real.
+- **A6:** do music files play in a Shipping build?
+- **Latency:** how long each source takes.
+- **Detectors:** is AudioSynesthesia's onset detector better than ours?
+
+**Housekeeping first.** #67 said "uncommitted"; it carries `54725ff` (Gevor committed the roadmap).
+
+**How it was measured (throwaway, not merged)**
+- **Worktree and branch:** `E:/SC_G0`, branch `spike/g0-audio` from `54725ff`, uncommitted.
+- **Code:** one file, `Source/ModularSceneBuilder/Private/Spike/StageAudioSpikeG0.cpp`, plus spike-only deps in its `Build.cs` (MediaAssets, SignalProcessing, AudioSynesthesiaCore; ole32, mfplat, mfreadwrite, mfuuid) and AudioSynesthesia and ElectraPlayer enabled in its `.uproject`.
+- **Command line:** `-StageAudioSpikeFile=<file> [-StageAudioSpikeMF] [-StageAudioSpikeLoopback] [-StageAudioSpikeInput] -StageAudioSpikeOut=<json>`. One run:
+  - plays the file (UMediaPlayer, or our Media Foundation decoder into a procedural sound);
+  - taps the main submix;
+  - optionally captures WASAPI loopback and the microphone at the same time;
+  - finds every kick sample-accurately and runs four onset detectors on the tap;
+  - writes JSON and quits.
+- **Test signal:** a 20 s, 120 BPM synthetic track (a kick every 0.5 s from exactly 1.000 s, off-beat hi-hat, chord pad, noise), made with ffmpeg as WAV, FLAC, MP3 and M4A. The 0.94 ms bias of the kick truth was measured on the files with ffmpeg.
+- **Runs:**
+  - 9 Development `-game` runs from the worktree editor binaries;
+  - 6 runs of a packaged **Shipping** build (`BuildCookRun`, `E:/SC_G0_Package`, BUILD SUCCESSFUL).
+  - Script: scratchpad `RunG0.ps1`. Results: `%TEMP%\StageCraftRuns\G0\*.json`.
+
+**Results** (details in ADR 0029 §2.1)
+- **Formats.**
+  - WmfMedia refuses `.mp3` and `.flac` by extension and plays only WAV of the four. Electra plays MP3 (not bare FLAC).
+  - **Our Media Foundation source reader decodes WAV, FLAC, MP3 and M4A in Development and Shipping.** A 20 s file takes 54–133 ms.
+  - Encoder priming is not trimmed (MP3 +39 ms, AAC +21 ms).
+- **Start latency** (play to first sample rendered):
+
+  | Path | Development | Shipping |
+  |---|---|---|
+  | Procedural wave fed from our decoder | 3 ms | 16 ms |
+  | WMF | 20–36 ms after IsPlaying | |
+  | Electra | 71–86 ms | |
+
+- **Player clocks are unusable for beats.** WMF `GetTime` steps by 100 ms; Electra's runs about 250 ms ahead of the mixer.
+- **Unfocused mute.** BaseEngine `[Audio] UnfocusedVolumeMultiplier=0.0` silences the app **and every submix tap** when the window loses focus.
+  - Every run after a game window opened in the background read silence (peak 0) until `FApp::SetUnfocusedVolumeMultiplier(1)` / `-ini:Engine:[Audio]:UnfocusedVolumeMultiplier=1.0`.
+  - The product needs this as a setting, because the operator will click into a browser.
+- **Submix tap:** 1024 frames every 21.3 ms (19–31 ms).
+- **Engine output delay:** the mixer renders a kick about 78 ms (73–83) before Windows' loopback stream carries it.
+- **WASAPI loopback works**, in Development and Shipping: 48 kHz float, 10 ms packets, steady QPC stamps; 37–38 of 38 kicks detected from it.
+- **Microphone:** 10 ms callbacks of 480 frames. The acoustic path could not be measured (the mic heard nothing of the speakers; peak 0.0007).
+- **Detectors** (38 kicks + 38 hats per run):
+
+  | Detector | Kicks | False positives | Mean latency | CPU per audio second |
+  |---|---|---|---|---|
+  | Ours, flux 2048/512 | 38/38 | 0–2 | 27 ms (20–41) | 1.2 ms |
+  | AudioSynesthesia defaults (4096/1024, lag 4) | 38/38 | 1–4 | 64 ms | 0.4 ms |
+  | Ours, 1024/256 | misses some | 4–6 | 13–16 ms | |
+  | Synesthesia 2048/512, lag 1 | misses some | 4–6 | 25 ms | |
+
+**Decisions recorded in ADR 0029 (still proposed; amended §2 A6/A7, new §2.1, §3 File row, §3 rejected list, §11):**
+- **File source:** our Media Foundation decoder on a worker, played through our procedural sound, with the same PCM analysed **before** it is played. Features can then be aligned to what the audience hears (held back by the ~78 ms output delay minus detection) instead of arriving late. The song position is exact, and no media plugin is needed.
+- **Detector:** our flux 2048/512. No AudioSynesthesia dependency.
+- **Unfocused mute:** becomes a user setting, default "keep playing".
+
+**Files**
+- `Docs/ADR/0029-audio-analysis-and-audio-reactive-effects.md`: status line, A6 result, A7, §2.1 measurements and decisions, File row, rejected list, §11 dependencies.
+- `tasks/todo.md`: G0 ticked.
+- `STATE.md`: #67 commit hash, this entry.
+- Spike only, not in this repository's main tree: `E:/SC_G0` (branch `spike/g0-audio`, uncommitted) and `E:/SC_G0_Package`.
+
+**Verification:**
+- Spike builds: worktree editor and Shipping package, 0 warnings in project code. The only warnings are the third-party SkyCreator header's C4305, which appear in any fresh compile of that plugin.
+- All numbers come from the JSON files above.
+- The main tree has documentation changes only (no build needed).
+
+**Commit:** uncommitted (working tree).
+
+**Known issues / follow-ups**
+- **Not measured:** the speaker-to-microphone acoustic latency, and real music (G1's tempo tests will use real tracks).
+  - Manual check for Gevor: play music with the mic near a speaker in G1's Audio panel.
+- **Spike leftovers:** `E:/SC_G0` and the about 1 GB `E:/SC_G0_Package` stay until Gevor says to remove them (`git worktree remove --force E:/SC_G0`, delete the package folder, `git branch -D spike/g0-audio`).
+- **G1 must:**
+  - stream the decode (a 5-minute song is about 115 MB as float), not queue it whole;
+  - resample 44.1 kHz files to the device rate;
+  - expose the unfocused-volume setting;
+  - add a per-source latency offset with the measured defaults.
