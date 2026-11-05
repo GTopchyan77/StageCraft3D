@@ -320,6 +320,13 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "StageCraft|DMX")
 	TArray<uint8> RenderDMXUniverse(int32 Universe) const;
 
+	/**
+	 * Has every patched universe sent again on the next output frame (Docs/ADR/0019 §9.2): called when the output opens or the
+	 * universes it sends change. Otherwise a universe is rendered only after a fixture in it changed, and the sender keeps the
+	 * stream alive in between, so an idle show neither ticks nor renders.
+	 */
+	void RefreshDMXOutput();
+
 	/** DMX refresh rate for output. 44 Hz is the practical maximum of a full 512-slot DMX512 line. */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "StageCraft|DMX", meta = (ClampMin = "1.0", ClampMax = "60.0", Units = "Hz"))
 	float DMXOutputRateHz = 44.f;
@@ -421,6 +428,15 @@ private:
 	/** Writes every effect-driven fixture's effect attributes for this frame (the clocks were advanced at the start of Tick). */
 	void TickEffects();
 	void TickDMXOutput(float DeltaTime);
+
+	/** Writes Values to Fixture (only what differs is applied) and, if anything changed, marks its universe for output. */
+	void WriteFixtureOutput(class ALightingFixtureActor& Fixture, const TMap<FGameplayTag, float>& Values);
+
+	/** Encodes every fixture patched in Universe into Data (512 slots, zeroed first). */
+	void RenderDMXUniverseInto(int32 Universe, TArrayView<uint8> Data) const;
+
+	/** Whether output has universes waiting to be rendered (or the patch changed since the last frame). */
+	bool HasPendingDMXOutput() const;
 	void CompleteFade();
 
 	/** Starts Cues[Index]: fades every fixture of its tracked look (and of the playback layer) with the cue's timing. */
@@ -571,6 +587,12 @@ private:
 	bool bBlackout = false;
 	float ActiveCueNumber = -1.f;
 	float DMXOutputAccumulator = 0.f;
+	/** Universes whose fixtures changed since they were last sent (Internal output only). */
+	TSet<int32> DirtyOutputUniverses;
+	/** The patch revision the output last rendered against: a re-patch sends every universe again. */
+	uint32 LastOutputPatchRevision = 0;
+	/** One universe being rendered; reused, so output does not allocate per frame. */
+	TArray<uint8> OutputScratch;
 	EStageControlSource ControlSource = EStageControlSource::Internal;
 	FTickCostStats TickCostStats;
 

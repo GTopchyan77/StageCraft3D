@@ -90,8 +90,11 @@ bool FStagePatchSheetTest::RunTest(const FString& Parameters)
 	TestTrue(TEXT("Empty stage, empty sheet"), Empty.IsEmpty() && Empty.Universes.IsEmpty() && Empty.PatchedCount == 0);
 
 	// CSV
+	FStagePatchSheetRow SpotA = MakeRow(1, TEXT("Spot A"), 1, 1, 16);
+	SpotA.bInvertPan = true;
+	SpotA.bSwapPanTilt = true;
 	const FStagePatchSheet CsvSheet = StagePatchSheet::Build({
-		MakeRow(1, TEXT("Spot A"), 1, 1, 16),
+		SpotA,
 		MakeRow(2, TEXT("Par"), 0, 0, 7),
 		MakeRow(3, TEXT("=cmd"), 1, 10, 16, true),
 		MakeRow(4, TEXT("Spot, left"), 2, 1, 16),
@@ -104,10 +107,10 @@ bool FStagePatchSheetTest::RunTest(const FString& Parameters)
 	TestTrue(TEXT("Fixture count"), Csv.Contains(TEXT("Fixtures,4\r\n")));
 	TestTrue(TEXT("Universes"), Csv.Contains(TEXT("Universes,\"1, 2\"\r\n")));
 	TestTrue(TEXT("Conflict count"), Csv.Contains(TEXT("Conflicts,1\r\n")));
-	TestTrue(TEXT("Header row"), Csv.Contains(TEXT("\r\n\r\nFixture ID,Label,Fixture Type,Mode,Universe,Address,End Address,Channels,X (m),Y (m),Z (m),Notes\r\n")));
-	TestTrue(TEXT("Patched row"), Csv.Contains(TEXT("\r\n1,Spot A,Spot 300,16ch,1,1,16,16,1.00,2.00,3.00,\r\n")));
-	TestTrue(TEXT("Unpatched row"), Csv.Contains(TEXT("\r\n2,Par,Spot 300,16ch,,,,7,1.00,2.00,3.00,Unpatched\r\n")));
-	TestTrue(TEXT("Conflict row, formula neutralised"), Csv.Contains(TEXT("\r\n3,'=cmd,Spot 300,16ch,1,10,25,16,1.00,2.00,3.00,Patch conflict\r\n")));
+	TestTrue(TEXT("Header row"), Csv.Contains(TEXT("\r\n\r\nFixture ID,Label,Fixture Type,Mode,Universe,Address,End Address,Channels,X (m),Y (m),Z (m),Notes,Invert Pan,Invert Tilt,Swap Pan/Tilt\r\n")));
+	TestTrue(TEXT("Patched row, inverted pan and swapped"), Csv.Contains(TEXT("\r\n1,Spot A,Spot 300,16ch,1,1,16,16,1.00,2.00,3.00,,Yes,,Yes\r\n")));
+	TestTrue(TEXT("Unpatched row"), Csv.Contains(TEXT("\r\n2,Par,Spot 300,16ch,,,,7,1.00,2.00,3.00,Unpatched,,,\r\n")));
+	TestTrue(TEXT("Conflict row, formula neutralised"), Csv.Contains(TEXT("\r\n3,'=cmd,Spot 300,16ch,1,10,25,16,1.00,2.00,3.00,Patch conflict,,,\r\n")));
 	TestTrue(TEXT("Comma in label quoted"), Csv.Contains(TEXT("\r\n4,\"Spot, left\",Spot 300,")));
 
 	TestEqual(TEXT("File stem"), StagePatchSheet::MakeFileStem(TEXT("Arena Night/1"), When), FString(TEXT("PatchSheet_Arena_Night_1_20261013-140509")));

@@ -522,12 +522,33 @@ public:
 	FStageEconomyResultInfo RequestPatchFixtures(TConstArrayView<struct FStageDMXPatchAssignment> Assignments, const FText& EmptyReason);
 
 	/**
+	 * Reads the fixture schedule at Path and plans it (UStageDMXPatchSubsystem::PlanSchedule; Docs/ADR/0019 §10.2) into OutImport.
+	 * Changes nothing: the Patch panel shows the plan and applies OutImport.Assignments through RequestPatchFixtures. A file that
+	 * cannot be read, is too large or has no "Fixture ID" header row is refused (reported on OnRequestRejected).
+	 */
+	FStageEconomyResultInfo RequestPlanPatchSchedule(const FString& Path, struct FStagePatchScheduleImport& OutImport);
+
+	/**
 	 * Switches the Art-Net / sACN input on or off (Patch panel DMX IN, Docs/ADR/0019 §3). On opens the ports and switches the
 	 * show to External; off closes them and switches back to Internal. The choice is remembered on this PC. A port that
 	 * cannot be opened (another program holds it) is reported on OnRequestRejected and nothing changes.
 	 */
 	UFUNCTION(BlueprintCallable, Category = "StageCraft|Requests")
 	FStageEconomyResultInfo RequestSetDMXInput(bool bEnabled);
+
+	/**
+	 * Switches the Art-Net / sACN output on or off (Patch panel DMX OUT, Docs/ADR/0019 §9). The show sends while it is Internal
+	 * and pauses while it follows DMX IN. The choice is remembered on this PC. An output that cannot open (no protocol, unicast
+	 * without an address, no socket) is reported on OnRequestRejected and nothing changes. A live device action: not undoable.
+	 */
+	UFUNCTION(BlueprintCallable, Category = "StageCraft|Requests")
+	FStageEconomyResultInfo RequestSetDMXOutput(bool bEnabled);
+
+	/**
+	 * Replaces the output settings of this PC (sanitized and saved; Patch panel DMX OUT). A running output restarts with them,
+	 * or only changes the universes it sends when just the muted ones changed. A failed restart is reported on OnRequestRejected.
+	 */
+	FStageEconomyResultInfo RequestApplyDMXOutputSettings(const struct FStageDMXOutputSettings& Settings);
 
 	/**
 	 * Imports model files into the Library (files dropped on a panel, Import Model...). The GameMode decides whether imports are

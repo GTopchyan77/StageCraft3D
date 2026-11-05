@@ -33,6 +33,10 @@ void UStageCraftUserSettings::SetToDefaults()
 	bViewportToolbarCollapsed = false;
 	bShowWelcomeAtStartup = true;
 	DMXInput = FStageDMXInputSettings();
+	const FGuid Cid = DMXOutput.Cid;
+	DMXOutput = FStageDMXOutputSettings();
+	DMXOutput.Cid = Cid;
+	SanitizeDMXOutput();
 	ResetInputToDefaults();
 }
 
@@ -47,6 +51,7 @@ void UStageCraftUserSettings::LoadSettings(bool bForceReload)
 	SanitizeAudio();
 	RenderSettings = StageRender::Sanitize(RenderSettings);
 	DMXInput = StageDMXInput::Sanitize(DMXInput);
+	SanitizeDMXOutput();
 	// A hand-edited ini can only select a toolbar preset; anything else falls back to the default.
 	GridSnapCm = StageViewMath::SanitizeGridSnap(GridSnapCm);
 	AngleSnapDegrees = StageViewMath::SanitizeAngleSnap(AngleSnapDegrees);
@@ -233,4 +238,22 @@ bool UStageCraftUserSettings::SetDMXInputSettings(const FStageDMXInputSettings& 
 	const bool bChanged = !(DMXInput == Sanitized);
 	DMXInput = Sanitized;
 	return bChanged;
+}
+
+bool UStageCraftUserSettings::SetDMXOutputSettings(const FStageDMXOutputSettings& Settings)
+{
+	FStageDMXOutputSettings Sanitized = StageDMXOutput::Sanitize(Settings);
+	Sanitized.Cid = DMXOutput.Cid; // This PC's source identity is not a setting.
+	const bool bChanged = !(DMXOutput == Sanitized);
+	DMXOutput = Sanitized;
+	return bChanged;
+}
+
+void UStageCraftUserSettings::SanitizeDMXOutput()
+{
+	DMXOutput = StageDMXOutput::Sanitize(DMXOutput);
+	if (!DMXOutput.Cid.IsValid())
+	{
+		DMXOutput.Cid = FGuid::NewGuid();
+	}
 }

@@ -6,6 +6,7 @@
 #include "Blueprint/UserWidget.h"
 #include "Components/SpinBox.h"
 #include "GameplayTagContainer.h"
+#include "Subsystems/StageDMXPatchSubsystem.h"
 #include "StagePatchPanel.generated.h"
 
 /** Display helpers of the patch sheet, shared by the panel and its tests. */
@@ -54,8 +55,12 @@ private:
  * The DMX patch sheet dock panel (StageCraft.Panel.Patch, Docs/ADR/0007-lighting-patch-paths-and-pipeline-hardening.md §6,
  * Docs/ADR/0019-dmx-patch-and-network-input.md §5), laid out like a console's patch window:
  *  - the network input: DMX IN switch and its status (listening ports, live universes and sources, frames, errors);
+ *  - the network output (ADR 0019 §9.6): DMX OUT switch, Art-Net and sACN modes, unicast address, priority, rate, one mute chip
+ *    per patched universe, and a status line;
  *  - patch tools: AUTO PATCH (the unpatched), FIX CONFLICTS, PATCH SELECTION AT U.AAA, and the usage of every universe;
- *  - a fixture table: fixture ID, name, type, mode, patch (U.AAA), footprint, with overlapping patches marked;
+ *  - IMPORT CSV (ADR 0019 §10.2): a fixture schedule planned into a bar above the table, applied by APPLY as one undo step;
+ *  - a fixture table: fixture ID, name, type, mode, patch (U.AAA), footprint, the pan / tilt wire options (INV P, INV T,
+ *    SWAP; ADR 0019 §10.1), with overlapping patches marked;
  *  - the channel map of the selected fixture: absolute address, attribute, 8/16-bit and the live DMX value.
  *
  * A view in the project's binding pattern:
@@ -64,9 +69,10 @@ private:
  *  - Push, never poll: rebuilds on the next tick after OnFixturesChanged, OnPatchChanged or a fixture's patch/label change;
  *    refreshes channel values only on the selected fixture's attribute changes; follows the selection through
  *    OnSelectionSetChanged; updates the input line on OnInputChanged (at most twice a second while frames arrive).
- *  - Writes go through the controller: field edits through RequestParameterChange (the fields read the value back, so a
- *    refused or clamped edit snaps back), the patch tools through RequestPatchFixtures (one undo step), DMX IN through
- *    RequestSetDMXInput.
+ *  - Writes go through the controller: field edits and option toggles through RequestParameterChange (the fields read the value
+ *    back, so a refused or clamped edit snaps back), the patch tools and the schedule import through RequestPatchFixtures (one
+ *    undo step; the file is read and planned by RequestPlanPatchSchedule), DMX IN through RequestSetDMXInput, DMX OUT through
+ *    RequestSetDMXOutput and RequestApplyDMXOutputSettings.
  *  - Every binding is made in NativeConstruct / Rebuild and removed in Rebuild / NativeDestruct. No tick.
  */
 UCLASS()
@@ -151,6 +157,59 @@ private:
 	/** The input line only: cheap, no rebuild. */
 	void RefreshInputStatus();
 
+	/** The DMX OUT line: switch, protocol modes, unicast address, priority, rate. */
+	class UWidget* BuildOutputLine();
+
+	/** The output line's labels, fields and status: cheap, no rebuild (OnOutputChanged, at most twice a second while sending). */
+	void RefreshOutputStatus();
+
+	/** One OUT chip per patched universe, lit when it is sent; rebuilt with the table (the patched universes changed). */
+	void RebuildOutputUniverses();
+
+	/** Sends Settings through the controller; the fields read the saved settings back, so a refused or sanitized edit snaps back. */
+	void ApplyOutputSettings(const struct FStageDMXOutputSettings& Settings);
+
+	UFUNCTION()
+	void HandleOutputClicked();
+
+	UFUNCTION()
+	void HandleArtNetModeClicked();
+
+	UFUNCTION()
+	void HandleSACNModeClicked();
+
+	UFUNCTION()
+	void HandleUnicastCommitted(const FText& Text, ETextCommit::Type CommitMethod);
+
+	UFUNCTION()
+	void HandlePriorityCommitted(float InValue, ETextCommit::Type CommitMethod);
+
+	UFUNCTION()
+	void HandleRateCommitted(float InValue, ETextCommit::Type CommitMethod);
+
+	/** An OUT chip was clicked (UStageChoiceButton reports its index into OutputUniverses): mute or unmute that universe. */
+	void HandleOutputUniversePicked(int32 Index);
+
+	/** A row's INV P / INV T / SWAP toggle (index = row * 3 + option): flips that option through RequestParameterChange. */
+	void HandlePatchOptionPicked(int32 Index);
+
+	/** IMPORT CSV: picks a fixture schedule, reads and plans it, and shows the plan in the import bar. Changes nothing yet. */
+	UFUNCTION()
+	void HandleImportClicked();
+
+	/** APPLY in the import bar: the planned changes through RequestPatchFixtures, one undo step. */
+	UFUNCTION()
+	void HandleImportApplyClicked();
+
+	UFUNCTION()
+	void HandleImportCancelClicked();
+
+	/** Shows PendingImport in the import bar, or hides the bar when there is none. */
+	void RefreshImportBar();
+
+	/** The bar between the tools and the table that shows a planned import (summary, reasons, APPLY / CANCEL). */
+	class UWidget* BuildImportBar();
+
 	/** Sends a plan through the controller; an empty plan is reported with Empty. */
 	void ApplyPlan(TConstArrayView<struct FStageDMXPatchAssignment> Plan, const FText& Empty);
 
@@ -189,6 +248,61 @@ private:
 	TObjectPtr<class UTextBlock> InputStatusText = nullptr;
 
 	UPROPERTY(Transient)
+	TObjectPtr<class UButton> OutputButton = nullptr;
+
+	UPROPERTY(Transient)
+	TObjectPtr<class UTextBlock> OutputButtonLabel = nullptr;
+
+	UPROPERTY(Transient)
+	TObjectPtr<class UButton> ArtNetModeButton = nullptr;
+
+	UPROPERTY(Transient)
+	TObjectPtr<class UTextBlock> ArtNetModeLabel = nullptr;
+
+	UPROPERTY(Transient)
+	TObjectPtr<class UButton> SACNModeButton = nullptr;
+
+	UPROPERTY(Transient)
+	TObjectPtr<class UTextBlock> SACNModeLabel = nullptr;
+
+	UPROPERTY(Transient)
+	TObjectPtr<class UEditableTextBox> UnicastField = nullptr;
+
+	UPROPERTY(Transient)
+	TObjectPtr<class USpinBox> PriorityField = nullptr;
+
+	UPROPERTY(Transient)
+	TObjectPtr<class USpinBox> RateField = nullptr;
+
+	UPROPERTY(Transient)
+	TObjectPtr<class UTextBlock> OutputStatusText = nullptr;
+
+	/** The OUT chips (RebuildOutputUniverses). */
+	UPROPERTY(Transient)
+	TObjectPtr<class UHorizontalBox> OutputUniverseBox = nullptr;
+
+	UPROPERTY(Transient)
+	TArray<TObjectPtr<class UStageChoiceButton>> OutputUniverseButtons;
+
+	UPROPERTY(Transient)
+	TObjectPtr<class UButton> ImportButton = nullptr;
+
+	UPROPERTY(Transient)
+	TObjectPtr<class UBorder> ImportBar = nullptr;
+
+	UPROPERTY(Transient)
+	TObjectPtr<class UTextBlock> ImportSummaryText = nullptr;
+
+	UPROPERTY(Transient)
+	TObjectPtr<class UTextBlock> ImportDetailsText = nullptr;
+
+	UPROPERTY(Transient)
+	TObjectPtr<class UButton> ImportApplyButton = nullptr;
+
+	UPROPERTY(Transient)
+	TObjectPtr<class UButton> ImportCancelButton = nullptr;
+
+	UPROPERTY(Transient)
 	TObjectPtr<class UButton> FixConflictsButton = nullptr;
 
 	UPROPERTY(Transient)
@@ -218,5 +332,15 @@ private:
 	TWeakObjectPtr<class UStageDMXNetworkSubsystem> Network;
 	TWeakObjectPtr<class USelectionComponent> Selection;
 	FDelegateHandle InputChangedHandle;
+	FDelegateHandle OutputChangedHandle;
+
+	/** The patched universes behind the OUT chips, by chip index. */
+	TArray<int32> OutputUniverses;
+
+	/** A schedule read and planned by IMPORT CSV, waiting for APPLY or CANCEL. Its fixtures are weak: one may be deleted meanwhile. */
+	TOptional<FStagePatchScheduleImport> PendingImport;
+
+	/** Where IMPORT CSV last picked a file (the Reports folder at first, where EXPORT PDF writes the CSV). */
+	FString LastImportDirectory;
 	FTimerHandle RebuildTimer;
 };

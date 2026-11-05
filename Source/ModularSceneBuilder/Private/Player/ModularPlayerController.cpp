@@ -1474,20 +1474,63 @@ FStageEconomyResultInfo AModularPlayerController::RequestPatchFixtures(TConstArr
 		return Refuse(FStageEconomyResultInfo::Fail(EStageEconomyResult::InvalidRequest, LOCTEXT("PatchNoAuthority", "Patching needs the StageCraft game mode.")));
 	}
 
+	// Each fixture's change as patch parameters: universe and address when the patch moves, and each pan / tilt option that
+	// differs when the plan carries options (the schedule import, Docs/ADR/0019 §10.2).
+	struct FFieldChange
+	{
+		FGameplayTag Id;
+		FText Name;
+		FStageParameterValue Before;
+		FStageParameterValue After;
+	};
 	struct FPatchChange
 	{
 		TWeakObjectPtr<ALightingFixtureActor> Fixture;
-		FStageDMXPatch Before;
 		FStageDMXPatch After;
+		TArray<FFieldChange> Fields;
 	};
+	const auto MakeFields = [](const ALightingFixtureActor& Fixture, const FStageDMXPatchAssignment& Assignment)
+	{
+		TArray<FFieldChange> Fields;
+		const FStageDMXPatch Before = Fixture.GetPatch();
+		if (!(Before == Assignment.Patch))
+		{
+			Fields.Add({ StageCraftTags::Param_Patch_Universe, LOCTEXT("PatchUniverse", "Universe"),
+				FStageParameterValue::MakeInteger(Before.Universe), FStageParameterValue::MakeInteger(Assignment.Patch.Universe) });
+			Fields.Add({ StageCraftTags::Param_Patch_Address, LOCTEXT("PatchAddress", "Address"),
+				FStageParameterValue::MakeInteger(Before.Address), FStageParameterValue::MakeInteger(Assignment.Patch.Address) });
+		}
+		if (Assignment.Options.IsSet())
+		{
+			const FStageDMXPatchOptions Old = Fixture.GetPatchOptions();
+			const FStageDMXPatchOptions& New = Assignment.Options.GetValue();
+			const auto AddOption = [&Fields](const FGameplayTag& Id, const FText& Name, bool bOld, bool bNew)
+			{
+				if (bOld != bNew)
+				{
+					Fields.Add({ Id, Name, FStageParameterValue::MakeBool(bOld), FStageParameterValue::MakeBool(bNew) });
+				}
+			};
+			AddOption(StageCraftTags::Param_Patch_InvertPan, LOCTEXT("PatchInvertPan", "Invert Pan"), Old.bInvertPan, New.bInvertPan);
+			AddOption(StageCraftTags::Param_Patch_InvertTilt, LOCTEXT("PatchInvertTilt", "Invert Tilt"), Old.bInvertTilt, New.bInvertTilt);
+			AddOption(StageCraftTags::Param_Patch_SwapPanTilt, LOCTEXT("PatchSwapPanTilt", "Swap Pan/Tilt"), Old.bSwapPanTilt, New.bSwapPanTilt);
+		}
+		return Fields;
+	};
+
 	TArray<FPatchChange> Changes;
 	for (const FStageDMXPatchAssignment& Assignment : Assignments)
 	{
 		ALightingFixtureActor* Fixture = Assignment.Fixture.Get();
-		if (IsValid(Fixture) && !Fixture->IsActorBeingDestroyed() && !(Fixture->GetPatch() == Assignment.Patch)
-			&& !Changes.ContainsByPredicate([Fixture](const FPatchChange& Change) { return Change.Fixture == Fixture; }))
+		if (!IsValid(Fixture) || Fixture->IsActorBeingDestroyed()
+			|| Changes.ContainsByPredicate([Fixture](const FPatchChange& Change) { return Change.Fixture == Fixture; }))
 		{
-			Changes.Add({ Fixture, Fixture->GetPatch(), Assignment.Patch });
+			continue;
+		}
+		TArray<FFieldChange> Fields = MakeFields(*Fixture, Assignment);
+		if (!Fields.IsEmpty())
+		{
+			Changes.Add({ Fixture, Assignment.Patch, MoveTemp(Fields) });
 		}
 	}
 	if (Changes.IsEmpty())
@@ -1496,13 +1539,12 @@ FStageEconomyResultInfo AModularPlayerController::RequestPatchFixtures(TConstArr
 			EmptyReason.IsEmpty() ? LOCTEXT("PatchNothing", "There is nothing to patch.") : EmptyReason));
 	}
 
-	// Every fixture must accept both halves of its new patch before any changes.
+	// Every fixture must accept every part of its change before anything changes.
 	for (const FPatchChange& Change : Changes)
 	{
-		for (const TPair<FGameplayTag, int32>& Field : { TPair<FGameplayTag, int32>(StageCraftTags::Param_Patch_Universe, Change.After.Universe),
-			TPair<FGameplayTag, int32>(StageCraftTags::Param_Patch_Address, Change.After.Address) })
+		for (const FFieldChange& Field : Change.Fields)
 		{
-			const FStageEconomyResultInfo Verdict = GameMode->EvaluateParameterChange(this, Change.Fixture.Get(), Field.Key, FStageParameterValue::MakeInteger(Field.Value));
+			const FStageEconomyResultInfo Verdict = GameMode->EvaluateParameterChange(this, Change.Fixture.Get(), Field.Id, Field.After);
 			if (!Verdict.IsSuccess())
 			{
 				return Refuse(Verdict);
@@ -1512,23 +1554,25 @@ FStageEconomyResultInfo AModularPlayerController::RequestPatchFixtures(TConstArr
 
 	// One undo step for the whole plan. An edit transaction someone else opened (none is expected) collects it instead.
 	const bool bOwnTransaction = EditHistory->BeginTransaction();
-	const FText UniverseName = LOCTEXT("PatchUniverse", "Universe");
-	const FText AddressName = LOCTEXT("PatchAddress", "Address");
 	for (int32 Index = 0; Index < Changes.Num(); ++Index)
 	{
 		ALightingFixtureActor* Fixture = Changes[Index].Fixture.Get();
-		EditHistory->RecordParameterChange(Fixture, StageCraftTags::Param_Patch_Universe, UniverseName, FStageParameterValue::MakeInteger(Changes[Index].Before.Universe));
-		EditHistory->RecordParameterChange(Fixture, StageCraftTags::Param_Patch_Address, AddressName, FStageParameterValue::MakeInteger(Changes[Index].Before.Address));
-		if (!Session->ApplyParameterChange(Fixture, StageCraftTags::Param_Patch_Universe, FStageParameterValue::MakeInteger(Changes[Index].After.Universe))
-			|| !Session->ApplyParameterChange(Fixture, StageCraftTags::Param_Patch_Address, FStageParameterValue::MakeInteger(Changes[Index].After.Address)))
+		for (int32 FieldIndex = 0; FieldIndex < Changes[Index].Fields.Num(); ++FieldIndex)
 		{
-			// Back where they were, so the transaction records nothing.
-			for (int32 Applied = 0; Applied <= Index; ++Applied)
+			const FFieldChange& Field = Changes[Index].Fields[FieldIndex];
+			EditHistory->RecordParameterChange(Fixture, Field.Id, Field.Name, Field.Before);
+			if (Session->ApplyParameterChange(Fixture, Field.Id, Field.After))
 			{
-				if (ALightingFixtureActor* Restored = Changes[Applied].Fixture.Get())
+				continue;
+			}
+			// Back where they were: every field applied so far, this fixture's included.
+			for (int32 Applied = Index; Applied >= 0; --Applied)
+			{
+				ALightingFixtureActor* Restored = Changes[Applied].Fixture.Get();
+				const int32 LastField = Applied == Index ? FieldIndex - 1 : Changes[Applied].Fields.Num() - 1;
+				for (int32 Undo = LastField; Restored && Undo >= 0; --Undo)
 				{
-					Session->ApplyParameterChange(Restored, StageCraftTags::Param_Patch_Universe, FStageParameterValue::MakeInteger(Changes[Applied].Before.Universe));
-					Session->ApplyParameterChange(Restored, StageCraftTags::Param_Patch_Address, FStageParameterValue::MakeInteger(Changes[Applied].Before.Address));
+					Session->ApplyParameterChange(Restored, Changes[Applied].Fields[Undo].Id, Changes[Applied].Fields[Undo].Before);
 				}
 			}
 			if (bOwnTransaction)
@@ -1545,6 +1589,33 @@ FStageEconomyResultInfo AModularPlayerController::RequestPatchFixtures(TConstArr
 		EditHistory->EndTransaction();
 	}
 	UE_LOG(LogStageCraft, Log, TEXT("DMX patch: %d fixtures re-patched in one step."), Changes.Num());
+	return FStageEconomyResultInfo::Ok();
+}
+
+FStageEconomyResultInfo AModularPlayerController::RequestPlanPatchSchedule(const FString& Path, FStagePatchScheduleImport& OutImport)
+{
+	const auto Refuse = [this](const FText& Reason)
+	{
+		const FStageEconomyResultInfo Refusal = FStageEconomyResultInfo::Fail(EStageEconomyResult::InvalidRequest, Reason);
+		ReportRejection(Refusal);
+		return Refusal;
+	};
+	const UStageDMXPatchSubsystem* Patching = UWorld::GetSubsystem<UStageDMXPatchSubsystem>(GetWorld());
+	if (!Patching)
+	{
+		return Refuse(LOCTEXT("ScheduleNoPatch", "Patching is not available here."));
+	}
+	FString Text;
+	FText Error;
+	if (!UStageDMXPatchSubsystem::LoadScheduleFile(Path, Text, Error))
+	{
+		return Refuse(Error);
+	}
+	OutImport = Patching->PlanSchedule(Text);
+	if (!OutImport.Parsed.bHeaderFound)
+	{
+		return Refuse(OutImport.Details.IsEmpty() ? LOCTEXT("ScheduleNoHeader", "The file is not a fixture schedule.") : OutImport.Details);
+	}
 	return FStageEconomyResultInfo::Ok();
 }
 
@@ -1578,6 +1649,44 @@ FStageEconomyResultInfo AModularPlayerController::RequestSetDMXInput(bool bEnabl
 	FText Ignored;
 	Network->SetInputEnabled(false, Ignored);
 	RequestSetControlSource(EStageControlSource::Internal);
+	return FStageEconomyResultInfo::Ok();
+}
+
+FStageEconomyResultInfo AModularPlayerController::RequestSetDMXOutput(bool bEnabled)
+{
+	UStageDMXNetworkSubsystem* Network = UWorld::GetSubsystem<UStageDMXNetworkSubsystem>(GetWorld());
+	if (!Network)
+	{
+		const FStageEconomyResultInfo Refusal = FStageEconomyResultInfo::Fail(EStageEconomyResult::InvalidRequest, LOCTEXT("NoDMXOutput", "DMX output is not available here."));
+		ReportRejection(Refusal);
+		return Refusal;
+	}
+	FText Error;
+	if (!Network->SetOutputEnabled(bEnabled, Error))
+	{
+		const FStageEconomyResultInfo Refusal = FStageEconomyResultInfo::Fail(EStageEconomyResult::InvalidRequest, Error);
+		ReportRejection(Refusal);
+		return Refusal;
+	}
+	return FStageEconomyResultInfo::Ok();
+}
+
+FStageEconomyResultInfo AModularPlayerController::RequestApplyDMXOutputSettings(const FStageDMXOutputSettings& Settings)
+{
+	UStageDMXNetworkSubsystem* Network = UWorld::GetSubsystem<UStageDMXNetworkSubsystem>(GetWorld());
+	if (!Network)
+	{
+		const FStageEconomyResultInfo Refusal = FStageEconomyResultInfo::Fail(EStageEconomyResult::InvalidRequest, LOCTEXT("NoDMXOutputSettings", "DMX output is not available here."));
+		ReportRejection(Refusal);
+		return Refusal;
+	}
+	FText Error;
+	if (!Network->ApplyOutputSettings(Settings, Error))
+	{
+		const FStageEconomyResultInfo Refusal = FStageEconomyResultInfo::Fail(EStageEconomyResult::InvalidRequest, Error);
+		ReportRejection(Refusal);
+		return Refusal;
+	}
 	return FStageEconomyResultInfo::Ok();
 }
 

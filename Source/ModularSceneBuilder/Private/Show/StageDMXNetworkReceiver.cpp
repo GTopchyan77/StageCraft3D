@@ -34,8 +34,9 @@ namespace
 
 // --- FStageDMXInbox ---
 
-FStageDMXInbox::FStageDMXInbox(const FStageDMXInputSettings& InSettings, TFunction<void()> InScheduleDrain)
+FStageDMXInbox::FStageDMXInbox(const FStageDMXInputSettings& InSettings, const FGuid& InIgnoredSource, TFunction<void()> InScheduleDrain)
 	: Settings(InSettings)
+	, IgnoredSource(InIgnoredSource)
 	, ScheduleDrain(MoveTemp(InScheduleDrain))
 {
 }
@@ -79,6 +80,11 @@ void FStageDMXInbox::HandleSACNDatagram(const TSharedPtr<FArrayReader, ESPMode::
 	{
 	case EStageDMXNetPacket::SACNData:
 		++SACNPackets;
+		if (IgnoredSource.IsValid() && Frame.Source == IgnoredSource)
+		{
+			++IgnoredFrames; // Our own output, looped back by multicast.
+			break;
+		}
 		HandleFrame(Frame, FPlatformTime::Seconds());
 		break;
 	case EStageDMXNetPacket::Ignored:
@@ -241,7 +247,7 @@ bool FStageDMXNetworkReceiver::Start(const FStageDMXReceiverConfig& InConfig, TF
 		}
 	}
 
-	Inbox = MakeShared<FStageDMXInbox, ESPMode::ThreadSafe>(Config.Settings, MoveTemp(ScheduleDrain));
+	Inbox = MakeShared<FStageDMXInbox, ESPMode::ThreadSafe>(Config.Settings, Config.IgnoredSource, MoveTemp(ScheduleDrain));
 	const FTimespan WaitTime = FTimespan::FromSeconds(SocketWaitSeconds);
 	if (ArtNetSocket)
 	{

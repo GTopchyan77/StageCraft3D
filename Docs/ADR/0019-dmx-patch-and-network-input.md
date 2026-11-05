@@ -1,6 +1,6 @@
 # ADR 0019: DMX patch subsystem and Art-Net / sACN input
 
-- **Status:** accepted. See STATE.md #46.
+- **Status:** accepted. See STATE.md #46. Amended by §9 (DMX output, STATE.md #65) and §10 (patch options and fixture schedule, STATE.md #66).
 - **Related:**
   - ADR 0007 (lighting, patch paths, Patch panel): §2 and §5 move the patch logic out of the show control and extend the panel.
   - ADR 0011 (cue list, patch sheet): the patch sheet now reads conflicts from the patch subsystem.
@@ -173,7 +173,7 @@ The last frames are forgotten when the patch revision or the control source chan
 - **New dependencies.** `Sockets` and `Networking` are new private dependencies. A Shipping build includes the receiver; the console commands are compiled out.
 - **Firewall.** Windows may ask to allow StageCraft through the firewall the first time the input is switched on. The automated tests use other ports on loopback.
 - **Not done:**
-  - DMX output (Art-Net / sACN send);
+  - DMX output (Art-Net / sACN send): done in §9;
   - HTP / LTP merging;
   - RDM;
   - several DMX modes per fixture (the todo item stays open);
@@ -181,3 +181,163 @@ The last frames are forgotten when the patch revision or the control source chan
   - sACN universe discovery;
   - ArtPollReply on every card when listening on all of them (it announces the address the OS prefers).
 - **Not verified on this machine:** a real console on the LAN, the firewall prompt, discovery by a real controller, and multicast from another PC. Loopback unicast and ArtPoll are tested.
+
+## 9. Amendment (2026-11-04, Phase F5a, STATE.md #65): Art-Net / sACN output
+
+Gevor's brief for F5 asked for DMX output (Art-Net and sACN) to drive real fixtures, nodes and visualisers, with patch options and a fixture schedule import to follow in F5b. Everything below follows the input's architecture (§3) wherever it can.
+
+### 9.1 One transport owner
+
+- **Decision.** `UStageDMXNetworkSubsystem` is the Art-Net / sACN transport of the world in both directions. `UStageNetworkDMXBridge` owns the existing `FStageDMXNetworkReceiver` and a new `FStageDMXNetworkSender`, each opened and closed on its own, and stays the show control's single bridge.
+  - The bridge is installed while input **or** output is on and removed when both are off (`EnsureBridge`, `ReleaseBridgeIfIdle`).
+  - Input and output are independent states: `EStageDMXInputState` (Off, Listening, Failed) and `EStageDMXOutputState` (Off, Sending, Failed), each with its own error, delegate and remembered on/off.
+  - `UStageDMXBridge::bOutputEnabled` follows whether the sender is open, so a bridge that only listens never makes the show render.
+- **Alternatives rejected.**
+  - A second bridge slot in the show control, or a separate output subsystem: two owners of the same network card, numbering and patch-change handling, and a show control that would need a list of bridges.
+  - The DMX Engine plugin's output ports: rejected for the input in §3.1, for the same reasons.
+
+### 9.2 No idle tick, no idle render
+
+- **Dirty universes.** Every write of a fixture's output by the show goes through one helper, `UShowControlSubsystem::WriteFixtureOutput`. It applies the values (`SetAttributes`, only what differs) and, when something changed and output is active, marks the fixture's universe dirty. The three mix paths (fade frame, fade end, `ResolveFixture`) use it; the masters re-resolve every fixture, so they mark too.
+- **Full frames** are asked for with `RefreshDMXOutput` when the output opens or the universes it sends change. A patch change is seen through `GetPatchRevision` and also sends every universe again.
+- **Render.** `TickDMXOutput` renders only the dirty universes, at most `DMXOutputRateHz` times a second (set from the settings' rate), into one reused buffer (`RenderDMXUniverseInto`). An idle show sends its next change at once instead of waiting out an interval.
+- **Tick.** `IsTickable` includes output only while a universe is waiting (`HasPendingDMXOutput`). An idle show with output on does not tick at all.
+- **Keep-alive** is the sender's job (§9.3), so receivers still see a steady stream.
+
+### 9.3 `FStageDMXNetworkSender`: network I/O off the game thread
+
+- **Threading.** One UDP socket and one `FRunnable` thread of its own (Rules §29).
+  - The game thread posts a universe's frame (`Post`) into a mailbox that keeps only the newest frame per universe, under a lock, and wakes the thread with an `FEvent`. Posting never waits on the network.
+  - The thread owns the per-universe streams (last slots, last send time, sequence numbers); nothing else touches them.
+- **Packets.** `StageDMXNet::BuildArtDmx` and `BuildSACNData` (already tested).
+  - Art-Net sequence runs 1..255 (0 means unsequenced); sACN has its own sequence per universe.
+  - The sACN CID, priority and source name come from the settings.
+- **Keep-alive.** An unchanged universe is sent again every second (E1.31 §6.6.1 and common Art-Net practice), so the game thread renders only on change.
+- **Which universes.** `SetUniverses` takes the universes to send: the patched ones, minus the muted ones, and none while the show is External (§9.5).
+  - A universe that leaves the set gets three sACN `Stream_Terminated` packets (E1.31 §6.7.1) and is no longer kept alive.
+  - A frame for a universe outside the set is dropped.
+- **Close** terminates every sACN stream, joins the thread, then closes the socket. It is idempotent and runs from the destructor and from the bridge's `Stop` / `BeginDestroy`.
+- **Socket.**
+  - Bound to the chosen network card (any free port), so broadcast and multicast leave through it.
+  - Broadcast is on; multicast TTL is 16, with the card as the multicast interface.
+  - Multicast loopback is on, so a visualiser on the same PC sees the output.
+  - Blocking, because only the sender's thread waits on it.
+- **Status.** Atomic counters (Art-Net and sACN packets, send errors) and the universes being sent, for the Patch panel and the console.
+
+### 9.4 Settings (per PC)
+
+`FStageDMXOutputSettings` is stored in `UStageCraftUserSettings` (GameUserSettings.ini) and always read through `StageDMXOutput::Sanitize`:
+
+| Field | Values | Default |
+|---|---|---|
+| `bEnabled` | remembered on/off | off |
+| `ArtNet` | Off, Broadcast (255.255.255.255 from the chosen card), Unicast | Broadcast |
+| `SACN` | Off, Multicast (239.255.hi.lo), Unicast | Multicast |
+| `UnicastAddress` | IPv4 for the protocols set to Unicast; anything else is emptied | empty |
+| `SACNPriority` | 0..200 | 100 |
+| `RateHz` | 1..44 | 44 |
+| `MutedUniverses` | sorted, unique, 1..63999 | none |
+| `Cid` | this PC's sACN component ID, made once and kept by a reset to defaults | new GUID |
+
+- **Shared with the input.** The network card (`BindAddress`) and the universe numbering (`ArtNetFirstPortAddress`, `SACNFirstUniverse`) stay in `FStageDMXInputSettings`, so each is set in one place. A change to them restarts a running output too.
+- **Unicast without an address** is refused when the output opens, with the reason, rather than quietly sending somewhere else.
+- **Own-frame guard.** The receiver ignores sACN frames carrying this PC's CID (`FStageDMXReceiverConfig::IgnoredSource`). With multicast loopback on, our own output would otherwise arrive as input.
+- **First save.** The first time the settings are saved after this change, GameUserSettings.ini gains a `DMXOutput=` line with the defaults and this PC's CID. Later saves keep the same CID.
+
+### 9.5 Output and the control source
+
+Output sends only while the show is Internal.
+- **Switching to External** (DMX IN drives the fixtures): the subsystem sets the sent universes to none, which terminates the sACN streams. StageCraft must not become a second source on the wire next to the console it follows.
+- **Back to Internal:** every universe is sent again.
+
+Merging the input with the output, or passing it through, is a follow-up.
+
+### 9.6 Requests and UI
+
+- **Requests.** `AModularPlayerController::RequestSetDMXOutput(bool)` and `RequestApplyDMXOutputSettings(Settings)`.
+  - Refusals (no protocol, unicast without an address, no socket) go to `OnRequestRejected`.
+  - Output is a live device action, like DMX IN, so it is not undoable.
+- **Patch panel DMX OUT line:**
+  - ON/OFF;
+  - ART-NET (OFF, BCAST, UNICAST) and sACN (OFF, MCAST, UNICAST), each cycled by a click;
+  - the unicast IPv4 field, and the PRI and HZ fields;
+  - one chip per patched universe, lit while it is sent; a click mutes or unmutes it.
+- **Status line** below the controls shows one of:
+  - "Sending 1 universe · Art-Net to 127.0.0.1, sACN to 127.0.0.1 · 189 Art-Net, 189 sACN packets";
+  - "Paused while DMX IN drives the show";
+  - the error.
+- **The fields read the saved settings back,** so a refused or sanitized edit snaps back.
+- **Push, never poll.** The line updates on `OnOutputChanged`: at once on a state change, and twice a second while sending (one looping timer that exists only while sending).
+
+### 9.7 Console and bench (development builds only)
+
+| Command | What it does |
+|---|---|
+| `StageCraft.DMX.Output On\|Off\|Status` | Switches the output on or off, or reports its status |
+| `StageCraft.DMX.OutputSettings [ArtNet=Off\|Broadcast\|Unicast] [SACN=Off\|Multicast\|Unicast] [To=<IPv4>] [Priority=n] [Rate=n] [Mute\|Unmute=<universe>]` | Logs or changes the output settings through the controller |
+| `StageCraft.Bench.Fixtures … DMXOut=1` | Also sends every bench universe as Art-Net and sACN unicast to 127.0.0.1 on unused ports (26454 / 25568), through a bench-owned bridge; refused while the user has DMX IN or OUT on |
+
+### 9.8 Consequences and follow-ups
+
+- **Firewall.** Outgoing UDP needs no prompt on Windows. A receiving visualiser on another PC may need its own rule.
+- **Not done (todo.md):**
+  - ArtPoll discovery of output targets (use broadcast or a typed unicast address);
+  - ArtSync;
+  - passthrough or merge of DMX IN to OUT;
+  - RDM;
+  - per-universe destinations.
+- **Not verified on this machine:** a real node, console or visualiser on the LAN receiving our broadcast, multicast or unicast. Loopback unicast is tested, and multicast loopback is on.
+
+## 10. Amendment (2026-11-04, Phase F5b, STATE.md #66): pan / tilt patch options and the fixture schedule
+
+### 10.1 Invert Pan, Invert Tilt, Swap Pan/Tilt
+
+- **Problem.** A moving head hung upside down, the other way round or sideways turns the wrong way for the console or visualiser downstream. Consoles fix this in the patch, not in the cues.
+- **Decision: wire-only.** `FStageDMXPatchOptions {bInvertPan, bInvertTilt, bSwapPanTilt}` is a SaveGame member of `ALightingFixtureActor` (its fields SaveGame too, as `FStageDMXPatch`'s must be). Only `WriteDMX` and `ReadDMX` map through it.
+  - The attributes, the beam on the stage, the programmer and the cues stay as they are.
+  - A cue therefore plays the same on a fixture hung either way. What changes is what the real fixture receives.
+- **One pure mapping for both directions.** `StageDMXPatchOptions::GetChannelSource(ChannelAttribute, Options)` returns the attribute a channel carries and whether it is inverted.
+  - **Swap:** the pan channel carries the tilt (normalised in the tilt's own range) and the other way round.
+  - **Invert:** belongs to the console axis. Invert Pan inverts the pan on whichever channel it travels.
+  - **16-bit channels:** follow automatically.
+  - **The CMY inversion** (`ResolveDMXAttribute`) still applies first; the two inverts combine by XOR.
+  - **Round trip.** The mapping is a per-channel permutation plus inversion, so `ReadDMX(WriteDMX(x)) == x` for all eight combinations (tested).
+- **Unusable options.** `StageDMXPatchOptions::GetEffective` turns off what the DMX mode cannot use: a swap needs both a pan and a tilt channel, and an invert needs its axis. The stored options are kept as given, so a mode change does not lose them. When no option is set, the codec skips the channel scan.
+- **Undo for free.** `StageCraft.Param.Patch.InvertPan`, `InvertTilt` and `SwapPanTilt` are Bool patch parameters in `IsPatchParameter`.
+  - `RequestParameterChange` records them as undoable steps like the universe and address.
+  - The inspector's Patch section offers them for the axes the mode has.
+  - `SetPatchOptions` reports through `NotifyPatchSubsystem`, so the patch revision moves: DMX output sends the universe again, and input reads its next frame in full.
+- **No scene format change.** Item state is tagged SaveGame serialization (`AModularBaseActor::CaptureSnapshot`), so states and scenes saved before #66 load with no options.
+- **UI.** Each Patch panel row has INV P, INV T and SWAP toggles: lit when on, greyed out without the axis. Each click is one `RequestParameterChange`.
+
+### 10.2 Fixture schedule import
+
+- **Problem.** A rig is usually planned in a spreadsheet: fixture number, universe, address. Typing hundreds of addresses again is slow and error-prone.
+- **Decision: read the patch sheet back.** The import reads the CSV the patch sheet already writes (`StagePatchSheet::ToCsv`). That CSV gains `Invert Pan`, `Invert Tilt` and `Swap Pan/Tilt` columns at the end (Yes or empty), so an export imports back exactly.
+- **`StagePatchSchedule::Parse` (pure)** reads the file as user input:
+  - **Format:** a UTF-8 BOM; CRLF or LF; comma or semicolon (taken from the header row); double-quoted fields with `""` escapes; the sheet's leading-apostrophe formula guard stripped.
+  - **Header:** the first row with a "Fixture ID" field. Lines before it (the title, the summary) are skipped.
+  - **Columns** are found by name in any order. Fixture ID, Universe and Address are required; the three option columns are optional.
+  - **Values:** numbers are digits only, at most six (fixture ID 1–99999, universe 1–63999, address 1–512). Universe and Address both empty means unpatch; one of them alone is an error. Flags are Yes/No, True/False, 1/0 or On/Off, and empty means No.
+  - **Limits:** 1 M characters per file (refused whole), 10 000 rows (reading stops with one reason), 512 characters per field.
+  - **Errors:** a NUL or another bad field reports that row with its line number, and the other rows still read.
+- **`StagePatchSchedule::Plan` (pure)** checks the rows against the stage's fixtures.
+  - **Rejected, each with its line:** an unknown fixture ID; an ID on more than one row (every such row, since the file is ambiguous); a patch for a fixture that takes no DMX; an address its footprint does not fit at (`StageDMXPatching::Fits`).
+  - **Unchanged:** rows equal to the stage are counted, not changed.
+  - **Conflicts:** overlaps are allowed (§2), computed over the whole stage as it would be after the plan, and reported.
+- **`UStageDMXPatchSubsystem::PlanSchedule`** runs both over the registered fixtures and returns `FStagePatchScheduleImport`:
+  - the parse and the plan;
+  - the changes as `FStageDMXPatchAssignment`s, each carrying its options only when the file set them;
+  - a one-line summary and the first four reasons.
+  
+  `LoadScheduleFile` refuses a missing file or one larger than the character limit could need, before reading it.
+- **Requests.**
+  - `AModularPlayerController::RequestPlanPatchSchedule(Path, OutImport)` reads and plans. It changes nothing, and refuses a file that is unreadable, too large or not a schedule.
+  - `RequestPatchFixtures` now takes the optional options. A fixture's change is a list of patch parameters (universe and address when the patch moves; each option that differs), all evaluated by the GameMode first, then applied and recorded as **one undo step**. On a failure, everything applied so far is put back.
+- **UI.** Patch panel IMPORT CSV opens the file picker, starting in the Reports folder where EXPORT PDF writes the CSV. The plan shows in a bar above the table: summary, reasons, APPLY and CANCEL. Nothing changes before APPLY.
+- **Console (development builds):** `StageCraft.DMX.ImportSchedule <path> [Apply]`.
+
+### 10.3 Consequences
+
+- **Not done:** importing fixtures that are not on the stage yet (a schedule only re-patches existing fixtures), mode or type columns, a GDTF / MVR import.
+- **The console command splits arguments on spaces,** so a path with spaces needs the panel.

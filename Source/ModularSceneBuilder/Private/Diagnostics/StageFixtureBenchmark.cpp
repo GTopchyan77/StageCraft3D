@@ -8,6 +8,7 @@
 //   (GM below 1 measures fades mixed in full every frame, as with a playback up or the Grand Master down; Docs/ADR/0026 §6.)
 //   (Effects=1 runs a circle and a dimmer sine on every bench fixture through both phases, Effects=2 adds a rainbow, Effects=3 stores them in the two cues instead (circle and dimmer sine in A, a bigger
 //   circle, dimmer sine and rainbow in B), so every crossfade fades, morphs and starts or stops effects; Docs/ADR/0027 §5, §7.)
+//   (DMXOut=1 also sends every bench universe as Art-Net and sACN unicast to 127.0.0.1 on unused ports; Docs/ADR/0019 §9.7.)
 //   (Zoom=0 keeps the zoom fixed: a cone change rebuilds the engine's light proxy, so zoom fades are measured apart.)
 //   StageCraft.Bench.Cancel
 //
@@ -38,7 +39,10 @@
 #include "ModularSceneBuilder.h"
 #include "Player/ModularPlayerController.h"
 #include "RenderTimer.h"
+#include "Show/StageNetworkDMXBridge.h"
 #include "Subsystems/ShowControlSubsystem.h"
+#include "Subsystems/StageDMXPatchSubsystem.h"
+#include "UObject/StrongObjectPtr.h"
 #include "Subsystems/StageProgrammerSubsystem.h"
 #include "Subsystems/StageItemSubsystem.h"
 #include "Subsystems/StageSessionSubsystem.h"
@@ -51,6 +55,9 @@ namespace StageFixtureBenchmark
 	/** Cue numbers far above any normal show, removed again with the rest of the run. */
 	constexpr float CueA = 9001.f;
 	constexpr float CueB = 9002.f;
+	/** DMXOut=1 sends here on 127.0.0.1: ports no DMX tool listens on, so a visualiser on this PC never sees bench frames. */
+	constexpr uint16 BenchArtNetPort = 26454;
+	constexpr uint16 BenchSACNPort = 25568;
 	/** Grid of fixtures: 1 m apart at 6 m, the height of a typical truss. */
 	constexpr double GridSpacingCm = 100.0;
 	constexpr double GridHeightCm = 600.0;
@@ -71,6 +78,11 @@ namespace StageFixtureBenchmark
 		double GrandMaster = 1.0;
 		/** Effects on every bench fixture during both phases (Docs/ADR/0027 §7): 0 none, 1 circle + dimmer sine, 2 also a rainbow, 3 held by the cues. */
 		int32 Effects = 0;
+		/**
+		 * DMXOut=1 sends every bench universe as Art-Net and sACN unicast to 127.0.0.1 on unused ports while measuring (Docs/ADR/0019
+		 * §9.7): the show renders each changed universe and the sender thread sends it. Refused while the user has DMX IN or OUT on.
+		 */
+		bool bDMXOut = false;
 	};
 
 	/** Per-frame samples of one measured phase, in milliseconds. */
@@ -175,6 +187,7 @@ namespace StageFixtureBenchmark
 				}
 				else
 				{
+					CloseBenchOutput();
 					Report();
 					SetStep(EStep::Finished);
 				}
@@ -192,6 +205,7 @@ namespace StageFixtureBenchmark
 			{
 				UE_LOG(LogStageCraft, Display, TEXT("StageCraft.Bench: cancelled."));
 				Cleanup();
+				CloseBenchOutput();
 				Report();
 				SetStep(EStep::Finished);
 			}
@@ -221,6 +235,10 @@ namespace StageFixtureBenchmark
 					Settings.ItemName.IsEmpty() ? TEXT("") : *FString::Printf(TEXT(" named %s"), *Settings.ItemName));
 				return false;
 			}
+			if (Settings.bDMXOut && !OpenBenchOutput(*Show))
+			{
+				return false;
+			}
 
 			SavedCues = Show->GetCues();
 			SavedActiveCue = Show->GetActiveCueNumber();
@@ -237,6 +255,66 @@ namespace StageFixtureBenchmark
 		}
 
 	private:
+		/** DMXOut=1: a bench-owned bridge that sends unicast to this PC on ports nothing listens on. The user's own transport is never replaced. */
+		bool OpenBenchOutput(UShowControlSubsystem& Show)
+		{
+			if (Show.GetDMXBridge())
+			{
+				UE_LOG(LogStageCraft, Display, TEXT("StageCraft.Bench: DMXOut=1 needs DMX IN and OUT off (a transport is installed); switch them off first."));
+				return false;
+			}
+			FStageDMXSenderConfig Config;
+			Config.Settings.ArtNet = EStageArtNetOutputMode::Unicast;
+			Config.Settings.SACN = EStageSACNOutputMode::Unicast;
+			Config.Settings.UnicastAddress = TEXT("127.0.0.1");
+			Config.ArtNetPort = BenchArtNetPort;
+			Config.SACNPort = BenchSACNPort;
+			Config.SourceName = TEXT("StageCraft Bench");
+			BenchBridge.Reset(NewObject<UStageNetworkDMXBridge>(&Show));
+			FText Error;
+			if (!BenchBridge->OpenOutput(Config, Error))
+			{
+				UE_LOG(LogStageCraft, Display, TEXT("StageCraft.Bench: DMXOut=1 could not open the output: %s"), *Error.ToString());
+				BenchBridge.Reset();
+				return false;
+			}
+			Show.SetDMXBridge(BenchBridge.Get());
+			return true;
+		}
+
+		/** Every patched universe (the bench fixtures were just auto-patched) is sent from now on. */
+		void UpdateBenchOutput(UShowControlSubsystem& Show) const
+		{
+			const UStageDMXPatchSubsystem* Patch = UWorld::GetSubsystem<UStageDMXPatchSubsystem>(World.Get());
+			if (BenchBridge && Patch)
+			{
+				BenchBridge->SetOutputUniverses(Patch->GetPatchedUniverses());
+				Show.RefreshDMXOutput();
+			}
+		}
+
+		/** Logs what the bench output sent and removes it from the show (which closes it). */
+		void CloseBenchOutput()
+		{
+			if (!BenchBridge)
+			{
+				return;
+			}
+			const FStageDMXOutputStatus Status = BenchBridge->GetOutputStatus();
+			UE_LOG(LogStageCraft, Display, TEXT("StageCraft.Bench: DMX output sent %lld Art-Net and %lld sACN packets (%lld send errors)."),
+				Status.ArtNetPackets, Status.SACNPackets, Status.SendErrors);
+			UShowControlSubsystem* Show = World.IsValid() ? UWorld::GetSubsystem<UShowControlSubsystem>(World.Get()) : nullptr;
+			if (Show && Show->GetDMXBridge() == BenchBridge.Get())
+			{
+				Show->SetDMXBridge(nullptr);
+			}
+			else
+			{
+				BenchBridge->Stop();
+			}
+			BenchBridge.Reset();
+		}
+
 		void SetStep(EStep NewStep)
 		{
 			Step = NewStep;
@@ -360,6 +438,7 @@ namespace StageFixtureBenchmark
 			{
 				StartEffects();
 			}
+			UpdateBenchOutput(*Show);
 		}
 
 		/** Starts the quick effect Name on every bench fixture. */
@@ -568,6 +647,8 @@ namespace StageFixtureBenchmark
 		TOptional<float> SavedGrandMaster;
 		/** The programmer's effects and stops before the run (Effects=1|2|3), put back when it ends. */
 		TOptional<FStageProgrammerEffects> SavedEffects;
+		/** DMXOut=1: the bench's own output, installed for the whole run. Strong: this runner is not a UObject. */
+		TStrongObjectPtr<UStageNetworkDMXBridge> BenchBridge;
 		int32 CountIndex = 0;
 		FRunResult Current;
 		TArray<FRunResult> Results;
@@ -626,9 +707,13 @@ namespace StageFixtureBenchmark
 				{
 					Out.Effects = FCString::Atoi(*Value);
 				}
+				else if (Key.Equals(TEXT("DMXOut"), ESearchCase::IgnoreCase) && (Value == TEXT("0") || Value == TEXT("1")))
+				{
+					Out.bDMXOut = Value == TEXT("1");
+				}
 				else
 				{
-					UE_LOG(LogStageCraft, Display, TEXT("StageCraft.Bench: ignored \"%s\" (Seconds 1..600, Fade 0.1..60, Settle 0..60, Zoom 0|1, Item=<asset name>, GM 0..1, Effects 0|1|2|3)."), *Arg);
+					UE_LOG(LogStageCraft, Display, TEXT("StageCraft.Bench: ignored \"%s\" (Seconds 1..600, Fade 0.1..60, Settle 0..60, Zoom 0|1, Item=<asset name>, GM 0..1, Effects 0|1|2|3, DMXOut 0|1)."), *Arg);
 				}
 				continue;
 			}

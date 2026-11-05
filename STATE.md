@@ -6237,7 +6237,7 @@ Gevor's Phase F4b brief: running effects recorded into cues, playback cues and s
 - **Not verified by hand:** the Effects panel's EDIT and STOP on a cue effect by mouse with Ctrl+Z, the FX column tooltip, the playback FX marker, STOP ALL over cue effects.
 
 
-**Commit:** uncommitted (working tree).
+**Commit:** `f406ee5`.
 
 **Known issues / follow-ups**
 - **A changed fixture list snaps** during a morph (the new list at once); only the settings blend.
@@ -6246,4 +6246,236 @@ Gevor's Phase F4b brief: running effects recorded into cues, playback cues and s
 - **A programmer stop or Clear is immediate**, not timed.
 - **No effect pool and no speed master** (ADR 0027 §8).
 - **Manual checks for Gevor:** the Effects panel's EDIT and STOP on a cue effect, the FX column and tooltip, the playback FX marker, by mouse with Ctrl+Z.
-- **Next:** F5 DMX output (#65).
+- **Next:** F5 DMX output (#65, #66).
+
+## #65 — Phase F5a: Art-Net / sACN DMX output, rendered only on change (2026-11-04)
+
+**What & why**
+Gevor's F5 brief: DMX output so StageCraft can drive real fixtures, nodes and visualisers, then patch options and a fixture schedule import (#66).
+- **Before.** The show had a send path (`TickDMXOutput` → `RenderDMXUniverse` → `UStageDMXBridge::SendUniverse`), but the only bridge (`UStageNetworkDMXBridge`) was input-only (`bOutputEnabled = false`). Had output been switched on, the show would have ticked and rendered every patched universe 44 times a second, even at rest.
+- **Design (ADR 0019 §9):** one transport owner, network I/O on a thread of its own, and renders only for universes whose look changed.
+
+**Transport** (`UStageDMXNetworkSubsystem`, `UStageNetworkDMXBridge`):
+- The subsystem is now the world's Art-Net / sACN transport in both directions. Input and output are independent states, each with its own error, delegate (`OnInputChanged`, `OnOutputChanged`) and remembered on/off.
+- One bridge holds the existing receiver and the new sender (`OpenInput` / `CloseInput`, `OpenOutput` / `CloseOutput`). It is installed in the show while either direction is on (`EnsureBridge`) and removed when both are off (`ReleaseBridgeIfIdle`). A bridge the show replaced is let go (`ForgetStoppedBridge`).
+- `bOutputEnabled` follows the sender, so a bridge that only listens never makes the show render.
+- **Under External** (DMX IN drives the show) the sent universes are set to none, which terminates the sACN streams: StageCraft never becomes a second source next to the console it follows. Back to Internal, every universe is sent again (`HandleControlSourceChanged`).
+
+**`FStageDMXNetworkSender`** (new, `Private/Show/StageDMXNetworkSender.*`):
+- **Threading.** One UDP socket and one `FRunnable` thread. `Post` puts a universe's frame into a mailbox that keeps only the newest frame per universe (lock + `FEvent`); it never waits on the network.
+- **Packets.** The thread sends ArtDmx (sequence 1..255) and E1.31 data (its own sequence, the settings' CID, priority and source name).
+- **Keep-alive.** An unchanged universe is sent again every second.
+- **Universes.** `SetUniverses` takes the patched universes minus the muted ones. A universe that leaves gets three `Stream_Terminated` packets.
+- **Close** terminates everything, joins the thread, then closes the socket. It is idempotent and also runs from the destructor.
+- **Socket:** bound to the chosen card, broadcast on, multicast TTL 16 with the card as interface, multicast loopback on (a visualiser on this PC sees it).
+- **Counters** are atomic.
+
+**Settings** (`FStageDMXOutputSettings` in `UStageCraftUserSettings`, `StageDMXOutput::Sanitize`):
+- `ArtNet` Off / Broadcast (255.255.255.255 from the card) / Unicast, default Broadcast.
+- `SACN` Off / Multicast / Unicast, default Multicast.
+- `UnicastAddress` (emptied unless it is IPv4), `SACNPriority` 0–200, `RateHz` 1–44, `MutedUniverses` (sorted, unique).
+- `Cid`: made once per PC and kept by a reset to defaults.
+- The network card and universe numbering stay the input's (`FStageDMXInputSettings`), so each is set in one place; changing them restarts a running output.
+- A protocol set to unicast without an address is refused when the output opens.
+- **Own-source guard.** The receiver ignores sACN carrying this PC's CID (`FStageDMXReceiverConfig::IgnoredSource`).
+
+**Show control** (`UShowControlSubsystem`):
+- Every fixture output write by the mix (fade frame, fade end, `ResolveFixture`) goes through `WriteFixtureOutput`. When anything changed and output is active, it marks the fixture's universe dirty.
+- `RefreshDMXOutput` and a patch revision change mark every patched universe.
+- `TickDMXOutput` renders only dirty universes, at most `DMXOutputRateHz` (from the settings), into one reused buffer (`RenderDMXUniverseInto`). An idle show sends its next change at once.
+- `IsTickable` includes output only while a universe waits (`HasPendingDMXOutput`): **an idle show with output on does not tick.**
+
+**Requests and UI:**
+- `AModularPlayerController::RequestSetDMXOutput(bool)` and `RequestApplyDMXOutputSettings(Settings)`; refusals go to `OnRequestRejected`. Output is not undoable (a live device action, as DMX IN).
+- **Patch panel DMX OUT line:**
+  - ON/OFF;
+  - ART-NET (OFF / BCAST / UNICAST) and sACN (OFF / MCAST / UNICAST), each cycled by a click;
+  - unicast IPv4 field, PRI and HZ fields;
+  - one chip per patched universe, lit while it is sent, a click mutes or unmutes it;
+  - a status line on its own row: "Sending 1 universe · Art-Net to …, sACN to … · 189 Art-Net, 189 sACN packets", "Paused while DMX IN drives the show", or the error.
+- The fields read the saved settings back. The line updates on `OnOutputChanged`: at once on a state change, and twice a second while sending (one looping timer that exists only while sending).
+
+**Dev console and bench** (compiled out of Shipping):
+- `StageCraft.DMX.Output On|Off|Status`.
+- `StageCraft.DMX.OutputSettings [ArtNet=…] [SACN=…] [To=<IPv4>] [Priority=n] [Rate=n] [Mute|Unmute=<u>]`.
+- `StageCraft.Bench.Fixtures … DMXOut=1`: a bench-owned bridge sending unicast to 127.0.0.1 on unused ports 26454 / 25568, refused while the user has DMX IN or OUT on. Script: `RunFixtureBench.ps1 -DMXOut`.
+
+**Files changed**
+- **New:**
+  - `Private/Show/StageDMXNetworkSender.h/.cpp`
+  - `Private/Show/Tests/StageDMXOutputTests.cpp` (DMX.OutputSettings, DMX.Output, DMX.OutputShow)
+- **Modified:**
+  - `Public/Show/StageDMXNetworkTypes.h`, `Private/Show/StageDMXNetworkTypes.cpp` (output settings, modes, state, status, `StageDMXOutput::Sanitize` / `IsMuted`)
+  - `Private/Show/StageNetworkDMXBridge.h/.cpp`
+  - `Private/Show/StageDMXNetworkReceiver.h/.cpp` (IgnoredSource)
+  - `Public/Subsystems/StageDMXNetworkSubsystem.h`, `Private/Subsystems/StageDMXNetworkSubsystem.cpp`
+  - `Public/Subsystems/ShowControlSubsystem.h`, `Private/Subsystems/ShowControlSubsystem.cpp`
+  - `Public/Settings/StageCraftUserSettings.h`, `Private/Settings/StageCraftUserSettings.cpp`
+  - `Public/Player/ModularPlayerController.h`, `Private/Player/ModularPlayerController.cpp`
+  - `Public/UI/StagePatchPanel.h`, `Private/UI/StagePatchPanel.cpp`
+  - `Private/Show/StageDMXConsoleCommands.cpp`
+  - `Private/Diagnostics/StageFixtureBenchmark.cpp`, `Scripts/Bench/RunFixtureBench.ps1`
+  - `Docs/ADR/0019-dmx-patch-and-network-input.md` (§9 amendment, status line)
+  - `Docs/CURRENT_SYSTEMS.md`, `tasks/todo.md`
+
+**Verification**
+- **Builds:** Editor, Game Development and Game Shipping, 0 warnings and 0 errors (rebuilt after the last F5a and F5b edits).
+- **Shipping UTF-16 scan** (both alignments): `StageCraft.DMX.Output`, `StageCraft.DMX.OutputSettings`, `DMXOut 0|1`, the bench's "DMX output sent" and "DMXOut=1 needs …" texts are absent. "DMX OUT: ON", "Paused while DMX IN drives the show" and "Sending {0}" are present.
+- **Automation:** 185/185 with and without a renderer after F5a; 189/189 after F5b (#66).
+  - **User data:** the first run with the new code added a `DMXOutput=` line to `Saved/Config/WindowsEditor/GameUserSettings.ini` (the defaults and this PC's CID). That is a one-time addition of a new setting; the next run left the file unchanged, with the same CID.
+  - **`DMX.OutputSettings`:** clamping, bad and trimmed addresses, unknown modes, muted universes sorted and unique; the user settings always hold a CID, a change cannot replace it, and a reset keeps it.
+  - **`DMX.Output`** (loopback sockets on 16454 / 15568):
+    - refusals (no protocol, unicast without an address) leave nothing open;
+    - universe 1 arrives as Art-Net 0 and sACN 1, with the newest of two posted frames and all 512 slots;
+    - kept alive at least three times in 0.7 s at a 0.2 s interval, with Art-Net sequence 1..255 stepping and never 0;
+    - an unset universe is never sent; our CID and priority 150 on the wire;
+    - dropping universe 2 sends exactly three terminations, then silence; Close terminates universe 1 three times;
+    - no send errors; status counters; the receiver drops our own CID but counts it.
+  - **`DMX.OutputShow`** (world, two fixtures, a real bridge to a loopback listener):
+    - no transport: never tickable;
+    - a refresh ticks once and sends exactly the rendered universe, then the show is idle again with nothing more on the wire;
+    - a Grand Master change sends one frame with the dimmed look;
+    - under External nothing is ticked or sent;
+    - removing the bridge closes it.
+- **Scripted run R65a** (Concert, Patch panel, unicast to 127.0.0.1, user data restored and hash-checked):
+  - one Art-Net and one sACN packet per second at rest;
+  - muting universe 1: Art-Net stays at 8 and sACN goes 8 → 11 (the three terminations);
+  - DMX IN on: "Paused while DMX IN drives the show", nothing sent;
+  - Output Off: closed cleanly.
+  - The cue Go step was refused (that template had no Go target there), so it is repeated in R65b.
+- **R65b:**
+  - at rest 1 → 3 packets in 2 s; a Grand Master change one extra frame;
+  - a Circle on fixtures 1–5: 88 frames in 2 s (44 Hz exactly);
+  - after Clear, back to one a second;
+  - Off: 210 Art-Net, 213 sACN (three terminations).
+  - The status line was moved onto its own row after R65a showed it cut short in a narrow window; R65b shows it in full. Artefacts: `%TEMP%\StageCraftRuns\R65a`, `R65b`.
+- **Benchmark** (`RunFixtureBench.ps1 -Counts 200,500`, show tick mean in ms). A/B against `f406ee5` in a worktree, alternating, the same evening:
+
+  | Case | 200 fixtures | 500 fixtures |
+  |---|---|---|
+  | Baseline, no effects, crossfade | 4.38, 4.36, 4.18 | 10.13, 9.55, 9.62 |
+  | Current, no effects, crossfade | 4.18, 4.08, 3.59 | 9.99, 9.38, 9.68 |
+  | Baseline, Effects=1 (idle / crossfade) | 4.75 / 5.24 | 11.42 / 12.87 |
+  | Current, Effects=1 (idle / crossfade) | 4.01 / 5.12 | 11.15 / 13.44 |
+  | Current, Effects=1 + DMXOut=1 (F5a; after F5b) | 4.33 / 4.74; 4.50 / 4.79 | 11.25 / 12.91; 11.34 / 13.33 |
+  | Current, no effects + DMXOut=1 (idle / crossfade) | 0.14 (1 tick) / 4.39 | 0.27 (1 tick) / 10.15 |
+
+  - **No regression in the show tick.**
+  - **Output costs nothing measurable** (it renders only changed universes; the sending is on its own thread). Idle with output on, the show ticked once in 10 s and the sender kept the stream alive. With effects, 13 998 Art-Net and 13 998 sACN packets were sent without an error.
+  - **Idle game-thread time.** The first A/B showed the current tree 0.7–1.2 ms higher at idle with no show ticks. The cause was the baseline worktree starting with the default workspace, while this tree opens Gevor's saved session of about 20 panels. With the same session copied in, 500-fixture idle game time was equal (8.52 / 8.54 ms). The remaining ~0.5 ms at 200 does not scale with fixtures.
+  - CuesStarted was 5 in every crossfade run (real fades).
+- **Not verified:** a real node, console or visualiser on the LAN receiving our broadcast, multicast or unicast; the panel by mouse (mode cycling, IP field, PRI / HZ, mute chips).
+
+**Commit:** uncommitted (working tree).
+
+**Known issues / follow-ups**
+- **No ArtPoll discovery of output targets.** Use broadcast or a typed unicast address. One unicast address serves both protocols.
+- **No ArtSync, no per-universe destinations, no passthrough or merge** of DMX IN to OUT, no RDM (ADR 0019 §9.8).
+- **Manual checks for Gevor:** a visualiser (sACNView, Capture, onPC) or a node receiving each mode; the DMX OUT line by mouse.
+
+## #66 — Phase F5b: pan / tilt patch options on the wire and the fixture schedule import (2026-11-04)
+
+**What & why**
+The rest of F5 (ADR 0019 §10).
+- **Patch options.** A moving head hung the other way round or sideways needs its pan or tilt inverted, or the two swapped, for what it receives. Consoles do this in the patch, not in the cues.
+- **Schedule import.** A rig planned in a spreadsheet had to be re-typed address by address.
+
+**Patch options** (`FStageDMXPatchOptions` in `ShowControlTypes.h`, SaveGame fields):
+- Stored on `ALightingFixtureActor` (`PatchOptions`, SaveGame). `SetPatchOptions` notifies the patch subsystem (a new revision: output re-sends the universe, input re-reads it) and the three parameters.
+- **Wire only.** `WriteDMX` and `ReadDMX` map each channel through `StageDMXPatchOptions::GetChannelSource`: a swap moves tilt onto the pan channel (in tilt's range) and back, and an invert belongs to the console axis on whichever channel it travels. It combines with the CMY inversion by XOR. The attributes, the beam, the programmer and the cues do not change.
+- **Unusable options.** `GetEffective` drops what the mode cannot use (a swap needs pan and tilt). The stored options are kept as given, and with none set the codec skips the channel scan.
+- **Undo for free.** `StageCraft.Param.Patch.InvertPan`, `InvertTilt` and `SwapPanTilt` are Bool patch parameters (`IsPatchParameter`), so edits are undoable through `RequestParameterChange`. The inspector offers them for the axes the DMX mode has.
+- **No scene format change.** Item state is tagged SaveGame serialization, so older states load with no options.
+
+**Fixture schedule** (`Public/Show/StagePatchSchedule.h`, `Private/Show/StagePatchSchedule.cpp`, pure):
+- **`Parse`** reads the patch sheet's own CSV back, or a hand-made one:
+  - BOM, CRLF or LF, comma or semicolon (from the header row), quoted fields;
+  - the formula guard stripped; the header is the first row with a "Fixture ID" field; columns by name in any order;
+  - optional Invert Pan / Invert Tilt / Swap Pan/Tilt columns;
+  - both Universe and Address empty = unpatch;
+  - limits: 1 M characters, 10 000 rows, 512 per field. Every bad field is reported on its line and the rest still read.
+- **`Plan`** rejects, with the line:
+  - an unknown fixture;
+  - a fixture on more than one row (every such row);
+  - a patch for a fixture without DMX;
+  - an address the footprint does not fit at.
+  
+  Rows equal to the stage are counted as unchanged. Conflicts are reported over the whole stage as it would be.
+- **`UStageDMXPatchSubsystem::PlanSchedule`** turns the plan into assignments (with options only where the file set them), a summary and the first four reasons. `LoadScheduleFile` refuses a missing or oversized file before reading it.
+- **The patch sheet CSV** gains the three option columns (Yes or empty), so an export imports back exactly.
+
+**Requests:**
+- `RequestPlanPatchSchedule(Path, OutImport)` reads and plans; it changes nothing.
+- `RequestPatchFixtures` now applies a list of patch parameters per fixture: universe and address when the patch moves, plus each option that differs when the assignment carries options. They are all evaluated by the GameMode first, applied and recorded as **one undo step**, and fully put back on a failure.
+
+**UI** (Patch panel):
+- each row has -P / -T / SW toggles (lit when on, greyed out without the axis), each one `RequestParameterChange`;
+- IMPORT CSV opens the picker in the Reports folder; the plan shows in a bar above the table (summary, reasons, APPLY / CANCEL) and nothing changes before APPLY;
+- the name cell now clips (ellipsis) in a narrow panel.
+
+**Also fixed:** an edit transaction's undo step was named by its command count ("Edit 6 items" for a re-patch of 3 fixtures, as AUTO PATCH already showed). It now counts distinct items (`UStageEditHistoryComponent::EndTransaction`).
+
+**Dev console:** `StageCraft.DMX.ImportSchedule <path> [Apply]` and `StageCraft.DMX.Render <universe> <first> [count]` (logs the rendered output channels).
+
+**Files changed**
+- **New:**
+  - `Public/Show/StagePatchSchedule.h`, `Private/Show/StagePatchSchedule.cpp`
+  - `Private/Show/Tests/StageDMXPatchOptionsTests.cpp` (DMX.PatchOptionsMap, DMX.PatchOptions, DMX.ScheduleParse, DMX.ScheduleImport)
+- **Modified:**
+  - `Public/Show/ShowControlTypes.h`
+  - `Public/Show/StageDMXPatching.h`, `Private/Show/StageDMXPatching.cpp`
+  - `Public/Actors/LightingFixtureActor.h`, `Private/Actors/LightingFixtureActor.cpp`
+  - `Public/Data/StageParameterTypes.h`, `Private/Data/StageParameterTypes.cpp`
+  - `Public/Subsystems/StageDMXPatchSubsystem.h`, `Private/Subsystems/StageDMXPatchSubsystem.cpp`
+  - `Public/Player/ModularPlayerController.h`, `Private/Player/ModularPlayerController.cpp`
+  - `Public/Report/StagePatchSheet.h`, `Private/Report/StagePatchSheet.cpp`, `Private/Report/StagePatchSheetSubsystem.cpp`, `Private/Report/Tests/StagePatchSheetTests.cpp`
+  - `Private/History/StageEditHistoryComponent.cpp`
+  - `Public/UI/StagePatchPanel.h`, `Private/UI/StagePatchPanel.cpp`
+  - `Private/Show/StageDMXConsoleCommands.cpp`
+  - `Docs/ADR/0019-dmx-patch-and-network-input.md` (§10), `Docs/CURRENT_SYSTEMS.md`, `tasks/todo.md`
+
+**Verification**
+- **Builds:** Editor, Game Development and Game Shipping, 0 warnings and 0 errors after the last edits.
+- **Shipping scan:** `StageCraft.DMX.ImportSchedule` and `StageCraft.DMX.Render` are absent. "IMPORT CSV", "Swap Pan/Tilt (DMX)", "Fixture schedule: {0}" and "is on more than one row" are present.
+- **Automation:** `RunAutomation.ps1 -ExpectedCount 189`: 189/189 with an offscreen renderer and 189/189 with `-NullRHI`, after the last edits; user data unchanged.
+  - **`DMX.PatchOptionsMap`** (pure): all 8 combinations: which attribute each channel carries and its invert; other attributes untouched; `GetEffective` per axis.
+  - **`DMX.PatchOptions`** (world): for all 8 combinations with pan 120 and tilt −40:
+    - the beam never moves; each 16-bit channel carries the expected value (inverted where due, ±1);
+    - `ReadDMX(WriteDMX)` gives the look back within 0.05°; options off gives the plain bytes again.
+    
+    Also:
+    - the three parameters are offered, are patch parameters, write and read back as Bool, refuse a Float and move the patch revision;
+    - recorded and undone and redone through the history;
+    - restored from a snapshot;
+    - a pan-only fixture ignores swap and tilt invert on the wire, keeps them as given, and offers only Invert Pan.
+  - **`DMX.ScheduleParse`** (pure):
+    - the patch sheet's own CSV (with a formula-guarded label, options and an unpatched row) reads back exactly;
+    - a hand-made semicolon sheet with a comma in its title, a BOM, quotes, reordered and extra columns and an apostrophe guard;
+    - refused whole: no header, no Universe/Address, over 1 M characters;
+    - 11 hostile rows (non-numeric, too large, past 512, negative, half a patch, a bad flag, an open quote, an over-long field, a control character, fixture ID 0, a fraction), each reported on its line while the good row reads;
+    - a NUL in a row; 10 005 rows reads 10 000 with one reason.
+  - **`DMX.ScheduleImport`:**
+    - pure plan: unchanged, a change with an option, takes-no-DMX, footprint overflow, unknown, duplicate rows (both), the overlap reported;
+    - over real fixtures: assignments carry the fixture, carry options only when the file set them, explain the unknown fixture, and change nothing;
+    - an options-only row;
+    - missing and readable files.
+- **Scripted run R66a/b** (Concert, user data restored and hash-checked), fixture 1 at pan 90°, tilt −30°:
+  - the wire went `170 170 99 142`; with Invert Pan `85 85 99 142`; with Swap too `99 142 85 85`;
+  - the fixture's output stayed Pan 90 / Tilt −30;
+  - two Undos gave `170 170 99 142` back.
+  - **Schedule import** (`R66Schedule.csv`): "3 fixtures to re-patch · 1 unchanged · 4 rows skipped · 0 conflicts" (no fixture 77; fixture 5's 12 channels do not fit at 1.510; fixture 6 on two rows, twice).
+    - Apply: "3 fixtures re-patched in one step"; fixture 1 at 2.001 sending `85 85` (Invert Pan from the file).
+    - One Undo, now named "Edit 3 items" (R66a showed "Edit 6 items" before the label fix), put fixtures 1–3 back at 1.001 / 1.013 / 1.025.
+- **R66c/d (panel):**
+  - R66b showed that the 104 px option column squeezed the name column to nothing in a narrow floating panel, and the names drew under the UNIV / ADDR fields.
+  - Now: 66 px column, -P / -T / SW labels with tooltips, and a clipped name cell. R66d shows the rows clean, with -T lit on fixture 2 and SW on fixture 3.
+  - Artefacts: `%TEMP%\StageCraftRuns\R66a`–`R66d`.
+- **Not verified:** IMPORT CSV through the file picker and the import bar's APPLY / CANCEL by mouse (the console path ran the same plan and request), a real hung fixture.
+
+**Commit:** uncommitted (working tree).
+
+**Known issues / follow-ups**
+- **A schedule only re-patches fixtures already on the stage.** It does not create them, and has no mode or type columns. No GDTF / MVR import.
+- **`StageCraft.DMX.ImportSchedule`** splits arguments on spaces (a path with spaces needs the panel).
+- **Manual checks for Gevor:** IMPORT CSV with the patch sheet CSV and a hand-made one (bar text, APPLY, CANCEL, Ctrl+Z); the -P / -T / SW toggles by mouse with Ctrl+Z; a real fixture or visualiser following INV / SWAP.
+- **Next:** Phase F is complete (F1–F5). Open follow-ups are in todo.md: merge or passthrough, ArtPoll output discovery, effect pool and speed master, the manual checks.

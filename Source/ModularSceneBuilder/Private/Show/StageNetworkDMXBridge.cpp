@@ -8,11 +8,11 @@
 
 UStageNetworkDMXBridge::UStageNetworkDMXBridge()
 {
-	// Input only (Gevor's choice, ADR 0019); with output on, the show would render universes 44 times a second for nobody.
+	// Follows the sender (OpenOutput / CloseOutput): a bridge that only listens must not make the show render universes.
 	bOutputEnabled = false;
 }
 
-bool UStageNetworkDMXBridge::Open(const FStageDMXReceiverConfig& Config, FText& OutError)
+bool UStageNetworkDMXBridge::OpenInput(const FStageDMXReceiverConfig& Config, FText& OutError)
 {
 	// Called on a socket thread when a batch starts; the weak pointer is only resolved on the game thread.
 	const TWeakObjectPtr<UStageNetworkDMXBridge> WeakThis(this);
@@ -28,15 +28,40 @@ bool UStageNetworkDMXBridge::Open(const FStageDMXReceiverConfig& Config, FText& 
 	}, OutError);
 }
 
-void UStageNetworkDMXBridge::Stop()
+void UStageNetworkDMXBridge::CloseInput()
 {
 	Receiver.Stop();
+}
+
+bool UStageNetworkDMXBridge::OpenOutput(const FStageDMXSenderConfig& Config, FText& OutError)
+{
+	const bool bOpened = Sender.Open(Config, OutError);
+	SetOutputEnabled(bOpened);
+	return bOpened;
+}
+
+void UStageNetworkDMXBridge::CloseOutput()
+{
+	SetOutputEnabled(false);
+	Sender.Close();
+}
+
+void UStageNetworkDMXBridge::SendUniverse_Implementation(int32 Universe, const TArray<uint8>& Channels)
+{
+	Sender.Post(Universe, Channels);
+}
+
+void UStageNetworkDMXBridge::Stop()
+{
+	CloseOutput();
+	CloseInput();
 	Super::Stop();
 }
 
 void UStageNetworkDMXBridge::BeginDestroy()
 {
-	Receiver.Stop();
+	CloseOutput();
+	CloseInput();
 	Super::BeginDestroy();
 }
 

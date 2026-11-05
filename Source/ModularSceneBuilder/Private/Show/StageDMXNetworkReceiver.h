@@ -18,6 +18,8 @@ struct FStageDMXReceiverConfig
 	uint16 SACNPort = StageDMXNet::SACNPort;
 	/** Name StageCraft gives itself in ArtPollReply. */
 	FString NodeName = TEXT("StageCraft");
+	/** sACN frames from this component ID are ignored: this PC's own output (Docs/ADR/0019 §9.4). Invalid = none. */
+	FGuid IgnoredSource;
 };
 
 /**
@@ -29,7 +31,7 @@ struct FStageDMXReceiverConfig
 class FStageDMXInbox : public TSharedFromThis<FStageDMXInbox, ESPMode::ThreadSafe>
 {
 public:
-	FStageDMXInbox(const FStageDMXInputSettings& InSettings, TFunction<void()> InScheduleDrain);
+	FStageDMXInbox(const FStageDMXInputSettings& InSettings, const FGuid& InIgnoredSource, TFunction<void()> InScheduleDrain);
 
 	/** Socket thread. Called by FUdpSocketReceiver for every datagram on the Art-Net port; may answer ArtPoll on ArtNetSocket. */
 	void HandleArtNetDatagram(const TSharedPtr<class FArrayReader, ESPMode::ThreadSafe>& Data, const struct FIPv4Endpoint& Sender);
@@ -52,6 +54,7 @@ private:
 	void ReplyToArtPoll(const struct FIPv4Endpoint& Sender, double NowSeconds);
 
 	const FStageDMXInputSettings Settings;
+	const FGuid IgnoredSource;
 	const TFunction<void()> ScheduleDrain;
 
 	mutable FCriticalSection Lock;

@@ -19,6 +19,7 @@
 #include "Show/StageDMXNetProtocol.h"
 #include "SocketSubsystem.h"
 #include "Sockets.h"
+#include "Subsystems/ShowControlSubsystem.h"
 #include "Subsystems/StageDMXNetworkSubsystem.h"
 #include "Subsystems/StageDMXPatchSubsystem.h"
 
@@ -134,6 +135,181 @@ namespace StageDMXCommands
 			Saved.bEnabled ? TEXT("on") : TEXT("off"));
 	}
 
+	FString JoinUniverses(TConstArrayView<int32> Universes)
+	{
+		TArray<FString> Parts;
+		for (const int32 Universe : Universes)
+		{
+			Parts.Add(FString::FromInt(Universe));
+		}
+		return FString::Join(Parts, TEXT(", "));
+	}
+
+	void LogOutputStatus(const UStageDMXNetworkSubsystem& Network)
+	{
+		const FStageDMXOutputStatus Status = Network.GetOutputStatus();
+		const FStageDMXOutputSettings Settings = Network.GetOutputSettings();
+		UE_LOG(LogStageCraft, Display, TEXT("StageCraft.DMX.Output: %s%s%s; Art-Net %lld, sACN %lld, send errors %lld; sending universes [%s], muted [%s]."),
+			*UEnum::GetValueAsString(Status.State), Status.Target.IsEmpty() ? TEXT("") : TEXT(", "), *Status.Target, Status.ArtNetPackets,
+			Status.SACNPackets, Status.SendErrors, *JoinUniverses(Status.Universes), *JoinUniverses(Settings.MutedUniverses));
+		if (!Status.Error.IsEmpty())
+		{
+			UE_LOG(LogStageCraft, Display, TEXT("StageCraft.DMX.Output: %s"), *Status.Error.ToString());
+		}
+	}
+
+	/** On | Off | Status */
+	void Output(const TArray<FString>& Args, UWorld* World)
+	{
+		const UStageDMXNetworkSubsystem* Network = World ? World->GetSubsystem<UStageDMXNetworkSubsystem>() : nullptr;
+		AModularPlayerController* Controller = GetController(World);
+		if (!Network || !Controller)
+		{
+			return;
+		}
+		if (!Args.IsEmpty() && (Args[0] == TEXT("On") || Args[0] == TEXT("Off")))
+		{
+			const FStageEconomyResultInfo Result = Controller->RequestSetDMXOutput(Args[0] == TEXT("On"));
+			UE_LOG(LogStageCraft, Display, TEXT("StageCraft.DMX.Output %s: %s"), *Args[0], Result.IsSuccess() ? TEXT("done") : *Result.Message.ToString());
+		}
+		LogOutputStatus(*Network);
+	}
+
+	/**
+	 * Key=Value pairs: ArtNet=Off|Broadcast|Unicast, SACN=Off|Multicast|Unicast, To=<IPv4>, Priority=<0-200>, Rate=<1-44>,
+	 * Mute=<universe>, Unmute=<universe>. Through the controller, as the Patch panel.
+	 */
+	void OutputSettings(const TArray<FString>& Args, UWorld* World)
+	{
+		const UStageDMXNetworkSubsystem* Network = World ? World->GetSubsystem<UStageDMXNetworkSubsystem>() : nullptr;
+		AModularPlayerController* Controller = GetController(World);
+		if (!Network || !Controller)
+		{
+			return;
+		}
+
+		FStageDMXOutputSettings Settings = Network->GetOutputSettings();
+		for (const FString& Arg : Args)
+		{
+			FString Key;
+			FString Value;
+			if (!Arg.Split(TEXT("="), &Key, &Value))
+			{
+				UE_LOG(LogStageCraft, Display, TEXT("StageCraft.DMX.OutputSettings: \"%s\" is not Key=Value."), *Arg);
+				return;
+			}
+			int32 Number = 0;
+			if (Key == TEXT("ArtNet"))
+			{
+				const int64 Mode = StaticEnum<EStageArtNetOutputMode>()->GetValueByNameString(Value);
+				if (Mode == INDEX_NONE)
+				{
+					UE_LOG(LogStageCraft, Display, TEXT("StageCraft.DMX.OutputSettings: ArtNet is Off, Broadcast or Unicast."));
+					return;
+				}
+				Settings.ArtNet = static_cast<EStageArtNetOutputMode>(Mode);
+			}
+			else if (Key == TEXT("SACN"))
+			{
+				const int64 Mode = StaticEnum<EStageSACNOutputMode>()->GetValueByNameString(Value);
+				if (Mode == INDEX_NONE)
+				{
+					UE_LOG(LogStageCraft, Display, TEXT("StageCraft.DMX.OutputSettings: SACN is Off, Multicast or Unicast."));
+					return;
+				}
+				Settings.SACN = static_cast<EStageSACNOutputMode>(Mode);
+			}
+			else if (Key == TEXT("To"))
+			{
+				Settings.UnicastAddress = Value;
+			}
+			else if (Key == TEXT("Priority") && LexTryParseString(Number, *Value))
+			{
+				Settings.SACNPriority = Number;
+			}
+			else if (Key == TEXT("Rate") && LexTryParseString(Number, *Value))
+			{
+				Settings.RateHz = Number;
+			}
+			else if (Key == TEXT("Mute") && LexTryParseString(Number, *Value))
+			{
+				Settings.MutedUniverses.Add(Number);
+			}
+			else if (Key == TEXT("Unmute") && LexTryParseString(Number, *Value))
+			{
+				Settings.MutedUniverses.Remove(Number);
+			}
+			else
+			{
+				UE_LOG(LogStageCraft, Display, TEXT("StageCraft.DMX.OutputSettings: unknown key or bad value \"%s\"."), *Arg);
+				return;
+			}
+		}
+
+		if (!Args.IsEmpty())
+		{
+			const FStageEconomyResultInfo Result = Controller->RequestApplyDMXOutputSettings(Settings);
+			if (!Result.IsSuccess())
+			{
+				UE_LOG(LogStageCraft, Display, TEXT("StageCraft.DMX.OutputSettings: %s"), *Result.Message.ToString());
+			}
+		}
+		const FStageDMXOutputSettings Saved = Network->GetOutputSettings();
+		UE_LOG(LogStageCraft, Display, TEXT("StageCraft.DMX.OutputSettings: ArtNet=%s SACN=%s To=%s Priority=%d Rate=%d Muted=[%s], output %s."),
+			*UEnum::GetValueAsString(Saved.ArtNet), *UEnum::GetValueAsString(Saved.SACN), Saved.UnicastAddress.IsEmpty() ? TEXT("(none)") : *Saved.UnicastAddress,
+			Saved.SACNPriority, Saved.RateHz, *JoinUniverses(Saved.MutedUniverses), Saved.bEnabled ? TEXT("on") : TEXT("off"));
+	}
+
+	/** <path> [Apply]: reads and plans a fixture schedule like the Patch panel's IMPORT CSV; with Apply, applies it (one undo step). */
+	void ImportSchedule(const TArray<FString>& Args, UWorld* World)
+	{
+		AModularPlayerController* Controller = GetController(World);
+		if (!Controller || Args.IsEmpty())
+		{
+			UE_LOG(LogStageCraft, Display, TEXT("StageCraft.DMX.ImportSchedule <path> [Apply]"));
+			return;
+		}
+		FStagePatchScheduleImport Import;
+		const FStageEconomyResultInfo Planned = Controller->RequestPlanPatchSchedule(Args[0], Import);
+		if (!Planned.IsSuccess())
+		{
+			UE_LOG(LogStageCraft, Display, TEXT("StageCraft.DMX.ImportSchedule: %s"), *Planned.Message.ToString());
+			return;
+		}
+		UE_LOG(LogStageCraft, Display, TEXT("StageCraft.DMX.ImportSchedule: %s"), *Import.Summary.ToString());
+		if (!Import.Details.IsEmpty())
+		{
+			UE_LOG(LogStageCraft, Display, TEXT("StageCraft.DMX.ImportSchedule:\n%s"), *Import.Details.ToString());
+		}
+		if (Args.Num() >= 2 && Args[1] == TEXT("Apply"))
+		{
+			const FStageEconomyResultInfo Result = Controller->RequestPatchFixtures(Import.Assignments, FText::FromString(TEXT("the schedule changes nothing")));
+			UE_LOG(LogStageCraft, Display, TEXT("StageCraft.DMX.ImportSchedule Apply: %s"), Result.IsSuccess() ? TEXT("done") : *Result.Message.ToString());
+		}
+	}
+
+	/** <universe> <first channel> [count]: logs the channels as the show renders them for output (patch options applied). */
+	void Render(const TArray<FString>& Args, UWorld* World)
+	{
+		const UShowControlSubsystem* Show = World ? World->GetSubsystem<UShowControlSubsystem>() : nullptr;
+		int32 Universe = 0;
+		int32 First = 0;
+		int32 Count = 8;
+		if (!Show || Args.Num() < 2 || !LexTryParseString(Universe, *Args[0]) || !LexTryParseString(First, *Args[1])
+			|| (Args.Num() >= 3 && !LexTryParseString(Count, *Args[2])))
+		{
+			UE_LOG(LogStageCraft, Display, TEXT("StageCraft.DMX.Render <universe> <first channel> [count]"));
+			return;
+		}
+		const TArray<uint8> Slots = Show->RenderDMXUniverse(Universe);
+		TArray<FString> Values;
+		for (int32 Index = FMath::Clamp(First, 1, 512) - 1; Index < FMath::Min(First - 1 + FMath::Clamp(Count, 1, 64), 512); ++Index)
+		{
+			Values.Add(FString::FromInt(Slots[Index]));
+		}
+		UE_LOG(LogStageCraft, Display, TEXT("StageCraft.DMX.Render: universe %d from %d: %s"), Universe, First, *FString::Join(Values, TEXT(" ")));
+	}
+
 	void LogPlan(const TCHAR* Command, const FStageEconomyResultInfo& Result, int32 Count)
 	{
 		UE_LOG(LogStageCraft, Display, TEXT("%s: %s (%d fixtures planned)."), Command, Result.IsSuccess() ? TEXT("done") : *Result.Message.ToString(), Count);
@@ -233,6 +409,14 @@ namespace StageDMXCommands
 		FConsoleCommandWithWorldAndArgsDelegate::CreateStatic(&Input));
 	FAutoConsoleCommandWithWorldAndArgs SettingsCommand(TEXT("StageCraft.DMX.Settings"), TEXT("[Bind=<IPv4>] [ArtNetFirst=<n>] [SACNFirst=<n>] [ArtNet|SACN|ArtPoll=On|Off]: logs or changes the input settings (saved on this PC; a running input restarts)."),
 		FConsoleCommandWithWorldAndArgsDelegate::CreateStatic(&Settings));
+	FAutoConsoleCommandWithWorldAndArgs OutputCommand(TEXT("StageCraft.DMX.Output"), TEXT("On | Off | Status: Art-Net / sACN output, like the Patch panel's DMX OUT."),
+		FConsoleCommandWithWorldAndArgsDelegate::CreateStatic(&Output));
+	FAutoConsoleCommandWithWorldAndArgs OutputSettingsCommand(TEXT("StageCraft.DMX.OutputSettings"), TEXT("[ArtNet=Off|Broadcast|Unicast] [SACN=Off|Multicast|Unicast] [To=<IPv4>] [Priority=<n>] [Rate=<n>] [Mute|Unmute=<universe>]: logs or changes the output settings (saved on this PC)."),
+		FConsoleCommandWithWorldAndArgsDelegate::CreateStatic(&OutputSettings));
+	FAutoConsoleCommandWithWorldAndArgs ImportScheduleCommand(TEXT("StageCraft.DMX.ImportSchedule"), TEXT("<path> [Apply]: plans a fixture schedule CSV like the Patch panel's IMPORT CSV; Apply applies it (validated, one undo step)."),
+		FConsoleCommandWithWorldAndArgsDelegate::CreateStatic(&ImportSchedule));
+	FAutoConsoleCommandWithWorldAndArgs RenderCommand(TEXT("StageCraft.DMX.Render"), TEXT("<universe> <first channel> [count]: logs the channels as rendered for DMX output."),
+		FConsoleCommandWithWorldAndArgsDelegate::CreateStatic(&Render));
 	FAutoConsoleCommandWithWorldAndArgs AutoPatchCommand(TEXT("StageCraft.DMX.AutoPatch"), TEXT("Patches every unpatched fixture (validated, one undo step)."),
 		FConsoleCommandWithWorldAndArgsDelegate::CreateStatic(&AutoPatch));
 	FAutoConsoleCommandWithWorldAndArgs FixConflictsCommand(TEXT("StageCraft.DMX.FixConflicts"), TEXT("Moves overlapping fixtures to free addresses (validated, one undo step)."),

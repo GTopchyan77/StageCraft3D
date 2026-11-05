@@ -3,6 +3,7 @@
 #include "Show/StageDMXPatching.h"
 
 #include "Algo/BinarySearch.h"
+#include "Data/StageParameterTypes.h"
 
 namespace
 {
@@ -279,4 +280,31 @@ TArray<FStageDMXUniverseUsage> StageDMXPatching::SummarizeUsage(TConstArrayView<
 		}
 	}
 	return Result;
+}
+
+FStageDMXPatchOptions StageDMXPatchOptions::GetEffective(const FStageDMXPatchOptions& Options, bool bHasPan, bool bHasTilt)
+{
+	FStageDMXPatchOptions Result = Options;
+	Result.bInvertPan &= bHasPan;
+	Result.bInvertTilt &= bHasTilt;
+	Result.bSwapPanTilt &= bHasPan && bHasTilt;
+	return Result;
+}
+
+FStageDMXChannelSource StageDMXPatchOptions::GetChannelSource(const FGameplayTag& ChannelAttribute, const FStageDMXPatchOptions& Options)
+{
+	FStageDMXChannelSource Source;
+	Source.Attribute = ChannelAttribute;
+	const bool bPanChannel = ChannelAttribute == StageCraftTags::Attribute_Pan;
+	const bool bTiltChannel = ChannelAttribute == StageCraftTags::Attribute_Tilt;
+	if (!bPanChannel && !bTiltChannel)
+	{
+		return Source;
+	}
+	if (Options.bSwapPanTilt)
+	{
+		Source.Attribute = bPanChannel ? StageCraftTags::Attribute_Tilt : StageCraftTags::Attribute_Pan;
+	}
+	Source.bInvert = Source.Attribute == StageCraftTags::Attribute_Pan ? Options.bInvertPan : Options.bInvertTilt;
+	return Source;
 }

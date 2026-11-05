@@ -33,6 +33,32 @@ struct MODULARSCENEBUILDER_API FStageDMXPatch
 };
 
 /**
+ * How a fixture's pan and tilt channels map onto the wire (Docs/ADR/0019 §10.1), for a fixture hung so its axes run the other way
+ * or sideways. They change only what WriteDMX sends and how ReadDMX reads: the fixture's attributes, its beam on the stage and
+ * the cues stay as they are, as with the invert and swap options of a console's patch. SaveGame fields, like FStageDMXPatch.
+ */
+USTRUCT(BlueprintType)
+struct MODULARSCENEBUILDER_API FStageDMXPatchOptions
+{
+	GENERATED_BODY()
+
+	/** The pan channel runs the other way (0 for full pan and back). */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, SaveGame, Category = "DMX")
+	bool bInvertPan = false;
+
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, SaveGame, Category = "DMX")
+	bool bInvertTilt = false;
+
+	/** The pan channel carries the tilt and the tilt channel the pan. Only on a fixture with both. */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, SaveGame, Category = "DMX")
+	bool bSwapPanTilt = false;
+
+	bool IsDefault() const { return !bInvertPan && !bInvertTilt && !bSwapPanTilt; }
+
+	bool operator==(const FStageDMXPatchOptions& Other) const = default;
+};
+
+/**
  * Attribute values of one fixture inside a cue or the programmer. Fixtures are referenced by FixtureId so cues survive save/load
  * and re-spawns.
  */

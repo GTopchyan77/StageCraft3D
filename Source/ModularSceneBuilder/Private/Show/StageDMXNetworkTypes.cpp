@@ -2,6 +2,7 @@
 
 #include "Show/StageDMXNetworkTypes.h"
 
+#include "Algo/BinarySearch.h"
 #include "Interfaces/IPv4/IPv4Address.h"
 #include "Show/StageDMXNetProtocol.h"
 #include "Show/StageDMXPatching.h"
@@ -60,4 +61,42 @@ int32 StageDMXInput::FromSACN(int32 SACNUniverse, const FStageDMXInputSettings& 
 int32 StageDMXInput::ToSACN(int32 Universe, const FStageDMXInputSettings& Settings)
 {
 	return MapToWire(Universe, Settings.SACNFirstUniverse, 1, StageDMXNet::MaxSACNUniverse);
+}
+
+FStageDMXOutputSettings StageDMXOutput::Sanitize(const FStageDMXOutputSettings& Settings)
+{
+	FStageDMXOutputSettings Result = Settings;
+	Result.RateHz = FMath::Clamp(Settings.RateHz, MinRateHz, MaxRateHz);
+	Result.SACNPriority = FMath::Clamp(Settings.SACNPriority, 0, MaxSACNPriority);
+	if (!StaticEnum<EStageArtNetOutputMode>()->IsValidEnumValue(static_cast<int64>(Result.ArtNet)))
+	{
+		Result.ArtNet = EStageArtNetOutputMode::Broadcast;
+	}
+	if (!StaticEnum<EStageSACNOutputMode>()->IsValidEnumValue(static_cast<int64>(Result.SACN)))
+	{
+		Result.SACN = EStageSACNOutputMode::Multicast;
+	}
+
+	Result.UnicastAddress.TrimStartAndEndInline();
+	FIPv4Address Parsed;
+	if (!Result.UnicastAddress.IsEmpty() && !FIPv4Address::Parse(Result.UnicastAddress, Parsed))
+	{
+		Result.UnicastAddress.Reset();
+	}
+
+	Result.MutedUniverses.RemoveAll([](int32 Universe) { return Universe < 1 || Universe > StageDMXPatching::MaxUniverse; });
+	Result.MutedUniverses.Sort();
+	for (int32 Index = Result.MutedUniverses.Num() - 1; Index > 0; --Index)
+	{
+		if (Result.MutedUniverses[Index] == Result.MutedUniverses[Index - 1])
+		{
+			Result.MutedUniverses.RemoveAt(Index);
+		}
+	}
+	return Result;
+}
+
+bool StageDMXOutput::IsMuted(const FStageDMXOutputSettings& Settings, int32 Universe)
+{
+	return Algo::BinarySearch(Settings.MutedUniverses, Universe) != INDEX_NONE;
 }

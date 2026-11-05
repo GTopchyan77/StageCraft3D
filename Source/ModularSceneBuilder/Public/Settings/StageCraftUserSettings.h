@@ -125,6 +125,12 @@ public:
 	/** Sanitized (StageDMXInput::Sanitize). Returns true if the stored value changed. Does not save. */
 	bool SetDMXInputSettings(const FStageDMXInputSettings& Settings);
 
+	/** Art-Net / sACN output of this PC (UStageDMXNetworkSubsystem is the only writer), always sanitized, always with a Cid. */
+	const FStageDMXOutputSettings& GetDMXOutputSettings() const { return DMXOutput; }
+
+	/** Sanitized (StageDMXOutput::Sanitize); the stored Cid is kept. Returns true if the stored value changed. Does not save. */
+	bool SetDMXOutputSettings(const FStageDMXOutputSettings& Settings);
+
 private:
 	void ResetAudioToDefaults();
 	void SanitizeAudio();
@@ -172,6 +178,12 @@ private:
 
 	UPROPERTY(Config)
 	FStageDMXInputSettings DMXInput;
+
+	UPROPERTY(Config)
+	FStageDMXOutputSettings DMXOutput;
+
+	/** Sanitizes DMXOutput and gives it a Cid when it has none; a reset to defaults keeps the Cid (the same sACN source). */
+	void SanitizeDMXOutput();
 
 	/** Only the commands whose keys differ from the defaults (FStageKeyBindings::ToOverrides). */
 	UPROPERTY(Config)

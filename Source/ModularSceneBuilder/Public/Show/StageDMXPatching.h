@@ -82,3 +82,29 @@ namespace StageDMXPatching
 	/** Usage of every universe with at least one patched slot, ascending by universe. */
 	MODULARSCENEBUILDER_API TArray<FStageDMXUniverseUsage> SummarizeUsage(TConstArrayView<FStageDMXPatchSlot> Slots);
 }
+
+/** Where one DMX channel's value comes from (WriteDMX) and goes to (ReadDMX) under a fixture's patch options. */
+struct FStageDMXChannelSource
+{
+	/** The fixture attribute the channel carries. */
+	FGameplayTag Attribute;
+	/** Whether the channel runs the other way (0..1 becomes 1..0). */
+	bool bInvert = false;
+};
+
+/**
+ * Pan / tilt invert and swap on the wire (Docs/ADR/0019 §10.1). Pure. One mapping serves both directions, and it is its own
+ * inverse per channel, so ReadDMX(WriteDMX(x)) == x for every option combination.
+ */
+namespace StageDMXPatchOptions
+{
+	/** Options with what the fixture cannot use turned off: a swap needs both a pan and a tilt channel. */
+	MODULARSCENEBUILDER_API FStageDMXPatchOptions GetEffective(const FStageDMXPatchOptions& Options, bool bHasPan, bool bHasTilt);
+
+	/**
+	 * The attribute a channel of ChannelAttribute carries, and whether it is inverted. With a swap the pan channel carries the tilt
+	 * (in the tilt's own range) and the other way round; an invert belongs to the console axis (Invert Pan inverts the pan, on
+	 * whichever channel it travels). Every other attribute maps to itself.
+	 */
+	MODULARSCENEBUILDER_API FStageDMXChannelSource GetChannelSource(const FGameplayTag& ChannelAttribute, const FStageDMXPatchOptions& Options);
+}

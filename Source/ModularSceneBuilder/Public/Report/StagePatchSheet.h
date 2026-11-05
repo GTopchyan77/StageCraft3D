@@ -24,6 +24,10 @@ struct FStagePatchSheetRow
 	FVector LocationMeters = FVector::ZeroVector;
 	/** Its channel range overlaps another fixture in the same universe; computed by the caller from the show's patch. */
 	bool bConflict = false;
+	/** Wire-only pan / tilt options (Docs/ADR/0019 §10.1); written to the CSV so a schedule import reads them back. */
+	bool bInvertPan = false;
+	bool bInvertTilt = false;
+	bool bSwapPanTilt = false;
 };
 
 /** The DMX patch sheet of a stage: every lighting fixture with its address, footprint and position, for the lighting crew. */

@@ -111,6 +111,9 @@ namespace StageCraftTags
 	UE_DEFINE_GAMEPLAY_TAG_COMMENT(Param_Patch_Address,			"StageCraft.Param.Patch.Address",		"DMX start address 1..512.");
 	UE_DEFINE_GAMEPLAY_TAG_COMMENT(Param_Patch_Footprint,		"StageCraft.Param.Patch.Footprint",		"Channel count of the DMX mode (read-only).");
 	UE_DEFINE_GAMEPLAY_TAG_COMMENT(Param_Patch_Mode,			"StageCraft.Param.Patch.Mode",			"Name of the fixture's DMX mode (read-only).");
+	UE_DEFINE_GAMEPLAY_TAG_COMMENT(Param_Patch_InvertPan,		"StageCraft.Param.Patch.InvertPan",		"The pan channel runs the other way on the wire (DMX only).");
+	UE_DEFINE_GAMEPLAY_TAG_COMMENT(Param_Patch_InvertTilt,		"StageCraft.Param.Patch.InvertTilt",	"The tilt channel runs the other way on the wire (DMX only).");
+	UE_DEFINE_GAMEPLAY_TAG_COMMENT(Param_Patch_SwapPanTilt,		"StageCraft.Param.Patch.SwapPanTilt",	"The pan and tilt channels carry each other's value (DMX only).");
 	UE_DEFINE_GAMEPLAY_TAG_COMMENT(Param_Audio_Gain,			"StageCraft.Param.Audio.Gain",			"Output gain in dB.");
 	UE_DEFINE_GAMEPLAY_TAG_COMMENT(Param_Audio_Mute,			"StageCraft.Param.Audio.Mute",			"Muted.");
 	UE_DEFINE_GAMEPLAY_TAG_COMMENT(Param_Audio_Delay,			"StageCraft.Param.Audio.Delay",			"Alignment delay in ms.");
@@ -212,7 +215,8 @@ namespace StageCraftTags
 
 	bool IsPatchParameter(const FGameplayTag& ParameterId)
 	{
-		return ParameterId == Param_Patch_FixtureId || ParameterId == Param_Patch_Universe || ParameterId == Param_Patch_Address;
+		return ParameterId == Param_Patch_FixtureId || ParameterId == Param_Patch_Universe || ParameterId == Param_Patch_Address
+			|| ParameterId == Param_Patch_InvertPan || ParameterId == Param_Patch_InvertTilt || ParameterId == Param_Patch_SwapPanTilt;
 	}
 
 	bool IsPhotometricParameter(const FGameplayTag& ParameterId)

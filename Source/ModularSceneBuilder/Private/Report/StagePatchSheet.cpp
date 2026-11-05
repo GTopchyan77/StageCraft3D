@@ -333,7 +333,8 @@ namespace StagePatchSheet
 		Out += LineEnd;
 
 		AppendRow(Out, { TEXT("Fixture ID"), TEXT("Label"), TEXT("Fixture Type"), TEXT("Mode"), TEXT("Universe"), TEXT("Address"),
-			TEXT("End Address"), TEXT("Channels"), TEXT("X (m)"), TEXT("Y (m)"), TEXT("Z (m)"), TEXT("Notes") });
+			TEXT("End Address"), TEXT("Channels"), TEXT("X (m)"), TEXT("Y (m)"), TEXT("Z (m)"), TEXT("Notes"),
+			TEXT("Invert Pan"), TEXT("Invert Tilt"), TEXT("Swap Pan/Tilt") });
 
 		for (const FStagePatchSheetRow& Row : Sheet.Rows)
 		{
@@ -345,7 +346,8 @@ namespace StagePatchSheet
 			AppendRow(Out, { FString::FromInt(Row.FixtureId), EscapeCsvField(Row.Label), EscapeCsvField(Row.FixtureType), EscapeCsvField(Row.Mode),
 				bPatched ? FString::FromInt(Row.Universe) : FString(), bPatched ? FString::FromInt(Row.Address) : FString(),
 				EndAddress > 0 ? FString::FromInt(EndAddress) : FString(), FString::FromInt(Row.Footprint),
-				FormatMeters(Row.LocationMeters.X), FormatMeters(Row.LocationMeters.Y), FormatMeters(Row.LocationMeters.Z), EscapeCsvField(Notes) });
+				FormatMeters(Row.LocationMeters.X), FormatMeters(Row.LocationMeters.Y), FormatMeters(Row.LocationMeters.Z), EscapeCsvField(Notes),
+				Row.bInvertPan ? TEXT("Yes") : TEXT(""), Row.bInvertTilt ? TEXT("Yes") : TEXT(""), Row.bSwapPanTilt ? TEXT("Yes") : TEXT("") });
 		}
 		return Out;
 	}

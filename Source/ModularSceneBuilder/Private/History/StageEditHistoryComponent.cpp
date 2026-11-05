@@ -594,6 +594,9 @@ void UStageEditHistoryComponent::EndTransaction()
 	Transaction.Reset();
 
 	TArray<TSharedRef<IStageEditCommand>> Commands = MakeTransformCommands(Collected.Transforms);
+	// The step is named by the items it changed, not by its commands: a re-patch changes two or more parameters per fixture.
+	int32 Count = Commands.Num();
+	TSet<const AModularBaseActor*> ParameterItems;
 	for (const FPendingParameterChange& Change : Collected.Parameters)
 	{
 		AModularBaseActor* Item = Change.Item.Get();
@@ -602,15 +605,18 @@ void UStageEditHistoryComponent::EndTransaction()
 			&& FStageParameterItemCommand::IsMeaningfulChange(Change.Before, After))
 		{
 			Commands.Add(MakeShared<FStageParameterItemCommand>(Item->GetInstanceId(), Item->GetInstanceLabel(), Change.ParameterName, Change.ParameterId, Change.Before, After));
+			bool bAlreadyCounted = false;
+			ParameterItems.Add(Item, &bAlreadyCounted);
+			Count += bAlreadyCounted || Collected.Transforms.ContainsByPredicate([Item](const FStageTransformChange& Transform) { return Transform.Item.Get() == Item; }) ? 0 : 1;
 		}
 	}
 
 	if (const TSharedPtr<IStageEditCommand> Programmed = MakeProgrammerCommand(Collected.ProgrammerDescription, Collected.ProgrammerFixtures, Collected.ProgrammerBefore))
 	{
 		Commands.Add(Programmed.ToSharedRef());
+		++Count;
 	}
 
-	const int32 Count = Commands.Num();
 	RecordCommands(MoveTemp(Commands), FText::Format(NSLOCTEXT("StageEditHistory", "EditItems", "Edit {0} items"), FText::AsNumber(Count)));
 }
 

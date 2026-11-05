@@ -99,7 +99,8 @@ TStatId UShowControlSubsystem::GetStatId() const
 
 bool UShowControlSubsystem::IsTickable() const
 {
-	return !Fades.IsEmpty() || PendingAutoGo.IsSet() || !Strobes.IsEmpty() || AreEffectsLive() || IsDMXOutputActive();
+	// Output ticks only while a universe waits to be sent: the sender keeps an unchanged stream alive on its own thread.
+	return !Fades.IsEmpty() || PendingAutoGo.IsSet() || !Strobes.IsEmpty() || AreEffectsLive() || (IsDMXOutputActive() && HasPendingDMXOutput());
 }
 
 void UShowControlSubsystem::Tick(float DeltaTime)
@@ -830,7 +831,7 @@ void UShowControlSubsystem::CompleteFade()
 			{
 				TMap<FGameplayTag, float> Out = Fade.To;
 				RemoveHeldAttributes(*Fixture, Out);
-				Fixture->SetAttributes(Out);
+				WriteFixtureOutput(*Fixture, Out);
 			}
 			else
 			{
@@ -892,7 +893,7 @@ void UShowControlSubsystem::TickFades(float DeltaTime)
 		if (bMainOnly)
 		{
 			RemoveHeldAttributes(*Fixture, Frame);
-			Fixture->SetAttributes(Frame);
+			WriteFixtureOutput(*Fixture, Frame);
 		}
 		else
 		{
@@ -1251,6 +1252,7 @@ void UShowControlSubsystem::SetDMXBridge(UStageDMXBridge* NewBridge)
 	}
 	DMXBridge = NewBridge;
 	DMXOutputAccumulator = 0.f;
+	DirtyOutputUniverses.Reset(); // The new bridge's owner asks for a full frame (RefreshDMXOutput) once its output is open.
 	if (DMXBridge)
 	{
 		DMXBridge->Start(*this);
@@ -1496,7 +1498,7 @@ void UShowControlSubsystem::ResolveFixture(ALightingFixtureActor& Fixture, EReso
 	TMap<FGameplayTag, float> Mixed;
 	StageShowMix::ResolveFixture(Attributes, Layers, Mixed);
 	// SetAttributes stores and applies only the values that differ from the output.
-	Fixture.SetAttributes(Mixed);
+	WriteFixtureOutput(Fixture, Mixed);
 }
 
 void UShowControlSubsystem::RemoveHeldAttributes(const ALightingFixtureActor& Fixture, TMap<FGameplayTag, float>& Frame) const
@@ -1709,29 +1711,73 @@ int32 UShowControlSubsystem::ReceiveDMXUniverse(int32 Universe, const TArray<uin
 TArray<uint8> UShowControlSubsystem::RenderDMXUniverse(int32 Universe) const
 {
 	TArray<uint8> Data;
-	Data.SetNumZeroed(DMXUniverseSize);
-	if (Patch)
+	Data.SetNumUninitialized(DMXUniverseSize);
+	RenderDMXUniverseInto(Universe, Data);
+	return Data;
+}
+
+void UShowControlSubsystem::RenderDMXUniverseInto(int32 Universe, TArrayView<uint8> Data) const
+{
+	FMemory::Memzero(Data.GetData(), Data.Num());
+	if (!Patch)
 	{
-		for (const TWeakObjectPtr<ALightingFixtureActor>& Fixture : Patch->GetFixturesInUniverse(Universe))
+		return;
+	}
+	for (const TWeakObjectPtr<ALightingFixtureActor>& Fixture : Patch->GetFixturesInUniverse(Universe))
+	{
+		if (Fixture.IsValid())
 		{
-			if (Fixture.IsValid())
-			{
-				Fixture->WriteDMX(Data);
-			}
+			Fixture->WriteDMX(Data);
 		}
 	}
-	return Data;
+}
+
+void UShowControlSubsystem::WriteFixtureOutput(ALightingFixtureActor& Fixture, const TMap<FGameplayTag, float>& Values)
+{
+	if (Fixture.SetAttributes(Values) && IsDMXOutputActive())
+	{
+		const FStageDMXPatch FixturePatch = Fixture.GetPatch();
+		if (FixturePatch.IsPatched())
+		{
+			DirtyOutputUniverses.Add(FixturePatch.Universe);
+		}
+	}
+}
+
+void UShowControlSubsystem::RefreshDMXOutput()
+{
+	if (Patch && IsDMXOutputActive())
+	{
+		DirtyOutputUniverses.Append(Patch->GetPatchedUniverses());
+	}
+}
+
+bool UShowControlSubsystem::HasPendingDMXOutput() const
+{
+	return !DirtyOutputUniverses.IsEmpty() || (Patch && Patch->GetPatchRevision() != LastOutputPatchRevision);
 }
 
 void UShowControlSubsystem::TickDMXOutput(float DeltaTime)
 {
-	if (!IsDMXOutputActive())
+	if (!IsDMXOutputActive() || !Patch)
 	{
 		return;
 	}
+	// A re-patch moves channels around: every universe is rendered again (the sender drops universes that are no longer sent).
+	if (Patch->GetPatchRevision() != LastOutputPatchRevision)
+	{
+		LastOutputPatchRevision = Patch->GetPatchRevision();
+		DirtyOutputUniverses.Append(Patch->GetPatchedUniverses());
+	}
 
-	DMXOutputAccumulator += DeltaTime;
 	const float Interval = 1.f / FMath::Clamp(DMXOutputRateHz, 1.f, 60.f);
+	if (DirtyOutputUniverses.IsEmpty())
+	{
+		// Idle: the next change goes out at once rather than waiting out an interval.
+		DMXOutputAccumulator = Interval;
+		return;
+	}
+	DMXOutputAccumulator += DeltaTime;
 	if (DMXOutputAccumulator < Interval)
 	{
 		return;
@@ -1739,12 +1785,11 @@ void UShowControlSubsystem::TickDMXOutput(float DeltaTime)
 	// Drop missed frames instead of bursting: DMX is a stream of states, not events.
 	DMXOutputAccumulator = FMath::Fmod(DMXOutputAccumulator, Interval);
 
-	if (!Patch)
+	OutputScratch.SetNumUninitialized(DMXUniverseSize);
+	for (const int32 Universe : DirtyOutputUniverses)
 	{
-		return;
+		RenderDMXUniverseInto(Universe, OutputScratch);
+		DMXBridge->SendUniverse(Universe, OutputScratch);
 	}
-	for (const int32 Universe : Patch->GetPatchedUniverses())
-	{
-		DMXBridge->SendUniverse(Universe, RenderDMXUniverse(Universe));
-	}
+	DirtyOutputUniverses.Reset();
 }

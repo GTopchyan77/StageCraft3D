@@ -567,4 +567,12 @@ Gevor's choices: automation tests on a harness game instance (not AFunctionalTes
 - [ ] F4a manual verification (Gevor): Effects panel by mouse (quick effect on a selection, slider drags as one undo step each, TAP, STOP / STOP ALL), Window > Effects..., Lighting Desk's Effects tab
 - [x] F4b effects in cues and playbacks (ADR 0027 §5, STATE.md #64): effects and stops in cues and playback cues, tracked (Track, Cue Only, Look, Block); fade in and out with the cue timing, morph between cue settings; programmer STOP and EDIT over cue effects; playback effects scaled by the fader; FX column and sources in the panels; scene format v10; Bench.Fixtures Effects=3
 - [ ] F4b manual verification (Gevor): Effects panel EDIT and STOP on a cue effect (then Ctrl+Z), STOP ALL over cue effects, the Cues panel FX column and its tooltip, the playback FX marker
-- [ ] F5 DMX output (Art-Net / sACN), per-fixture invert / swap pan and tilt, fixture schedule CSV import (ADR 0019 amendment, STATE.md #65)
+- [x] F5 DMX output (Art-Net / sACN), per-fixture invert / swap pan and tilt, fixture schedule CSV import (ADR 0019 §9 §10, STATE.md #65 #66)
+  - [x] F5a output settings (per PC, sanitized) and FStageDMXNetworkSender (own thread, newest-frame mailbox, 1 s keep-alive, sACN termination)
+  - [x] F5a bridge and network subsystem own input and output; show control renders only dirty universes (no idle tick)
+  - [x] F5a RequestSetDMXOutput / settings, Patch panel DMX OUT line, dev console, Bench DMXOut=1
+  - [x] F5a tests (OutputSettings, Output loopback, OutputShow), builds, scripted runs R65a/b, benchmark A/B
+  - [x] F5b patch options (invert pan / tilt, swap) wire-only, Bool patch parameters with undo, Patch panel toggles, CSV columns
+  - [x] F5b schedule import (pure Parse and Plan, import bar, one undo step), tests, runs R66a-d
+- [ ] F5 manual verification (Gevor): a visualiser or node receiving DMX OUT (broadcast, multicast, unicast); the DMX OUT line by mouse (mode cycling, IP, PRI, HZ, mute chips); IMPORT CSV through the picker with APPLY / CANCEL and Ctrl+Z; -P / -T / SW toggles with Ctrl+Z
+- [ ] DMX follow-ups: ArtPoll discovery of output targets, ArtSync, DMX IN to OUT passthrough / merge, per-universe destinations, schedule rows that create fixtures (mode / type columns), GDTF / MVR import

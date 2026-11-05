@@ -12,6 +12,7 @@
 #include "Interaction/StageCraftCollision.h"
 #include "Materials/MaterialInstanceDynamic.h"
 #include "ModularSceneBuilder.h"
+#include "Show/StageDMXPatching.h"
 #include "Show/StageFixtureCells.h"
 #include "Show/StageGelLibrary.h"
 #include "Subsystems/ShowControlSubsystem.h"
@@ -1239,6 +1240,58 @@ void ALightingFixtureActor::SetPatch(const FStageDMXPatch& NewPatch)
 	}
 }
 
+void ALightingFixtureActor::SetPatchOptions(const FStageDMXPatchOptions& NewOptions)
+{
+	if (NewOptions == PatchOptions)
+	{
+		return;
+	}
+	const FStageDMXPatchOptions Before = PatchOptions;
+	PatchOptions = NewOptions;
+	// A new patch revision: output sends this universe again, input reads its next frame in full.
+	NotifyPatchSubsystem();
+	if (Before.bInvertPan != NewOptions.bInvertPan)
+	{
+		NotifyParameterChanged(StageCraftTags::Param_Patch_InvertPan);
+	}
+	if (Before.bInvertTilt != NewOptions.bInvertTilt)
+	{
+		NotifyParameterChanged(StageCraftTags::Param_Patch_InvertTilt);
+	}
+	if (Before.bSwapPanTilt != NewOptions.bSwapPanTilt)
+	{
+		NotifyParameterChanged(StageCraftTags::Param_Patch_SwapPanTilt);
+	}
+}
+
+FStageDMXPatchOptions ALightingFixtureActor::GetEffectivePatchOptions() const
+{
+	if (PatchOptions.IsDefault())
+	{
+		return PatchOptions; // The common case: no channel scan per frame.
+	}
+	bool bHasPan = false;
+	bool bHasTilt = false;
+	GetPanTiltChannels(bHasPan, bHasTilt);
+	return StageDMXPatchOptions::GetEffective(PatchOptions, bHasPan, bHasTilt);
+}
+
+void ALightingFixtureActor::GetPanTiltChannels(bool& bOutHasPan, bool& bOutHasTilt) const
+{
+	bOutHasPan = false;
+	bOutHasTilt = false;
+	const ULightingFixtureData* Fixture = GetFixtureData();
+	if (!Fixture)
+	{
+		return;
+	}
+	for (const FStageFixtureDMXChannel& Channel : Fixture->DMXChannels)
+	{
+		bOutHasPan |= Channel.Attribute == StageCraftTags::Attribute_Pan && Fixture->SupportsAttribute(Channel.Attribute);
+		bOutHasTilt |= Channel.Attribute == StageCraftTags::Attribute_Tilt && Fixture->SupportsAttribute(Channel.Attribute);
+	}
+}
+
 int32 ALightingFixtureActor::GetDMXFootprint() const
 {
 	const ULightingFixtureData* Fixture = GetFixtureData();
@@ -1253,10 +1306,14 @@ void ALightingFixtureActor::WriteDMX(TArrayView<uint8> UniverseData) const
 		return;
 	}
 
+	const FStageDMXPatchOptions Options = GetEffectivePatchOptions();
 	for (const FStageFixtureDMXChannel& Channel : Fixture->DMXChannels)
 	{
 		bool bInverted = false;
-		const FGameplayTag Attribute = ResolveDMXAttribute(Channel.Attribute, bInverted);
+		FGameplayTag Attribute = ResolveDMXAttribute(Channel.Attribute, bInverted);
+		const FStageDMXChannelSource Source = StageDMXPatchOptions::GetChannelSource(Attribute, Options);
+		Attribute = Source.Attribute;
+		bInverted ^= Source.bInvert;
 		if (!Fixture->SupportsAttribute(Channel.Attribute) || !Fixture->SupportsAttribute(Attribute))
 		{
 			continue;
@@ -1293,10 +1350,14 @@ bool ALightingFixtureActor::ReadDMX(TConstArrayView<uint8> UniverseData)
 	}
 
 	TMap<FGameplayTag, float> Values;
+	const FStageDMXPatchOptions Options = GetEffectivePatchOptions();
 	for (const FStageFixtureDMXChannel& Channel : Fixture->DMXChannels)
 	{
 		bool bInverted = false;
-		const FGameplayTag Attribute = ResolveDMXAttribute(Channel.Attribute, bInverted);
+		FGameplayTag Attribute = ResolveDMXAttribute(Channel.Attribute, bInverted);
+		const FStageDMXChannelSource Source = StageDMXPatchOptions::GetChannelSource(Attribute, Options);
+		Attribute = Source.Attribute;
+		bInverted ^= Source.bInvert;
 		if (!Fixture->SupportsAttribute(Channel.Attribute) || !Fixture->SupportsAttribute(Attribute))
 		{
 			continue;
@@ -1473,6 +1534,22 @@ void ALightingFixtureActor::GatherParameterSections(TArray<FStageParameterSectio
 	PatchSection.Add(StageCraftTags::Param_Patch_Mode, LOCTEXT("DMXMode", "DMX Mode"), FStageParameterValue::MakeText(FText::FromName(Fixture->DMXModeName))).ReadOnly();
 	PatchSection.Add(StageCraftTags::Param_Patch_Footprint, LOCTEXT("Footprint", "Channels"),
 		FStageParameterValue::MakeInteger(Fixture->GetDMXFootprint())).Display(1.0, LOCTEXT("ChannelUnits", "ch")).ReadOnly();
+	// Wire-only options (Docs/ADR/0019 §10.1), offered for the axes the DMX mode has.
+	bool bHasPan = false;
+	bool bHasTilt = false;
+	GetPanTiltChannels(bHasPan, bHasTilt);
+	if (bHasPan)
+	{
+		PatchSection.Add(StageCraftTags::Param_Patch_InvertPan, LOCTEXT("InvertPan", "Invert Pan (DMX)"), FStageParameterValue::MakeBool(PatchOptions.bInvertPan));
+	}
+	if (bHasTilt)
+	{
+		PatchSection.Add(StageCraftTags::Param_Patch_InvertTilt, LOCTEXT("InvertTilt", "Invert Tilt (DMX)"), FStageParameterValue::MakeBool(PatchOptions.bInvertTilt));
+	}
+	if (bHasPan && bHasTilt)
+	{
+		PatchSection.Add(StageCraftTags::Param_Patch_SwapPanTilt, LOCTEXT("SwapPanTilt", "Swap Pan/Tilt (DMX)"), FStageParameterValue::MakeBool(PatchOptions.bSwapPanTilt));
+	}
 
 	auto AddAttribute = [this, Fixture](FStageParameterSection& Section, const FGameplayTag& Attribute, const FText& Name, double DisplayScale, const FText& Units, const FText& ShortName = FText::GetEmpty())
 	{
@@ -1720,6 +1797,13 @@ bool ALightingFixtureActor::ReadParameter(const FGameplayTag& ParameterId, FStag
 		OutValue = FStageParameterValue::MakeInteger(Patch.Address);
 		return true;
 	}
+	if (ParameterId == StageCraftTags::Param_Patch_InvertPan || ParameterId == StageCraftTags::Param_Patch_InvertTilt
+		|| ParameterId == StageCraftTags::Param_Patch_SwapPanTilt)
+	{
+		OutValue = FStageParameterValue::MakeBool(ParameterId == StageCraftTags::Param_Patch_InvertPan ? PatchOptions.bInvertPan
+			: ParameterId == StageCraftTags::Param_Patch_InvertTilt ? PatchOptions.bInvertTilt : PatchOptions.bSwapPanTilt);
+		return true;
+	}
 	return Super::ReadParameter(ParameterId, OutValue);
 }
 
@@ -1798,6 +1882,16 @@ bool ALightingFixtureActor::WriteParameter(const FGameplayTag& ParameterId, cons
 			SetPatch(NewPatch);
 			return true;
 		}
+	}
+	if (Value.Type == EStageParameterType::Bool && (ParameterId == StageCraftTags::Param_Patch_InvertPan
+		|| ParameterId == StageCraftTags::Param_Patch_InvertTilt || ParameterId == StageCraftTags::Param_Patch_SwapPanTilt))
+	{
+		FStageDMXPatchOptions NewOptions = PatchOptions;
+		bool& Field = ParameterId == StageCraftTags::Param_Patch_InvertPan ? NewOptions.bInvertPan
+			: ParameterId == StageCraftTags::Param_Patch_InvertTilt ? NewOptions.bInvertTilt : NewOptions.bSwapPanTilt;
+		Field = Value.bBool;
+		SetPatchOptions(NewOptions);
+		return true;
 	}
 	return Super::WriteParameter(ParameterId, Value);
 }

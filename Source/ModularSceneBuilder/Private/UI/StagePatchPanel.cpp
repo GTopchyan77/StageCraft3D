@@ -7,20 +7,25 @@
 #include "Components/Border.h"
 #include "Components/Button.h"
 #include "Components/ButtonSlot.h"
+#include "Components/EditableTextBox.h"
 #include "Components/HorizontalBox.h"
 #include "Components/HorizontalBoxSlot.h"
 #include "Components/Image.h"
 #include "Components/ScrollBox.h"
 #include "Components/SelectionComponent.h"
 #include "Components/SizeBox.h"
+#include "Components/SpinBox.h"
 #include "Components/TextBlock.h"
 #include "Components/VerticalBox.h"
 #include "Components/VerticalBoxSlot.h"
 #include "Data/LightingFixtureData.h"
 #include "Engine/World.h"
 #include "Framework/Application/SlateApplication.h"
+#include "Import/StageFileDialog.h"
 #include "Interaction/StageParameterInterface.h"
+#include "Misc/Paths.h"
 #include "Player/ModularPlayerController.h"
+#include "Report/StageReportFiles.h"
 #include "Subsystems/ShowControlSubsystem.h"
 #include "Subsystems/StageDMXNetworkSubsystem.h"
 #include "Subsystems/StageDMXPatchSubsystem.h"
@@ -47,12 +52,21 @@ namespace StagePatchPanel
 	constexpr int32 MaxUniverse = 63999;
 	constexpr int32 MaxAddress = 512;
 	constexpr int32 UniverseSize = 512;
+	constexpr float OptionsWidth = 66.f;
+
+	/** The per-row pan / tilt option toggles; a toggle's choice index is Row * PatchOptionCount + its option. */
+	enum class EPatchOption : int32
+	{
+		InvertPan,
+		InvertTilt,
+		Swap,
+	};
+	constexpr int32 PatchOptionCount = 3;
 
 	/** Patch edits that change what the table shows; attribute changes only touch channel values. */
 	bool IsTableParameter(const FGameplayTag& ParameterId)
 	{
-		return ParameterId == StageCraftTags::Param_Patch_FixtureId || ParameterId == StageCraftTags::Param_Patch_Universe
-			|| ParameterId == StageCraftTags::Param_Patch_Address || ParameterId == StageCraftTags::Param_Info_Label
+		return StageCraftTags::IsPatchParameter(ParameterId) || ParameterId == StageCraftTags::Param_Info_Label
 			|| ParameterId == StageCraftTags::Param_Info_Type;
 	}
 }
@@ -153,6 +167,42 @@ void UStagePatchPanel::NativeOnInitialized()
 	{
 		InputButton->OnClicked.AddUniqueDynamic(this, &ThisClass::HandleInputClicked);
 	}
+	if (OutputButton)
+	{
+		OutputButton->OnClicked.AddUniqueDynamic(this, &ThisClass::HandleOutputClicked);
+	}
+	if (ImportButton)
+	{
+		ImportButton->OnClicked.AddUniqueDynamic(this, &ThisClass::HandleImportClicked);
+	}
+	if (ImportApplyButton)
+	{
+		ImportApplyButton->OnClicked.AddUniqueDynamic(this, &ThisClass::HandleImportApplyClicked);
+	}
+	if (ImportCancelButton)
+	{
+		ImportCancelButton->OnClicked.AddUniqueDynamic(this, &ThisClass::HandleImportCancelClicked);
+	}
+	if (ArtNetModeButton)
+	{
+		ArtNetModeButton->OnClicked.AddUniqueDynamic(this, &ThisClass::HandleArtNetModeClicked);
+	}
+	if (SACNModeButton)
+	{
+		SACNModeButton->OnClicked.AddUniqueDynamic(this, &ThisClass::HandleSACNModeClicked);
+	}
+	if (UnicastField)
+	{
+		UnicastField->OnTextCommitted.AddUniqueDynamic(this, &ThisClass::HandleUnicastCommitted);
+	}
+	if (PriorityField)
+	{
+		PriorityField->OnValueCommitted.AddUniqueDynamic(this, &ThisClass::HandlePriorityCommitted);
+	}
+	if (RateField)
+	{
+		RateField->OnValueCommitted.AddUniqueDynamic(this, &ThisClass::HandleRateCommitted);
+	}
 }
 
 void UStagePatchPanel::BuildTree()
@@ -169,6 +219,7 @@ void UStagePatchPanel::BuildTree()
 	Root->SetContent(Column);
 	Column->AddChildToVerticalBox(BuildHeader());
 	Column->AddChildToVerticalBox(BuildToolsBar());
+	Column->AddChildToVerticalBox(BuildImportBar());
 
 	// The patch usually docks low and wide (next to the faders), so the fixture table and the selected fixture's channels
 	// sit side by side, like a console's patch window with its fixture sheet.
@@ -276,6 +327,14 @@ UWidget* UStagePatchPanel::BuildHeader()
 		ExportSlot->SetVerticalAlignment(VAlign_Center);
 		ExportSlot->SetPadding(FMargin(4.f, 0.f, 0.f, 0.f));
 	}
+
+	ImportButton = MakeHeaderButton(TEXT("ImportButton"), LOCTEXT("Import", "IMPORT CSV"),
+		LOCTEXT("ImportTip", "Patch from a fixture schedule: a CSV with Fixture ID, Universe and Address columns (and optionally Invert Pan, Invert Tilt, Swap Pan/Tilt), such as the CSV EXPORT PDF writes. You see what would change before anything does; applying is one undo step."));
+	if (UHorizontalBoxSlot* ImportSlot = Line->AddChildToHorizontalBox(ImportButton))
+	{
+		ImportSlot->SetVerticalAlignment(VAlign_Center);
+		ImportSlot->SetPadding(FMargin(4.f, 0.f, 0.f, 0.f));
+	}
 	return Header;
 }
 
@@ -319,6 +378,7 @@ UWidget* UStagePatchPanel::MakeColumnTitles()
 	AddTitle(LOCTEXT("UniverseColumn", "UNIV"), UniverseWidth, 4.f);
 	AddTitle(LOCTEXT("AddressColumn", "ADDR"), AddressWidth, 4.f);
 	AddTitle(LOCTEXT("FootprintColumn", "CH"), FootprintWidth, 4.f);
+	AddTitle(LOCTEXT("OptionsColumn", "P/T OUT"), OptionsWidth, 6.f);
 	return Row;
 }
 
@@ -406,6 +466,8 @@ UWidget* UStagePatchPanel::MakeFixtureRow(ALightingFixtureActor& Fixture, bool b
 	UTextBlock* Detail = MakeText(TypeText, 7, TEXT("Regular"), Palette.TextSecondary);
 	Detail->SetTextOverflowPolicy(ETextOverflowPolicy::Ellipsis);
 	NameCell->AddChildToVerticalBox(Detail);
+	// In a narrow panel the name gets less than it asks for: clipped (and ellipsised), never drawn under the patch fields.
+	NameCell->SetClipping(EWidgetClipping::ClipToBounds);
 	AddCell(NameCell, 6.f, true);
 
 	const auto AddField = [&](const FGameplayTag& ParameterId, int32 Value, int32 Min, int32 Max, float Width, const FText& ToolTip)
@@ -425,6 +487,48 @@ UWidget* UStagePatchPanel::MakeFixtureRow(ALightingFixtureActor& Fixture, bool b
 	UTextBlock* Footprint = MakeText(FText::AsNumber(Fixture.GetDMXFootprint()), 8, TEXT("Bold"), Palette.TextSecondary);
 	Footprint->SetJustification(ETextJustify::Right);
 	AddCell(MakeCell(*Footprint, FootprintWidth), 4.f, false);
+
+	// Pan / tilt options on the wire (Docs/ADR/0019 §10.1): lit when on, greyed out for an axis the DMX mode does not have.
+	bool bHasPan = false;
+	bool bHasTilt = false;
+	Fixture.GetPanTiltChannels(bHasPan, bHasTilt);
+	const FStageDMXPatchOptions Options = Fixture.GetPatchOptions();
+	UHorizontalBox* OptionCell = WidgetTree->ConstructWidget<UHorizontalBox>(UHorizontalBox::StaticClass());
+	const int32 Row = RowFixtures.Num() - 1;
+	const struct { EPatchOption Option; FText Label; FText ToolTip; bool bOn; bool bAvailable; } OptionButtons[] = {
+		{ EPatchOption::InvertPan, LOCTEXT("InvertPanShort", "-P"),
+			LOCTEXT("InvertPanTip", "Invert Pan on the wire: the pan channel runs the other way (for a fixture hung the other way round). The beam on the stage does not change. Undoable."),
+			Options.bInvertPan, bHasPan },
+		{ EPatchOption::InvertTilt, LOCTEXT("InvertTiltShort", "-T"),
+			LOCTEXT("InvertTiltTip", "Invert Tilt on the wire: the tilt channel runs the other way. The beam on the stage does not change. Undoable."),
+			Options.bInvertTilt, bHasTilt },
+		{ EPatchOption::Swap, LOCTEXT("SwapShort", "SW"),
+			LOCTEXT("SwapTip", "Swap Pan/Tilt on the wire: the pan channel carries the tilt and the other way round (for a fixture hung sideways). The beam on the stage does not change. Undoable."),
+			Options.bSwapPanTilt, bHasPan && bHasTilt },
+	};
+	for (const auto& Entry : OptionButtons)
+	{
+		UStageChoiceButton* Toggle = WidgetTree->ConstructWidget<UStageChoiceButton>(UStageChoiceButton::StaticClass());
+		const bool bLit = Entry.bOn && Entry.bAvailable;
+		Toggle->SetStyle(MakeFlatButton(bLit ? WithAlpha(Palette.AccentColor, 0.28f) : FLinearColor::Transparent,
+			bLit ? WithAlpha(Palette.AccentColor, 0.38f) : Palette.RowHover, Palette.Divider));
+		Toggle->SetChoiceIndex(Row * PatchOptionCount + static_cast<int32>(Entry.Option));
+		Toggle->OnPicked.BindUObject(this, &ThisClass::HandlePatchOptionPicked);
+		Toggle->SetIsEnabled(Entry.bAvailable);
+		Toggle->SetToolTipText(Entry.bAvailable ? Entry.ToolTip : LOCTEXT("OptionUnavailable", "This fixture's DMX mode has no channel for it."));
+		UTextBlock* ToggleLabel = MakeText(Entry.Label, 6, TEXT("Bold"), bLit ? Palette.TextPrimary : Palette.TextSecondary);
+		if (UButtonSlot* LabelSlot = Cast<UButtonSlot>(Toggle->AddChild(ToggleLabel)))
+		{
+			LabelSlot->SetPadding(FMargin(4.f, 3.f));
+			LabelSlot->SetHorizontalAlignment(HAlign_Center);
+		}
+		if (UHorizontalBoxSlot* ToggleSlot = OptionCell->AddChildToHorizontalBox(Toggle))
+		{
+			ToggleSlot->SetPadding(FMargin(1.f, 0.f));
+			ToggleSlot->SetVerticalAlignment(VAlign_Center);
+		}
+	}
+	AddCell(MakeCell(*OptionCell, OptionsWidth), 6.f, false);
 	return RowButton;
 }
 
@@ -508,6 +612,12 @@ UWidget* UStagePatchPanel::BuildToolsBar()
 	InputStatusText->SetTextOverflowPolicy(ETextOverflowPolicy::Ellipsis);
 	AddToLine(InputLine, InputStatusText, 10.f, true);
 
+	// Network output: the switch, where it sends, and which universes.
+	if (UVerticalBoxSlot* OutputSlot = Lines->AddChildToVerticalBox(BuildOutputLine()))
+	{
+		OutputSlot->SetPadding(FMargin(0.f, 4.f, 0.f, 0.f));
+	}
+
 	// Patch tools: repair conflicts, patch the selection from an address; how full each universe is.
 	UHorizontalBox* ToolsLine = WidgetTree->ConstructWidget<UHorizontalBox>(UHorizontalBox::StaticClass(), TEXT("ToolsLine"));
 	if (UVerticalBoxSlot* ToolsSlot = Lines->AddChildToVerticalBox(ToolsLine))
@@ -563,6 +673,10 @@ void UStagePatchPanel::NativeConstruct()
 	{
 		InputChangedHandle = NetworkSubsystem->OnInputChanged.AddUObject(this, &ThisClass::RefreshInputStatus);
 	}
+	if (NetworkSubsystem && !OutputChangedHandle.IsValid())
+	{
+		OutputChangedHandle = NetworkSubsystem->OnOutputChanged.AddUObject(this, &ThisClass::RefreshOutputStatus);
+	}
 
 	const AModularPlayerController* Controller = GetStageController();
 	USelectionComponent* SelectionComponent = Controller ? Controller->GetSelection() : nullptr;
@@ -573,6 +687,7 @@ void UStagePatchPanel::NativeConstruct()
 	}
 	Rebuild();
 	RefreshInputStatus();
+	RefreshOutputStatus();
 }
 
 void UStagePatchPanel::NativeDestruct()
@@ -588,8 +703,10 @@ void UStagePatchPanel::NativeDestruct()
 	if (UStageDMXNetworkSubsystem* NetworkSubsystem = Network.Get())
 	{
 		NetworkSubsystem->OnInputChanged.Remove(InputChangedHandle);
+		NetworkSubsystem->OnOutputChanged.Remove(OutputChangedHandle);
 	}
 	InputChangedHandle.Reset();
+	OutputChangedHandle.Reset();
 	Patching.Reset();
 	Network.Reset();
 	if (USelectionComponent* SelectionComponent = Selection.Get())
@@ -685,6 +802,7 @@ void UStagePatchPanel::Rebuild()
 	}
 	UsageText->SetText(Usage.IsEmpty() ? LOCTEXT("NoUniverses", "No universe in use") : FText::FromString(FString::Join(Usage, TEXT("   "))));
 	RebuildChannelMap();
+	RebuildOutputUniverses();
 }
 
 void UStagePatchPanel::RefreshInputStatus()
@@ -958,6 +1076,452 @@ void UStagePatchPanel::HandleExportClicked()
 	{
 		Controller->RequestExportPatchSheet();
 	}
+}
+
+// --- DMX OUT (Docs/ADR/0019 §9.6) ---
+
+UWidget* UStagePatchPanel::BuildOutputLine()
+{
+	using namespace StageCraftWidgetStyle;
+	using namespace StagePatchPanel;
+	const UStageCraftUITheme& Palette = GetTheme();
+
+	UHorizontalBox* Line = WidgetTree->ConstructWidget<UHorizontalBox>(UHorizontalBox::StaticClass(), TEXT("OutputLine"));
+	const auto AddToLine = [Line](UWidget* Widget, float LeftGap, bool bFill)
+	{
+		if (UHorizontalBoxSlot* WidgetSlot = Line->AddChildToHorizontalBox(Widget))
+		{
+			WidgetSlot->SetVerticalAlignment(VAlign_Center);
+			WidgetSlot->SetPadding(FMargin(LeftGap, 0.f, 0.f, 0.f));
+			if (bFill)
+			{
+				WidgetSlot->SetSize(FSlateChildSize(ESlateSizeRule::Fill));
+			}
+		}
+	};
+	const auto Sized = [this](UWidget* Content, float Width)
+	{
+		USizeBox* Box = WidgetTree->ConstructWidget<USizeBox>(USizeBox::StaticClass());
+		Box->SetWidthOverride(Width);
+		Box->SetHeightOverride(FieldHeight);
+		Box->SetContent(Content);
+		return Box;
+	};
+
+	UTextBlock* Label = nullptr;
+	OutputButton = MakeHeaderButton(TEXT("OutputButton"), LOCTEXT("OutputOff", "DMX OUT: OFF"),
+		LOCTEXT("OutputTip", "Send the show as Art-Net and/or sACN to real fixtures, a DMX node or a visualiser. Only universes with patched fixtures are sent, and only while the cue list drives the show (it pauses while DMX IN follows a console). Remembered on this PC."),
+		&Label);
+	OutputButtonLabel = Label;
+	AddToLine(OutputButton, 0.f, false);
+
+	Label = nullptr;
+	ArtNetModeButton = MakeHeaderButton(TEXT("ArtNetModeButton"), FText::GetEmpty(),
+		LOCTEXT("ArtNetModeTip", "Art-Net: off, broadcast to every node on the network (255.255.255.255 on port 6454), or unicast to the address on the right. Click to change."),
+		&Label);
+	ArtNetModeLabel = Label;
+	AddToLine(ArtNetModeButton, 4.f, false);
+
+	Label = nullptr;
+	SACNModeButton = MakeHeaderButton(TEXT("SACNModeButton"), FText::GetEmpty(),
+		LOCTEXT("SACNModeTip", "sACN (E1.31): off, multicast to each universe's group (239.255.x.y, which every sACN receiver listens to), or unicast to the address on the right. Click to change."),
+		&Label);
+	SACNModeLabel = Label;
+	AddToLine(SACNModeButton, 4.f, false);
+
+	UnicastField = WidgetTree->ConstructWidget<UEditableTextBox>(UEditableTextBox::StaticClass(), TEXT("UnicastField"));
+	FEditableTextBoxStyle TextStyle = MakeInputField(Palette);
+	TextStyle.SetPadding(FMargin(6.f, 2.f));
+	TextStyle.SetFont(MakeFont(8));
+	UnicastField->SetWidgetStyle(TextStyle);
+	UnicastField->SetRevertTextOnEscape(true);
+	UnicastField->SetHintText(LOCTEXT("UnicastHint", "unicast IP"));
+	UnicastField->SetToolTipText(LOCTEXT("UnicastTip", "The IPv4 address the protocols set to UNICAST send to (a DMX node or a visualiser PC). Press Enter to apply."));
+	AddToLine(Sized(UnicastField, 104.f), 4.f, false);
+
+	PriorityField = MakeNumberField(100, 0, StageDMXOutput::MaxSACNPriority, 34.f,
+		LOCTEXT("PriorityTip", "sACN priority, 0-200 (default 100). A receiver shows the source with the highest priority."));
+	AddToLine(MakeText(LOCTEXT("PriorityLabel", "PRI"), 6, TEXT("Bold"), Palette.TextSecondary), 6.f, false);
+	AddToLine(Sized(PriorityField, 40.f), 3.f, false);
+
+	RateField = MakeNumberField(StageDMXOutput::MaxRateHz, StageDMXOutput::MinRateHz, StageDMXOutput::MaxRateHz, 30.f,
+		LOCTEXT("RateTip", "Frames per second while the look changes, 1-44. Unchanged universes are repeated once a second."));
+	AddToLine(MakeText(LOCTEXT("RateLabel", "HZ"), 6, TEXT("Bold"), Palette.TextSecondary), 6.f, false);
+	AddToLine(Sized(RateField, 36.f), 3.f, false);
+
+	OutputUniverseBox = WidgetTree->ConstructWidget<UHorizontalBox>(UHorizontalBox::StaticClass(), TEXT("OutputUniverses"));
+	AddToLine(OutputUniverseBox, 6.f, false);
+
+	// The status gets a line of its own: the controls fill the first one, and the packet counts must stay readable.
+	UVerticalBox* Block = WidgetTree->ConstructWidget<UVerticalBox>(UVerticalBox::StaticClass(), TEXT("OutputBlock"));
+	Block->AddChildToVerticalBox(Line);
+	OutputStatusText = MakeText(FText::GetEmpty(), 7, TEXT("Regular"), Palette.TextSecondary);
+	OutputStatusText->SetTextOverflowPolicy(ETextOverflowPolicy::Ellipsis);
+	if (UVerticalBoxSlot* StatusSlot = Block->AddChildToVerticalBox(OutputStatusText))
+	{
+		StatusSlot->SetPadding(FMargin(2.f, 3.f, 0.f, 0.f));
+	}
+	return Block;
+}
+
+void UStagePatchPanel::RefreshOutputStatus()
+{
+	if (!OutputStatusText || !OutputButtonLabel)
+	{
+		return;
+	}
+	const UStageCraftUITheme& Palette = GetTheme();
+	const UStageDMXNetworkSubsystem* NetworkSubsystem = Network.Get();
+	const FStageDMXOutputStatus Status = NetworkSubsystem ? NetworkSubsystem->GetOutputStatus() : FStageDMXOutputStatus();
+	const FStageDMXOutputSettings Settings = NetworkSubsystem ? NetworkSubsystem->GetOutputSettings() : FStageDMXOutputSettings();
+	const bool bAvailable = NetworkSubsystem != nullptr;
+	for (UWidget* Control : TArray<UWidget*>{ OutputButton, ArtNetModeButton, SACNModeButton, UnicastField, PriorityField, RateField })
+	{
+		if (Control)
+		{
+			Control->SetIsEnabled(bAvailable);
+		}
+	}
+
+	const auto ModeText = [](EStageArtNetOutputMode Mode)
+	{
+		switch (Mode)
+		{
+		case EStageArtNetOutputMode::Broadcast: return LOCTEXT("ArtNetBroadcast", "ART-NET: BCAST");
+		case EStageArtNetOutputMode::Unicast: return LOCTEXT("ArtNetUnicast", "ART-NET: UNICAST");
+		default: return LOCTEXT("ArtNetOff", "ART-NET: OFF");
+		}
+	};
+	const auto SACNText = [](EStageSACNOutputMode Mode)
+	{
+		switch (Mode)
+		{
+		case EStageSACNOutputMode::Multicast: return LOCTEXT("SACNMulticast", "sACN: MCAST");
+		case EStageSACNOutputMode::Unicast: return LOCTEXT("SACNUnicast", "sACN: UNICAST");
+		default: return LOCTEXT("SACNOff", "sACN: OFF");
+		}
+	};
+	ArtNetModeLabel->SetText(ModeText(Settings.ArtNet));
+	ArtNetModeLabel->SetColorAndOpacity(FSlateColor(Settings.ArtNet == EStageArtNetOutputMode::Off ? Palette.TextSecondary : Palette.TextPrimary));
+	SACNModeLabel->SetText(SACNText(Settings.SACN));
+	SACNModeLabel->SetColorAndOpacity(FSlateColor(Settings.SACN == EStageSACNOutputMode::Off ? Palette.TextSecondary : Palette.TextPrimary));
+	// The fields read the saved settings back, so a refused or sanitized edit snaps back; one being typed in is left alone.
+	if (!UnicastField->HasKeyboardFocus())
+	{
+		UnicastField->SetText(FText::FromString(Settings.UnicastAddress));
+	}
+	if (!PriorityField->HasKeyboardFocus())
+	{
+		PriorityField->SetValue(static_cast<float>(Settings.SACNPriority));
+	}
+	if (!RateField->HasKeyboardFocus())
+	{
+		RateField->SetValue(static_cast<float>(Settings.RateHz));
+	}
+
+	const UShowControlSubsystem* Show = ShowControl.Get();
+	const bool bPaused = Show && Show->GetControlSource() == EStageControlSource::External;
+	switch (Status.State)
+	{
+	case EStageDMXOutputState::Sending:
+		OutputButtonLabel->SetText(LOCTEXT("OutputOn", "DMX OUT: ON"));
+		OutputButtonLabel->SetColorAndOpacity(FSlateColor(Palette.AccentColor));
+		OutputStatusText->SetText(bPaused
+			? FText::Format(LOCTEXT("OutputPaused", "Paused while DMX IN drives the show · {0}"), FText::FromString(Status.Target))
+			: FText::Format(LOCTEXT("OutputLive", "Sending {0} {0}|plural(one=universe,other=universes) · {1} · {2} Art-Net, {3} sACN packets{4}"),
+				Status.Universes.Num(), FText::FromString(Status.Target), FText::AsNumber(Status.ArtNetPackets), FText::AsNumber(Status.SACNPackets),
+				Status.SendErrors > 0 ? FText::Format(LOCTEXT("OutputErrors", " · {0} not sent"), FText::AsNumber(Status.SendErrors)) : FText::GetEmpty()));
+		OutputStatusText->SetColorAndOpacity(FSlateColor(Status.SendErrors > 0 ? Palette.WarningColor : Palette.TextSecondary));
+		break;
+	case EStageDMXOutputState::Failed:
+		OutputButtonLabel->SetText(LOCTEXT("OutputOffFailed", "DMX OUT: OFF"));
+		OutputButtonLabel->SetColorAndOpacity(FSlateColor(Palette.TextSecondary));
+		OutputStatusText->SetText(Status.Error);
+		OutputStatusText->SetColorAndOpacity(FSlateColor(Palette.WarningColor));
+		break;
+	default:
+		OutputButtonLabel->SetText(LOCTEXT("OutputOffIdle", "DMX OUT: OFF"));
+		OutputButtonLabel->SetColorAndOpacity(FSlateColor(Palette.TextSecondary));
+		OutputStatusText->SetText(LOCTEXT("OutputIdle", "Network output off. Switch on to drive fixtures, a node or a visualiser over Art-Net or sACN."));
+		OutputStatusText->SetColorAndOpacity(FSlateColor(Palette.TextSecondary));
+		break;
+	}
+	OutputStatusText->SetToolTipText(OutputStatusText->GetText());
+
+	// The chips: lit while their universe is sent (muted ones stay dark).
+	for (int32 Index = 0; Index < OutputUniverseButtons.Num() && Index < OutputUniverses.Num(); ++Index)
+	{
+		if (UStageChoiceButton* Chip = OutputUniverseButtons[Index])
+		{
+			const bool bSent = !StageDMXOutput::IsMuted(Settings, OutputUniverses[Index]);
+			Chip->SetStyle(StageCraftWidgetStyle::MakeFlatButton(bSent ? StageCraftWidgetStyle::WithAlpha(Palette.AccentColor, 0.28f) : FLinearColor::Transparent,
+				bSent ? StageCraftWidgetStyle::WithAlpha(Palette.AccentColor, 0.38f) : Palette.RowHover, Palette.Divider));
+			if (UTextBlock* ChipLabel = Cast<UTextBlock>(Chip->GetChildAt(0)))
+			{
+				ChipLabel->SetColorAndOpacity(FSlateColor(bSent ? Palette.TextPrimary : Palette.TextSecondary));
+			}
+		}
+	}
+}
+
+void UStagePatchPanel::RebuildOutputUniverses()
+{
+	if (!OutputUniverseBox)
+	{
+		return;
+	}
+	OutputUniverseBox->ClearChildren();
+	OutputUniverseButtons.Reset();
+	const UStageDMXPatchSubsystem* PatchSubsystem = Patching.Get();
+	OutputUniverses = PatchSubsystem ? PatchSubsystem->GetPatchedUniverses() : TArray<int32>();
+	for (int32 Index = 0; Index < OutputUniverses.Num(); ++Index)
+	{
+		UStageChoiceButton* Chip = WidgetTree->ConstructWidget<UStageChoiceButton>(UStageChoiceButton::StaticClass());
+		Chip->SetChoiceIndex(Index);
+		Chip->SetToolTipText(FText::Format(LOCTEXT("ChipTip", "Universe {0}: lit while DMX OUT sends it. Click to mute or unmute it on this PC."), OutputUniverses[Index]));
+		Chip->OnPicked.BindUObject(this, &ThisClass::HandleOutputUniversePicked);
+		UTextBlock* ChipLabel = MakeText(FText::Format(LOCTEXT("ChipLabel", "U{0}"), OutputUniverses[Index]), 6, TEXT("Bold"), GetTheme().TextSecondary);
+		if (UButtonSlot* LabelSlot = Cast<UButtonSlot>(Chip->AddChild(ChipLabel)))
+		{
+			LabelSlot->SetPadding(FMargin(5.f, 3.f));
+			LabelSlot->SetHorizontalAlignment(HAlign_Center);
+		}
+		if (UHorizontalBoxSlot* ChipSlot = OutputUniverseBox->AddChildToHorizontalBox(Chip))
+		{
+			ChipSlot->SetPadding(FMargin(Index == 0 ? 0.f : 2.f, 0.f, 0.f, 0.f));
+			ChipSlot->SetVerticalAlignment(VAlign_Center);
+		}
+		OutputUniverseButtons.Add(Chip);
+	}
+	RefreshOutputStatus();
+}
+
+void UStagePatchPanel::ApplyOutputSettings(const FStageDMXOutputSettings& Settings)
+{
+	if (AModularPlayerController* Controller = GetStageController())
+	{
+		// A refusal reaches the status bar through OnRequestRejected; the line follows through OnOutputChanged.
+		Controller->RequestApplyDMXOutputSettings(Settings);
+	}
+	RefreshOutputStatus(); // Snaps the fields back when nothing changed (no broadcast then).
+}
+
+void UStagePatchPanel::HandleOutputClicked()
+{
+	AModularPlayerController* Controller = GetStageController();
+	const UStageDMXNetworkSubsystem* NetworkSubsystem = Network.Get();
+	if (Controller && NetworkSubsystem)
+	{
+		Controller->RequestSetDMXOutput(NetworkSubsystem->GetOutputStatus().State != EStageDMXOutputState::Sending);
+	}
+}
+
+void UStagePatchPanel::HandleArtNetModeClicked()
+{
+	if (const UStageDMXNetworkSubsystem* NetworkSubsystem = Network.Get())
+	{
+		FStageDMXOutputSettings Settings = NetworkSubsystem->GetOutputSettings();
+		Settings.ArtNet = static_cast<EStageArtNetOutputMode>((static_cast<uint8>(Settings.ArtNet) + 1) % 3);
+		ApplyOutputSettings(Settings);
+	}
+}
+
+void UStagePatchPanel::HandleSACNModeClicked()
+{
+	if (const UStageDMXNetworkSubsystem* NetworkSubsystem = Network.Get())
+	{
+		FStageDMXOutputSettings Settings = NetworkSubsystem->GetOutputSettings();
+		Settings.SACN = static_cast<EStageSACNOutputMode>((static_cast<uint8>(Settings.SACN) + 1) % 3);
+		ApplyOutputSettings(Settings);
+	}
+}
+
+void UStagePatchPanel::HandleUnicastCommitted(const FText& Text, ETextCommit::Type CommitMethod)
+{
+	const UStageDMXNetworkSubsystem* NetworkSubsystem = Network.Get();
+	if (!NetworkSubsystem || CommitMethod == ETextCommit::OnCleared)
+	{
+		RefreshOutputStatus();
+		return;
+	}
+	FStageDMXOutputSettings Settings = NetworkSubsystem->GetOutputSettings();
+	if (Settings.UnicastAddress == Text.ToString().TrimStartAndEnd())
+	{
+		return;
+	}
+	Settings.UnicastAddress = Text.ToString();
+	ApplyOutputSettings(Settings);
+}
+
+void UStagePatchPanel::HandlePriorityCommitted(float InValue, ETextCommit::Type CommitMethod)
+{
+	if (const UStageDMXNetworkSubsystem* NetworkSubsystem = Network.Get())
+	{
+		FStageDMXOutputSettings Settings = NetworkSubsystem->GetOutputSettings();
+		if (Settings.SACNPriority != FMath::RoundToInt32(InValue))
+		{
+			Settings.SACNPriority = FMath::RoundToInt32(InValue);
+			ApplyOutputSettings(Settings);
+		}
+	}
+}
+
+void UStagePatchPanel::HandleRateCommitted(float InValue, ETextCommit::Type CommitMethod)
+{
+	if (const UStageDMXNetworkSubsystem* NetworkSubsystem = Network.Get())
+	{
+		FStageDMXOutputSettings Settings = NetworkSubsystem->GetOutputSettings();
+		if (Settings.RateHz != FMath::RoundToInt32(InValue))
+		{
+			Settings.RateHz = FMath::RoundToInt32(InValue);
+			ApplyOutputSettings(Settings);
+		}
+	}
+}
+
+void UStagePatchPanel::HandleOutputUniversePicked(int32 Index)
+{
+	const UStageDMXNetworkSubsystem* NetworkSubsystem = Network.Get();
+	if (!NetworkSubsystem || !OutputUniverses.IsValidIndex(Index))
+	{
+		return;
+	}
+	FStageDMXOutputSettings Settings = NetworkSubsystem->GetOutputSettings();
+	const int32 Universe = OutputUniverses[Index];
+	if (Settings.MutedUniverses.Remove(Universe) == 0)
+	{
+		Settings.MutedUniverses.Add(Universe);
+	}
+	ApplyOutputSettings(Settings);
+}
+
+// --- Patch options and fixture schedule (Docs/ADR/0019 §10) ---
+
+void UStagePatchPanel::HandlePatchOptionPicked(int32 Index)
+{
+	using namespace StagePatchPanel;
+	const int32 Row = Index / PatchOptionCount;
+	ALightingFixtureActor* Fixture = RowFixtures.IsValidIndex(Row) ? RowFixtures[Row].Get() : nullptr;
+	AModularPlayerController* Controller = GetStageController();
+	if (!Fixture || !Controller)
+	{
+		return;
+	}
+	const FStageDMXPatchOptions Options = Fixture->GetPatchOptions();
+	const EPatchOption Option = static_cast<EPatchOption>(Index % PatchOptionCount);
+	const FGameplayTag ParameterId = Option == EPatchOption::InvertPan ? StageCraftTags::Param_Patch_InvertPan
+		: Option == EPatchOption::InvertTilt ? StageCraftTags::Param_Patch_InvertTilt : StageCraftTags::Param_Patch_SwapPanTilt;
+	const bool bOn = Option == EPatchOption::InvertPan ? Options.bInvertPan : Option == EPatchOption::InvertTilt ? Options.bInvertTilt : Options.bSwapPanTilt;
+	// One undo step (a patch parameter); the row follows through the fixture's OnParameterChanged.
+	Controller->RequestParameterChange(Fixture, ParameterId, FStageParameterValue::MakeBool(!bOn));
+}
+
+UWidget* UStagePatchPanel::BuildImportBar()
+{
+	using namespace StageCraftWidgetStyle;
+	const UStageCraftUITheme& Palette = GetTheme();
+
+	ImportBar = WidgetTree->ConstructWidget<UBorder>(UBorder::StaticClass(), TEXT("ImportBar"));
+	ImportBar->SetBrush(MakeBox(WithAlpha(Palette.AccentColor, 0.12f)));
+	ImportBar->SetPadding(FMargin(10.f, 6.f));
+	ImportBar->SetVisibility(ESlateVisibility::Collapsed);
+
+	UHorizontalBox* Line = WidgetTree->ConstructWidget<UHorizontalBox>(UHorizontalBox::StaticClass());
+	ImportBar->SetContent(Line);
+	UVerticalBox* Texts = WidgetTree->ConstructWidget<UVerticalBox>(UVerticalBox::StaticClass());
+	if (UHorizontalBoxSlot* TextsSlot = Line->AddChildToHorizontalBox(Texts))
+	{
+		TextsSlot->SetSize(FSlateChildSize(ESlateSizeRule::Fill));
+		TextsSlot->SetVerticalAlignment(VAlign_Center);
+	}
+	ImportSummaryText = MakeText(FText::GetEmpty(), 8, TEXT("Bold"), Palette.TextPrimary);
+	ImportSummaryText->SetAutoWrapText(true);
+	Texts->AddChildToVerticalBox(ImportSummaryText);
+	ImportDetailsText = MakeText(FText::GetEmpty(), 7, TEXT("Regular"), Palette.TextSecondary);
+	ImportDetailsText->SetAutoWrapText(true);
+	Texts->AddChildToVerticalBox(ImportDetailsText);
+
+	ImportApplyButton = MakeHeaderButton(TEXT("ImportApplyButton"), LOCTEXT("ImportApply", "APPLY"),
+		LOCTEXT("ImportApplyTip", "Re-patch the fixtures as shown, in one undo step. Skipped rows change nothing."));
+	if (UHorizontalBoxSlot* ApplySlot = Line->AddChildToHorizontalBox(ImportApplyButton))
+	{
+		ApplySlot->SetVerticalAlignment(VAlign_Center);
+		ApplySlot->SetPadding(FMargin(8.f, 0.f, 0.f, 0.f));
+	}
+	ImportCancelButton = MakeHeaderButton(TEXT("ImportCancelButton"), LOCTEXT("ImportCancel", "CANCEL"),
+		LOCTEXT("ImportCancelTip", "Close without changing the patch."));
+	if (UHorizontalBoxSlot* CancelSlot = Line->AddChildToHorizontalBox(ImportCancelButton))
+	{
+		CancelSlot->SetVerticalAlignment(VAlign_Center);
+		CancelSlot->SetPadding(FMargin(4.f, 0.f, 0.f, 0.f));
+	}
+	return ImportBar;
+}
+
+void UStagePatchPanel::RefreshImportBar()
+{
+	if (!ImportBar)
+	{
+		return;
+	}
+	if (!PendingImport.IsSet())
+	{
+		ImportBar->SetVisibility(ESlateVisibility::Collapsed);
+		return;
+	}
+	const FStagePatchScheduleImport& Import = PendingImport.GetValue();
+	ImportBar->SetVisibility(ESlateVisibility::Visible);
+	ImportSummaryText->SetText(FText::Format(LOCTEXT("ImportSummary", "Fixture schedule: {0}"), Import.Summary));
+	ImportDetailsText->SetText(Import.Details);
+	ImportDetailsText->SetVisibility(Import.Details.IsEmpty() ? ESlateVisibility::Collapsed : ESlateVisibility::HitTestInvisible);
+	ImportApplyButton->SetIsEnabled(!Import.Assignments.IsEmpty());
+}
+
+void UStagePatchPanel::HandleImportClicked()
+{
+	const UStageDMXPatchSubsystem* PatchSubsystem = Patching.Get();
+	AModularPlayerController* Controller = GetStageController();
+	if (!PatchSubsystem || !Controller)
+	{
+		return;
+	}
+	if (LastImportDirectory.IsEmpty())
+	{
+		LastImportDirectory = StageReportFiles::GetOutputDirectory();
+	}
+	TArray<FString> Files;
+	if (!StageFileDialog::OpenFiles(LOCTEXT("ImportTitle", "Import a Fixture Schedule"), LastImportDirectory,
+		TEXT("CSV files (*.csv)|*.csv|Text files (*.txt)|*.txt"), Files) || Files.IsEmpty())
+	{
+		return;
+	}
+	LastImportDirectory = FPaths::GetPath(Files[0]);
+
+	// A file that cannot be read or is not a schedule is refused on the status bar; otherwise the plan waits for APPLY.
+	FStagePatchScheduleImport Import;
+	if (Controller->RequestPlanPatchSchedule(Files[0], Import).IsSuccess())
+	{
+		PendingImport = MoveTemp(Import);
+	}
+	RefreshImportBar();
+}
+
+void UStagePatchPanel::HandleImportApplyClicked()
+{
+	AModularPlayerController* Controller = GetStageController();
+	if (Controller && PendingImport.IsSet())
+	{
+		// A refusal reaches the status bar; the table follows through OnPatchChanged.
+		Controller->RequestPatchFixtures(PendingImport->Assignments, LOCTEXT("ImportNothing", "The schedule changes nothing on this stage."));
+	}
+	PendingImport.Reset();
+	RefreshImportBar();
+}
+
+void UStagePatchPanel::HandleImportCancelClicked()
+{
+	PendingImport.Reset();
+	RefreshImportBar();
 }
 
 #undef LOCTEXT_NAMESPACE

@@ -6,6 +6,7 @@
 #include "Subsystems/WorldSubsystem.h"
 #include "Show/ShowControlTypes.h"
 #include "Show/StageDMXPatching.h"
+#include "Show/StagePatchSchedule.h"
 #include "StageDMXPatchSubsystem.generated.h"
 
 DECLARE_DYNAMIC_MULTICAST_DELEGATE(FOnStageDMXPatchChanged);
@@ -15,6 +16,21 @@ struct FStageDMXPatchAssignment
 {
 	TWeakObjectPtr<class ALightingFixtureActor> Fixture;
 	FStageDMXPatch Patch;
+	/** New pan / tilt options (Docs/ADR/0019 §10.1), or unset to keep the fixture's (every plan but the schedule import). */
+	TOptional<FStageDMXPatchOptions> Options;
+};
+
+/** A fixture schedule ready to apply: what the file held, what it would change, and those changes as assignments. */
+struct FStagePatchScheduleImport
+{
+	FStagePatchScheduleParse Parsed;
+	FStagePatchSchedulePlan Plan;
+	TArray<FStageDMXPatchAssignment> Assignments;
+
+	/** "12 fixtures re-patched · 2 rows skipped · 1 conflict" */
+	FText Summary;
+	/** The first few reasons rows were skipped, one per line ("Line 7: There is no fixture 77 on the stage."). */
+	FText Details;
 };
 
 /**
@@ -76,6 +92,18 @@ public:
 
 	/** New patches that remove every conflict (StageDMXPatching::PlanConflictRepair). Empty when there is none to repair. */
 	TArray<FStageDMXPatchAssignment> PlanConflictRepair() const;
+
+	/**
+	 * A fixture schedule read into a plan (Docs/ADR/0019 §10.2): StagePatchSchedule::Parse and Plan over the registered fixtures,
+	 * with the changes as assignments (each carrying its pan / tilt options) for RequestPatchFixtures. Changes nothing.
+	 */
+	FStagePatchScheduleImport PlanSchedule(FStringView Text) const;
+
+	/**
+	 * Reads a schedule file for PlanSchedule: refused (with OutError) when it cannot be read or is larger than
+	 * StagePatchSchedule::MaxFileCharacters. Game thread; a schedule is small, so the read is synchronous.
+	 */
+	static bool LoadScheduleFile(const FString& Path, FString& OutText, FText& OutError);
 
 	/** Changes on every patch change, so a consumer can tell its derived state is stale without binding a delegate. */
 	uint32 GetPatchRevision() const { return PatchRevision; }

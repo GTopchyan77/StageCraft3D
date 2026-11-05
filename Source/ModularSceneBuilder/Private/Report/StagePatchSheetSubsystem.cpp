@@ -59,6 +59,10 @@ TArray<FStagePatchSheetRow> UStagePatchSheetSubsystem::GatherRows(const UShowCon
 		// Unreal units are centimetres; crews work in metres.
 		Row.LocationMeters = Fixture->GetActorLocation() / 100.0;
 		Row.bConflict = Conflicts.Contains(Row.FixtureId);
+		const FStageDMXPatchOptions Options = Fixture->GetPatchOptions();
+		Row.bInvertPan = Options.bInvertPan;
+		Row.bInvertTilt = Options.bInvertTilt;
+		Row.bSwapPanTilt = Options.bSwapPanTilt;
 	}
 	return Rows;
 }

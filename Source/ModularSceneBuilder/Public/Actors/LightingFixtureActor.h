@@ -128,6 +128,19 @@ public:
 	void SetPatch(const FStageDMXPatch& NewPatch);
 
 	UFUNCTION(BlueprintPure, Category = "StageCraft|Patch")
+	FStageDMXPatchOptions GetPatchOptions() const { return PatchOptions; }
+
+	/**
+	 * Pan / tilt invert and swap on the wire (Docs/ADR/0019 §10.1): WriteDMX and ReadDMX map through them, the attributes and the
+	 * beam do not change. Kept as given even where the fixture cannot use them (no tilt); the codec ignores those. A change tells
+	 * the patch subsystem (a new patch revision), so DMX output sends the universe again and input re-reads it in full.
+	 */
+	void SetPatchOptions(const FStageDMXPatchOptions& NewOptions);
+
+	/** Whether the fixture has a pan and a tilt channel in its DMX mode: which patch options it offers. */
+	void GetPanTiltChannels(bool& bOutHasPan, bool& bOutHasTilt) const;
+
+	UFUNCTION(BlueprintPure, Category = "StageCraft|Patch")
 	int32 GetDMXFootprint() const;
 
 	// --- DMX codec ---
@@ -204,6 +217,13 @@ protected:
 
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, SaveGame, Category = "StageCraft|Patch")
 	FStageDMXPatch Patch;
+
+	/** Saved with the item; a state saved before #66 has none, which is the default (no invert, no swap). */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, SaveGame, Category = "StageCraft|Patch")
+	FStageDMXPatchOptions PatchOptions;
+
+	/** PatchOptions without what this fixture's DMX mode cannot use (StageDMXPatchOptions::GetEffective). */
+	FStageDMXPatchOptions GetEffectivePatchOptions() const;
 
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, SaveGame, Category = "StageCraft|Fixture", meta = (Categories = "StageCraft.Attribute"))
 	TMap<FGameplayTag, float> Attributes;

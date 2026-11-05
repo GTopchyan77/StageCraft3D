@@ -29,6 +29,8 @@ param(
     # Effects on every bench fixture: 0 none, 1 circle + dimmer sine, 2 also a rainbow, 3 held by the two cues (fade and morph on every Go; ADR 0027 sections 5 and 7).
     [ValidateSet(0, 1, 2, 3)]
     [int]$Effects = 0,
+    # Also send every bench universe as Art-Net and sACN unicast to 127.0.0.1 on unused ports (ADR 0019 section 6.7).
+    [switch]$DMXOut,
     [int]$ResX = 1600,
     [int]$ResY = 900,
     [int]$StartDelaySeconds = 10,
@@ -53,6 +55,7 @@ if (Get-Process -Name 'UnrealEditor*' -ErrorAction SilentlyContinue) {
 $Log = Join-Path $ProjectRoot "Saved\Logs\$($Project.BaseName).log"
 $BenchCommand = "StageCraft.Bench.Fixtures $($Counts -join ' ') Seconds=$Seconds Fade=$Fade Zoom=$Zoom GM=$GM Effects=$Effects"
 if ($Item) { $BenchCommand += " Item=$Item" }
+if ($DMXOut) { $BenchCommand += " DMXOut=1" }
 $ExecCmds = "StageCraft.Workspace.Delay $StartDelaySeconds $BenchCommand"
 
 Write-Host "Running: $BenchCommand"
