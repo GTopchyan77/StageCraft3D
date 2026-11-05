@@ -5,6 +5,7 @@
 #include "CoreMinimal.h"
 #include "Show/ShowControlTypes.h"
 #include "Show/StageEffectTypes.h"
+#include "Show/StageEffects.h"
 #include "Show/StageShowMix.h"
 
 /** Where a running effect comes from (Docs/ADR/0027-effects-engine.md §5). */
@@ -70,8 +71,15 @@ public:
 	/**
 	 * Moves every clock on by its rate and every fade on by DeltaSeconds. Effects whose fade-out ended are dropped; their fixtures'
 	 * IDs are added to OutReleased (each once), as those fixtures need a full re-mix.
+	 *
+	 * Audio is this frame's music (Docs/ADR/0029 §4), read by effects whose audio mode is not Off: Sync runs the clock at the tempo
+	 * and pulls it to the beat, Trigger steps it on beats or onsets, Modulate scales the level range, size or rate by a band. Null
+	 * (or no signal) makes them fall back: Sync keeps its last good tempo or its own rate, Trigger holds, Modulate reads the band as 1.
 	 */
-	void Advance(float DeltaSeconds, TArray<int32>& OutReleased);
+	void Advance(float DeltaSeconds, TArray<int32>& OutReleased, const StageEffects::FAudioInput* Audio = nullptr);
+
+	/** An effect running now follows the music: the show then hands Advance a snapshot of it. */
+	bool NeedsAudio() const { return bNeedsAudio; }
 
 	bool DrivesFixture(int32 FixtureId) const { return ByFixture.Contains(FixtureId); }
 
@@ -126,8 +134,27 @@ private:
 		bool bStopping = false;
 		TOptional<FTransition> Transition;
 
+		// Audio state (Docs/ADR/0029 §4), used only while the effect's audio mode is not Off.
+		/** Modulate: the band after the effect's own response smoothing; 1 (no signal) until the music says otherwise. */
+		float SmoothedBand = 1.f;
+		/** Sync: the last tempo followed, in cycles per second; 0 until there was one. */
+		double LastGoodHz = 0.0;
+		/** Trigger: the event count at the last step, valid once primed (a source that starts or restarts primes without a step). */
+		int64 LastTriggerEvents = 0;
+		bool bTriggerPrimed = false;
+		/** Modulate Level or Size: the settings with the band applied, refreshed every Advance; unset otherwise. */
+		TOptional<FStageEffect> Modulated;
+
 		float GetWeight() const;
+		/** The settings evaluated now: modulated when Modulate applies, else the entry's own. */
+		const FStageEffect& GetEvaluated() const { return Modulated.IsSet() ? Modulated.GetValue() : Source.Entry.Effect; }
 	};
+
+	/** Moves Item's clock on by DeltaSeconds at Rate (cycles per second), following Audio where its effect uses audio. */
+	static void AdvanceClock(FRunning& Item, double Rate, float DeltaSeconds, const StageEffects::FAudioInput& Audio);
+
+	/** Refreshes Item.Modulated from its smoothed band (Modulate Level or Size), or clears it. */
+	static void UpdateModulated(FRunning& Item);
 
 	/** One effect's hold on a fixture: which effect, and the fixture's place in its order. */
 	struct FDrive
@@ -155,4 +182,8 @@ private:
 	/** Per fixture ID, the effects driving it in mix order. */
 	TMap<int32, TArray<FDrive, TInlineAllocator<2>>> ByFixture;
 	TArray<FDrivenFixture> DrivenFixtures;
+	/** Any running effect uses audio; refreshed whenever Running changes. */
+	bool bNeedsAudio = false;
+
+	void RefreshNeedsAudio();
 };

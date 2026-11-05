@@ -582,7 +582,13 @@ Gevor's choices: automation tests on a harness game instance (not AFunctionalTes
 - [ ] Gevor's decisions: approve ADR 0029; approve ADR 0030 (default online model, key policy for a shipped product); crowd and band art source (MetaHuman / Fab / commissioned); performance target (no-regression gate or a named reference scene and GPU)
 - [x] G0 spike: WmfMedia MP3/WAV/FLAC in Shipping through a tapped submix; WASAPI loopback prototype; source latencies; AudioSynesthesia onset comparison (STATE.md #68: done in Development and Shipping; results in ADR 0029 §2.1)
 - [x] G1 audio sources and analyser: tap ring buffer, analyser thread, pure bands / onsets / tempo / beat phase, UStageAudioReactiveSubsystem, per-PC settings, requests, dev commands, tests (STATE.md #69: done; dev commands are StageCraft.Music.*; packaged-Shipping runtime check and real-music manual check deferred to G2 with the Audio panel)
-- [ ] G2 audio in effects: FStageEffectAudio (Sync, Modulate, Trigger), scene format v11, Effects panel AUDIO row, audio quick effects, Audio panel, Bench.Fixtures Audio=1
+- [x] G2 audio in effects: FStageEffectAudio (Sync, Modulate, Trigger), scene format v11, Effects panel AUDIO row, audio quick effects, Audio panel, Bench.Fixtures Audio=1 (STATE.md #70: done; panel mouse check, real music and packaged Shipping run by Gevor)
+  - [x] G2a FStageEffectAudio data, rules, pure maths (sync target, modulation, trigger step, response smoothing)
+  - [x] G2b runner Sync / Modulate / Trigger fed one features snapshot per show tick, only while an effect uses audio
+  - [x] G2c scene format v11 (effect "audio" object, written only when not Off)
+  - [x] G2d Effects panel AUDIO rows, six audio quick effects, audio markers in running list, Cues and Playback panels
+  - [x] G2e Audio panel (source, device, gain, meters, BPM and beat lamp, transport, background toggle)
+  - [x] G2f Bench.Fixtures Audio=1, file heard-delay measurement, tests, builds, A/B against a85475f, STATE #70
 - [ ] G3 flash limiter (3 Hz default), AUDIO master and KILL, Listening indicator, latency offset; manual check with real music on every source (Gevor)
 - [ ] H0 spike: HTTP streaming, prompt-cache hit, latency and cost per model
 - [ ] H1 knowledge index from code (UI anchors, key map, parameters, panels), help articles EN/HY, offline BM25 search, SHOW ME (Phase 26)

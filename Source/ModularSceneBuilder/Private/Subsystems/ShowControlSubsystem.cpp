@@ -13,6 +13,7 @@
 #include "Show/StageDMXPatching.h"
 #include "Show/StageShadowBudget.h"
 #include "Show/StageShowMix.h"
+#include "Subsystems/StageAudioReactiveSubsystem.h"
 #include "Subsystems/StageDMXPatchSubsystem.h"
 #include "Subsystems/StageProgrammerSubsystem.h"
 #include "Subsystems/StageShowLibrarySubsystem.h"
@@ -49,6 +50,7 @@ void UShowControlSubsystem::Initialize(FSubsystemCollectionBase& Collection)
 		ProgrammerChangedHandle = Programmer->OnFixturesChanged.AddUObject(this, &ThisClass::HandleProgrammerFixturesChanged);
 		ProgrammerEffectsHandle = Programmer->OnEffectsChanged.AddUObject(this, &ThisClass::HandleProgrammerEffectsChanged);
 	}
+	AudioReactive = Collection.InitializeDependency<UStageAudioReactiveSubsystem>();
 	Library = Collection.InitializeDependency<UStageShowLibrarySubsystem>();
 	if (Library)
 	{
@@ -75,6 +77,7 @@ void UShowControlSubsystem::Deinitialize()
 	EffectRunner = FStageEffectRunner();
 	MainEffects.Reset();
 	Programmer = nullptr;
+	AudioReactive = nullptr;
 	if (Library)
 	{
 		Library->OnPalettesChanged.RemoveDynamic(this, &ThisClass::HandlePalettesChanged);
@@ -116,7 +119,16 @@ void UShowControlSubsystem::Tick(float DeltaTime)
 	TArray<int32> ReleasedByEffects;
 	if (bEffectsLive)
 	{
-		EffectRunner.Advance(DeltaTime, ReleasedByEffects);
+		// One snapshot of the music per tick, and only while an effect follows it (Docs/ADR/0029 §4): a lock-free copy, no allocation.
+		TOptional<StageEffects::FAudioInput> Audio;
+		if (EffectRunner.NeedsAudio() && AudioReactive)
+		{
+			Audio = StageEffects::FAudioInput::FromFeatures(AudioReactive->GetFeatures(), FPlatformTime::Seconds());
+#if !UE_BUILD_SHIPPING
+			++AudioReadsForTests;
+#endif
+		}
+		EffectRunner.Advance(DeltaTime, ReleasedByEffects, Audio.GetPtrOrNull());
 	}
 	TickFades(DeltaTime);
 	if (bEffectsLive)

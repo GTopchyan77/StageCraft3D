@@ -515,6 +515,11 @@ UWidget* UStageCuePanel::MakeCueRow(const FShowCue& Cue, bool bActive, int32 Row
 		EffectNames.Add(Entry.Effect.Name.ToString());
 	}
 	FString EffectsLabel = Cue.Effects.IsEmpty() ? FString() : FString::FromInt(Cue.Effects.Num());
+	// ♪: one of them follows the music (Docs/ADR/0029 §4).
+	if (Cue.Effects.ContainsByPredicate([](const FStageEffectEntry& Entry) { return Entry.Effect.UsesAudio(); }))
+	{
+		EffectsLabel += TEXT(" ♪");
+	}
 	if (!Cue.EffectStops.IsEmpty())
 	{
 		EffectsLabel += FString::Printf(TEXT("%s-%d"), EffectsLabel.IsEmpty() ? TEXT("") : TEXT(" "), Cue.EffectStops.Num());

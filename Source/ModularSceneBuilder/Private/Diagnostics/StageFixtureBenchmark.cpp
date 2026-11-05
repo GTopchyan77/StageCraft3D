@@ -9,6 +9,8 @@
 //   (Effects=1 runs a circle and a dimmer sine on every bench fixture through both phases, Effects=2 adds a rainbow, Effects=3 stores them in the two cues instead (circle and dimmer sine in A, a bigger
 //   circle, dimmer sine and rainbow in B), so every crossfade fades, morphs and starts or stops effects; Docs/ADR/0027 §5, §7.)
 //   (DMXOut=1 also sends every bench universe as Art-Net and sACN unicast to 127.0.0.1 on unused ports; Docs/ADR/0019 §9.7.)
+//   (Audio=1, with Effects, makes those effects follow the test signal at 128 BPM: the circle synced, the dimmer sine modulated by the bass,
+//   the rainbow synced to the bar; needs the audio source off; Docs/ADR/0029 §8.)
 //   (Zoom=0 keeps the zoom fixed: a cone change rebuilds the engine's light proxy, so zoom fades are measured apart.)
 //   StageCraft.Bench.Cancel
 //
@@ -41,6 +43,7 @@
 #include "RenderTimer.h"
 #include "Show/StageNetworkDMXBridge.h"
 #include "Subsystems/ShowControlSubsystem.h"
+#include "Subsystems/StageAudioReactiveSubsystem.h"
 #include "Subsystems/StageDMXPatchSubsystem.h"
 #include "UObject/StrongObjectPtr.h"
 #include "Subsystems/StageProgrammerSubsystem.h"
@@ -83,6 +86,12 @@ namespace StageFixtureBenchmark
 		 * §9.7): the show renders each changed universe and the sender thread sends it. Refused while the user has DMX IN or OUT on.
 		 */
 		bool bDMXOut = false;
+		/**
+		 * Audio=1 (with Effects 1..3) makes the bench effects follow the music (Docs/ADR/0029 §8): the circle syncs to every two beats,
+		 * the dimmer sine is modulated by the bass, the rainbow syncs to the bar, while the test signal plays at 128 BPM. Refused
+		 * unless the audio source is off; it is switched off again at the end.
+		 */
+		bool bAudio = false;
 	};
 
 	/** Per-frame samples of one measured phase, in milliseconds. */
@@ -188,6 +197,7 @@ namespace StageFixtureBenchmark
 				else
 				{
 					CloseBenchOutput();
+					StopBenchAudio();
 					Report();
 					SetStep(EStep::Finished);
 				}
@@ -206,6 +216,7 @@ namespace StageFixtureBenchmark
 				UE_LOG(LogStageCraft, Display, TEXT("StageCraft.Bench: cancelled."));
 				Cleanup();
 				CloseBenchOutput();
+				StopBenchAudio();
 				Report();
 				SetStep(EStep::Finished);
 			}
@@ -235,8 +246,13 @@ namespace StageFixtureBenchmark
 					Settings.ItemName.IsEmpty() ? TEXT("") : *FString::Printf(TEXT(" named %s"), *Settings.ItemName));
 				return false;
 			}
+			if (Settings.bAudio && !StartBenchAudio())
+			{
+				return false;
+			}
 			if (Settings.bDMXOut && !OpenBenchOutput(*Show))
 			{
+				StopBenchAudio();
 				return false;
 			}
 
@@ -255,6 +271,70 @@ namespace StageFixtureBenchmark
 		}
 
 	private:
+		/** Audio=1: the test signal as the source. Only from Off, so nothing of the user's is replaced. */
+		bool StartBenchAudio()
+		{
+			UStageAudioReactiveSubsystem* Audio = UWorld::GetSubsystem<UStageAudioReactiveSubsystem>(World.Get());
+			if (Settings.Effects <= 0)
+			{
+				UE_LOG(LogStageCraft, Display, TEXT("StageCraft.Bench: Audio=1 needs Effects=1, 2 or 3 (the effects that follow the music)."));
+				return false;
+			}
+			if (!Audio || Audio->GetState() != EStageAudioSourceState::Off)
+			{
+				UE_LOG(LogStageCraft, Display, TEXT("StageCraft.Bench: Audio=1 needs the audio source off; switch it off in the Audio panel first."));
+				return false;
+			}
+			FText Error;
+			if (!Audio->SetSource(EStageAudioSource::TestSignal, Error))
+			{
+				UE_LOG(LogStageCraft, Display, TEXT("StageCraft.Bench: Audio=1 could not start the test signal: %s"), *Error.ToString());
+				return false;
+			}
+			bBenchAudio = true;
+			return true;
+		}
+
+		/** Logs what the analyser found and switches the source off again. */
+		void StopBenchAudio()
+		{
+			if (!bBenchAudio)
+			{
+				return;
+			}
+			bBenchAudio = false;
+			UStageAudioReactiveSubsystem* Audio = World.IsValid() ? UWorld::GetSubsystem<UStageAudioReactiveSubsystem>(World.Get()) : nullptr;
+			if (!Audio)
+			{
+				return;
+			}
+			const FStageAudioStatus Status = Audio->GetStatus();
+			UE_LOG(LogStageCraft, Display, TEXT("StageCraft.Bench: audio test signal at %.2f BPM (confidence %.2f), analyser %.2f %% of a core, %lld samples dropped."),
+				Status.Features.BPM, Status.Features.Confidence, Status.AnalyzerCpuPercent, Status.DroppedSamples);
+			FText Error;
+			Audio->SetSource(EStageAudioSource::Off, Error);
+		}
+
+		/** Audio=1: Effect made to follow the music the way the bench measures it (Docs/ADR/0029 §8). */
+		static void ApplyBenchAudio(FStageEffect& Effect)
+		{
+			switch (Effect.Target)
+			{
+			case EStageEffectTarget::Position:
+				Effect.Audio.Mode = EStageEffectAudioMode::Sync;
+				Effect.Audio.BeatsPerCycle = EStageEffectBeatDivision::Two;
+				break;
+			case EStageEffectTarget::Intensity:
+				Effect.Audio.Mode = EStageEffectAudioMode::Modulate;
+				Effect.Audio.Band = EStageAudioBand::Bass;
+				break;
+			default:
+				Effect.Audio.Mode = EStageEffectAudioMode::Sync;
+				Effect.Audio.BeatsPerCycle = EStageEffectBeatDivision::Four;
+				break;
+			}
+		}
+
 		/** DMXOut=1: a bench-owned bridge that sends unicast to this PC on ports nothing listens on. The user's own transport is never replaced. */
 		bool OpenBenchOutput(UShowControlSubsystem& Show)
 		{
@@ -455,7 +535,12 @@ namespace StageFixtureBenchmark
 			const TArray<FStageEffect> Quick = StageEffectRules::MakeQuickEffects();
 			if (const FStageEffect* Effect = Quick.FindByPredicate([Name](const FStageEffect& Candidate) { return Candidate.Name.ToString() == Name; }))
 			{
-				Programmer.AddEffect(*Effect, FixtureIds);
+				FStageEffect Started = *Effect;
+				if (Settings.bAudio)
+				{
+					ApplyBenchAudio(Started);
+				}
+				Programmer.AddEffect(Started, FixtureIds);
 			}
 		}
 
@@ -649,6 +734,8 @@ namespace StageFixtureBenchmark
 		TOptional<FStageProgrammerEffects> SavedEffects;
 		/** DMXOut=1: the bench's own output, installed for the whole run. Strong: this runner is not a UObject. */
 		TStrongObjectPtr<UStageNetworkDMXBridge> BenchBridge;
+		/** Audio=1: the bench started the test signal and switches it off at the end. */
+		bool bBenchAudio = false;
 		int32 CountIndex = 0;
 		FRunResult Current;
 		TArray<FRunResult> Results;
@@ -711,9 +798,13 @@ namespace StageFixtureBenchmark
 				{
 					Out.bDMXOut = Value == TEXT("1");
 				}
+				else if (Key.Equals(TEXT("Audio"), ESearchCase::IgnoreCase) && (Value == TEXT("0") || Value == TEXT("1")))
+				{
+					Out.bAudio = Value == TEXT("1");
+				}
 				else
 				{
-					UE_LOG(LogStageCraft, Display, TEXT("StageCraft.Bench: ignored \"%s\" (Seconds 1..600, Fade 0.1..60, Settle 0..60, Zoom 0|1, Item=<asset name>, GM 0..1, Effects 0|1|2|3, DMXOut 0|1)."), *Arg);
+					UE_LOG(LogStageCraft, Display, TEXT("StageCraft.Bench: ignored \"%s\" (Seconds 1..600, Fade 0.1..60, Settle 0..60, Zoom 0|1, Item=<asset name>, GM 0..1, Effects 0|1|2|3, DMXOut 0|1, Audio 0|1)."), *Arg);
 				}
 				continue;
 			}

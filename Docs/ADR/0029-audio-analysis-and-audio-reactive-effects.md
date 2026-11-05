@@ -3,7 +3,8 @@
 - **Status:** approved by Gevor 2026-11-05. Drafted in STATE.md #67.
   - Spike G0 done (STATE.md #68, §2.1): it changed the file source (§3) and the module dependencies (§11).
   - G1 implemented (STATE.md #69, §13): sources, analyser, subsystem, settings, requests.
-  - G2 and G3 not started.
+  - G2 implemented (STATE.md #70, §14): audio in effects, the Audio panel, scene v11, `Bench.Fixtures Audio=1`.
+  - G3 not started.
 - **Related:**
   - ADR 0027 (effects engine; this ADR amends §2 and §4 with an audio setting on `FStageEffect`).
   - ADR 0025 / 0026 (the output mix and its masters; the show control stays the only writer).
@@ -269,3 +270,53 @@ The delay from tap to audience (`StageAudioReactive::GetHeardDelaySeconds`):
 - **Background audio** is `UStageCraftUserSettings::bPlayAudioInBackground`, on by default. `UStageAudioSubsystem` applies it through `FApp::SetUnfocusedVolumeMultiplier` and restores the previous value on `Deinitialize`, because PIE shares it with the editor.
 - **GameMode gate:** `AStageCraftGameModeBase::EvaluateAudioRequest(Player, EStageAudioRequest)`, a BlueprintNativeEvent. By default it allows any player and refuses no player.
 
+
+## 14. G2 implementation notes (STATE.md #70)
+
+How G2 realised §4, §5 and §8, and what it settled that §4 left open.
+
+### Effects
+- **`FStageEffectAudio`** on `FStageEffect` (`Public/Show/StageEffectTypes.h`): `Mode`, `Band` (G1's `EStageAudioBand`), `Amount`, `Modulates` (`EStageEffectAudioTarget`), `BeatsPerCycle` (`EStageEffectBeatDivision`), `Response`. `Equals`, `SanitizeEffect`, undo and every effect request carry it unchanged.
+- **The pure maths** is in `StageEffects` (`Public/Show/StageEffects.h`): `FAudioInput` (one analyser snapshot, the beat carried forward to the frame time), `ApplyModulation`, `GetModulatedRate`, `GetSyncTarget`, `GetTriggerEvents`, `GetTriggerStep`, `SmoothBand`, `GetCycleError`.
+- **The runner** (`FStageEffectRunner::Advance(Delta, Released, Audio)`) keeps per effect a smoothed band, the last good tempo and the trigger count. `NeedsAudio()` is rebuilt only when the running set changes.
+- **The show** reads the music once per tick, and only while an audio effect runs: one lock-free copy, no allocation. `IsTickable` is unchanged.
+- **Off** takes the same code path as before G2: the same clock, value for value (test `Show.AudioEffects`).
+
+### Clarifications of §4
+- **Sync** follows the tempo only at confidence ≥ 0.5 with a signal. Below that it keeps the last tempo it followed, and the pull to the beat stops. The pull is at most 0.05 cycle a frame, along the shorter way round the cycle.
+- **Trigger** steps once per event:
+  - Events are `floor(beats / BeatsPerCycle)`: ¼ gives four steps a beat, 8 one step every two bars.
+  - With `Band = Level` they are onsets instead, and need a signal but no tempo.
+  - A step is one pattern step: `1 / steps` of a cycle, where steps come after wings and blocks. For Random it is a whole cycle, so each step draws a new level.
+  - At most 4 steps a frame.
+  - Without a usable signal the pattern holds. When the signal returns, the count primes again without catching up.
+- **Modulate:**
+  - Level moves `High` towards `Low`, so it applies to Intensity and Beam. Size applies to Position. Rate scales the clock.
+  - The band rises at once and falls with the response's time constant: Fast 30 ms, Medium 120 ms, Slow 400 ms.
+- **Scene v11:**
+  - `"audio"` is written only when the mode is not Off, so a show without audio effects writes what v10 did, apart from the version number.
+  - Enums are written by name, with `BeatsPerCycle` as `"1/4"`, `"1/2"`, `"1"`, `"2"`, `"4"` or `"8"`.
+
+### UI
+- **Effects panel:**
+  - AUDIO rows: MODE, then BAND, MOD, BEATS, RESP and AMOUNT, shown by mode. RATE is greyed while Sync or Trigger drives the clock.
+  - An AUDIO group of six quick effects: Bass Pulse, Beat Chase, High Sparkle, Hue per Bar, Beat Swing and Mid Zoom.
+  - Running effects that follow the music show ♪ with their mode.
+- **Cues and Playback panels:** ♪ after the FX count when one of a cue's effects follows the music.
+- **Audio panel** (`StageCraft.Panel.Audio`, `UStageAudioPanel`, `DA_Panel_Audio`; Window > Audio..., a tab of the Lighting Desk):
+  - source buttons; a FILE... dialog;
+  - file transport and a seek bar;
+  - the input device and its gain;
+  - SUB, BASS, MID, HIGH and LEVEL meters, BPM with confidence and a beat lamp;
+  - "keep playing in the background";
+  - the analyser's cost.
+  - Every write goes through the controller's audio requests.
+  - The meters run from a 30 Hz timer that exists only while a source runs.
+- **Latency offsets, the AUDIO master, KILL, the flash limiter and the Listening indicator stay in G3.**
+
+### Measurements
+- **The file's heard delay:**
+  - `StageCraft.Music.MeasureDelay` (dev) compares the playing file's beat phase with a second analyser on the WASAPI loopback.
+  - On this PC the file's beat trailed Windows' output by 7.4 ms (median of 1,596 frames, 10–90 % from −10.4 to −5.8 ms).
+  - That is inside the 10 ms tolerance, so the default stays at 78 ms.
+- **Cost:** `Bench.Fixtures Effects=1 Audio=1` against `Effects=1`; see STATE.md #70.

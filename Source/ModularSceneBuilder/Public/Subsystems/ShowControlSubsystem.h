@@ -351,6 +351,9 @@ public:
 	const FTickCostStats& GetTickCostStats() const { return TickCostStats; }
 	void ResetTickCostStats() { TickCostStats = FTickCostStats(); }
 
+	/** Ticks that read the music for audio effects (Docs/ADR/0029 §4), for tests that prove no read happens without one. Development only. */
+	int64 GetAudioReadsForTests() const { return AudioReadsForTests; }
+
 protected:
 	//~ Begin UWorldSubsystem Interface
 	virtual bool DoesSupportWorldType(const EWorldType::Type WorldType) const override;
@@ -538,6 +541,10 @@ private:
 	UPROPERTY(Transient)
 	TObjectPtr<class UStageProgrammerSubsystem> Programmer = nullptr;
 
+	/** The music audio effects follow (Docs/ADR/0029 §4), read once per tick while one runs. Resolved in Initialize; same world. */
+	UPROPERTY(Transient)
+	TObjectPtr<class UStageAudioReactiveSubsystem> AudioReactive = nullptr;
+
 	FDelegateHandle ProgrammerChangedHandle;
 	FDelegateHandle ProgrammerEffectsHandle;
 
@@ -595,6 +602,7 @@ private:
 	TArray<uint8> OutputScratch;
 	EStageControlSource ControlSource = EStageControlSource::Internal;
 	FTickCostStats TickCostStats;
+	int64 AudioReadsForTests = 0;
 
 	/** One pending re-ranking at most; armed by MarkShadowBudgetDirty, cleared in Deinitialize. */
 	FTimerHandle ShadowBudgetTimer;

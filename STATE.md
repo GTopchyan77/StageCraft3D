@@ -6732,7 +6732,7 @@ All times in ms.
 - **The extra 0.5 ms at 200 idle with imports is the user's imported models.** The main tree loads them and the worktree does not (memory note). With `Imports.json` moved aside for one run, then restored and hash-checked, G1 matches the baseline.
 - **No regression.** That is what the code predicts: with the source Off, nothing ticks, no timer exists and no thread runs.
 
-**Commit:** uncommitted (working tree).
+**Commit:** `a85475f` (Gevor committed G1).
 
 **Known issues / follow-ups**
 - **Packaged Shipping not run at runtime.** The dev commands that drive the sources are compiled out of Shipping, and the Audio panel arrives in G2. G0 already ran Media Foundation decoding and WASAPI loopback in Shipping; G2 repeats it through the panel.
@@ -6744,3 +6744,164 @@ All times in ms.
   - real music on each source (a song file, YouTube in a browser with System audio, a line or mic input), with `StageCraft.Music.Status` in the console;
   - the mic acoustic latency.
 - **Spike leftovers:** `E:/SC_G0`, `E:/SC_G0_Package` and branch `spike/g0-audio` are still waiting on Gevor. The bench worktree `E:/SC_Baseline` was removed after the A/B.
+
+## #70 — Phase G2: audio in effects (Sync, Modulate, Trigger), Audio panel, scene format v11, Bench Audio=1 (2026-11-05)
+
+**Housekeeping first.** #69 said "uncommitted"; it now carries `a85475f` (Gevor committed G1).
+
+**What & why**
+- Gevor's brief (2026-11-05) asked for Phase G2: audio-reactive modes on `FStageEffect`, an AUDIO row and quick presets in the Effects panel, an Audio panel, markers in the Cues and Playback panels, scene format v11 and `Bench.Fixtures Audio=1`.
+- ADR 0029 (approved) governs where the brief differed:
+  - scene v11 stores the effect audio settings only; source, device, gain and transport stay per PC or per session (§5);
+  - the flash limiter, AUDIO master and KILL, the Listening indicator and latency-offset controls stay in G3.
+- Plan: `C:\Users\gevor\.claude\plans\flickering-nibbling-newell.md`, approved by Gevor.
+
+**Design** (details in ADR 0029 §14)
+
+*Data and maths:*
+- `FStageEffectAudio` on `FStageEffect` (`Public/Show/StageEffectTypes.h`):
+  - `Mode` (Off, Sync, Modulate, Trigger) and `Band` (G1's `EStageAudioBand`);
+  - `Amount` 0..1 and `Modulates` (Level, Size, Rate);
+  - `BeatsPerCycle` (¼ ½ 1 2 4 8) and `Response` (Fast, Medium, Slow).
+- Sanitised in `SanitizeEffect` and compared in `Equals`, so undo, requests and files carry it unchanged.
+- Pure helpers in `StageEffects` (`Public/Show/StageEffects.h`):
+  - `FAudioInput` (one snapshot, the beat carried forward to the frame time);
+  - `ApplyModulation`, `GetModulatedRate`, `GetSyncTarget`, `GetTriggerEvents`, `GetTriggerStep`, `SmoothBand`, `GetCycleError`.
+- `StageEffectRules::MakeAudioQuickEffects`: Bass Pulse, Beat Chase, High Sparkle, Hue per Bar, Beat Swing, Mid Zoom.
+
+*Runner and show:*
+- `FStageEffectRunner::Advance(Delta, Released, Audio)` keeps per effect a smoothed band, the last good tempo and the trigger count.
+- **Sync** runs the clock at BPM / 60 / beats, pulled to the beat by at most 0.05 cycle a frame. At confidence below 0.5 or with no signal it keeps the last good tempo, or its own rate if there never was one.
+- **Trigger** steps one pattern step (a whole cycle for Random) per beat division, or per onset with the Level band.
+  - At most 4 steps a frame.
+  - It holds without a signal and primes again without catching up.
+- **Modulate:**
+  - Level moves High towards Low; Size and Rate scale those.
+  - The band rises at once and falls at 30/120/400 ms.
+  - No signal reads 1.
+- `NeedsAudio()` is rebuilt only when the running set changes.
+- `UShowControlSubsystem` reads `UStageAudioReactiveSubsystem::GetFeatures()` once per tick, only while an audio effect runs: a lock-free copy, no allocation. `IsTickable` is unchanged.
+- Off takes the same arithmetic as before.
+
+*Scene v11* (`Private/Scene/StageSceneStore.*`):
+- An effect writes `"audio": {mode, band, amount, modulates, beatsPerCycle, response}` by name, only when its mode is not Off.
+- Bad values fall back to defaults and are counted.
+- v1–v10 load with audio Off; builds before #70 refuse v11.
+
+*UI:*
+- **Effects panel:**
+  - AUDIO rows (MODE; BAND, MOD, BEATS, RESP and AMOUNT shown by mode); RATE greyed while Sync or Trigger drives the clock;
+  - an AUDIO quick-effect group;
+  - running effects show "♪ SYNC", "♪ TRIGGER", "♪ MODULATE" or "n Hz ♪".
+- **Cues panel:** "n ♪" in the FX column. **Playback panel:** "FX ♪".
+- **Audio panel** (new `UStageAudioPanel`, `StageCraft.Panel.Audio`, `DA_Panel_Audio` from `Scripts/Content/create_audio_content.py`; Window > Audio..., a Lighting Desk tab, floating 560×420):
+  - OFF / FILE... (OS dialog) / INPUT / SYSTEM / TEST;
+  - file name, PLAY/PAUSE, STOP, LOOP, seek bar and position;
+  - input device and gain;
+  - SUB, BASS, MID, HIGH and LEVEL meters, BPM with confidence and a beat lamp;
+  - KEEP PLAYING IN THE BACKGROUND (G1's setting had no UI);
+  - the analyser's cost.
+  - Every write goes through the controller's audio requests.
+  - Status pushes from `OnAudioStatusChanged`. The meters run from a 30 Hz timer that exists only while a source runs.
+- `UStageAudioReactiveSubsystem::ListInputDevices`.
+
+*Found and fixed on the way (shared widget):*
+- **Cause:** in UE 5.8, `USlider::SetValue` broadcasts `OnValueChanged` when the value changes. `UStageValueSlider`'s contract ("read-backs do not fire OnMoved") no longer held.
+- **Symptom:**
+  - the Audio panel's position read-back looked like a user drag, so a phantom seek preview froze the shown position at 0:00 (run G2a);
+  - the same read-back could send a preview request from the Effects, Environment, Preferences, Playback or Sketch panels when a value changed outside them (undo, a cue).
+- **Fix:** `UStageValueSlider` reports `OnMoved` only between `OnMouseCaptureBegin` and `OnMouseCaptureEnd`. Begin fires before a click's own value change, so a click on the bar still counts.
+- **Regression test:** `StageCraft.UI.ValueSlider`.
+
+*Dev and bench:*
+- `StageCraft.Show.Effect` keys `audio= band= mod= beats= resp= amount=`; `Start` finds the audio quick effects; `List` prints each effect's audio settings.
+- `StageCraft.Music.MeasureDelay [s]` measures the File source's heard delay against a second analyser on the WASAPI loopback.
+- `StageCraft.Bench.Fixtures ... Audio=1` (`RunFixtureBench.ps1 -Audio`), valid with Effects 1..3:
+  - the test signal at 128 BPM;
+  - the circle synced to two beats, the dimmer sine modulated by the bass, the rainbow synced to the bar;
+  - refused unless the source is Off; switched off again at the end.
+
+**Files**
+- New:
+  - `Public/UI/StageAudioPanel.h`, `Private/UI/StageAudioPanel.cpp`
+  - `Private/Show/Tests/StageAudioEffectTests.cpp`
+  - `Content/StageCraft/UI/Panels/DA_Panel_Audio.uasset`, `Scripts/Content/create_audio_content.py`
+- Changed (all under `Source/ModularSceneBuilder` unless noted):
+  - Show: `Public/Show/StageEffectTypes.h`, `Private/Show/StageEffectTypes.cpp`, `Public/Show/StageEffects.h`, `Private/Show/StageEffects.cpp`, `Public/Show/StageEffectRunner.h`, `Private/Show/StageEffectRunner.cpp`, `Private/Show/StageShowConsoleCommands.cpp`
+  - Subsystems: `Public/Subsystems/ShowControlSubsystem.h`, `Private/Subsystems/ShowControlSubsystem.cpp`, `Public/Subsystems/StageAudioReactiveSubsystem.h`, `Private/Subsystems/StageAudioReactiveSubsystem.cpp`
+  - Scene: `Private/Scene/StageSceneStore.h`, `Private/Scene/StageSceneStore.cpp`
+  - UI: `Public/UI/StageEffectsPanel.h`, `Private/UI/StageEffectsPanel.cpp`, `Private/UI/StageCuePanel.cpp`, `Private/UI/StagePlaybackPanel.cpp`, `Public/UI/StageValueSlider.h`, `Private/UI/StageValueSlider.cpp`, `Private/UI/Tests/StageUITests.cpp`
+  - Workspace: `Public/Workspace/StageWorkspaceTypes.h`, `Private/Workspace/StageWorkspaceTypes.cpp`, `Private/Workspace/StageWorkspaceShell.cpp`, `Private/Workspace/SStageWorkspaceMenuBar.cpp`
+  - Audio and bench: `Private/Audio/StageAudioReactiveConsoleCommands.cpp`, `Private/Diagnostics/StageFixtureBenchmark.cpp`, `Scripts/Bench/RunFixtureBench.ps1`
+- Docs:
+  - `Docs/ADR/0029-...md`: status, new §14;
+  - `Docs/CURRENT_SYSTEMS.md`: audio analysis and audio-reactive effects rows, test count;
+  - `tasks/todo.md`: G2 sub-items, ticked;
+  - `STATE.md`: #69 commit hash, this entry.
+- No maps, Blueprints or input actions changed. One content asset is new (`DA_Panel_Audio`).
+
+**Verification**
+
+*Builds:* Editor, Game Development and Game Shipping, 0 warnings.
+
+*Shipping UTF-16/ASCII scan:*
+- **Absent:** `StageCraft.Music.MeasureDelay`, `StageCraft.Music.Source`, `StageCraft.Bench.Fixtures`, `StageCraft.Show.Effect` and the dev text "follows the music: %s".
+- **Present:** "KEEP PLAYING IN THE BACKGROUND", "Hue per Bar", "beatsPerCycle", "Finding the tempo", the analysis detail.
+
+*Tests:* 201/201, with and without a renderer (197 + 4 new), user data unchanged.
+
+| Test | What it covers |
+|---|---|
+| `StageCraft.Show.AudioEffects` (pure) | Rules: hostile audio settings fall back; Amount clamped; `Equals`; six valid quick effects. Maths: modulation formulas, no signal = 1, smoothing time constants, cycle error, trigger events and steps, beat carried forward. Runner: Off identical with or without music; Sync pulls ≤ 0.05 cycle a frame and locks within a second, 120 → 128 without a jump; low confidence or no music keeps 128; never → own rate; 4 beats a cycle. Trigger: primes, steps on the beat, caps 14 beats to 4 steps, holds without tempo, primes again, restart; onsets for Random. Modulate Rate. `NeedsAudio` |
+| `StageCraft.Show.AudioOnFixtures` (world, test signal) | The music is never read without an audio effect, then once per tick; Bass Pulse at full with no music; a synced swing at 127.94 BPM against 128; Bass Pulse 0.09 .. 0.94 with the kick; External holds and does not read |
+| `StageCraft.Scene.EffectAudioData` | v11 round trip; only audio effects write `"audio"`; enums by name; hostile values fall back or clamp and are counted; v10 loads Off |
+| `StageCraft.UI.ValueSlider` | A read-back is not a move; a move inside the capture is, with its index; quiet after release |
+
+*Scripted Development `-game` runs on the Concert stage* (G2a, then G2b after the slider fix; user data restored):
+- **Test signal 128:** Beat Chase on 1–6, Bass Pulse on 7–10, Beat Swing and Hue per Bar on all.
+  - The analyser read 128.07 BPM at confidence 1.00, CPU 0.37 %.
+  - The chase stepped 14 times in about 7 s.
+- **Screenshots:**
+  - Audio panel: TEST lit, "128.1 BPM · 100 % sure", five meters moving, background on, "Analysis 0.4 % of a CPU core · 0 samples dropped";
+  - Effects panel: the AUDIO quick group, the AUDIO rows, the running list with ♪ modes.
+- **Scene round trip:** cue 21 Track-stored with all four effects, saved as G2Audio, a fresh Concert stage loaded, then G2Audio again. Cue 21 came back with its four effects and every audio setting (Trigger, Modulate Fast, Sync 2, Sync 4), running from the cue list.
+- **File:** the G0 120 BPM WAV read 120.04 BPM, 0 underruns.
+  - G2b: the panel showed PAUSE lit and "0:09 / 0:20" with the seek handle moving.
+  - G2a, before the fix: stuck at "0:00".
+- Artefacts: `%TEMP%\StageCraftRuns\G2a`, `G2b`; the saved scene in the scratchpad `g2scenes`.
+
+*The file's heard delay* (`MeasureDelay 15`, run G2delay):
+- The file's beat trails what Windows plays by 7.4 ms (median of 1,596 frames, 10–90 % from −10.4 to −5.8 ms).
+- That is inside the plan's 10 ms tolerance, so `FileOutputDelayMs` stays at 78.
+
+*Performance A/B:*
+`RunFixtureBench.ps1 -Counts 200,500`, show tick mean in ms. Baseline is a worktree at `a85475f` (workspace copied in, editor built). Imports were set aside for every run, then restored and hash-checked. 12 runs, in two orders.
+
+| Case | 200 idle | 200 crossfade | 500 idle | 500 crossfade |
+|---|---|---|---|---|
+| `a85475f`, `-Effects 1` (4 runs) | 4.44 | 4.87 | 10.88 | 12.92 |
+| G2, `-Effects 1` (4 runs) | 4.63 | 5.02 | 11.34 | 13.48 |
+| G2, `-Effects 1 -Audio` (2 runs) | 4.59 | 4.97 | 11.29 | 13.45 |
+| `a85475f` / G2, no effects (1 run each) | 0 / 0 | 4.48 / 4.36 | 0 / 0 | 9.52 / 10.22 |
+
+- **Audio=1 costs nothing measurable** against `Effects=1` in the same tree, inside the 5 % gate. The test signal read 128.04 BPM; the analyser used 0.35–0.37 % of a core with 0 samples dropped.
+- **Effects=1 against the baseline: the remaining difference is at most 4 %, within run-to-run spread.**
+  - In the first order (the baseline first in each pair) G2 read 6–10 % slower. Reversed (G2 first) it read −2 % to +3 %, so the first gap was drift with run order.
+  - The Off path gained a switch, a pointer test and an optional reset per effect per frame. That is too little to show at 200–500 fixtures.
+- **Idle** with no effects: no show tick in either tree, and frame times match (10.66 vs 10.65 ms at 200).
+- **CuesStarted** is 5 per crossfade phase in every CSV (a sound bench).
+- The baseline worktree `E:/SC_Baseline` was removed afterwards. CSVs: `Saved/StageCraft/Benchmarks/FixtureBench_20261105-1800*` to `-181*` (the baseline's were in the worktree).
+
+
+**Commit:** uncommitted (working tree).
+
+**Known issues / follow-ups**
+- **The flash limiter is G3.** Until then an audio-driven chase or sparkle can reach real fixtures through DMX OUT without a cap. High Sparkle can step up to 10 times a second on onsets. Do G3 before using audio looks on real lights.
+- **Packaged Shipping not run at runtime.** It needs the Audio panel by mouse (FILE... and SYSTEM). Gevor's check.
+- **The panel's controls by mouse are not exercised by automation:** a C++ panel needs a local player. The scripted runs drove the sources by dev commands and checked the panel's read-back and screenshots. Not clicked: the FILE... dialog, transport buttons, the seek drag, the device list, the gain slider, the background toggle.
+- **Mouse checks for Gevor:**
+  - the AUDIO rows and quick effects;
+  - the ♪ markers in the Cues and Playback panels (not on screen in the runs);
+  - real music on each source.
+- **Seek restarts the analysis** (as in G1): Sync keeps the last tempo meanwhile; Trigger holds.
+- Effects whose Level modulation applies to Color have no visible effect: Level reads Low/High, which colour does not use. The panel still offers it.

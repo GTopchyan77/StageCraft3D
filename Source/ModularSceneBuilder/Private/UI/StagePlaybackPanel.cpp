@@ -363,8 +363,16 @@ void UStagePlaybackPanel::Refresh()
 			const bool bHasEffects = Playback.Cues.ContainsByPredicate([](const FShowCue& Each) { return !Each.Effects.IsEmpty(); });
 			const FText Position = Playback.Cues.IsEmpty() ? LOCTEXT("EmptyPlayback", "empty")
 				: FText::Format(LOCTEXT("CuePosition", "{0}/{1}"), CueIndex == INDEX_NONE ? FText::FromString(TEXT("-")) : FText::AsNumber(CueIndex + 1), FText::AsNumber(Playback.Cues.Num()));
-			Cue->SetText(bHasEffects ? FText::Format(LOCTEXT("CuePositionFx", "{0} FX"), Position) : Position);
-			Cue->SetToolTipText(bHasEffects ? LOCTEXT("PlaybackFxTip", "This playback holds effects: they run while it is up, their intensity scaled by the fader.") : FText::GetEmpty());
+			// ♪: one of its effects follows the music (Docs/ADR/0029 §4).
+			const bool bHasAudio = Playback.Cues.ContainsByPredicate([](const FShowCue& Each)
+			{
+				return Each.Effects.ContainsByPredicate([](const FStageEffectEntry& Entry) { return Entry.Effect.UsesAudio(); });
+			});
+			Cue->SetText(!bHasEffects ? Position : bHasAudio ? FText::Format(LOCTEXT("CuePositionFxAudio", "{0} FX ♪"), Position)
+				: FText::Format(LOCTEXT("CuePositionFx", "{0} FX"), Position));
+			Cue->SetToolTipText(!bHasEffects ? FText::GetEmpty() : bHasAudio
+				? LOCTEXT("PlaybackFxAudioTip", "This playback holds effects, some following the music (♪): they run while it is up, their intensity scaled by the fader.")
+				: LOCTEXT("PlaybackFxTip", "This playback holds effects: they run while it is up, their intensity scaled by the fader."));
 		}
 		if (UStageValueSlider* Fader = Strip.Fader.Get())
 		{

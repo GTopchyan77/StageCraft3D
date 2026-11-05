@@ -14,7 +14,9 @@ DECLARE_DELEGATE_TwoParams(FOnStageSliderMoved, int32 /*SliderIndex*/, float /*V
  * moved, so each one carries its index and reports it on OnMoved, like UStageChoiceButton does for buttons.
  *
  * Never keyboard-focusable: a drag leaves focus on the viewport, so viewport shortcuts keep working right after it.
- * OnMoved fires only for user changes; SetValue (the panel's read-back) does not fire it, so there is no feedback loop.
+ * OnMoved fires only for user changes: between the mouse capture's begin and end (a click on the bar or a drag). USlider::SetValue
+ * broadcasts OnValueChanged on a changed value (UE 5.8), so a panel's read-back would otherwise come back as a user move; the
+ * capture window keeps it out, so there is no feedback loop.
  */
 UCLASS()
 class MODULARSCENEBUILDER_API UStageValueSlider : public USlider
@@ -37,6 +39,15 @@ public:
 private:
 	UFUNCTION()
 	void HandleValueChanged(float NewValue);
+
+	UFUNCTION()
+	void HandleCaptureBegin();
+
+	UFUNCTION()
+	void HandleCaptureEnd();
+
+	/** The user holds the slider: its value changes are theirs. */
+	bool bUserMoving = false;
 
 	int32 SliderIndex = INDEX_NONE;
 };

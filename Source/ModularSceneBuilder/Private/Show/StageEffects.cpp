@@ -150,4 +150,127 @@ namespace StageEffects
 	{
 		return Effect.Low + (Effect.High - Effect.Low) * FMath::Clamp(Unit, 0.f, 1.f) * FMath::Abs(SizeFactor);
 	}
+
+	// --- Audio ---
+
+	float FAudioInput::GetBand(EStageAudioBand Band) const
+	{
+		const int32 Index = static_cast<int32>(Band);
+		return Index >= 0 && Index < UE_ARRAY_COUNT(Bands) ? Bands[Index] : 0.f;
+	}
+
+	FAudioInput FAudioInput::FromFeatures(const FStageAudioFeatures& Features, double NowSeconds)
+	{
+		FAudioInput Input;
+		for (int32 Band = 0; Band < UE_ARRAY_COUNT(Input.Bands); ++Band)
+		{
+			Input.Bands[Band] = FMath::Clamp(Features.GetBand(static_cast<EStageAudioBand>(Band)), 0.f, 1.f);
+		}
+		Input.BPM = Features.BPM;
+		Input.Confidence = Features.Confidence;
+		Input.OnsetCount = Features.OnsetCount;
+		Input.bSignal = Features.bSignal;
+		// The count and phase describe the frame's time; carried forward the way PhaseAt carries the phase (at most a second), with the
+		// count following the phase past the beat.
+		double Beats = static_cast<double>(Features.BeatCount) + Features.BeatPhase;
+		if (Features.BPM > 0.f)
+		{
+			Beats += FMath::Clamp(NowSeconds - Features.Timestamp, 0.0, 1.0) * Features.BPM / 60.0;
+		}
+		Input.Beats = Beats;
+		return Input;
+	}
+
+	float GetModulationBand(const FStageEffectAudio& Audio, const FAudioInput& Input)
+	{
+		return Input.bSignal ? FMath::Clamp(Input.GetBand(Audio.Band), 0.f, 1.f) : 1.f;
+	}
+
+	float SmoothBand(float Previous, float Target, float DeltaSeconds, EStageEffectAudioResponse Response)
+	{
+		if (Target >= Previous)
+		{
+			return Target;
+		}
+		if (DeltaSeconds <= 0.f)
+		{
+			return Previous;
+		}
+		float TimeConstant = 0.12f;
+		switch (Response)
+		{
+		case EStageEffectAudioResponse::Fast:   TimeConstant = 0.03f; break;
+		case EStageEffectAudioResponse::Medium: TimeConstant = 0.12f; break;
+		case EStageEffectAudioResponse::Slow:   TimeConstant = 0.4f; break;
+		}
+		const float Keep = FMath::Exp(-DeltaSeconds / TimeConstant);
+		return Target + (Previous - Target) * Keep;
+	}
+
+	float GetModulationScale(const FStageEffectAudio& Audio, float Band)
+	{
+		return 1.f - Audio.Amount + Audio.Amount * FMath::Clamp(Band, 0.f, 1.f);
+	}
+
+	void ApplyModulation(FStageEffect& InOutEffect, float Band)
+	{
+		if (InOutEffect.Audio.Mode != EStageEffectAudioMode::Modulate)
+		{
+			return;
+		}
+		const float Scale = GetModulationScale(InOutEffect.Audio, Band);
+		switch (InOutEffect.Audio.Modulates)
+		{
+		case EStageEffectAudioTarget::Level:
+			InOutEffect.High = InOutEffect.Low + (InOutEffect.High - InOutEffect.Low) * Scale;
+			break;
+		case EStageEffectAudioTarget::Size:
+			InOutEffect.Size *= Scale;
+			break;
+		case EStageEffectAudioTarget::Rate:
+			break;
+		}
+	}
+
+	float GetModulatedRate(const FStageEffect& Effect, float RateHz, float Band)
+	{
+		if (Effect.Audio.Mode != EStageEffectAudioMode::Modulate || Effect.Audio.Modulates != EStageEffectAudioTarget::Rate)
+		{
+			return RateHz;
+		}
+		return RateHz * (1.f + Effect.Audio.Amount * FMath::Clamp(Band, 0.f, 1.f));
+	}
+
+	double GetSyncTarget(const FStageEffectAudio& Audio, double Beats)
+	{
+		return Beats / StageEffectRules::GetBeatsPerCycle(Audio.BeatsPerCycle);
+	}
+
+	int64 GetTriggerEvents(const FStageEffectAudio& Audio, const FAudioInput& Input)
+	{
+		if (Audio.Band == EStageAudioBand::Level)
+		{
+			return Input.OnsetCount;
+		}
+		// Every BeatsPerCycle beats: a quarter gives four steps a beat, eight one every two bars.
+		return static_cast<int64>(FMath::FloorToDouble(Input.Beats / StageEffectRules::GetBeatsPerCycle(Audio.BeatsPerCycle)));
+	}
+
+	double GetTriggerStep(const FStageEffect& Effect, int32 Count)
+	{
+		if (Effect.Waveform == EStageEffectWaveform::Random)
+		{
+			return 1.0;
+		}
+		int32 Step = 0;
+		int32 Steps = 1;
+		GetPatternStep(Effect, 0, Count, Step, Steps);
+		return 1.0 / FMath::Max(Steps, 1);
+	}
+
+	double GetCycleError(double Cycles, double Target)
+	{
+		const double Difference = Target - Cycles;
+		return Difference - FMath::FloorToDouble(Difference + 0.5);
+	}
 }

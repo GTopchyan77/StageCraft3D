@@ -23,6 +23,7 @@ namespace StageCraftTags
 	UE_DEFINE_GAMEPLAY_TAG_COMMENT(Panel_Palettes,	"StageCraft.Panel.Palettes",	"Palette pools: colour, position, beam, focus and intensity looks that cues refer to (ADR 0028).");
 	UE_DEFINE_GAMEPLAY_TAG_COMMENT(Panel_Playback,	"StageCraft.Panel.Playback",	"Playback desk: ten playback faders with Go, Flash, Record and Release, the Grand Master and Blackout (ADR 0026).");
 	UE_DEFINE_GAMEPLAY_TAG_COMMENT(Panel_Effects,		"StageCraft.Panel.Effects",		"Effects: quick effects on the selection, the running effects and their rate, size, phase, spread and shape (ADR 0027).");
+	UE_DEFINE_GAMEPLAY_TAG_COMMENT(Panel_Audio,		"StageCraft.Panel.Audio",		"Audio: the music audio effects follow (file, input, system audio, test beat), its transport, band meters, tempo and beat (ADR 0029).");
 	UE_DEFINE_GAMEPLAY_TAG_COMMENT(Panel_Preferences,	"StageCraft.Panel.Preferences",	"Preferences: keyboard shortcuts, camera look, viewport and audio.");
 	UE_DEFINE_GAMEPLAY_TAG_COMMENT(Panel_Sketch,		"StageCraft.Panel.Sketch",		"Sketch to Stage: draw decks, truss lines and fixtures in 2D and generate them in 3D.");
 	UE_DEFINE_GAMEPLAY_TAG_COMMENT(Panel_Assistant,	"StageCraft.Panel.Assistant",	"AI Assistant: ask about the stage and request safe, undoable changes in plain language.");

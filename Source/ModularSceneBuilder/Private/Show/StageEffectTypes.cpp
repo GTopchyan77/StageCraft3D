@@ -14,7 +14,14 @@ bool FStageEffect::Equals(const FStageEffect& Other) const
 	return Name.ToString().Equals(Other.Name.ToString(), ESearchCase::CaseSensitive) && Target == Other.Target && Waveform == Other.Waveform
 		&& Attribute == Other.Attribute && Axis == Other.Axis && ColorMode == Other.ColorMode && ColorA == Other.ColorA && ColorB == Other.ColorB
 		&& Low == Other.Low && High == Other.High && Size == Other.Size && RateHz == Other.RateHz && Duty == Other.Duty && Phase == Other.Phase
-		&& Spread == Other.Spread && Wings == Other.Wings && Blocks == Other.Blocks && Direction == Other.Direction && SizeFan == Other.SizeFan;
+		&& Spread == Other.Spread && Wings == Other.Wings && Blocks == Other.Blocks && Direction == Other.Direction && SizeFan == Other.SizeFan
+		&& Audio.Equals(Other.Audio);
+}
+
+bool FStageEffectAudio::Equals(const FStageEffectAudio& Other) const
+{
+	return Mode == Other.Mode && Band == Other.Band && Amount == Other.Amount && Modulates == Other.Modulates && BeatsPerCycle == Other.BeatsPerCycle
+		&& Response == Other.Response;
 }
 
 bool FStageProgrammerEffects::Equals(const FStageProgrammerEffects& Other) const
@@ -84,6 +91,12 @@ namespace StageEffectRules
 		Out.Spread = FMath::Clamp(Finite(Effect.Spread, 0.f), -MaxPhaseDegrees, MaxPhaseDegrees);
 		Out.Wings = FMath::Clamp(Effect.Wings, 1, MaxWings);
 		Out.Blocks = FMath::Clamp(Effect.Blocks, 1, MaxBlocks);
+		Out.Audio.Mode = SanitizeEnum(Effect.Audio.Mode, EStageEffectAudioMode::Trigger, Defaults.Audio.Mode);
+		Out.Audio.Band = SanitizeEnum(Effect.Audio.Band, EStageAudioBand::Level, Defaults.Audio.Band);
+		Out.Audio.Amount = FMath::Clamp(Finite(Effect.Audio.Amount, Defaults.Audio.Amount), 0.f, 1.f);
+		Out.Audio.Modulates = SanitizeEnum(Effect.Audio.Modulates, EStageEffectAudioTarget::Rate, Defaults.Audio.Modulates);
+		Out.Audio.BeatsPerCycle = SanitizeEnum(Effect.Audio.BeatsPerCycle, EStageEffectBeatDivision::Eight, Defaults.Audio.BeatsPerCycle);
+		Out.Audio.Response = SanitizeEnum(Effect.Audio.Response, EStageEffectAudioResponse::Slow, Defaults.Audio.Response);
 		if (Out.Target == EStageEffectTarget::Beam && !IsBeamAttribute(Out.Attribute))
 		{
 			Out.Attribute = StageCraftTags::Attribute_Zoom;
@@ -218,6 +231,69 @@ namespace StageEffectRules
 		FStageEffect& Zoom = Add(LOCTEXT("ZoomBreathe", "Zoom Breathe"), EStageEffectTarget::Beam, EStageEffectWaveform::Triangle, 0.2f, 90.f);
 		Zoom.Attribute = StageCraftTags::Attribute_Zoom;
 		return Effects;
+	}
+
+	TArray<FStageEffect> MakeAudioQuickEffects()
+	{
+		TArray<FStageEffect> Effects;
+		const auto Add = [&Effects](const FText& Name, EStageEffectTarget Target, EStageEffectWaveform Waveform, EStageEffectAudioMode Mode, float Spread) -> FStageEffect&
+		{
+			FStageEffect& Effect = Effects.AddDefaulted_GetRef();
+			Effect.Name = Name;
+			Effect.Target = Target;
+			Effect.Waveform = Waveform;
+			Effect.Spread = Spread;
+			Effect.Audio.Mode = Mode;
+			return Effect;
+		};
+		// The level follows the kick: the top of a still wave (a cosine at rate 0 sits at its top), scaled by the bass.
+		FStageEffect& BassPulse = Add(LOCTEXT("BassPulse", "Bass Pulse"), EStageEffectTarget::Intensity, EStageEffectWaveform::Cosine, EStageEffectAudioMode::Modulate, 0.f);
+		BassPulse.RateHz = 0.f;
+		BassPulse.Audio.Band = EStageAudioBand::Bass;
+		BassPulse.Audio.Response = EStageEffectAudioResponse::Fast;
+		// One fixture lit at a time, moving on one fixture per beat.
+		FStageEffect& BeatChase = Add(LOCTEXT("BeatChase", "Beat Chase"), EStageEffectTarget::Intensity, EStageEffectWaveform::Square, EStageEffectAudioMode::Trigger, 360.f);
+		BeatChase.Duty = 0.25f;
+		BeatChase.Audio.BeatsPerCycle = EStageEffectBeatDivision::One;
+		// A new random level on every hit: onsets are at least 100 ms apart (the analyser's refractory gap).
+		FStageEffect& Sparkle = Add(LOCTEXT("HighSparkle", "High Sparkle"), EStageEffectTarget::Intensity, EStageEffectWaveform::Random, EStageEffectAudioMode::Trigger, 360.f);
+		Sparkle.Audio.Band = EStageAudioBand::Level;
+		// Once round the colour wheel per bar of four beats.
+		FStageEffect& Hue = Add(LOCTEXT("HuePerBar", "Hue per Bar"), EStageEffectTarget::Color, EStageEffectWaveform::RampUp, EStageEffectAudioMode::Sync, 0.f);
+		Hue.ColorMode = EStageEffectColorMode::Rainbow;
+		Hue.Audio.BeatsPerCycle = EStageEffectBeatDivision::Four;
+		// Left on one beat, right on the next.
+		FStageEffect& Swing = Add(LOCTEXT("BeatSwing", "Beat Swing"), EStageEffectTarget::Position, EStageEffectWaveform::Sine, EStageEffectAudioMode::Sync, 0.f);
+		Swing.Axis = EStageEffectAxis::Pan;
+		Swing.Size = 30.f;
+		Swing.Audio.BeatsPerCycle = EStageEffectBeatDivision::Two;
+		// The zoom opens with the mids, held at its widest when the music stops.
+		FStageEffect& Zoom = Add(LOCTEXT("MidZoom", "Mid Zoom"), EStageEffectTarget::Beam, EStageEffectWaveform::Cosine, EStageEffectAudioMode::Modulate, 0.f);
+		Zoom.Attribute = StageCraftTags::Attribute_Zoom;
+		Zoom.RateHz = 0.f;
+		Zoom.Low = 0.2f;
+		Zoom.Audio.Band = EStageAudioBand::Mid;
+		Zoom.Audio.Response = EStageEffectAudioResponse::Slow;
+		return Effects;
+	}
+
+	float GetBeatsPerCycle(EStageEffectBeatDivision Division)
+	{
+		switch (Division)
+		{
+		case EStageEffectBeatDivision::Quarter: return 0.25f;
+		case EStageEffectBeatDivision::Half:    return 0.5f;
+		case EStageEffectBeatDivision::One:     return 1.f;
+		case EStageEffectBeatDivision::Two:     return 2.f;
+		case EStageEffectBeatDivision::Four:    return 4.f;
+		case EStageEffectBeatDivision::Eight:   return 8.f;
+		}
+		return 1.f;
+	}
+
+	bool IsClockFromAudio(const FStageEffectAudio& Audio)
+	{
+		return Audio.Mode == EStageEffectAudioMode::Sync || Audio.Mode == EStageEffectAudioMode::Trigger;
 	}
 }
 

@@ -14,6 +14,7 @@
     powershell -ExecutionPolicy Bypass -File Scripts\Bench\RunFixtureBench.ps1
     powershell -ExecutionPolicy Bypass -File Scripts\Bench\RunFixtureBench.ps1 -Counts 50,200,500 -Seconds 15 -Fade 2
     powershell -ExecutionPolicy Bypass -File Scripts\Bench\RunFixtureBench.ps1 -Zoom 0
+    powershell -ExecutionPolicy Bypass -File Scripts\Bench\RunFixtureBench.ps1 -Effects 1 -Audio
     powershell -ExecutionPolicy Bypass -File Scripts\Bench\RunFixtureBench.ps1 -Item DA_Fixture_Spot470
 #>
 param(
@@ -31,6 +32,8 @@ param(
     [int]$Effects = 0,
     # Also send every bench universe as Art-Net and sACN unicast to 127.0.0.1 on unused ports (ADR 0019 section 6.7).
     [switch]$DMXOut,
+    # Make the effects follow the test signal at 128 BPM (needs -Effects 1..3; ADR 0029 section 8).
+    [switch]$Audio,
     [int]$ResX = 1600,
     [int]$ResY = 900,
     [int]$StartDelaySeconds = 10,
@@ -56,6 +59,7 @@ $Log = Join-Path $ProjectRoot "Saved\Logs\$($Project.BaseName).log"
 $BenchCommand = "StageCraft.Bench.Fixtures $($Counts -join ' ') Seconds=$Seconds Fade=$Fade Zoom=$Zoom GM=$GM Effects=$Effects"
 if ($Item) { $BenchCommand += " Item=$Item" }
 if ($DMXOut) { $BenchCommand += " DMXOut=1" }
+if ($Audio) { $BenchCommand += " Audio=1" }
 $ExecCmds = "StageCraft.Workspace.Delay $StartDelaySeconds $BenchCommand"
 
 Write-Host "Running: $BenchCommand"

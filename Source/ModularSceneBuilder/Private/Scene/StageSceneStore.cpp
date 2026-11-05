@@ -760,6 +760,15 @@ namespace StageSceneStore
 		const TCHAR* Blocks = TEXT("blocks");
 		const TCHAR* Direction = TEXT("direction");
 		const TCHAR* SizeFan = TEXT("sizeFan");
+
+		// Version 11: audio (Docs/ADR/0029 §4).
+		const TCHAR* Audio = TEXT("audio");
+		const TCHAR* AudioMode = TEXT("mode");
+		const TCHAR* AudioBand = TEXT("band");
+		const TCHAR* AudioAmount = TEXT("amount");
+		const TCHAR* AudioModulates = TEXT("modulates");
+		const TCHAR* AudioBeatsPerCycle = TEXT("beatsPerCycle");
+		const TCHAR* AudioResponse = TEXT("response");
 	}
 
 	/** Effect settings by name in files, so a reordered enum never changes what a file means. Index = enum value. */
@@ -776,6 +785,16 @@ namespace StageSceneStore
 	static_assert(UE_ARRAY_COUNT(EffectDirectionNames) == static_cast<int32>(EStageEffectDirection::Bounce) + 1, "Name every direction.");
 	const TCHAR* const FanModeNames[] = { TEXT("Off"), TEXT("Linear"), TEXT("V"), TEXT("InvertedV") };
 	static_assert(UE_ARRAY_COUNT(FanModeNames) == static_cast<int32>(EStageFanMode::InvertedV) + 1, "Name every fan mode.");
+	const TCHAR* const EffectAudioModeNames[] = { TEXT("Off"), TEXT("Sync"), TEXT("Modulate"), TEXT("Trigger") };
+	static_assert(UE_ARRAY_COUNT(EffectAudioModeNames) == static_cast<int32>(EStageEffectAudioMode::Trigger) + 1, "Name every audio mode.");
+	const TCHAR* const EffectAudioBandNames[] = { TEXT("SubBass"), TEXT("Bass"), TEXT("Mid"), TEXT("High"), TEXT("Level") };
+	static_assert(UE_ARRAY_COUNT(EffectAudioBandNames) == static_cast<int32>(EStageAudioBand::Level) + 1, "Name every audio band.");
+	const TCHAR* const EffectAudioTargetNames[] = { TEXT("Level"), TEXT("Size"), TEXT("Rate") };
+	static_assert(UE_ARRAY_COUNT(EffectAudioTargetNames) == static_cast<int32>(EStageEffectAudioTarget::Rate) + 1, "Name every modulation target.");
+	const TCHAR* const EffectBeatDivisionNames[] = { TEXT("1/4"), TEXT("1/2"), TEXT("1"), TEXT("2"), TEXT("4"), TEXT("8") };
+	static_assert(UE_ARRAY_COUNT(EffectBeatDivisionNames) == static_cast<int32>(EStageEffectBeatDivision::Eight) + 1, "Name every beat division.");
+	const TCHAR* const EffectAudioResponseNames[] = { TEXT("Fast"), TEXT("Medium"), TEXT("Slow") };
+	static_assert(UE_ARRAY_COUNT(EffectAudioResponseNames) == static_cast<int32>(EStageEffectAudioResponse::Slow) + 1, "Name every response.");
 
 	TArray<TSharedPtr<FJsonValue>> WriteColor(const FLinearColor& Color)
 	{
@@ -822,6 +841,18 @@ namespace StageSceneStore
 			Object->SetNumberField(EffectField::Blocks, Effect.Blocks);
 			Object->SetStringField(EffectField::Direction, EffectDirectionNames[static_cast<int32>(Effect.Direction)]);
 			Object->SetStringField(EffectField::SizeFan, FanModeNames[static_cast<int32>(Effect.SizeFan)]);
+			if (Effect.UsesAudio())
+			{
+				// Only an effect that follows the music carries it, so a show without audio effects writes what version 10 did.
+				const TSharedRef<FJsonObject> Audio = MakeShared<FJsonObject>();
+				Audio->SetStringField(EffectField::AudioMode, EffectAudioModeNames[static_cast<int32>(Effect.Audio.Mode)]);
+				Audio->SetStringField(EffectField::AudioBand, EffectAudioBandNames[static_cast<int32>(Effect.Audio.Band)]);
+				Audio->SetNumberField(EffectField::AudioAmount, Effect.Audio.Amount);
+				Audio->SetStringField(EffectField::AudioModulates, EffectAudioTargetNames[static_cast<int32>(Effect.Audio.Modulates)]);
+				Audio->SetStringField(EffectField::AudioBeatsPerCycle, EffectBeatDivisionNames[static_cast<int32>(Effect.Audio.BeatsPerCycle)]);
+				Audio->SetStringField(EffectField::AudioResponse, EffectAudioResponseNames[static_cast<int32>(Effect.Audio.Response)]);
+				Object->SetObjectField(EffectField::Audio, Audio);
+			}
 			Array.Add(MakeShared<FJsonValueObject>(Object));
 		}
 		return Array;
@@ -939,6 +970,24 @@ namespace StageSceneStore
 		ReadEffectNumber(Object, EffectField::Spread, Effect.Spread, InOutInvalid);
 		ReadEffectNumber(Object, EffectField::Wings, Effect.Wings, InOutInvalid);
 		ReadEffectNumber(Object, EffectField::Blocks, Effect.Blocks, InOutInvalid);
+
+		// Version 11: how the effect follows the music. Absent (every older file) means Off.
+		const TSharedPtr<FJsonObject>* Audio = nullptr;
+		if (Object.HasField(EffectField::Audio))
+		{
+			if (!Object.TryGetObjectField(EffectField::Audio, Audio) || !Audio || !Audio->IsValid())
+			{
+				++InOutInvalid;
+				return true;
+			}
+			const FJsonObject& AudioObject = **Audio;
+			ReadEffectEnum(AudioObject, EffectField::AudioMode, EffectAudioModeNames, Effect.Audio.Mode, InOutInvalid);
+			ReadEffectEnum(AudioObject, EffectField::AudioBand, EffectAudioBandNames, Effect.Audio.Band, InOutInvalid);
+			ReadEffectNumber(AudioObject, EffectField::AudioAmount, Effect.Audio.Amount, InOutInvalid);
+			ReadEffectEnum(AudioObject, EffectField::AudioModulates, EffectAudioTargetNames, Effect.Audio.Modulates, InOutInvalid);
+			ReadEffectEnum(AudioObject, EffectField::AudioBeatsPerCycle, EffectBeatDivisionNames, Effect.Audio.BeatsPerCycle, InOutInvalid);
+			ReadEffectEnum(AudioObject, EffectField::AudioResponse, EffectAudioResponseNames, Effect.Audio.Response, InOutInvalid);
+		}
 		return true;
 	}
 

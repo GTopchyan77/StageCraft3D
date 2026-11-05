@@ -2,14 +2,19 @@
 
 // Development console commands for audio-reactive lighting (Docs/ADR/0029 §5): choose the source, drive the file transport, change
 // the settings and read the analysis, through AModularPlayerController's audio requests (the path the Audio panel will use).
-// For scripted runs before the G2 Audio panel exists. Compiled out of Shipping.
+// For scripted runs and measurements (MeasureDelay); the Audio panel is the user's way in. Compiled out of Shipping.
 
 #include "CoreMinimal.h"
 
 #if !UE_BUILD_SHIPPING
 
+#include "Audio/StageAudioAnalyzer.h"
 #include "Audio/StageAudioCaptureSources.h"
 #include "Audio/StageAudioSubsystem.h"
+#include "Audio/StageAudioTap.h"
+#include "Containers/Ticker.h"
+#include "HAL/PlatformTime.h"
+#include <atomic>
 #include "Engine/GameInstance.h"
 #include "Engine/World.h"
 #include "HAL/IConsoleManager.h"
@@ -182,6 +187,138 @@ namespace StageAudioReactiveCommands
 			UE_LOG(LogStageCraft, Display, TEXT("StageCraft.Music.Devices: \"%s\" id=%s"), *Device.Key, *Device.Value);
 		}
 	}
+
+	/**
+	 * Measures the File source's heard delay (Docs/ADR/0029 §13, the G1 follow-up): while the song plays, a second WASAPI loopback
+	 * hears what Windows actually outputs and a second analyser follows it (heard delay 0). Both find the same beats with the same
+	 * maths, so the gap between their beat phases is the error in FileOutputDelayMs: positive means the file's frames are released
+	 * too early (the lights lead the sound). Other sounds playing on the PC spoil the measurement.
+	 */
+	class FHeardDelayProbe
+	{
+	public:
+		bool Start(UStageAudioReactiveSubsystem& InAudio, double InSeconds)
+		{
+			Audio = &InAudio;
+			Seconds = InSeconds;
+			Tap = MakeShared<FStageAudioTap>();
+			TSharedRef<std::atomic<int32>> OpenedState = OpenState;
+			FText Error;
+			if (!Loopback.Start(Tap.ToSharedRef(), [OpenedState](bool bOk, const FText&, const FString&, int32, int32) { OpenedState->store(bOk ? 1 : -1); }, Error))
+			{
+				UE_LOG(LogStageCraft, Display, TEXT("StageCraft.Music.MeasureDelay: system audio did not open: %s"), *Error.ToString());
+				return false;
+			}
+			StartedAt = FPlatformTime::Seconds();
+			return true;
+		}
+
+		~FHeardDelayProbe()
+		{
+			Loopback.Shutdown();
+			Analyzer.Shutdown();
+		}
+
+		/** One game-thread frame; false when done. */
+		bool Tick()
+		{
+			UStageAudioReactiveSubsystem* Live = Audio.Get();
+			if (!Live || Live->GetSource() != EStageAudioSource::File || OpenState->load() < 0)
+			{
+				UE_LOG(LogStageCraft, Display, TEXT("StageCraft.Music.MeasureDelay: stopped (the file stopped, or system audio failed)."));
+				return false;
+			}
+			if (!bAnalyzing)
+			{
+				if (OpenState->load() == 0)
+				{
+					return true;
+				}
+				FStageAudioAnalyzerConfig Config;
+				Config.Settings = Live->GetSettings();
+				FText Error;
+				if (!Analyzer.Start(Tap.ToSharedRef(), Config, Error))
+				{
+					UE_LOG(LogStageCraft, Display, TEXT("StageCraft.Music.MeasureDelay: %s"), *Error.ToString());
+					return false;
+				}
+				bAnalyzing = true;
+			}
+			const double Now = FPlatformTime::Seconds();
+			const FStageAudioFeatures File = Live->GetFeatures();
+			const FStageAudioFeatures Heard = Analyzer.GetFeatures(Now);
+			if (File.bSignal && Heard.bSignal && File.Confidence >= 0.5f && Heard.Confidence >= 0.5f && File.BPM > 0.f)
+			{
+				double Gap = static_cast<double>(File.PhaseAt(Now)) - Heard.PhaseAt(Now);
+				Gap -= FMath::FloorToDouble(Gap + 0.5);
+				GapsMs.Add(Gap * 60000.0 / File.BPM);
+			}
+			if (Now - StartedAt < Seconds)
+			{
+				return true;
+			}
+			if (GapsMs.Num() < 60)
+			{
+				UE_LOG(LogStageCraft, Display, TEXT("StageCraft.Music.MeasureDelay: too few beat-locked frames (%d); play a steady beat louder, with nothing else playing."), GapsMs.Num());
+				return false;
+			}
+			GapsMs.Sort();
+			const double Median = GapsMs[GapsMs.Num() / 2];
+			const double Low = GapsMs[GapsMs.Num() / 10];
+			const double High = GapsMs[GapsMs.Num() * 9 / 10];
+			const float Current = Live->GetSettings().FileOutputDelayMs;
+			UE_LOG(LogStageCraft, Display, TEXT("StageCraft.Music.MeasureDelay: the file's beat leads what Windows plays by %.1f ms (median of %d frames, 10-90 %% %.1f .. %.1f ms); FileOutputDelayMs %.0f would be %.0f."),
+				Median, GapsMs.Num(), Low, High, Current, Current + Median);
+			return false;
+		}
+
+	private:
+		TWeakObjectPtr<UStageAudioReactiveSubsystem> Audio;
+		double Seconds = 10.0;
+		double StartedAt = 0.0;
+		TSharedPtr<FStageAudioTap> Tap;
+		FStageLoopbackCapture Loopback;
+		FStageAudioAnalyzer Analyzer;
+		/** 0 opening, 1 open, -1 failed; written by the capture thread. */
+		TSharedRef<std::atomic<int32>> OpenState = MakeShared<std::atomic<int32>>(0);
+		bool bAnalyzing = false;
+		TArray<double> GapsMs;
+	};
+
+	TUniquePtr<FHeardDelayProbe> ActiveProbe;
+	FTSTicker::FDelegateHandle ProbeTicker;
+
+	void MeasureDelay(const TArray<FString>& Args, UWorld* World)
+	{
+		UStageAudioReactiveSubsystem* Audio = World ? World->GetSubsystem<UStageAudioReactiveSubsystem>() : nullptr;
+		if (!Audio || Audio->GetSource() != EStageAudioSource::File || Audio->GetState() != EStageAudioSourceState::Running || ActiveProbe)
+		{
+			UE_LOG(LogStageCraft, Display, TEXT("StageCraft.Music.MeasureDelay: needs a music file playing (StageCraft.Music.Source File <path>), one measurement at a time."));
+			return;
+		}
+		const double Seconds = Args.IsEmpty() ? 10.0 : FMath::Clamp(FCString::Atod(*Args[0]), 3.0, 120.0);
+		ActiveProbe = MakeUnique<FHeardDelayProbe>();
+		if (!ActiveProbe->Start(*Audio, Seconds))
+		{
+			ActiveProbe.Reset();
+			return;
+		}
+		UE_LOG(LogStageCraft, Display, TEXT("StageCraft.Music.MeasureDelay: listening to system audio for %.0f s..."), Seconds);
+		ProbeTicker = FTSTicker::GetCoreTicker().AddTicker(FTickerDelegate::CreateLambda([](float)
+		{
+			if (ActiveProbe && ActiveProbe->Tick())
+			{
+				return true;
+			}
+			ActiveProbe.Reset();
+			ProbeTicker.Reset();
+			return false;
+		}));
+	}
+
+	FAutoConsoleCommandWithWorldAndArgs MeasureDelayCommand(TEXT("StageCraft.Music.MeasureDelay"),
+		TEXT("[seconds=10] While a music file plays, compares its beat with what Windows outputs (loopback) and logs the file delay it should have."),
+		FConsoleCommandWithWorldAndArgsDelegate::CreateStatic(&MeasureDelay));
 
 	FAutoConsoleCommandWithWorldAndArgs SourceCommand(TEXT("StageCraft.Music.Source"), TEXT("Off | Input | SystemAudio | TestSignal [BPM=<n>] | File <path>: the audio-reactive source."),
 		FConsoleCommandWithWorldAndArgsDelegate::CreateStatic(&Source));

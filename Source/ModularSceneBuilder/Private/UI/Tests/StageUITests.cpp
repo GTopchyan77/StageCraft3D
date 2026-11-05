@@ -12,6 +12,8 @@
 #include "Misc/AutomationTest.h"
 #include "UI/StageItemLibraryPanel.h"
 #include "UI/StageStatusBarWidget.h"
+#include "UI/StageValueSlider.h"
+#include "UObject/Package.h"
 
 namespace StageUITests
 {
@@ -143,6 +145,32 @@ bool FStageSpanHintTest::RunTest(const FString& Parameters)
 	TestTrue(TEXT("Remapped: the finish key is named"), RemappedPath.Contains(TEXT("K or double-click: place")));
 	TestFalse(TEXT("Remapped: Enter is not offered"), RemappedPath.Contains(TEXT("Enter")));
 	TestFalse(TEXT("Remapped: an unbound undo-point key is left out"), RemappedPath.Contains(TEXT("undo point")));
+	return true;
+}
+
+// A panel's read-back (SetValue) must never come back to it as a user move: USlider::SetValue broadcasts OnValueChanged in
+// UE 5.8, which froze the Audio panel's seek bar on a phantom drag (STATE.md #70).
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FStageValueSliderTest, "StageCraft.UI.ValueSlider", StageUITests::Flags)
+
+bool FStageValueSliderTest::RunTest(const FString& Parameters)
+{
+	UStageValueSlider* Slider = NewObject<UStageValueSlider>(GetTransientPackage());
+	Slider->SetSliderIndex(3);
+	int32 Moves = 0;
+	int32 MovedIndex = INDEX_NONE;
+	float MovedValue = -1.f;
+	Slider->OnMoved.BindLambda([&](int32 Index, float Value) { ++Moves; MovedIndex = Index; MovedValue = Value; });
+
+	Slider->SetValue(0.4f);
+	TestEqual(TEXT("A read-back is not a move"), Moves, 0);
+	// What SSlider does on a click: capture begins, then the value changes, then (on release) capture ends.
+	Slider->OnMouseCaptureBegin.Broadcast();
+	Slider->SetValue(0.7f);
+	TestTrue(TEXT("The user's change is a move, with the slider's index"), Moves == 1 && MovedIndex == 3 && MovedValue == 0.7f);
+	Slider->OnMouseCaptureEnd.Broadcast();
+	Slider->SetValue(0.1f);
+	TestEqual(TEXT("After release, read-backs are quiet again"), Moves, 1);
+	Slider->OnMoved.Unbind();
 	return true;
 }
 

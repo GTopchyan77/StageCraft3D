@@ -18,10 +18,27 @@ void UStageValueSlider::PostInitProperties()
 	if (!HasAnyFlags(RF_ClassDefaultObject | RF_ArchetypeObject))
 	{
 		OnValueChanged.AddUniqueDynamic(this, &ThisClass::HandleValueChanged);
+		OnMouseCaptureBegin.AddUniqueDynamic(this, &ThisClass::HandleCaptureBegin);
+		OnMouseCaptureEnd.AddUniqueDynamic(this, &ThisClass::HandleCaptureEnd);
 	}
 }
 
 void UStageValueSlider::HandleValueChanged(float NewValue)
 {
-	OnMoved.ExecuteIfBound(SliderIndex, NewValue);
+	// SetValue (a panel showing the current value) broadcasts too; only the user's own moves are reported.
+	if (bUserMoving)
+	{
+		OnMoved.ExecuteIfBound(SliderIndex, NewValue);
+	}
+}
+
+void UStageValueSlider::HandleCaptureBegin()
+{
+	// Fires before the click's own value change, so a click on the bar counts as a move.
+	bUserMoving = true;
+}
+
+void UStageValueSlider::HandleCaptureEnd()
+{
+	bUserMoving = false;
 }

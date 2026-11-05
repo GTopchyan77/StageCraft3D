@@ -220,6 +220,9 @@ void SStageWorkspaceMenuBar::FillReportSection(FMenuBuilder& MenuBuilder, const 
 	MenuBuilder.AddMenuEntry(LOCTEXT("ShowEffects", "Effects..."),
 		LOCTEXT("ShowEffectsTip", "Show the Effects panel: circles, chases, waves and rainbows on the selected fixtures, with rate, size, phase and spread."), FSlateIcon(),
 		FUIAction(FExecuteAction::CreateSP(this, &SStageWorkspaceMenuBar::ShowPanel, FGameplayTag(StageCraftTags::Panel_Effects))));
+	MenuBuilder.AddMenuEntry(LOCTEXT("ShowAudio", "Audio..."),
+		LOCTEXT("ShowAudioTip", "Show the Audio panel: the music effects follow (a song file, an input, this PC's sound or a test beat), with its tempo, beat and band meters."), FSlateIcon(),
+		FUIAction(FExecuteAction::CreateSP(this, &SStageWorkspaceMenuBar::ShowPanel, FGameplayTag(StageCraftTags::Panel_Audio))));
 	MenuBuilder.AddMenuEntry(LOCTEXT("OpenReportsFolder", "Open Reports Folder"), FText::FromString(Report->GetOutputDirectory()), FSlateIcon(),
 		FUIAction(FExecuteAction::CreateLambda([Directory = Report->GetOutputDirectory()]() { OpenFolder(Directory); })));
 	MenuBuilder.EndSection();

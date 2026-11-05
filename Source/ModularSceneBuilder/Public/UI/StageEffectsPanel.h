@@ -15,6 +15,8 @@
  *  - quick effects (Circle, Dimmer Chase, Rainbow, ...) that start on the selected fixtures, in selection order, with one click;
  *  - an editor for the chosen running effect: waveform, direction, size fan, axis, colours or beam attribute, and sliders for rate
  *    (Hz and BPM, with TAP), size, low/high, phase, spread, duty, wings and blocks, over a live preview of the wave and its fixtures;
+ *  - the AUDIO rows (Docs/ADR/0029 §4): mode (Off, Sync, Modulate, Trigger), band, what it modulates, beats, response and amount,
+ *    and six audio quick effects (§5); running effects that follow the music are marked ♪;
  *  - the running effects, each with STOP, and STOP ALL.
  *
  * A view in the project's binding pattern: reads UStageProgrammerSubsystem (the effects) and UShowControlSubsystem (their clocks,
@@ -51,6 +53,8 @@ private:
 		Duty,
 		Wings,
 		Blocks,
+		/** Modulate: the depth (Docs/ADR/0029 §4). */
+		Amount,
 		Count,
 	};
 
@@ -65,6 +69,12 @@ private:
 		ColorA,
 		ColorB,
 		BeamAttribute,
+		// How the effect follows the music (Docs/ADR/0029 §4).
+		AudioMode,
+		AudioBand,
+		AudioTarget,
+		AudioBeats,
+		AudioResponse,
 		Count,
 	};
 
@@ -92,6 +102,8 @@ private:
 
 	void BuildTree();
 	class UWidget* BuildQuickColumn();
+	/** A wrap box of quick-effect buttons for QuickEffects[First, First + Count). */
+	class UWidget* BuildQuickGrid(int32 First, int32 Count);
 	class UWidget* BuildEditor();
 	class UWidget* BuildRunningColumn();
 	class UWidget* BuildSettingRow(ESetting Setting, const FText& Label, const FText& ToolTip);
@@ -175,7 +187,9 @@ private:
 	UPROPERTY(Transient)
 	TObjectPtr<class UTextBlock> StatusText = nullptr;
 
+	/** The plain quick effects, then the audio ones (Docs/ADR/0029 §5) from AudioQuickStart on. */
 	TArray<FStageEffect> QuickEffects;
+	int32 AudioQuickStart = 0;
 	/** View state: which running effect the editor shows. */
 	FGuid SelectedEffectId;
 	/** TAP: the last taps (FPlatformTime seconds); the tempo is their average spacing. */

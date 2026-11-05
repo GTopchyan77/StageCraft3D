@@ -68,6 +68,9 @@ public:
 
 	FStageAudioStatus GetStatus();
 
+	/** The recording devices the Input source can use, as (name, id) pairs; asks the system each call, so call it on demand only. */
+	static TArray<TPair<FString, FString>> ListInputDevices();
+
 	/** State changes at once; counters and the file position at most every StatusIntervalSeconds while a source runs. */
 	FOnStageAudioStatusChanged OnAudioStatusChanged;
 

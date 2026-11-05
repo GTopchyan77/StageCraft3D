@@ -137,6 +137,8 @@ void UStageEffectsPanel::NativeOnInitialized()
 {
 	Super::NativeOnInitialized();
 	QuickEffects = StageEffectRules::MakeQuickEffects();
+	AudioQuickStart = QuickEffects.Num();
+	QuickEffects.Append(StageEffectRules::MakeAudioQuickEffects());
 	if (WidgetTree && !WidgetTree->RootWidget)
 	{
 		BuildTree();
@@ -209,10 +211,25 @@ UWidget* UStageEffectsPanel::BuildQuickColumn()
 		ScrollSlot->SetSize(FSlateChildSize(ESlateSizeRule::Fill));
 		ScrollSlot->SetPadding(FMargin(0.f, 4.f, 0.f, 0.f));
 	}
+	UVerticalBox* Groups = WidgetTree->ConstructWidget<UVerticalBox>(UVerticalBox::StaticClass());
+	Scroll->AddChild(Groups);
+	Groups->AddChildToVerticalBox(BuildQuickGrid(0, AudioQuickStart));
+	// The audio quick effects follow the music (Docs/ADR/0029 §5): they move only while the Audio panel has a source playing.
+	UTextBlock* AudioTitle = MakeText(LOCTEXT("QuickAudioTitle", "AUDIO"), 7, TEXT("Bold"), UITheme.TextSecondary);
+	AudioTitle->SetToolTipText(LOCTEXT("QuickAudioTip", "Effects that follow the music of the Audio panel's source: on the beat, or with a band's level. Without music they hold, or stay fully lit."));
+	if (UVerticalBoxSlot* TitleSlot = Groups->AddChildToVerticalBox(AudioTitle))
+	{
+		TitleSlot->SetPadding(FMargin(0.f, 8.f, 0.f, 3.f));
+	}
+	Groups->AddChildToVerticalBox(BuildQuickGrid(AudioQuickStart, QuickEffects.Num() - AudioQuickStart));
+	return Width;
+}
+
+UWidget* UStageEffectsPanel::BuildQuickGrid(int32 First, int32 Count)
+{
 	UWrapBox* Grid = WidgetTree->ConstructWidget<UWrapBox>(UWrapBox::StaticClass());
 	Grid->SetInnerSlotPadding(FVector2D(3.f, 3.f));
-	Scroll->AddChild(Grid);
-	for (int32 Index = 0; Index < QuickEffects.Num(); ++Index)
+	for (int32 Index = First; Index < First + Count && Index < QuickEffects.Num(); ++Index)
 	{
 		UStageChoiceButton* Button = MakeButton(QuickEffects[Index].Name,
 			FText::Format(LOCTEXT("QuickTip", "Start {0} on the selected fixtures."), QuickEffects[Index].Name), Index, false);
@@ -222,7 +239,7 @@ UWidget* UStageEffectsPanel::BuildQuickColumn()
 		ButtonWidth->SetContent(Button);
 		Grid->AddChildToWrapBox(ButtonWidth);
 	}
-	return Width;
+	return Grid;
 }
 
 UWidget* UStageEffectsPanel::BuildSettingRow(ESetting Setting, const FText& Label, const FText& ToolTip)
@@ -380,6 +397,24 @@ UWidget* UStageEffectsPanel::BuildEditor()
 	const FText Beams[] = { LOCTEXT("Zoom", "ZOOM"), LOCTEXT("Iris", "IRIS"), LOCTEXT("Frost", "FROST"), LOCTEXT("Shutter", "SHUTTER"), LOCTEXT("GoboRotation", "GOBO ROT") };
 	static_assert(UE_ARRAY_COUNT(Beams) == StageEffectsPanel::BeamChoiceCount, "One button per beam choice.");
 	Add(BuildChoiceRow(EChoiceRow::BeamAttribute, LOCTEXT("Beam", "BEAM"), Beams, LOCTEXT("BeamTip", "The beam attribute the effect moves.")));
+
+	// How the effect follows the music (Docs/ADR/0029 §4).
+	const FText AudioModes[] = { LOCTEXT("AudioOff", "OFF"), LOCTEXT("AudioSync", "SYNC"), LOCTEXT("AudioModulate", "MODULATE"), LOCTEXT("AudioTrigger", "TRIGGER") };
+	Add(BuildChoiceRow(EChoiceRow::AudioMode, LOCTEXT("Audio", "AUDIO"), AudioModes,
+		LOCTEXT("AudioTip", "Follow the music of the Audio panel's source. SYNC runs the wave at the tempo, on the beat. MODULATE lets a band's level scale it. TRIGGER steps the pattern on each beat. OFF: its own rate.")));
+	const FText Bands[] = { LOCTEXT("SubBass", "SUB"), LOCTEXT("Bass", "BASS"), LOCTEXT("Mid", "MID"), LOCTEXT("High", "HIGH"), LOCTEXT("Level", "LEVEL") };
+	Add(BuildChoiceRow(EChoiceRow::AudioBand, LOCTEXT("Band", "BAND"), Bands,
+		LOCTEXT("BandTip", "MODULATE: the band whose level scales the effect. TRIGGER: LEVEL steps on every hit (onset) instead of every beat.")));
+	const FText Targets[] = { LOCTEXT("TargetLevel", "LEVEL"), LOCTEXT("TargetSize", "SIZE"), LOCTEXT("TargetRate", "RATE") };
+	Add(BuildChoiceRow(EChoiceRow::AudioTarget, LOCTEXT("Modulates", "MOD"), Targets,
+		LOCTEXT("TargetTip", "What the band scales: the top of the level range (intensity, beam), the size of the swing (position), or the speed.")));
+	const FText BeatChoices[] = { LOCTEXT("BeatQuarter", "1/4"), LOCTEXT("BeatHalf", "1/2"), LOCTEXT("BeatOne", "1"), LOCTEXT("BeatTwo", "2"), LOCTEXT("BeatFour", "4"), LOCTEXT("BeatEight", "8") };
+	Add(BuildChoiceRow(EChoiceRow::AudioBeats, LOCTEXT("Beats", "BEATS"), BeatChoices,
+		LOCTEXT("BeatsTip", "SYNC: beats to one cycle of the wave. TRIGGER: beats between steps (1/4: four steps a beat).")));
+	const FText Responses[] = { LOCTEXT("ResponseFast", "FAST"), LOCTEXT("ResponseMedium", "MED"), LOCTEXT("ResponseSlow", "SLOW") };
+	Add(BuildChoiceRow(EChoiceRow::AudioResponse, LOCTEXT("Response", "RESP"), Responses,
+		LOCTEXT("ResponseTip", "How fast the modulation falls back after a hit: FAST pumps with every kick, SLOW breathes.")));
+	Add(BuildSettingRow(ESetting::Amount, LOCTEXT("Amount", "AMOUNT"), LOCTEXT("AmountTip", "How much the band scales the effect: 0 not at all, 100 % the band alone.")));
 
 	Add(BuildSettingRow(ESetting::Rate, LOCTEXT("Rate", "RATE"), LOCTEXT("RateTip", "Cycles per second (and beats per minute). 0 holds the pattern still.")));
 	Add(BuildSettingRow(ESetting::Size, LOCTEXT("Size", "SIZE"), LOCTEXT("SizeTip", "How far pan and tilt swing either side of their position.")));
@@ -634,8 +669,14 @@ void UStageEffectsPanel::RefreshRunningList(bool bEnabled)
 			const FText Source = Effect.Source == EStageEffectSource::Programmer ? LOCTEXT("SourceProgrammer", "PRG")
 				: Effect.Source == EStageEffectSource::Playback ? FText::Format(LOCTEXT("SourcePlayback", "PB {0}"), FText::AsNumber(Effect.Playback + 1))
 				: LOCTEXT("SourceCue", "CUE");
-			Label->SetText(FText::Format(LOCTEXT("RunningLine", "{0} · {1} · {2} Hz"), Entry.Effect.Name, Source,
-				FText::AsNumber(Entry.Effect.RateHz, &StageEffectsPanel::RateFormat())));
+			// An effect that follows the music says how: its own rate means nothing while Sync or Trigger drives its clock.
+			const FStageEffectAudio& Audio = Entry.Effect.Audio;
+			const FText Speed = Audio.Mode == EStageEffectAudioMode::Sync ? LOCTEXT("SpeedSync", "♪ SYNC")
+				: Audio.Mode == EStageEffectAudioMode::Trigger ? LOCTEXT("SpeedTrigger", "♪ TRIGGER")
+				: Audio.Mode == EStageEffectAudioMode::Modulate && Entry.Effect.RateHz <= 0.f ? LOCTEXT("SpeedModulateStill", "♪ MODULATE")
+				: Audio.Mode == EStageEffectAudioMode::Modulate ? FText::Format(LOCTEXT("SpeedModulate", "{0} Hz ♪"), FText::AsNumber(Entry.Effect.RateHz, &StageEffectsPanel::RateFormat()))
+				: FText::Format(LOCTEXT("SpeedHz", "{0} Hz"), FText::AsNumber(Entry.Effect.RateHz, &StageEffectsPanel::RateFormat()));
+			Label->SetText(FText::Format(LOCTEXT("RunningLine", "{0} · {1} · {2}"), Entry.Effect.Name, Source, Speed));
 		}
 	}
 }
@@ -676,6 +717,19 @@ void UStageEffectsPanel::RefreshEditor(const FStageEffectEntry* Selected, bool b
 	Show(SettingRows[static_cast<int32>(ESetting::Low)].Row, bLevels);
 	Show(SettingRows[static_cast<int32>(ESetting::High)].Row, bLevels);
 	Show(SettingRows[static_cast<int32>(ESetting::Duty)].Row, Effect.Waveform == EStageEffectWaveform::Square);
+	const EStageEffectAudioMode AudioMode = Effect.Audio.Mode;
+	const bool bModulate = AudioMode == EStageEffectAudioMode::Modulate;
+	const bool bClockFromAudio = StageEffectRules::IsClockFromAudio(Effect.Audio);
+	Show(ChoiceRows[static_cast<int32>(EChoiceRow::AudioBand)].Row, bModulate || AudioMode == EStageEffectAudioMode::Trigger);
+	Show(ChoiceRows[static_cast<int32>(EChoiceRow::AudioTarget)].Row, bModulate);
+	Show(ChoiceRows[static_cast<int32>(EChoiceRow::AudioBeats)].Row, bClockFromAudio);
+	Show(ChoiceRows[static_cast<int32>(EChoiceRow::AudioResponse)].Row, bModulate);
+	Show(SettingRows[static_cast<int32>(ESetting::Amount)].Row, bModulate);
+	// Sync and Trigger take the clock from the music: the effect's own rate is kept (it is used again with no tempo) but greyed.
+	if (UWidget* RateRow = SettingRows[static_cast<int32>(ESetting::Rate)].Row.Get())
+	{
+		RateRow->SetIsEnabled(!bClockFromAudio);
+	}
 
 	for (int32 Row = 0; Row < ChoiceRows.Num(); ++Row)
 	{
@@ -724,6 +778,7 @@ float UStageEffectsPanel::ToSliderValue(ESetting Setting, const FStageEffect& Ef
 	case ESetting::Duty:	return Effect.Duty;
 	case ESetting::Wings:	return FMath::Clamp(static_cast<float>(Effect.Wings - 1) / (MaxSliderWings - 1), 0.f, 1.f);
 	case ESetting::Blocks:	return FMath::Clamp(static_cast<float>(Effect.Blocks - 1) / (MaxSliderBlocks - 1), 0.f, 1.f);
+	case ESetting::Amount:	return Effect.Audio.Amount;
 	default:				return 0.f;
 	}
 }
@@ -743,6 +798,7 @@ void UStageEffectsPanel::FromSliderValue(ESetting Setting, float SliderValue, FS
 	case ESetting::Duty:	InOutEffect.Duty = Value; break;
 	case ESetting::Wings:	InOutEffect.Wings = 1 + FMath::RoundToInt(Value * (MaxSliderWings - 1)); break;
 	case ESetting::Blocks:	InOutEffect.Blocks = 1 + FMath::RoundToInt(Value * (MaxSliderBlocks - 1)); break;
+	case ESetting::Amount:	InOutEffect.Audio.Amount = Value; break;
 	default:				break;
 	}
 }
@@ -764,6 +820,7 @@ FText UStageEffectsPanel::FormatSetting(ESetting Setting, const FStageEffect& Ef
 	case ESetting::Duty:	return FormatPercent(Effect.Duty);
 	case ESetting::Wings:	return FText::AsNumber(Effect.Wings);
 	case ESetting::Blocks:	return FText::AsNumber(Effect.Blocks);
+	case ESetting::Amount:	return FormatPercent(Effect.Audio.Amount);
 	default:				return FText::GetEmpty();
 	}
 }
@@ -800,6 +857,11 @@ int32 UStageEffectsPanel::GetLitOption(EChoiceRow Row, const FStageEffect& Effec
 			}
 		}
 		return INDEX_NONE;
+	case EChoiceRow::AudioMode:		return static_cast<int32>(Effect.Audio.Mode);
+	case EChoiceRow::AudioBand:		return static_cast<int32>(Effect.Audio.Band);
+	case EChoiceRow::AudioTarget:	return static_cast<int32>(Effect.Audio.Modulates);
+	case EChoiceRow::AudioBeats:	return static_cast<int32>(Effect.Audio.BeatsPerCycle);
+	case EChoiceRow::AudioResponse:	return static_cast<int32>(Effect.Audio.Response);
 	default:
 		return INDEX_NONE;
 	}
@@ -819,6 +881,11 @@ bool UStageEffectsPanel::ApplyOption(EChoiceRow Row, int32 Option, FStageEffect&
 	case EChoiceRow::ColorA:	InOutEffect.ColorA = ColorChoices[FMath::Clamp(Option, 0, static_cast<int32>(UE_ARRAY_COUNT(ColorChoices)) - 1)]; break;
 	case EChoiceRow::ColorB:	InOutEffect.ColorB = ColorChoices[FMath::Clamp(Option, 0, static_cast<int32>(UE_ARRAY_COUNT(ColorChoices)) - 1)]; break;
 	case EChoiceRow::BeamAttribute:	InOutEffect.Attribute = BeamChoice(Option); break;
+	case EChoiceRow::AudioMode:		InOutEffect.Audio.Mode = static_cast<EStageEffectAudioMode>(FMath::Clamp(Option, 0, static_cast<int32>(EStageEffectAudioMode::Trigger))); break;
+	case EChoiceRow::AudioBand:		InOutEffect.Audio.Band = static_cast<EStageAudioBand>(FMath::Clamp(Option, 0, static_cast<int32>(EStageAudioBand::Level))); break;
+	case EChoiceRow::AudioTarget:	InOutEffect.Audio.Modulates = static_cast<EStageEffectAudioTarget>(FMath::Clamp(Option, 0, static_cast<int32>(EStageEffectAudioTarget::Rate))); break;
+	case EChoiceRow::AudioBeats:	InOutEffect.Audio.BeatsPerCycle = static_cast<EStageEffectBeatDivision>(FMath::Clamp(Option, 0, static_cast<int32>(EStageEffectBeatDivision::Eight))); break;
+	case EChoiceRow::AudioResponse:	InOutEffect.Audio.Response = static_cast<EStageEffectAudioResponse>(FMath::Clamp(Option, 0, static_cast<int32>(EStageEffectAudioResponse::Slow))); break;
 	default:					break;
 	}
 	return !InOutEffect.Equals(Before);

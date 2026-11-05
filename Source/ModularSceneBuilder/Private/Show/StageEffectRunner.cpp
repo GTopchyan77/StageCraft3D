@@ -119,6 +119,9 @@ bool FStageEffectRunner::SetEffects(TConstArrayView<FSourcedEntry> Entries, FFin
 		Item.bStopping = false;
 		if (bNew || bChanged)
 		{
+			// New audio settings start their trigger count afresh; the modulated look follows at once, not a frame late.
+			Item.bTriggerPrimed = false;
+			UpdateModulated(Item);
 			Item.Transition.Reset();
 			if (TimedBy)
 			{
@@ -136,6 +139,7 @@ bool FStageEffectRunner::SetEffects(TConstArrayView<FSourcedEntry> Entries, FFin
 
 	const bool bSameLayout = HasSameLayout(Running, Next);
 	Running = MoveTemp(Next);
+	RefreshNeedsAudio();
 	if (!bSameLayout)
 	{
 		RebuildDrives(&FindFixture);
@@ -176,12 +180,97 @@ void FStageEffectRunner::RebuildDrives(const FFindFixture* FindFixture)
 	}
 }
 
-void FStageEffectRunner::Advance(float DeltaSeconds, TArray<int32>& OutReleased)
+void FStageEffectRunner::RefreshNeedsAudio()
+{
+	bNeedsAudio = Running.ContainsByPredicate([](const FRunning& Item) { return Item.Source.Entry.Effect.UsesAudio(); });
+}
+
+void FStageEffectRunner::UpdateModulated(FRunning& Item)
+{
+	const FStageEffect& Effect = Item.Source.Entry.Effect;
+	if (Effect.Audio.Mode != EStageEffectAudioMode::Modulate || Effect.Audio.Modulates == EStageEffectAudioTarget::Rate)
+	{
+		Item.Modulated.Reset();
+		return;
+	}
+	// Assigning over the kept copy reuses it: no allocation per frame.
+	if (Item.Modulated.IsSet())
+	{
+		Item.Modulated.GetValue() = Effect;
+	}
+	else
+	{
+		Item.Modulated.Emplace(Effect);
+	}
+	StageEffects::ApplyModulation(Item.Modulated.GetValue(), Item.SmoothedBand);
+}
+
+void FStageEffectRunner::AdvanceClock(FRunning& Item, double Rate, float DeltaSeconds, const StageEffects::FAudioInput& Audio)
+{
+	const FStageEffect& Effect = Item.Source.Entry.Effect;
+	switch (Effect.Audio.Mode)
+	{
+	case EStageEffectAudioMode::Off:
+		Item.Cycles += Rate * DeltaSeconds;
+		break;
+
+	case EStageEffectAudioMode::Sync:
+	{
+		// The clock still integrates, so a tempo change bends the pattern instead of jumping it; the pull then closes the gap to the
+		// beat a little each frame. Without a tempo it carries on at the last one it followed (or its own rate if there never was one).
+		const bool bTempo = Audio.HasTempo();
+		if (bTempo)
+		{
+			Item.LastGoodHz = Audio.BPM / 60.0 / StageEffectRules::GetBeatsPerCycle(Effect.Audio.BeatsPerCycle);
+		}
+		Item.Cycles += (Item.LastGoodHz > 0.0 ? Item.LastGoodHz : Rate) * DeltaSeconds;
+		if (bTempo)
+		{
+			const double Error = StageEffects::GetCycleError(Item.Cycles, StageEffects::GetSyncTarget(Effect.Audio, Audio.Beats));
+			Item.Cycles += FMath::Clamp(Error, -StageEffects::SyncMaxPullCycles, StageEffects::SyncMaxPullCycles);
+		}
+		break;
+	}
+
+	case EStageEffectAudioMode::Modulate:
+		Item.SmoothedBand = StageEffects::SmoothBand(Item.SmoothedBand, StageEffects::GetModulationBand(Effect.Audio, Audio), DeltaSeconds, Effect.Audio.Response);
+		Item.Cycles += StageEffects::GetModulatedRate(Effect, static_cast<float>(Rate), Item.SmoothedBand) * DeltaSeconds;
+		break;
+
+	case EStageEffectAudioMode::Trigger:
+	{
+		// Onsets need only a signal; beats need a tempo. Without one the pattern holds and the count primes again when it returns, so
+		// the beats missed meanwhile are not stepped through at once.
+		const bool bOnsets = Effect.Audio.Band == EStageAudioBand::Level;
+		if (bOnsets ? !Audio.bSignal : !Audio.HasTempo())
+		{
+			Item.bTriggerPrimed = false;
+			break;
+		}
+		const int64 Events = StageEffects::GetTriggerEvents(Effect.Audio, Audio);
+		if (Item.bTriggerPrimed && Events > Item.LastTriggerEvents)
+		{
+			const int64 Steps = FMath::Min<int64>(Events - Item.LastTriggerEvents, StageEffects::TriggerMaxStepsPerFrame);
+			Item.Cycles += static_cast<double>(Steps) * StageEffects::GetTriggerStep(Effect, Item.Source.Entry.FixtureIds.Num());
+		}
+		// A count that went back (the source restarted) primes again.
+		Item.LastTriggerEvents = Events;
+		Item.bTriggerPrimed = true;
+		break;
+	}
+	}
+	UpdateModulated(Item);
+}
+
+void FStageEffectRunner::Advance(float DeltaSeconds, TArray<int32>& OutReleased, const StageEffects::FAudioInput* Audio)
 {
 	if (!FMath::IsFinite(DeltaSeconds) || DeltaSeconds <= 0.f)
 	{
 		return;
 	}
+	// No music handed in reads as silence: every audio effect falls back (Docs/ADR/0029 §4).
+	static const StageEffects::FAudioInput Silence;
+	const StageEffects::FAudioInput& Input = Audio ? *Audio : Silence;
 	bool bAnyEnded = false;
 	for (FRunning& Item : Running)
 	{
@@ -191,9 +280,10 @@ void FStageEffectRunner::Advance(float DeltaSeconds, TArray<int32>& OutReleased)
 			// A morph blends the rate too, so the pattern speeds up or slows down smoothly.
 			Rate = FMath::Lerp(Item.Transition->MorphFrom->RateHz, Rate, Item.Transition->GetAlpha());
 		}
+		AdvanceClock(Item, Rate, DeltaSeconds, Input);
 		// Wrapped every 2^20 cycles (days at the top rate): keeps the double's fraction exact, and every waveform repeats by then
 		// except Random, whose sequence simply carries on from another point.
-		Item.Cycles = FMath::Fmod(Item.Cycles + static_cast<double>(Rate) * DeltaSeconds, 1048576.0);
+		Item.Cycles = FMath::Fmod(Item.Cycles, 1048576.0);
 
 		if (Item.Transition.IsSet())
 		{
@@ -220,6 +310,7 @@ void FStageEffectRunner::Advance(float DeltaSeconds, TArray<int32>& OutReleased)
 		}
 	}
 	Running.RemoveAll([](const FRunning& Item) { return Item.bStopping && !Item.Transition.IsSet(); });
+	RefreshNeedsAudio();
 	RebuildDrives(nullptr);
 }
 
@@ -272,6 +363,7 @@ void FStageEffectRunner::EvaluateDrive(const ALightingFixtureActor& Fixture, con
 		return;
 	}
 	const FStageEffectEntry& Entry = Item.Source.Entry;
+	const FStageEffect& Effect = Item.GetEvaluated();
 	const int32 Count = Entry.FixtureIds.Num();
 
 	// A morph evaluates the old settings on the same clock and blends each value towards the new ones.
@@ -288,8 +380,8 @@ void FStageEffectRunner::EvaluateDrive(const ALightingFixtureActor& Fixture, con
 	}
 
 	// A playback's fader scales its intensity effects as it scales its intensity (Docs/ADR/0027 §5).
-	const float Scale = Entry.Effect.Target == EStageEffectTarget::Intensity ? Item.Source.IntensityScale : 1.f;
-	EvaluateEffect(Fixture, Entry.Effect, Drive.Index, Count, Item.Cycles, [&](const FGameplayTag& Attribute, float Value, bool bRelative)
+	const float Scale = Effect.Target == EStageEffectTarget::Intensity ? Item.Source.IntensityScale : 1.f;
+	EvaluateEffect(Fixture, Effect, Drive.Index, Count, Item.Cycles, [&](const FGameplayTag& Attribute, float Value, bool bRelative)
 	{
 		if (const StageShowMix::FEffectValue* From = MorphFromValues.Find(Attribute); From && From->bRelative == bRelative)
 		{

@@ -660,6 +660,14 @@ namespace StageShowCommands
 			else if (Key == TEXT("dir")) { bOk = ParseEnum(Text, Effect.Direction); }
 			else if (Key == TEXT("fan")) { bOk = ParseEnum(Text, Effect.SizeFan); }
 			else if (Key == TEXT("axis")) { bOk = ParseEnum(Text, Effect.Axis); }
+			// Audio (Docs/ADR/0029 §4): audio=Off|Sync|Modulate|Trigger band=SubBass|Bass|Mid|High|Level mod=Level|Size|Rate
+			// beats=Quarter|Half|One|Two|Four|Eight resp=Fast|Medium|Slow amount=0..1.
+			else if (Key == TEXT("audio")) { bOk = ParseEnum(Text, Effect.Audio.Mode); }
+			else if (Key == TEXT("band")) { bOk = ParseEnum(Text, Effect.Audio.Band); }
+			else if (Key == TEXT("mod")) { bOk = ParseEnum(Text, Effect.Audio.Modulates); }
+			else if (Key == TEXT("beats")) { bOk = ParseEnum(Text, Effect.Audio.BeatsPerCycle); }
+			else if (Key == TEXT("resp")) { bOk = ParseEnum(Text, Effect.Audio.Response); }
+			else if (Key == TEXT("amount") && bNumber) { Effect.Audio.Amount = Number; }
 			else { bOk = false; }
 			if (!bOk)
 			{
@@ -691,7 +699,8 @@ namespace StageShowCommands
 		bool bOk = true;
 		if (Verb == TEXT("Start") && Args.Num() >= 2)
 		{
-			const TArray<FStageEffect> Quick = StageEffectRules::MakeQuickEffects();
+			TArray<FStageEffect> Quick = StageEffectRules::MakeQuickEffects();
+			Quick.Append(StageEffectRules::MakeAudioQuickEffects());
 			const FStageEffect* Found = Quick.FindByPredicate([&Args](const FStageEffect& Effect)
 			{
 				return Effect.Name.ToString().Replace(TEXT(" "), TEXT("")).Equals(Args[1], ESearchCase::IgnoreCase);
@@ -720,7 +729,7 @@ namespace StageShowCommands
 		else if (Verb != TEXT("List"))
 		{
 			UE_LOG(LogStageCraft, Display, TEXT("Usage: StageCraft.Show.Effect Start <quick effect> [key=value...] | Set <n> key=value... | Edit <n> | Stop <n>|All | List. ")
-				TEXT("Keys: rate bpm size low high phase spread duty wings blocks wave dir fan axis."));
+				TEXT("Keys: rate bpm size low high phase spread duty wings blocks wave dir fan axis audio band mod beats resp amount."));
 			return;
 		}
 		if (Verb != TEXT("List"))
@@ -751,6 +760,15 @@ namespace StageShowCommands
 				*StaticEnum<EStageEffectWaveform>()->GetNameStringByValue(static_cast<int64>(Effect.Waveform)), Entry.FixtureIds.Num(), Effect.RateHz,
 				StageEffectRules::HzToBPM(Effect.RateHz), Effect.Size, Effect.Low, Effect.High, Effect.Phase, Effect.Spread, Effect.Wings, Effect.Blocks,
 				*StaticEnum<EStageEffectDirection>()->GetNameStringByValue(static_cast<int64>(Effect.Direction)), Show->GetEffectCycles(Entry.Id));
+			if (Effect.UsesAudio())
+			{
+				UE_LOG(LogStageCraft, Display, TEXT("StageCraft.Show.Effect %d follows the music: %s, band %s, %s x %.2f, %s beat(s), response %s."), Index + 1,
+					*StaticEnum<EStageEffectAudioMode>()->GetNameStringByValue(static_cast<int64>(Effect.Audio.Mode)),
+					*StaticEnum<EStageAudioBand>()->GetNameStringByValue(static_cast<int64>(Effect.Audio.Band)),
+					*StaticEnum<EStageEffectAudioTarget>()->GetNameStringByValue(static_cast<int64>(Effect.Audio.Modulates)), Effect.Audio.Amount,
+					*StaticEnum<EStageEffectBeatDivision>()->GetNameStringByValue(static_cast<int64>(Effect.Audio.BeatsPerCycle)),
+					*StaticEnum<EStageEffectAudioResponse>()->GetNameStringByValue(static_cast<int64>(Effect.Audio.Response)));
+			}
 		}
 	}
 

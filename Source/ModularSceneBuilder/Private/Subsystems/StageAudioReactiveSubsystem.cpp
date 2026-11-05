@@ -586,6 +586,11 @@ FStageAudioFeatures UStageAudioReactiveSubsystem::GetFeatures()
 	return Analyzer->GetFeatures(FPlatformTime::Seconds());
 }
 
+TArray<TPair<FString, FString>> UStageAudioReactiveSubsystem::ListInputDevices()
+{
+	return FStageAudioInputCapture::ListDevices();
+}
+
 FStageAudioStatus UStageAudioReactiveSubsystem::GetStatus()
 {
 	FStageAudioStatus Status;

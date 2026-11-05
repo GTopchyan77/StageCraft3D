@@ -61,8 +61,10 @@ public:
 	 *  - 9: adds "programmerEffects", the effects running in the programmer (Docs/ADR/0027 §4). Older files load with none.
 	 *  - 10: cues (main list and playbacks) may hold "effects" and "effectStops"; adds "programmerEffectStops" (Docs/ADR/0027 §5).
 	 *    Older files load with no cue effects and no stops.
+	 *  - 11: an effect that follows the music holds "audio" {mode, band, amount, modulates, beatsPerCycle, response} (Docs/ADR/0029 §4),
+	 *    written only when its mode is not Off. Older files, and effects without it, load with audio Off.
 	 */
-	static constexpr int32 FormatVersion = 10;
+	static constexpr int32 FormatVersion = 11;
 	static constexpr int32 MaxGroups = StageFixtureGroupRules::MaxGroups;
 	/** The oldest version Parse still migrates. Older or newer files are refused as VersionMismatch and left untouched. */
 	static constexpr int32 MinReadableVersion = 1;

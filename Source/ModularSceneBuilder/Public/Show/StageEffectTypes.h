@@ -3,6 +3,7 @@
 #pragma once
 
 #include "CoreMinimal.h"
+#include "Audio/StageAudioReactiveTypes.h"
 #include "GameplayTagContainer.h"
 #include "StageEffectTypes.generated.h"
 
@@ -92,6 +93,82 @@ enum class EStageEffectDirection : uint8
 	Bounce,
 };
 
+/** How an effect follows the music (Docs/ADR/0029-audio-analysis-and-audio-reactive-effects.md §4). */
+UENUM(BlueprintType)
+enum class EStageEffectAudioMode : uint8
+{
+	/** Not at all: the effect as it was before audio, value for value. */
+	Off,
+	/** The clock runs at the music's tempo, one cycle per BeatsPerCycle beats, held to the beat. */
+	Sync,
+	/** A band's level scales the effect's level range, size or rate. */
+	Modulate,
+	/** The pattern steps on each beat (each BeatsPerCycle beats), or on each onset with the Level band. */
+	Trigger,
+};
+
+/** What Modulate scales (ADR 0029 §4). */
+UENUM(BlueprintType)
+enum class EStageEffectAudioTarget : uint8
+{
+	/** Intensity and Beam: the top of the wave, between Low and High. */
+	Level,
+	/** Position: the size of the swing. */
+	Size,
+	/** The speed of the clock. */
+	Rate,
+};
+
+/** Beats to one wave cycle for Sync, and beats between steps for Trigger (ADR 0029 §4). */
+UENUM(BlueprintType)
+enum class EStageEffectBeatDivision : uint8
+{
+	Quarter	UMETA(DisplayName = "1/4"),
+	Half	UMETA(DisplayName = "1/2"),
+	One		UMETA(DisplayName = "1"),
+	Two		UMETA(DisplayName = "2"),
+	Four	UMETA(DisplayName = "4"),
+	Eight	UMETA(DisplayName = "8"),
+};
+
+/** Extra smoothing of the band Modulate reads, on top of the analyser's: how fast it falls after a hit. */
+UENUM(BlueprintType)
+enum class EStageEffectAudioResponse : uint8
+{
+	Fast,
+	Medium,
+	Slow,
+};
+
+/** An effect's audio settings (ADR 0029 §4). Sanitized with the effect (StageEffectRules::SanitizeEffect). */
+USTRUCT(BlueprintType)
+struct MODULARSCENEBUILDER_API FStageEffectAudio
+{
+	GENERATED_BODY()
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Effect|Audio")
+	EStageEffectAudioMode Mode = EStageEffectAudioMode::Off;
+
+	/** Modulate: the band read. Trigger: Level steps on onsets instead of beats. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Effect|Audio")
+	EStageAudioBand Band = EStageAudioBand::Bass;
+
+	/** Modulate: the depth, 0 (none) .. 1 (the band alone sets it). */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Effect|Audio", meta = (ClampMin = "0.0", ClampMax = "1.0"))
+	float Amount = 1.f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Effect|Audio")
+	EStageEffectAudioTarget Modulates = EStageEffectAudioTarget::Level;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Effect|Audio")
+	EStageEffectBeatDivision BeatsPerCycle = EStageEffectBeatDivision::One;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Effect|Audio")
+	EStageEffectAudioResponse Response = EStageEffectAudioResponse::Medium;
+
+	bool Equals(const FStageEffectAudio& Other) const;
+};
+
 /**
  * One effect's settings (Docs/ADR/0027-effects-engine.md §2): what it moves, its shape and speed, and how it spreads over its
  * fixtures. Values are sanitized by StageEffectRules::SanitizeEffect wherever they enter (request, file, undo step).
@@ -168,6 +245,12 @@ struct MODULARSCENEBUILDER_API FStageEffect
 	/** Scales the size per fixture in order (StageShowMix::FanFactor); Off = the same size on every fixture. */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Effect")
 	EStageFanMode SizeFan = EStageFanMode::Off;
+
+	/** How the effect follows the music (ADR 0029 §4); Mode Off by default. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Effect")
+	FStageEffectAudio Audio;
+
+	bool UsesAudio() const { return Audio.Mode != EStageEffectAudioMode::Off; }
 
 	/** Every setting equal (names compared exactly). */
 	bool Equals(const FStageEffect& Other) const;
@@ -251,4 +334,13 @@ namespace StageEffectRules
 
 	/** The one-click effects of the Effects panel (Docs/ADR/0027 §6), named. */
 	MODULARSCENEBUILDER_API TArray<FStageEffect> MakeQuickEffects();
+
+	/** The Effects panel's one-click audio effects (ADR 0029 §5): bass pulse, beat chase, high sparkle, hue per bar, beat swing, mid zoom. */
+	MODULARSCENEBUILDER_API TArray<FStageEffect> MakeAudioQuickEffects();
+
+	/** Beats per cycle (Sync) or between steps (Trigger): 0.25 .. 8. */
+	MODULARSCENEBUILDER_API float GetBeatsPerCycle(EStageEffectBeatDivision Division);
+
+	/** Sync and Trigger set the clock from the music, so the effect's own rate is unused (the panel greys it). */
+	MODULARSCENEBUILDER_API bool IsClockFromAudio(const FStageEffectAudio& Audio);
 }

@@ -53,4 +53,63 @@ namespace StageEffects
 
 	/** Intensity and Beam: the fraction 0..1 of a fixture's range at Unit, after the size fan (which narrows the swing from Low). */
 	MODULARSCENEBUILDER_API float GetLevel(const FStageEffect& Effect, float Unit, float SizeFactor);
+
+	// --- Audio (Docs/ADR/0029-audio-analysis-and-audio-reactive-effects.md §4) ---
+
+	/** Below this tempo confidence Sync keeps the last good tempo instead of following the analyser. */
+	inline constexpr float SyncMinConfidence = 0.5f;
+	/** Sync moves the clock towards the beat by at most this much of a cycle per frame, so a tempo change never jumps the pattern. */
+	inline constexpr double SyncMaxPullCycles = 0.05;
+	/** Trigger takes at most this many steps per frame, so a stream that resumes cannot race the pattern. */
+	inline constexpr int32 TriggerMaxStepsPerFrame = 4;
+
+	/** What the music gives the effects at one frame: one snapshot of the analyser, taken by the show once per tick. */
+	struct FAudioInput
+	{
+		/** By EStageAudioBand. */
+		float Bands[5] = { 0.f, 0.f, 0.f, 0.f, 0.f };
+		/** Beats since the tempo was found, with the fraction through the current one, at the frame time. */
+		double Beats = 0.0;
+		float BPM = 0.f;
+		float Confidence = 0.f;
+		int64 OnsetCount = 0;
+		bool bSignal = false;
+
+		float GetBand(EStageAudioBand Band) const;
+		/** A tempo Sync and Trigger may follow: a signal, a tempo and enough confidence. */
+		bool HasTempo() const { return bSignal && BPM > 0.f && Confidence >= SyncMinConfidence; }
+
+		/** From an analyser frame, the beat carried forward to NowSeconds (the frame is stamped when the audience hears it). */
+		static FAudioInput FromFeatures(const FStageAudioFeatures& Features, double NowSeconds);
+	};
+
+	/** The band Modulate reads: the analyser's, or 1 without a signal (a show built on audio stays lit when the music stops). */
+	MODULARSCENEBUILDER_API float GetModulationBand(const FStageEffectAudio& Audio, const FAudioInput& Input);
+
+	/** Band smoothed from Previous towards Target over DeltaSeconds: rises at once, falls with the response's time constant. */
+	MODULARSCENEBUILDER_API float SmoothBand(float Previous, float Target, float DeltaSeconds, EStageEffectAudioResponse Response);
+
+	/** The share 1 − Amount + Amount × Band that Modulate keeps of the level range or size. */
+	MODULARSCENEBUILDER_API float GetModulationScale(const FStageEffectAudio& Audio, float Band);
+
+	/**
+	 * Effect with Modulate applied for Band: Level moves the top of the wave towards Low (High' = Low + (High − Low) × scale), Size
+	 * scales the size; Rate is applied to the clock by the runner. Other modes leave the settings as they are.
+	 */
+	MODULARSCENEBUILDER_API void ApplyModulation(FStageEffect& InOutEffect, float Band);
+
+	/** The clock rate Modulate Rate gives: RateHz × (1 + Amount × Band). */
+	MODULARSCENEBUILDER_API float GetModulatedRate(const FStageEffect& Effect, float RateHz, float Band);
+
+	/** Sync: where the clock should be (cycles) at Beats. Only the fraction is used. */
+	MODULARSCENEBUILDER_API double GetSyncTarget(const FStageEffectAudio& Audio, double Beats);
+
+	/** Trigger: the event count at Input, which a step follows each time it rises (beats every BeatsPerCycle, or onsets with Level). */
+	MODULARSCENEBUILDER_API int64 GetTriggerEvents(const FStageEffectAudio& Audio, const FAudioInput& Input);
+
+	/** Trigger: how far one step moves the clock: one pattern step of Count fixtures, or a whole cycle for Random (a new level). */
+	MODULARSCENEBUILDER_API double GetTriggerStep(const FStageEffect& Effect, int32 Count);
+
+	/** Shortest signed distance from Cycles to Target on the cycle, -0.5 .. 0.5. */
+	MODULARSCENEBUILDER_API double GetCycleError(double Cycles, double Target);
 }
