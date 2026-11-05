@@ -1,0 +1,202 @@
+# ADR 0030: Assistant v2: knowledge, live context, diagnostics and tools
+
+- **Status:** proposed (draft 2026-11-05, STATE.md #67). Not approved, not implemented. Spike H0 must confirm the facts marked **(H0)**.
+- **Amends:**
+  - ADR 0016 §2.1 (one command per prompt → a bounded tool loop; the model still never acts);
+  - ADR 0016 §2.5 (history replay);
+  - ADR 0023 §7 (the assistant's key moves into the vault).
+- **Absorbs:** Phase 26 in `tasks/todo.md` (offline knowledge base, multi-step, memory; Gevor 2026-10-30). That phase pointed at "ADR 0022", which became the DCC bridge; this ADR is its home.
+- **Related:** ADR 0017 (Armenian and voice), ADR 0019 (DMX), ADR 0025–0028 (console), ADR 0029 (audio).
+- **Rules.md:** request bridge, §20 / §55 / §66 (the model's output is untrusted input), §29 (async lifetime), §60 (one prompt in flight), §65 (Shipping).
+- **Roadmap:** `Docs/Roadmap/2026-11-05-realism-audio-assistant.md`, Phase H.
+
+## 1. Problem
+
+Gevor's brief (2026-11-05) asks for an assistant inside the console that:
+- knows every button, command, fixture parameter, cue store rule, DMX value and panel control;
+- answers in real time and explains operations step by step;
+- diagnoses patch and show errors;
+- makes live fixture and preset adjustments on command.
+
+What exists (ADR 0016, #43–#45, #49):
+- A chat panel, an offline English grammar with Armenian mapped onto it, and voice prompts.
+- About 30 intents, each run through the controller's requests with undo.
+- An optional Claude backend with one `stage_command` tool, **one command per prompt**, a short scene summary and no knowledge of the UI.
+- **Gevor's standing decision (2026-10-30):** the free offline engine is the full default, and Claude only extends it.
+
+## 2. Decision: the model never acts, commands do (kept)
+
+ADR 0016 §2.1 stands:
+- Every effect on the stage is a validated command run through `AModularPlayerController`'s public requests, judged by the GameMode and recorded in the history.
+- The model, local or online, only proposes.
+- Nothing in this ADR gives the assistant a path the user's buttons do not have.
+
+**Never exposed to the assistant:** purchases, the wallet, profile or entitlements; credentials; file deletion; scene open, save or overwrite; Clear Stage; dev console commands; DMX OUT on or off (a live rig).
+
+## 3. Decision: knowledge generated from the code, not written twice
+
+**`FStageKnowledgeIndex`** is read-only and built once at startup by `StageKnowledge::Build`. Each entry has an id, a kind, a title, a body, keywords, a language, and an optional UI anchor and command.
+
+| Kind | Source of truth | Example entry |
+|---|---|---|
+| Command | `StageKeyBindings` command table plus the user's current chords | "Blackout: Ctrl+Shift+B, or BLACKOUT in the Playback panel" |
+| Control | **UI anchor registry** (new, below) | "Patch › DMX OUT › PRI: sACN priority 0–200, default 100" |
+| Parameter | `StageParameterTypes` tags, ranges and units; which fixture models offer each | "Zoom: 4–60° on Beam 280" |
+| Rule | Help articles `Content/StageCraft/Help/<lang>/*.md`, written from the ADRs (tracking, store modes, HTP/LTP, palettes, patch, DMX in/out, effects, audio) | "Cue Only: the change applies to this cue and the next cue restores…" |
+| Panel | `DA_Panel_*` definitions and menu paths | "Effects panel: Window › Effects…" |
+
+**UI anchors** (`FStageUIAnchor {PanelTag, ControlId, Label, Tooltip, HelpTopic}`):
+- Each panel declares its anchors in one static table next to its build code, and the control's tooltip is read from the same entry, so help and tooltip cannot drift.
+- Slate widget addresses are never used: they are runtime-only and unstable.
+- An anchor lets a reply carry a **SHOW ME** button: it opens the panel and pulses that control (§7).
+
+**Search.** `StageKnowledgeSearch` is pure and offline: BM25 over keyword tokens, English and Armenian, with the Armenian lexicon of ADR 0017. It answers "how do I…" and "where is…" with no network. It is Phase 26's `StageAIFeatureSearch`.
+
+**Shipping.** Help articles are staged as UFS. Dev console commands are not indexed, because they do not exist in Shipping.
+
+## 4. Decision: live context through read tools, never a dump
+
+Nothing about the live show is put into the system prompt. The model asks through **read tools**, each bounded to about 4 KB of output and run on the game thread from current state:
+
+| Tool | Returns |
+|---|---|
+| `get_stage_summary` | today's summary (items, fixtures, cues, totals, environment) |
+| `find_fixtures {query, limit}` | ids, names, models, patch, selection state |
+| `get_fixture {id}` | parameters with values and ranges; patch and options; **why it looks like this** (§5) |
+| `get_patch {universe}` | addresses, footprints, conflicts |
+| `get_dmx {universe, from, count≤64}` | the rendered output values the show would send |
+| `get_cues`, `get_playbacks`, `get_effects`, `get_palettes`, `get_groups` | lists with ids and the settings that matter |
+| `get_io_status` | DMX IN and OUT state and counters; audio source, BPM and signal (ADR 0029) |
+| `run_diagnostics {scope}` | the findings of §5 |
+| `search_help {query}` | the top entries of §3 |
+
+Read tools are also what the offline engine uses to answer, so local and online answers agree.
+
+## 5. Decision: diagnostics and "why" are pure code, useful without AI
+
+**`StageShowDiagnostics::Run(const FStageShowSnapshot&)`** returns `FStageDiagnostic {Severity, Code, Message, Subjects, SuggestedCommand?}`.
+
+Codes:
+- PatchConflict, FootprintOverflow, Unpatched (a fixture used by a cue or playback but not patched);
+- DMXInNoSource, DMXInTimedOut, DMXOutFailed, OutputPausedUnderExternal, EffectsHeldUnderExternal;
+- PaletteReferenceMissing, CueNamesMissingFixture;
+- BlackoutOn, GrandMasterLow, AudioNoSignal;
+- ShadowBudgetFull, and more as found.
+
+They are deterministic and tested. They also feed a **Problems** list in the Patch and Cues panels, which works without the assistant.
+
+**`StageFixtureExplain::Explain(Fixture, Attribute)`** walks the output mix layers for one fixture and attribute and says which layer set the final value:
+1. home look;
+2. cue (which cue, tracked from which cue);
+3. playback (HTP or LTP winner);
+4. programmer;
+5. effect (which one, audio mode);
+6. highlight;
+7. masters.
+
+"Why is fixture 12 dark?" is answered exactly from this, for example "Grand Master is at 0 %" or "Cue 4 tracks dimmer 0 from cue 2". The model only phrases it.
+
+## 6. Decision: action tools and a bounded loop
+
+**Action tools.** There is one action tool per request family, each a strict JSON schema validated by `StageAICommandSchema` before anything runs:
+- `set_fixture_values {fixtures, values, fan}` → programmer (existing `set_fixture`);
+- `apply_palette`, `store_cue {number, name, mode}`, `update_cue`, `go / back / go_to_cue`;
+- `start_effect {quick or settings, audio}`, `stop_effect`;
+- `select {fixtures | group}`, `record_group`, `record_palette`;
+- `patch_fixtures {assignments}` (through `RequestPatchFixtures`), `set_environment`, `apply_atmosphere`;
+- `add_fixtures`, `move / replace / delete_selected` (existing);
+- `undo / redo`, `export_report`.
+
+Each maps onto existing controller requests. New requests appear only where a button already exists without one.
+
+**The loop:**
+
+1. Read tools run at once.
+2. Action tools are **collected**, not run, until the model ends its turn.
+3. The plan is shown as a **proposal card** in the chat, listing the steps in words with APPLY and CANCEL (the IMPORT CSV pattern).
+4. Plans that only touch the programmer of selected fixtures, playback (GO and BACK) or the camera apply at once. The user can switch that off. Every other plan waits for APPLY.
+5. APPLY runs the steps in order through the requests inside **one history transaction**, so the plan is one undo step: "Assistant: <summary>". It stops at the first refusal, reports which step failed and why, and rolls back the earlier steps of that plan (the `RequestPatchFixtures` rollback pattern).
+
+**Limits:**
+- at most 8 model turns and 24 tool calls per prompt;
+- at most 32 steps per plan;
+- one prompt in flight (§60);
+- a prompt can be cancelled from the panel.
+
+**Offline:**
+- The local grammar gains multi-step prompts ("add 4 pars and store cue 1"), split into the same plan type.
+- Conversation memory: "them" means the last fixtures affected, and "do it again on group 2" works.
+- The same proposal card is used.
+
+## 7. Decision: UI
+
+- **Reply buttons:** SHOW ME (anchor), APPLY / CANCEL (plan), OPEN PANEL. Answers that come from help articles cite the article title.
+- **Pulse:** a soft, 1.5 s highlight on the anchored control (a Slate overlay on the panel, no tick after it ends).
+- **Footer:** names the interpreter (local or the online model) and what is sent (§8).
+- **Panel host:** it can dock in the Lighting Desk layout as well as float.
+
+## 8. Decision: the online model (amends ADR 0016 §2.5)
+
+The wire facts below were checked against the current API reference on 2026-11-05.
+
+**Transport:** raw HTTP to the Messages API (C++ has no official SDK), with the headers and `fallbacks: "default"` as today.
+
+**Model:**
+- Default `claude-opus-5-5` at `output_config.effort: "low"` (chat).
+- A setting may pick `claude-sonnet-5-5` or `claude-haiku-5-5` for latency or cost. That is Gevor's product call. H0 measures time to first token and cost per prompt for each.
+
+**Tools on the wire:**
+- `strict: true` on every tool.
+- `tool_choice` stays `auto`: forced tool choice is a 400 on Opus 5.5 and Sonnet 5.5.
+- Parallel read calls are allowed; their results return together in one user message.
+
+**Prompt caching:**
+- The request order is tools, then system, then messages.
+- The tool list (sorted, deterministic) and the system prompt (role, rules of §2, a compact digest of the knowledge index: panel and command names, not articles) are byte-stable, with a `cache_control` breakpoint after the system prompt.
+- Nothing volatile goes before it: no time, no scene state.
+- H0 checks `usage.cache_read_input_tokens` on the second prompt.
+
+**History:**
+- Append-only. The assistant's content blocks, including thinking and `tool_use` blocks, are kept and sent back unchanged, both inside a loop and across turns.
+- This replaces ADR 0016's "tool calls and thinking blocks are never replayed". Current models check that earlier turns were not edited (preserved thinking), and an edited history can be refused.
+- A conversation past about 40 turns starts fresh with a short local summary, rather than being trimmed.
+
+**Streaming (H0):** SSE streaming of the reply text, if the engine's HTTP module delivers the response body incrementally (`SetResponseBodyReceiveStreamDelegate` or equivalent; to be confirmed). Otherwise it stays non-streaming with "thinking…".
+
+**Validation:** with eager tool-input streaming, tool inputs are validated against the schema before use, and a truncated input is a failed tool result, never a partial command.
+
+**Stop reasons** are checked before content: `refusal` reports a decline, `max_tokens` and `pause_turn` are handled, and any transport failure falls back to the local engine and says so.
+
+**Tool search** (`defer_loading`) is not needed for about 20 tools. It is reconsidered past 40.
+
+**Sent to the service:** the prompt, the stable system prefix and tool results. Never file paths, user or machine names, keys or the scene file. The footer and the Preferences page say so.
+
+## 9. Decision: credentials
+
+- The Anthropic key moves into the credential vault (ADR 0023): a "Claude assistant" row in Services & Keys. `ANTHROPIC_API_KEY` stays as a developer fallback in non-Shipping builds only.
+- **A shipped product cannot carry a StageCraft-owned key in the client** (§66). For paying users the choice is a bring-your-own key (as now) or a StageCraft proxy server that holds the key and meters use. That decision is Gevor's, and it is out of scope here.
+
+## 10. Tests (planned; no network in any test)
+
+| Test | Proves |
+|---|---|
+| `StageCraft.Assistant.Knowledge` | the index is built from the key map, anchors, parameters and articles; every anchor has a label and tooltip; no dev command is indexed in a Shipping-configured build |
+| `StageCraft.Assistant.Search` | an EN/HY corpus of about 120 questions gets its expected top-3 article; ranking is stable |
+| `StageCraft.Show.Diagnostics` | each code fires on a built world and not on a clean one |
+| `StageCraft.Show.Explain` | each layer is reported as the winner in a built mix (home, tracked cue, HTP playback, programmer, effect, highlight, GM, blackout) |
+| `StageCraft.Assistant.ToolSchema` | every tool rejects unknown fields, out-of-range values, wrong types, huge arrays and NUL bytes |
+| `StageCraft.Assistant.Loop` | a scripted mock backend: read then act; a plan is one undo step; a refusal stops and rolls back; auto-apply versus confirm; turn and tool limits; cancel; `refusal`, `max_tokens` and transport-failure fallbacks |
+| `StageCraft.Assistant.MultiStep` | the offline splitter and the memory ("them", "again") |
+
+## 11. Alternatives considered
+
+- **Injecting the whole UI and show state into every prompt.** Rejected: it costs tokens on every prompt, breaks caching on every change, and goes stale between tool calls. Read tools fetch exactly what is asked, when it is asked.
+- **Letting the model run console commands.** Rejected: dev commands are compiled out of Shipping and bypass the request bridge.
+- **Embeddings and a vector store** for help search. Rejected for now: the corpus is a few hundred entries, BM25 works offline in two languages, and embeddings would need a model download or a network call.
+- **Executing each action as the model emits it.** Rejected: there would be no single undo step, and no chance to confirm a large change.
+
+## 12. Consequences and rollback
+
+- New Private `AI/Knowledge`, `Show/Diagnostics` and `UI` anchor tables; help articles as content; a Problems list.
+- The Claude backend changes from one tool to a loop. The offline engine stays the default and grows with Phase 26.
+- **Rollback:** setting the online model off returns the panel to the local engine. Diagnostics and help search stand alone.

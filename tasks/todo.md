@@ -576,3 +576,21 @@ Gevor's choices: automation tests on a harness game instance (not AFunctionalTes
   - [x] F5b schedule import (pure Parse and Plan, import bar, one undo step), tests, runs R66a-d
 - [ ] F5 manual verification (Gevor): a visualiser or node receiving DMX OUT (broadcast, multicast, unicast); the DMX OUT line by mouse (mode cycling, IP, PRI, HZ, mute chips); IMPORT CSV through the picker with APPLY / CANCEL and Ctrl+Z; -P / -T / SW toggles with Ctrl+Z
 - [ ] DMX follow-ups: ArtPoll discovery of output targets, ArtSync, DMX IN to OUT passthrough / merge, per-universe destinations, schedule rows that create fixtures (mode / type columns), GDTF / MVR import
+
+## Phase 35 - Audio-reactive lighting, assistant v2, realistic stages and crowds (requested by Gevor 2026-11-05; roadmap `Docs/Roadmap/2026-11-05-realism-audio-assistant.md`; STATE.md #67; ADR 0029, ADR 0030 proposed)
+- [x] Roadmap and proposed ADRs 0029 (audio analysis, audio-reactive effects) and 0030 (assistant knowledge, live context, diagnostics, tools) (STATE.md #67)
+- [ ] Gevor's decisions: approve ADR 0029; approve ADR 0030 (default online model, key policy for a shipped product); crowd and band art source (MetaHuman / Fab / commissioned); performance target (no-regression gate or a named reference scene and GPU)
+- [ ] G0 spike: WmfMedia MP3/WAV/FLAC in Shipping through a tapped submix; WASAPI loopback prototype; source latencies; AudioSynesthesia onset comparison
+- [ ] G1 audio sources and analyser: tap ring buffer, analyser thread, pure bands / onsets / tempo / beat phase, UStageAudioReactiveSubsystem, per-PC settings, requests, dev commands, tests
+- [ ] G2 audio in effects: FStageEffectAudio (Sync, Modulate, Trigger), scene format v11, Effects panel AUDIO row, audio quick effects, Audio panel, Bench.Fixtures Audio=1
+- [ ] G3 flash limiter (3 Hz default), AUDIO master and KILL, Listening indicator, latency offset; manual check with real music on every source (Gevor)
+- [ ] H0 spike: HTTP streaming, prompt-cache hit, latency and cost per model
+- [ ] H1 knowledge index from code (UI anchors, key map, parameters, panels), help articles EN/HY, offline BM25 search, SHOW ME (Phase 26)
+- [ ] H2 StageShowDiagnostics, StageFixtureExplain, Problems list
+- [ ] H3 tool catalogue, proposal cards, one-undo-step plans with rollback, bounded online loop with append-only history and cached prefix, key in the vault
+- [ ] H4 offline multi-step, conversation memory, new actions (rest of Phase 26)
+- [ ] I0 ADR 0031: asset source, VAT crowd technique (AnimToTexture bake, instanced meshes), crowd GPU budget measured at 1k / 5k / 20k; OverCrowd evaluated
+- [ ] I1 Audience area item (outline, density, capacity in reports, crowd energy from audio), Bench.Crowd
+- [ ] I2 band members and backline items
+- [ ] I3 haze machine item; starter stages v2 (Arena, Festival, Club, Theatre, Conference) with mixed fixtures
+- [ ] I4 packaged Shipping validation per template

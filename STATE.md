@@ -6366,7 +6366,7 @@ Gevor's F5 brief: DMX output so StageCraft can drive real fixtures, nodes and vi
   - CuesStarted was 5 in every crossfade run (real fades).
 - **Not verified:** a real node, console or visualiser on the LAN receiving our broadcast, multicast or unicast; the panel by mouse (mode cycling, IP field, PRI / HZ, mute chips).
 
-**Commit:** uncommitted (working tree).
+**Commit:** `1594875` (F5a and F5b in one commit, as proposed).
 
 **Known issues / follow-ups**
 - **No ArtPoll discovery of output targets.** Use broadcast or a typed unicast address. One unicast address serves both protocols.
@@ -6472,10 +6472,52 @@ The rest of F5 (ADR 0019 §10).
   - Artefacts: `%TEMP%\StageCraftRuns\R66a`–`R66d`.
 - **Not verified:** IMPORT CSV through the file picker and the import bar's APPLY / CANCEL by mouse (the console path ran the same plan and request), a real hung fixture.
 
-**Commit:** uncommitted (working tree).
+**Commit:** `1594875` (F5a and F5b in one commit, as proposed).
 
 **Known issues / follow-ups**
 - **A schedule only re-patches fixtures already on the stage.** It does not create them, and has no mode or type columns. No GDTF / MVR import.
 - **`StageCraft.DMX.ImportSchedule`** splits arguments on spaces (a path with spaces needs the panel).
 - **Manual checks for Gevor:** IMPORT CSV with the patch sheet CSV and a hand-made one (bar text, APPLY, CANCEL, Ctrl+Z); the -P / -T / SW toggles by mouse with Ctrl+Z; a real fixture or visualiser following INV / SWAP.
 - **Next:** Phase F is complete (F1–F5). Open follow-ups are in todo.md: merge or passthrough, ArtPoll output discovery, effect pool and speed master, the manual checks.
+
+## #67 — Roadmap: audio-reactive lighting, assistant v2, realistic stages and crowds; proposed ADRs 0029 and 0030 (2026-11-05)
+
+**What & why**
+Gevor asked (2026-11-05) for a structured, multi-phase roadmap for three features: realistic default stages with crowd and band, an audio-reactive engine (file, line and streamed audio; four-band analysis; beat and BPM; driving the F4 effects), and an in-console AI assistant with full context, diagnostics and live actions. This entry is planning only: **no code changed.**
+
+**Housekeeping first.** #65 and #66 said "uncommitted"; both now carry `1594875` (F5a and F5b went in as one commit).
+
+**Findings from the scan that shaped the plan**
+- **Phase 26 was never built.** The offline knowledge base, multi-step prompts and memory are still open, and Gevor's 2026-10-30 decision (offline is the full default, Claude only extends it) stands. Assistant v2 absorbs Phase 26. Phase 26 pointed at "ADR 0022", which became the DCC bridge; ADR 0030 is its home now.
+- **No audio analysis exists.** `AudioCaptureCore` has no loopback capture, so "YouTube" means listening to the PC's own output (WASAPI loopback, our own code). Downloading or extracting YouTube streams is ruled out: it breaks YouTube's terms.
+- **No 120 FPS baseline is recorded.** The measured numbers are about 110–120 fps camera flight on the test map, 14.2 ms at 200 crossfading fixtures, and 27–33 ms at 500 (render-thread bound). The roadmap keeps the "no regression A/B" gate, adds a budget per feature, and asks Gevor for a reference scene if he wants a hard frame-rate target.
+- **Characters.** There are no crowd or band assets. The OverCrowd plugin (third-party VAT crowds, beta, built for 5.7) is in `Plugins/` but disabled. UE 5.8 ships AnimToTexture, MassCrowd and MetaHuman.
+  - Realistic people depend on an art-source decision; code alone can't supply them.
+  - Verified in the engine tree: `ISubmixBufferListener`, `Audio::FSpectrumAnalyzer` / `IFFTAlgorithm`, `UMediaSoundComponent` spectral data and the plugins above.
+
+**Recommended order:** G (audio, builds on F4 and is testable with synthetic signals), then H (assistant; needs the features it describes), then I (realism). I0's asset decision starts now because sourcing has the longest lead time.
+
+**Files**
+- `Docs/Roadmap/2026-11-05-realism-audio-assistant.md` (new): state scan, baselines, order, phases G0–G3, H0–H4, I0–I4 with exit criteria, decisions needed, risks.
+- `Docs/ADR/0029-audio-analysis-and-audio-reactive-effects.md` (new, **proposed**): one source at a time (File via WmfMedia to a tapped submix, Input, SystemAudio loopback, TestSignal), a lock-free tap, an analyser thread, pure bands / spectral-flux onsets / autocorrelation tempo / PLL beat phase. `FStageEffectAudio` (Sync, Modulate, Trigger) on the existing effect clocks; scene format v11; a flash limiter (3 Hz default) on audio-driven intensity because DMX OUT reaches real lights; privacy; performance gates; tests.
+- `Docs/ADR/0030-assistant-knowledge-live-context-and-tools.md` (new, **proposed**):
+  - knowledge generated from the code (UI anchor tables, key map, parameters, panels, help articles), offline BM25 search in EN/HY;
+  - live state through bounded read tools, never a dump;
+  - pure diagnostics and a per-fixture "why" explainer;
+  - action tools collected into a proposal card and applied as one undo step with rollback;
+  - a bounded online loop with an append-only history (amends ADR 0016 §2.5) and a cached prefix;
+  - the key moves into the credential vault.
+- `tasks/todo.md`: Phase 35 with every step unchecked except the roadmap.
+- `STATE.md`: #65/#66 commit hash, this entry.
+
+**Verification:** documents only; no build or test needed. API facts in ADR 0030 §8 were checked against the current Claude API reference. Engine facts in ADR 0029 §2 were checked in `C:/Program Files/Epic Games/UE_5.8`. Facts not yet proven are marked (G0) / (H0) for the spikes.
+
+**Commit:** uncommitted (working tree).
+
+**Known issues / follow-ups**
+- **Waiting on Gevor:**
+  - approve ADR 0029 and ADR 0030;
+  - the default online model and the key policy for a shipped product;
+  - the crowd and band art source (MetaHuman, Fab or commissioned);
+  - the performance target.
+- ADR 0031 (stage realism and crowds) is written in I0, after the asset decision.
