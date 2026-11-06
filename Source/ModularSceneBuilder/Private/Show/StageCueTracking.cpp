@@ -44,6 +44,29 @@ namespace StageCueTracking
 		}
 	}
 
+	int32 FindSettingCue(TConstArrayView<FShowCue> Cues, int32 Index, int32 FixtureId, const FGameplayTag& Attribute)
+	{
+		if (!Cues.IsValidIndex(Index))
+		{
+			return INDEX_NONE;
+		}
+		// Backwards from Index, stopping after the nearest block, as StateAt reads forwards from it.
+		for (int32 CueIndex = Index; CueIndex >= 0; --CueIndex)
+		{
+			const FShowCue& Cue = Cues[CueIndex];
+			const FShowCueFixtureState* Entry = Cue.Fixtures.FindByPredicate([FixtureId](const FShowCueFixtureState& State) { return State.FixtureId == FixtureId; });
+			if (Entry && Entry->Attributes.Contains(Attribute))
+			{
+				return CueIndex;
+			}
+			if (Cue.bBlock)
+			{
+				break;
+			}
+		}
+		return INDEX_NONE;
+	}
+
 	void MergeInto(FShowCue& Cue, TConstArrayView<FShowCueFixtureState> Entries)
 	{
 		for (const FShowCueFixtureState& Entry : Entries)

@@ -7143,7 +7143,7 @@ All times in ms.
   - by mouse: how-to questions in both languages, SHOW ME and OPEN PANEL, floating and re-docking the assistant;
   - a packaged build answering from the help articles (UFS staging not yet exercised).
 
-**Commit:** uncommitted (working tree).
+**Commit:** `6185a1f`.
 
 **Known issues / follow-ups**
 - **The pulse is a dimmed blink, not ADR §7's Slate overlay.** It is visible but modest on the dark theme. An overlay outline could follow if Gevor wants it stronger.
@@ -7152,3 +7152,109 @@ All times in ms.
 - **93 questions, not the ADR's ~120.** The corpus grows with H2–H4.
 - **ADR 0030 decisions still open (Gevor):** the default online model (after the paid H0 run) and the key policy for a shipped product.
 - **Next:** H2 (`StageShowDiagnostics`, `StageFixtureExplain`, Problems list).
+
+## #73 — Phase H2: show diagnostics, Problems panel, "why is fixture N dark?" (2026-11-06)
+
+**Housekeeping first.** #72 said "uncommitted"; it now carries `6185a1f` (Gevor committed H0/H1).
+
+**What & why**
+- Gevor's brief (2026-11-06) asks for Phase H2, aligned with ADR 0030, in auto mode:
+  - a live diagnostic scanner (`StageShowDiagnostics`) for unpatched fixtures, DMX address conflicts, missing cue targets, muted or disconnected audio and broken signal chains;
+  - a Problems list whose rows jump to the fixture, cue or patch concerned;
+  - `StageFixtureExplain`: "why is fixture X dark / not responding?" traced along patch, DMX, cue values, programmer, Grand Master and Blackout, dimmer, effects and the audio flash limit / KILL, in English and Armenian;
+  - 0-warning builds, all tests, todo.md and STATE.md.
+- **Where the brief and ADR 0030 / Rules.md differ:**
+  - "Constantly checks" is push, not poll (Rules.md: subsystems never poll). The checks re-run once, on the frame after any show, patch, programmer, palette, DMX or audio change, and only while the Problems panel (or anyone) listens. Whether the music is heard is not pushed; REFRESH and the assistant re-run on demand.
+  - ADR §5 put the Problems list in the Patch and Cues panels. One Problems panel covering every place replaces that, as the brief asks.
+  - "Explain" is pure functions plus one world subsystem that gathers the facts (the ADR §5 shape), not a subsystem per feature.
+
+**Design (ADR 0030 §15)**
+- **Mix explanation** (`Public/Show/StageShowMix.h`, `Private/Show/StageShowMix.cpp`): `StageShowMix::ExplainAttribute` mirrors `ResolveAttribute` and reports the winning layer (home, cue list, playback with `FPlaybackLayer::Index`, programmer, highlight), whether an effect changed the value and whether the masters scaled it.
+  - `UShowControlSubsystem::BuildLayers` now builds the layers for both `ResolveFixture` (writing) and `ExplainAttribute` (explaining), so the explanation cannot drift from the output.
+  - `UShowControlSubsystem::FindSettingCue` / `StageCueTracking::FindSettingCue`: the cue a tracked value comes from.
+- **Diagnostics** (`Public/Show/StageShowDiagnostics.h`, `Private/Show/StageShowDiagnostics.cpp`, pure): `Run(FStageShowSnapshot)` returns `FStageDiagnostic`s worst first, then in code order. 18 codes:
+  - PatchConflict (overlap or past channel 512), Unpatched (only while DMX goes in or out), DMXInOff, DMXInFailed, DMXInNoSignal, DMXOutFailed, UniverseMuted, OutputPausedUnderExternal, EffectsHeldUnderExternal;
+  - PaletteReferenceMissing, CueNamesMissingFixture (one finding per cue list, listing the cues);
+  - BlackoutOn, GrandMasterLow (at or below 20 %);
+  - AudioSourceFailed, AudioNoSource, AudioNoSignal, AudioKilled (the last three only while effects follow the music);
+  - ProgrammerHolds.
+  - `Describe(Diagnostic, Language)`: one sentence in English or Armenian that says what to do.
+  - Each finding names an `EStageDiagnosticPlace`; `StageUIAnchors::GetPlaceTarget` maps it to a panel anchor, so the show code stays UI-free.
+- **Why is it dark** (`Public/Show/StageFixtureExplain.h`, `Private/Show/StageFixtureExplain.cpp`, pure): `Explain(FStageFixtureFacts, Language)`.
+  - The first dark cause along the chain (`EStageDarkCause`): DMX IN off, a silent universe or no address (under External); Blackout; the Grand Master; the dimmer's layer (tracked-from cue, playback name and fader, programmer, home); an effect; the colour mix; the iris.
+  - Separately, what keeps a real fixture from following (`EStageOutputCause`): DMX OUT off, failed or paused; unpatched; muted universe; conflict.
+  - The text gives the verdict, then one line per step: control, intensity, effect (with the flash limit and KILL), masters, colour, iris, real fixture.
+- **`UStageShowDiagnosticsSubsystem`** (world subsystem, Game and PIE; `Public/Subsystems/StageShowDiagnosticsSubsystem.h`, `Private/Subsystems/StageShowDiagnosticsSubsystem.cpp`): gathers the snapshot and one fixture's facts.
+  - It binds the show, patch, library, programmer, DMX network and audio delegates.
+  - A one-shot FTSTicker coalesces a frame's changes into one run, and `OnProblemsChanged` is broadcast only when the findings differ.
+  - Everything is unbound and the ticker removed in Deinitialize. It never changes the show.
+- **Problems panel** (`Public/UI/StageProblemsPanel.h`, `Private/UI/StageProblemsPanel.cpp`, `StageCraft.Panel.Problems`, `DA_Panel_Problems` from `Scripts/Content/create_problems_content.py`): a summary, REFRESH, and one row per finding (ERROR / WARNING / INFO).
+  - A click selects the fixtures through `RequestSelectItems` and calls `ShowControl` on the place's anchor.
+  - Anchors ProblemList and Refresh; the knowledge index now has 70 anchors on eight panels.
+  - A tab in the Lighting Desk layout next to Audio; Window › Problems...
+- **Assistant:** intents `ExplainFixture` (`FixtureId`; unset means the selected fixture) and `ListProblems`. Both are questions and never run anything.
+  - Grammar (`ParseDiagnostics`, before the fixture controls): "why is fixture 12 dark", "why is light 3 not responding/off", "explain fixture 7", "why is it dark", "any problems", "what's wrong", "check the show", "run diagnostics". A why-question about no fixture in particular still goes to the help article, and "how do I fix ..." does too.
+  - Armenian lexicon: ինչու, բացատր, մութ, չի/չեն, վառվ, աշխատ, արձագանք, խնդիր, սխալ, ստուգ.
+  - Online tool: `explain_fixture {fixture_id}` (a whole number of at least 1) and `list_problems`.
+  - Reply: an explanation comes with SHOW ME at the cause's control; a list shows 6 findings with OPEN PANEL on Problems.
+- **Help:** `why-dark` (EN/HY) now mentions asking the assistant and the Problems panel; new `problems` article (EN/HY).
+- **Dev commands** (`Private/Show/StageDiagnosticsConsoleCommands.cpp`, `#if !UE_BUILD_SHIPPING`): `StageCraft.Problems.List [hy]`, `StageCraft.Problems.GoTo <row>`, `StageCraft.Show.Explain <id> [hy]`.
+
+**Files changed**
+- New:
+  - `Public/Show/StageShowDiagnostics.h`, `Private/Show/StageShowDiagnostics.cpp`;
+  - `Public/Show/StageFixtureExplain.h`, `Private/Show/StageFixtureExplain.cpp`;
+  - `Public/Subsystems/StageShowDiagnosticsSubsystem.h`, `Private/Subsystems/StageShowDiagnosticsSubsystem.cpp`;
+  - `Public/UI/StageProblemsPanel.h`, `Private/UI/StageProblemsPanel.cpp`;
+  - `Private/Show/StageDiagnosticsConsoleCommands.cpp`, `Private/Show/Tests/StageDiagnosticsTests.cpp`;
+  - `Content/StageCraft/UI/Panels/DA_Panel_Problems.uasset`, `Scripts/Content/create_problems_content.py`;
+  - `Content/StageCraft/Help/en/problems.md`, `Content/StageCraft/Help/hy/problems.md`.
+- Changed:
+  - `Public/Show/StageShowMix.h`, `Private/Show/StageShowMix.cpp`, `Public/Show/StageCueTracking.h`, `Private/Show/StageCueTracking.cpp`;
+  - `Public/Subsystems/ShowControlSubsystem.h`, `Private/Subsystems/ShowControlSubsystem.cpp`;
+  - `Public/UI/StageUIAnchors.h`, `Private/UI/StageUIAnchors.cpp`;
+  - `Public/AI/StageAITypes.h`, `Private/AI/StageAITypes.cpp`, `Private/AI/StageAICommandParser.cpp`, `Private/AI/StageAICommandSchema.cpp`, `Private/AI/StageAIArmenian.cpp`, `Public/AI/StageAICommandSubsystem.h`, `Private/AI/StageAICommandSubsystem.cpp`, `Private/AI/Tests/StageKnowledgeTests.cpp`;
+  - `Public/Workspace/StageWorkspaceTypes.h`, `Private/Workspace/StageWorkspaceTypes.cpp`, `Private/Workspace/SStageWorkspaceMenuBar.cpp`, `Private/Workspace/StageWorkspaceShell.cpp`;
+  - `Content/StageCraft/Help/en/why-dark.md`, `Content/StageCraft/Help/hy/why-dark.md`;
+  - `Docs/ADR/0030-...` (status, §15), `Docs/CURRENT_SYSTEMS.md`, `tasks/todo.md`, `STATE.md` (#72 commit, #73).
+- No maps or Blueprints changed; one new data asset.
+
+**Verification**
+- **Builds:** Editor, Game Development and Game Shipping, 0 warnings.
+- **Tests:** 212/212 with no renderer and 212/212 with the offscreen renderer (`RunAutomation.ps1 -ExpectedCount 212`); user data unchanged (108 files). New tests:
+  - `StageCraft.Show.Explain`:
+    - Ten layer cases agree with `ResolveAttribute`: HTP playback index, LTP latest, programmer, an effect, the highlight hiding an effect, the masters on intensity only, Blackout over the highlight.
+    - 19 cause cases: each dark and output cause, its place and its wording, with Armenian text for each.
+    - On a built show: tracked from cue 1 into cue 2, programmer, GM 0, Blackout, playback 1 by HTP, highlight, an unknown ID.
+  - `StageCraft.Show.Diagnostics`:
+    - A clean show finds nothing.
+    - Each of the 18 faults fires with its severity, worst first, with a sentence in both languages, the same on every run, and a place that is a real anchor.
+    - Subjects are sorted; no Unpatched without DMX; findings per playback; the GM threshold; no audio finding under External.
+    - On a built world: three changes in one frame give one broadcast; no change gives none; a change that leaves the list as it was gives none; new findings give one.
+  - `StageCraft.Assistant.Diagnostics`:
+    - 13 English and Armenian questions parse to the right intent and fixture.
+    - A why-question about no particular fixture, and "how do I fix", stay with the help; "turn fixture 3 off" still sets the fixture.
+    - The tool's fixture_id validation.
+    - In a world: Blackout explained, with SHOW ME on BLACKOUT; the Armenian answer; "which fixture?" when nothing is selected; the problem list and "found no problems"; nothing ever executed.
+  - Changed: `StageCraft.Assistant.Knowledge` (eight anchored panels) and `StageCraft.Assistant.Search` (96 questions, three of them about the Problems panel).
+- **Shipping UTF-16 scan:**
+  - absent: `StageCraft.Problems.List`, `StageCraft.Problems.GoTo`, `StageCraft.Show.Explain`, `StageCraft.Assistant.Spike`;
+  - present: PROBLEMS, "No problems found.", explain_fixture, list_problems and the dark-cause sentences.
+- **Scripted run H2** (Lighting Desk layout, user data restored):
+  - Setup: 3 fixtures added, cue 1 stored, one fixture deleted, fixture 1 held at 0 and patched at 1.001, fixture 2 at 1.003, Blackout on, GM at 10 %.
+  - `Problems.List`: 5 findings (conflict between fixtures 1 and 2; cue 1 names fixture 5; Blackout; GM 10 %; the programmer holds 1).
+  - `Show.Explain 1`: "dark: BLACKOUT is on", intensity "0 % held in the programmer". `Show.Explain 2 hy`: the same in Armenian.
+  - The Problems tab shows the five rows; the docked assistant answered "why is fixture 2 dark?" and "any problems?".
+  - GO TO on row 1 selected both fixtures and opened the Patch panel (floating) with them marked red.
+- **Implemented, awaiting manual verification (Gevor):** click rows of Window › Problems; ask the questions in both languages and click SHOW ME.
+- **Benchmark not run:** the show tick is unchanged. `ResolveFixture` builds the same layers through `BuildLayers`, and nothing is added per frame.
+
+**Commit:** uncommitted (working tree).
+
+**Known issues / follow-ups**
+- The music's signal (AudioNoSignal) is not pushed. The list catches it on the next change, on REFRESH, or when the assistant is asked.
+- Cell fixtures: the explanation follows the master dimmer, not each cell's dimmer.
+- When an audio effect drives the dimmer, the flash limiter is reported as "rises are limited to N flashes a second". Whether it is holding at this instant is not read out.
+- Problems rows are in English (the UI language); the assistant answers in the asker's language.
+- Layouts saved before this change do not get the Problems tab; Window › Problems opens it.
+- Still open from #72: the paid H0 run, the H1 mouse checks, and a packaged build reading the help articles.

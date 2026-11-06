@@ -22,6 +22,11 @@
 #include "Subsystems/ShowControlSubsystem.h"
 #include "Subsystems/StageProfileSubsystem.h"
 #include "Subsystems/StageSessionSubsystem.h"
+#include "Subsystems/StageShowDiagnosticsSubsystem.h"
+#include "Components/SelectionComponent.h"
+#include "Player/ModularPlayerController.h"
+#include "UI/StageUIAnchors.h"
+#include "Workspace/StageWorkspaceTypes.h"
 
 #include UE_INLINE_GENERATED_CPP_BY_NAME(StageAICommandSubsystem)
 
@@ -190,6 +195,86 @@ FStageAIInterpretation UStageAICommandSubsystem::InterpretLocally(const FString&
 		: FStageAIInterpretation::MakeReply(StageAIAnswers::DescribeNotUnderstood(Prompt));
 }
 
+FText UStageAICommandSubsystem::AnswerDiagnostics(const FStageAICommand& Command, FStageAIReference& OutReference) const
+{
+	using StageAILanguage::Pick;
+	const EStageAILanguage Language = Command.Language;
+	UWorld* World = GetWorld();
+	UStageShowDiagnosticsSubsystem* Diagnostics = UWorld::GetSubsystem<UStageShowDiagnosticsSubsystem>(World);
+	if (!Diagnostics)
+	{
+		return Pick(Language, LOCTEXT("NoDiagnostics", "There is no stage to check yet."), INVTEXT("Դեռ ստուգելու բեմ չկա։"));
+	}
+	EStageDiagnosticPlace Place = EStageDiagnosticPlace::None;
+	FText Answer;
+	if (Command.Intent == EStageAIIntent::ExplainFixture)
+	{
+		int32 FixtureId = Command.FixtureId.Get(INDEX_NONE);
+		if (!Command.FixtureId.IsSet())
+		{
+			// "Why is it dark?": the asking player's selected fixture (the primary one when several are).
+			const AModularPlayerController* Controller = World ? Cast<AModularPlayerController>(World->GetFirstPlayerController()) : nullptr;
+			const USelectionComponent* Selection = Controller ? Controller->GetSelection() : nullptr;
+			const ALightingFixtureActor* Fixture = Selection ? Cast<ALightingFixtureActor>(Selection->GetSelectedActor()) : nullptr;
+			if (!Fixture && Selection)
+			{
+				for (AActor* Selected : Selection->GetSelectedActors())
+				{
+					if ((Fixture = Cast<ALightingFixtureActor>(Selected)) != nullptr)
+					{
+						break;
+					}
+				}
+			}
+			if (!Fixture)
+			{
+				return Pick(Language, LOCTEXT("WhichFixture", "Which fixture? Select one, or name it: \"why is fixture 12 dark\"."),
+					INVTEXT("Ո՞ր սարքը։ Ընտրեք մեկը կամ նշեք այն՝ «ինչու է 12 սարքը մութ»։"));
+			}
+			FixtureId = Fixture->GetFixtureId();
+		}
+		const FStageFixtureVerdict Verdict = Diagnostics->ExplainFixture(FixtureId, Language);
+		Place = Verdict.Place;
+		Answer = FText::FromString(Verdict.Text);
+	}
+	else
+	{
+		const TArray<FStageDiagnostic>& Problems = Diagnostics->RefreshProblems();
+		if (Problems.IsEmpty())
+		{
+			return Pick(Language, LOCTEXT("NoProblems", "I found no problems: the patch, DMX, masters, cues and music source look right."),
+				INVTEXT("Խնդիրներ չգտա. պատչը, DMX-ը, մաստերները, կյուները և երաժշտության աղբյուրը կարգին են։"));
+		}
+		TArray<FString> Lines;
+		Lines.Add(FText::Format(Pick(Language, LOCTEXT("ProblemsFound", "{0} {0}|plural(one=thing,other=things) to look at, worst first (all in the Problems panel):"),
+			INVTEXT("Ուշադրության արժանի է {0} բան՝ ըստ կարևորության (բոլորը Problems վահանակում)։")), FText::AsNumber(Problems.Num())).ToString());
+		constexpr int32 MaxListed = 6;
+		for (int32 Index = 0; Index < Problems.Num() && Index < MaxListed; ++Index)
+		{
+			Lines.Add(FString::Printf(TEXT("%d. %s"), Index + 1, *StageShowDiagnostics::Describe(Problems[Index], Language).ToString()));
+		}
+		if (Problems.Num() > MaxListed)
+		{
+			Lines.Add(FText::Format(Pick(Language, LOCTEXT("ProblemsMore", "...and {0} more."), INVTEXT("...և ևս {0}։")), FText::AsNumber(Problems.Num() - MaxListed)).ToString());
+		}
+		// The Problems panel lists them all, each with its own GO TO.
+		Answer = FText::FromString(FString::Join(Lines, TEXT("\n")));
+	}
+	FGameplayTag Panel;
+	FName Control;
+	if (StageUIAnchors::GetPlaceTarget(Place, Panel, Control))
+	{
+		OutReference.Panel = Panel;
+		OutReference.Control = Control;
+	}
+	else if (Command.Intent == EStageAIIntent::ListProblems)
+	{
+		OutReference.Panel = StageCraftTags::Panel_Problems;
+		OutReference.Control = TEXT("ProblemList");
+	}
+	return Answer;
+}
+
 bool UStageAICommandSubsystem::AnswerFromKnowledge(const FString& Prompt, FStageAIInterpretation& OutReply) const
 {
 	const UWorld* World = GetWorld();
@@ -296,6 +381,12 @@ void UStageAICommandSubsystem::Respond(const FStageAIInterpretation& Interpretat
 	else if (Command.Intent == EStageAIIntent::Unsupported)
 	{
 		AddMessage(EStageAISpeaker::Assistant, EStageAIOutcome::Info, WithNote(StageAIAnswers::DescribeUnsupported(Command.ItemQuery, Command.Language), Interpretation.Note));
+	}
+	else if (Command.Intent == EStageAIIntent::ExplainFixture || Command.Intent == EStageAIIntent::ListProblems)
+	{
+		FStageAIReference Reference;
+		const FText Answer = AnswerDiagnostics(Command, Reference);
+		AddMessage(EStageAISpeaker::Assistant, EStageAIOutcome::Info, WithNote(Answer, Interpretation.Note), Reference);
 	}
 	else if (Command.IsQuestion())
 	{

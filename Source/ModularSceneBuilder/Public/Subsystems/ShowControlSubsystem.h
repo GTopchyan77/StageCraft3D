@@ -365,6 +365,16 @@ public:
 	const FTickCostStats& GetTickCostStats() const { return TickCostStats; }
 	void ResetTickCostStats() { TickCostStats = FTickCostStats(); }
 
+	/**
+	 * Which layer of the output mix gives FixtureId's Attribute its value now, and whether an effect or the masters changed it
+	 * (Docs/ADR/0030 §5). Built from the same layers the show writes, so it agrees with the fixture's output (a cue fade part-way
+	 * through included). bFound false for an unknown fixture or an attribute no layer holds. Read-only; game thread.
+	 */
+	StageShowMix::FAttributeExplanation ExplainAttribute(int32 FixtureId, const FGameplayTag& Attribute) const;
+
+	/** The number of the main cue list's cue that gives FixtureId's Attribute its value at the active cue (tracked), if one does. */
+	TOptional<float> FindSettingCue(int32 FixtureId, const FGameplayTag& Attribute) const;
+
 	/** Ticks that read the music for audio effects (Docs/ADR/0029 §4), for tests that prove no read happens without one. Development only. */
 	int64 GetAudioReadsForTests() const { return AudioReadsForTests; }
 
@@ -519,6 +529,17 @@ private:
 
 	/** Re-mixes one fixture (ResolveFixtures). In External mode only the programmer and highlight are written, so the console's look stays. */
 	void ResolveFixture(class ALightingFixtureActor& Fixture, EResolveScope Scope = EResolveScope::All);
+
+	/** Storage the layers of one fixture point into while it is mixed or explained. */
+	struct FLayerScratch
+	{
+		TMap<FGameplayTag, float> Highlight;
+		TMap<FGameplayTag, float> Programmer;
+		StageShowMix::FEffectMap Effects;
+	};
+
+	/** The layers ResolveFixture mixes for Fixture now (under External: only what the user holds by hand), pointing into Scratch. */
+	void BuildLayers(const class ALightingFixtureActor& Fixture, FLayerScratch& Scratch, StageShowMix::FFixtureLayers& OutLayers) const;
 
 	/**
 	 * The values the highlight shows on Fixture: full dimmer, open shutter and the fixture's own full white. Stored in OutValues so

@@ -28,6 +28,8 @@ namespace StageShowMix
 		float Level = 1.f;
 		/** Activation order: the higher one wins an LTP attribute. */
 		uint32 Order = 0;
+		/** The playback's index (0-based), for ExplainAttribute only; the mix itself never reads it. */
+		int32 Index = INDEX_NONE;
 	};
 
 	/** An effect's output for one attribute (Docs/ADR/0027 §3). */
@@ -67,6 +69,43 @@ namespace StageShowMix
 
 	/** The value Attribute takes. False when no layer holds it (the output keeps its value). */
 	MODULARSCENEBUILDER_API bool ResolveAttribute(const FGameplayTag& Attribute, const FFixtureLayers& Layers, float& OutValue);
+
+	/** The layer that gave an attribute its static value (Docs/ADR/0030 §5). */
+	enum class ELayer : uint8
+	{
+		/** No layer holds it: the output keeps whatever it had. */
+		None,
+		Home,
+		/** The main cue list. */
+		CueList,
+		/** A playback fader (FAttributeExplanation::Playback). */
+		Playback,
+		Programmer,
+		Highlight,
+	};
+
+	/** How ResolveAttribute arrived at a value, layer by layer. */
+	struct FAttributeExplanation
+	{
+		/** The layer whose value won, before the effect and the masters. */
+		ELayer Layer = ELayer::None;
+		/** For Layer Playback: the winning playback's FPlaybackLayer::Index. */
+		int32 Playback = INDEX_NONE;
+		/** The winning layer's value, after a playback's fader for intensity. */
+		float StaticValue = 0.f;
+		/** A running effect changed the value (it was not hidden by the highlight). */
+		bool bEffect = false;
+		/** The masters scaled it: intensity with an IntensityScale below 1. */
+		bool bScaledByMasters = false;
+		float IntensityScale = 1.f;
+		bool bIntensity = false;
+		/** What ResolveAttribute gives; valid when bFound. */
+		float Value = 0.f;
+		bool bFound = false;
+	};
+
+	/** Explains ResolveAttribute(Attribute, Layers): the same value, and which layer, effect and master made it. */
+	MODULARSCENEBUILDER_API FAttributeExplanation ExplainAttribute(const FGameplayTag& Attribute, const FFixtureLayers& Layers);
 
 	/** True when a layer above the playback (programmer or highlight) holds Attribute, so a cue fade must leave it alone. */
 	MODULARSCENEBUILDER_API bool IsHeldAbovePlayback(const FGameplayTag& Attribute, const FFixtureLayers& Layers);

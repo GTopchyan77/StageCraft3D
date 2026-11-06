@@ -5,6 +5,7 @@
 #include "CoreMinimal.h"
 #include "Components/Widget.h"
 #include "GameplayTagContainer.h"
+#include "Show/StageShowDiagnostics.h"
 #include "UObject/Interface.h"
 #include "StageUIAnchors.generated.h"
 
@@ -83,4 +84,10 @@ namespace StageUIAnchors
 
 	/** How long a pulse lasts (seconds). */
 	constexpr float PulseSeconds = 1.5f;
+
+	/**
+	 * The panel and anchored control where a diagnostic place is fixed (Docs/ADR/0030 §5): the Problems list goes there and the
+	 * assistant's SHOW ME points at it. False for EStageDiagnosticPlace::None.
+	 */
+	MODULARSCENEBUILDER_API bool GetPlaceTarget(EStageDiagnosticPlace Place, FGameplayTag& OutPanel, FName& OutControl);
 }

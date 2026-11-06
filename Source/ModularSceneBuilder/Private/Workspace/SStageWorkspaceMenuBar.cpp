@@ -223,6 +223,9 @@ void SStageWorkspaceMenuBar::FillReportSection(FMenuBuilder& MenuBuilder, const 
 	MenuBuilder.AddMenuEntry(LOCTEXT("ShowAudio", "Audio..."),
 		LOCTEXT("ShowAudioTip", "Show the Audio panel: the music effects follow (a song file, an input, this PC's sound or a test beat), with its tempo, beat and band meters."), FSlateIcon(),
 		FUIAction(FExecuteAction::CreateSP(this, &SStageWorkspaceMenuBar::ShowPanel, FGameplayTag(StageCraftTags::Panel_Audio))));
+	MenuBuilder.AddMenuEntry(LOCTEXT("ShowProblems", "Problems..."),
+		LOCTEXT("ShowProblemsTip", "Show the Problems panel: patch conflicts, DMX in and out, Blackout and the Grand Master, cues naming missing fixtures or palettes and the music source, worst first. Click one to go to its fix."), FSlateIcon(),
+		FUIAction(FExecuteAction::CreateSP(this, &SStageWorkspaceMenuBar::ShowPanel, FGameplayTag(StageCraftTags::Panel_Problems))));
 	MenuBuilder.AddMenuEntry(LOCTEXT("OpenReportsFolder", "Open Reports Folder"), FText::FromString(Report->GetOutputDirectory()), FSlateIcon(),
 		FUIAction(FExecuteAction::CreateLambda([Directory = Report->GetOutputDirectory()]() { OpenFolder(Directory); })));
 	MenuBuilder.EndSection();

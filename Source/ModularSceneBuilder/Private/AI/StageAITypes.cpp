@@ -16,6 +16,8 @@ bool FStageAICommand::IsQuestion() const
 	case EStageAIIntent::CountMatching:
 	case EStageAIIntent::ListCues:
 	case EStageAIIntent::EnvironmentStatus:
+	case EStageAIIntent::ExplainFixture:
+	case EStageAIIntent::ListProblems:
 	case EStageAIIntent::ListingDetails:
 		return true;
 	default:

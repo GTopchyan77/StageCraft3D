@@ -124,6 +124,89 @@ namespace StageShowMix
 		return bFound;
 	}
 
+	FAttributeExplanation ExplainAttribute(const FGameplayTag& Attribute, const FFixtureLayers& Layers)
+	{
+		// Mirrors ResolveAttribute step by step; StageCraft.Show.Explain checks that both give the same value.
+		FAttributeExplanation Out;
+		Out.bIntensity = StagePaletteRules::GetAttributeKind(Attribute) == EStagePaletteKind::Intensity;
+		Out.IntensityScale = Layers.IntensityScale;
+		float Value = 0.f;
+		if (const float* Highlighted = Layers.Highlight ? Layers.Highlight->Find(Attribute) : nullptr)
+		{
+			Out.Layer = ELayer::Highlight;
+			Value = *Highlighted;
+		}
+		else
+		{
+			if (const float* Programmed = Layers.Programmer ? Layers.Programmer->Find(Attribute) : nullptr)
+			{
+				Out.Layer = ELayer::Programmer;
+				Value = *Programmed;
+			}
+			if (Out.Layer == ELayer::None)
+			{
+				const float* Main = Layers.Playback ? Layers.Playback->Find(Attribute) : nullptr;
+				if (Main)
+				{
+					Out.Layer = ELayer::CueList;
+					Value = *Main;
+				}
+				const FPlaybackLayer* Latest = nullptr;
+				for (const FPlaybackLayer& Playback : Layers.Playbacks)
+				{
+					const float* Held = Playback.Values ? Playback.Values->Find(Attribute) : nullptr;
+					if (!Held)
+					{
+						continue;
+					}
+					if (Out.bIntensity)
+					{
+						// HTP: the highest wins; on a tie the cue list (or the earlier playback) keeps it, as Max does.
+						const float Scaled = *Held * Playback.Level;
+						if (Out.Layer == ELayer::None || Scaled > Value)
+						{
+							Out.Layer = ELayer::Playback;
+							Out.Playback = Playback.Index;
+							Value = Scaled;
+						}
+					}
+					else if (!Latest || Playback.Order > Latest->Order)
+					{
+						Latest = &Playback;
+						Out.Layer = ELayer::Playback;
+						Out.Playback = Playback.Index;
+						Value = *Held;
+					}
+				}
+			}
+			if (Out.Layer == ELayer::None)
+			{
+				if (const float* Home = Layers.Home ? Layers.Home->Find(Attribute) : nullptr)
+				{
+					Out.Layer = ELayer::Home;
+					Value = *Home;
+				}
+			}
+			Out.StaticValue = Value;
+			if (const FEffectValue* Effect = Layers.Effects ? Layers.Effects->Find(Attribute) : nullptr)
+			{
+				Out.bEffect = ApplyEffect(*Effect, Out.Layer != ELayer::None, Value);
+			}
+		}
+		if (Out.Layer == ELayer::Highlight)
+		{
+			Out.StaticValue = Value;
+		}
+		Out.bFound = Out.Layer != ELayer::None || Out.bEffect;
+		if (Out.bFound && Out.bIntensity && Layers.IntensityScale != 1.f)
+		{
+			Value *= Layers.IntensityScale;
+			Out.bScaledByMasters = true;
+		}
+		Out.Value = Value;
+		return Out;
+	}
+
 	bool IsHeldAbovePlayback(const FGameplayTag& Attribute, const FFixtureLayers& Layers)
 	{
 		return (Layers.Highlight && Layers.Highlight->Contains(Attribute)) || (Layers.Programmer && Layers.Programmer->Contains(Attribute));

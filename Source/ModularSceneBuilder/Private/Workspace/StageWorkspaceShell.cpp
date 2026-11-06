@@ -146,6 +146,7 @@ TSharedRef<FTabManager::FLayout> FStageWorkspaceShell::MakeLightingDeskLayout()
 					->AddTab(ToTabId(StageCraftTags::Panel_Cues), ETabState::OpenedTab)
 					->AddTab(ToTabId(StageCraftTags::Panel_Effects), ETabState::OpenedTab)
 					->AddTab(ToTabId(StageCraftTags::Panel_Audio), ETabState::OpenedTab)
+					->AddTab(ToTabId(StageCraftTags::Panel_Problems), ETabState::OpenedTab)
 					->AddTab(ToTabId(StageCraftTags::Panel_FaderBank), ETabState::OpenedTab)
 					->SetForegroundTab(ToTabId(StageCraftTags::Panel_Playback))
 				)
@@ -567,6 +568,7 @@ void FStageWorkspaceShell::RegisterPanelSpawners()
 	FTabManager::RegisterDefaultTabWindowSize(FGameplayTag(StageCraftTags::Panel_Playback).GetTagName(), FVector2D(860.0, 400.0));
 	FTabManager::RegisterDefaultTabWindowSize(FGameplayTag(StageCraftTags::Panel_Effects).GetTagName(), FVector2D(900.0, 460.0));
 	FTabManager::RegisterDefaultTabWindowSize(FGameplayTag(StageCraftTags::Panel_Audio).GetTagName(), FVector2D(560.0, 420.0));
+	FTabManager::RegisterDefaultTabWindowSize(FGameplayTag(StageCraftTags::Panel_Problems).GetTagName(), FVector2D(560.0, 420.0));
 }
 
 void FStageWorkspaceShell::SyncReportedHosts()

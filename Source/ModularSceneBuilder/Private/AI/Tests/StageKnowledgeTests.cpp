@@ -151,7 +151,7 @@ bool FStageAssistantKnowledgeTest::RunTest(const FString& Parameters)
 	// Anchor tables: every anchor has a label and a tooltip, and ids are unique in their panel.
 	int32 Anchors = 0;
 	const TArray<StageUIAnchors::FTable> Tables = StageUIAnchors::GetTables();
-	TestEqual(TEXT("Seven anchored panels"), Tables.Num(), 7);
+	TestEqual(TEXT("Eight anchored panels (the Lighting Desk seven and Problems)"), Tables.Num(), 8);
 	for (const StageUIAnchors::FTable& Table : Tables)
 	{
 		TSet<FName> Ids;
@@ -292,6 +292,8 @@ bool FStageAssistantSearchTest::RunTest(const FString& Parameters)
 		{ TEXT("what is the lighting desk layout"), { TEXT("article.layouts") } },
 		{ TEXT("why is my fixture dark"), { TEXT("article.why-dark") } },
 		{ TEXT("my light is not working"), { TEXT("article.why-dark") } },
+		{ TEXT("where do I see the problems in my show"), { TEXT("article.problems"), TEXT("panel.Problems") } },
+		{ TEXT("show me the diagnostics list"), { TEXT("article.problems"), TEXT("panel.Problems") } },
 		{ TEXT("what is zoom"), { TEXT("parameter.Zoom") } },
 		{ TEXT("what is a gobo"), { TEXT("parameter.Gobo") } },
 		{ TEXT("what is cmy"), { TEXT("parameter.ColorC") } },
@@ -319,6 +321,7 @@ bool FStageAssistantSearchTest::RunTest(const FString& Parameters)
 		{ TEXT("ինչպե՞ս հետարկել"), { TEXT("article.undo"), TEXT("command.Undo") } },
 		{ TEXT("ինչպե՞ս պահել տեսարանը"), { TEXT("article.scenes") } },
 		{ TEXT("ինչո՞ւ է սարքը մութ"), { TEXT("article.why-dark") } },
+		{ TEXT("որտեղ տեսնել շոուի խնդիրները"), { TEXT("article.problems"), TEXT("panel.Problems") } },
 		{ TEXT("ինչպե՞ս փոխել դասավորությունը"), { TEXT("article.layouts") } },
 		{ TEXT("ինչ է օգնականը"), { TEXT("article.assistant") } },
 		{ TEXT("ինչպե՞ս միացնել միկրոֆոնը"), { TEXT("article.audio"), TEXT("control.Audio.SourceInput") } },

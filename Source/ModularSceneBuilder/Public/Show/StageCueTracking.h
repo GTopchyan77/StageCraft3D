@@ -22,6 +22,12 @@ namespace StageCueTracking
 	 */
 	MODULARSCENEBUILDER_API void StateAt(TConstArrayView<FShowCue> Cues, int32 Index, FFixtureStates& OutState);
 
+	/**
+	 * The index of the cue that gives FixtureId's Attribute its value in StateAt(Cues, Index): the latest cue from the nearest block
+	 * at or before Index that sets it. INDEX_NONE when none does or Index is out of range (Docs/ADR/0030 §5, "tracked from").
+	 */
+	MODULARSCENEBUILDER_API int32 FindSettingCue(TConstArrayView<FShowCue> Cues, int32 Index, int32 FixtureId, const FGameplayTag& Attribute);
+
 	/** Puts Entry's values and references onto Into (same fixture); a value Entry sets without a reference drops Into's reference. */
 	MODULARSCENEBUILDER_API void ApplyEntry(FShowCueFixtureState& Into, const FShowCueFixtureState& Entry);
 

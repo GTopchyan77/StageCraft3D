@@ -28,6 +28,10 @@ enum class EStageAIIntent : uint8
 	CountMatching,
 	ListCues,
 	EnvironmentStatus,
+	/** "Why is fixture 12 dark?": the signal chain of FixtureId, or of the selected fixture when unset (Docs/ADR/0030 §5). */
+	ExplainFixture,
+	/** "Any problems?": the show's diagnostics, worst first (Docs/ADR/0030 §5). */
+	ListProblems,
 
 	// Actions (through the controller's requests).
 	AddFixtures,
@@ -213,6 +217,9 @@ struct MODULARSCENEBUILDER_API FStageAICommand
 
 	/** StoreCue (unset: the next whole number after the last cue), GoToCue. */
 	TOptional<float> CueNumber;
+
+	/** ExplainFixture: the fixture ID (unset: the asking player's selected fixture). */
+	TOptional<int32> FixtureId;
 
 	/** StoreCue. */
 	FString Label;

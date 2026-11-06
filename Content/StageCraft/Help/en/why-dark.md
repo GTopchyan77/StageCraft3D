@@ -11,3 +11,5 @@ When a fixture stays dark, check in this order:
 5. An effect may be dipping it, or a strobe may hold its shutter.
 
 HIGHLIGHT (Groups panel) shows the selected fixtures at full to find them.
+
+Or ask the assistant: "why is fixture 12 dark?" (or select it and ask "why is it dark?"). It follows that fixture's signal chain (DMX IN, the cue, playback or programmer that set its dimmer, effects, the masters, colour and iris, then the patch and DMX OUT) and names the first thing that keeps it dark. SHOW ME then points at the control that fixes it. Window › Problems lists what may be wrong in the whole show.

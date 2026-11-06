@@ -35,6 +35,8 @@ namespace StageAICommandSchema
 			{ EStageAIIntent::CountMatching, TEXT("count_matching") },
 			{ EStageAIIntent::ListCues, TEXT("list_cues") },
 			{ EStageAIIntent::EnvironmentStatus, TEXT("environment_status") },
+			{ EStageAIIntent::ExplainFixture, TEXT("explain_fixture") },
+			{ EStageAIIntent::ListProblems, TEXT("list_problems") },
 			{ EStageAIIntent::AddFixtures, TEXT("add_fixtures") },
 			{ EStageAIIntent::StoreCue, TEXT("store_cue") },
 			{ EStageAIIntent::GoToCue, TEXT("go_to_cue") },
@@ -173,10 +175,11 @@ namespace StageAICommandSchema
 			for (const FReportName& Entry : ReportNames) { Reports.Add(Entry.Name); }
 
 			TSharedRef<FJsonObject> Properties = MakeShared<FJsonObject>();
-			TSharedRef<FJsonObject> Intent = MakeProperty(TEXT("string"), TEXT("What to do. Questions (stage_summary, item_count, total_weight, power_draw, fixture_count, count_matching, list_cues, environment_status, listing_details) are answered from the live stage and the marketplace results; search_marketplace browses the community marketplace, preview_listing shows a listing read-only, acquire_listing gets one (the app asks the user before spending credits); the others change the stage."));
+			TSharedRef<FJsonObject> Intent = MakeProperty(TEXT("string"), TEXT("What to do. Questions (stage_summary, item_count, total_weight, power_draw, fixture_count, count_matching, list_cues, environment_status, explain_fixture, list_problems, listing_details) are answered from the live stage and the marketplace results; search_marketplace browses the community marketplace, preview_listing shows a listing read-only, acquire_listing gets one (the app asks the user before spending credits); the others change the stage."));
 			Intent->SetArrayField(TEXT("enum"), StringValues(Intents));
 			Properties->SetObjectField(TEXT("intent"), Intent);
 			Properties->SetObjectField(TEXT("count"), MakeProperty(TEXT("integer"), FString::Printf(TEXT("add_fixtures: how many, 1 to %d. Default 1. delete_items, move_items, replace_items with target named: at most how many of the matching items (the latest placed first); omit for all of them."), StageAICommandParser::MaxFixturesPerCommand)));
+			Properties->SetObjectField(TEXT("fixture_id"), MakeProperty(TEXT("integer"), TEXT("explain_fixture: the fixture ID the user names (\"why is fixture 12 dark\" is 12); omit for the selected fixture.")));
 			Properties->SetObjectField(TEXT("item"), MakeProperty(TEXT("string"), TEXT("add_fixtures: words naming the fixture type or catalog name (e.g. \"moving head spot\"); empty picks the first fixture. count_matching, and delete_items / move_items / replace_items with target named: words naming the placed items (\"spot\", \"truss\", \"lights\" for every fixture). unsupported: one of delete (clearing the whole stage), open, save.")));
 			TSharedRef<FJsonObject> Target = MakeProperty(TEXT("string"), TEXT("delete_items, move_items, replace_items, set_fixture: selection for the user's selected items (\"this\", \"the selected\", \"it\"), named for the placed items matching item."));
 			Target->SetArrayField(TEXT("enum"), StringValues(NamesOf(MakeArrayView(TargetNames))));
@@ -286,7 +289,7 @@ namespace StageAICommandSchema
 				TEXT("weather"), TEXT("hour"), TEXT("sky_on"), TEXT("report"), TEXT("reply_language"), TEXT("target"), TEXT("replacement"), TEXT("direction"),
 				TEXT("distance_cm"), TEXT("shape"), TEXT("radius_cm"), TEXT("width_cm"), TEXT("height_cm"), TEXT("angle_degrees"), TEXT("handrails"),
 				TEXT("fixture_settings"), TEXT("search"), TEXT("listing_kinds"), TEXT("category"), TEXT("price"), TEXT("max_credits"), TEXT("sort"),
-				TEXT("listing_number"), TEXT("listing_title") };
+				TEXT("listing_number"), TEXT("listing_title"), TEXT("fixture_id") };
 			for (const TPair<FString, TSharedPtr<FJsonValue>>& Field : Input.Values)
 			{
 				if (!Algo::FindByPredicate(KnownFields, [&Field](const TCHAR* Known) { return Field.Key == Known; }))
@@ -339,7 +342,20 @@ namespace StageAICommandSchema
 				Out = Number;
 				return true;
 			};
-			TOptional<double> Count, CueNumber, Fade, Hour;
+			TOptional<double> Count, CueNumber, Fade, Hour, FixtureId;
+			if (!ReadNumber(TEXT("fixture_id"), FixtureId))
+			{
+				return false;
+			}
+			if (FixtureId.IsSet())
+			{
+				if (!FMath::IsFinite(*FixtureId) || *FixtureId != FMath::RoundToDouble(*FixtureId) || *FixtureId < 1.0 || *FixtureId > double(MAX_int32))
+				{
+					OutError = LOCTEXT("FixtureIdWhole", "The fixture ID must be a whole number from 1.");
+					return false;
+				}
+				Command.FixtureId = int32(*FixtureId);
+			}
 			if (!ReadNumber(TEXT("count"), Count) || !ReadNumber(TEXT("cue_number"), CueNumber) || !ReadNumber(TEXT("fade_seconds"), Fade) || !ReadNumber(TEXT("hour"), Hour)
 				|| !ReadNumber(TEXT("distance_cm"), Command.DistanceCm) || !ReadNumber(TEXT("radius_cm"), Command.RadiusCm) || !ReadNumber(TEXT("width_cm"), Command.WidthCm)
 				|| !ReadNumber(TEXT("height_cm"), Command.HeightCm) || !ReadNumber(TEXT("angle_degrees"), Command.AngleDegrees))

@@ -1505,44 +1505,69 @@ void UShowControlSubsystem::MakeHighlightValues(const ALightingFixtureActor& Fix
 	}
 }
 
-void UShowControlSubsystem::ResolveFixture(ALightingFixtureActor& Fixture, EResolveScope Scope)
+void UShowControlSubsystem::BuildLayers(const ALightingFixtureActor& Fixture, FLayerScratch& Scratch, StageShowMix::FFixtureLayers& OutLayers) const
 {
 	const int32 Id = Fixture.GetFixtureId();
-	TMap<FGameplayTag, float> HighlightValues;
 	const bool bHighlighted = Programmer && Programmer->IsHighlighted(Id);
 	if (bHighlighted)
 	{
-		MakeHighlightValues(Fixture, HighlightValues);
+		MakeHighlightValues(Fixture, Scratch.Highlight);
 	}
 
 	// Under External DMX the console owns the cue and home layers; only what the user holds by hand is written over it.
 	const bool bInternal = ControlSource == EStageControlSource::Internal;
-	TMap<FGameplayTag, float> ProgrammerScratch;
-	StageShowMix::FFixtureLayers Layers;
-	Layers.Home = bInternal ? &Fixture.GetHomeAttributes() : nullptr;
-	Layers.Playback = bInternal ? PlaybackValues.Find(Id) : nullptr;
-	Layers.Programmer = GetProgrammerLayer(Fixture, ProgrammerScratch);
-	Layers.Highlight = bHighlighted ? &HighlightValues : nullptr;
-	for (const FPlaybackRuntime& Runtime : PlaybackRuntime)
+	OutLayers = StageShowMix::FFixtureLayers();
+	OutLayers.Home = bInternal ? &Fixture.GetHomeAttributes() : nullptr;
+	OutLayers.Playback = bInternal ? PlaybackValues.Find(Id) : nullptr;
+	OutLayers.Programmer = GetProgrammerLayer(Fixture, Scratch.Programmer);
+	OutLayers.Highlight = bHighlighted ? &Scratch.Highlight : nullptr;
+	for (int32 Index = 0; Index < PlaybackRuntime.Num(); ++Index)
 	{
+		const FPlaybackRuntime& Runtime = PlaybackRuntime[Index];
 		const TMap<FGameplayTag, float>* Values = bInternal && Runtime.IsActive() ? Runtime.Output.Find(Id) : nullptr;
 		if (Values)
 		{
-			Layers.Playbacks.Add({ Values, Runtime.GetEffectiveLevel(), Runtime.Order });
+			OutLayers.Playbacks.Add({ Values, Runtime.GetEffectiveLevel(), Runtime.Order, Index });
 		}
 	}
 	// The masters scale intensity last, the programmer and highlight included (under External: what the user holds by hand).
-	Layers.IntensityScale = GetIntensityScale();
-	StageShowMix::FEffectMap EffectValues;
-	if (bInternal && EffectRunner.Evaluate(Fixture, EffectValues))
+	OutLayers.IntensityScale = GetIntensityScale();
+	if (bInternal && EffectRunner.Evaluate(Fixture, Scratch.Effects))
 	{
-		Layers.Effects = &EffectValues;
+		OutLayers.Effects = &Scratch.Effects;
 	}
+}
+
+StageShowMix::FAttributeExplanation UShowControlSubsystem::ExplainAttribute(int32 FixtureId, const FGameplayTag& Attribute) const
+{
+	const ALightingFixtureActor* Fixture = FindFixture(FixtureId);
+	if (!Fixture)
+	{
+		return StageShowMix::FAttributeExplanation();
+	}
+	FLayerScratch Scratch;
+	StageShowMix::FFixtureLayers Layers;
+	BuildLayers(*Fixture, Scratch, Layers);
+	return StageShowMix::ExplainAttribute(Attribute, Layers);
+}
+
+TOptional<float> UShowControlSubsystem::FindSettingCue(int32 FixtureId, const FGameplayTag& Attribute) const
+{
+	const int32 Index = FindCueIndex(ActiveCueNumber);
+	const int32 Setting = StageCueTracking::FindSettingCue(Cues, Index, FixtureId, Attribute);
+	return Cues.IsValidIndex(Setting) ? TOptional<float>(Cues[Setting].Number) : TOptional<float>();
+}
+
+void UShowControlSubsystem::ResolveFixture(ALightingFixtureActor& Fixture, EResolveScope Scope)
+{
+	FLayerScratch Scratch;
+	StageShowMix::FFixtureLayers Layers;
+	BuildLayers(Fixture, Scratch, Layers);
 
 	TArray<FGameplayTag> Attributes;
 	if (Scope == EResolveScope::EffectAttributes)
 	{
-		EffectValues.GetKeys(Attributes);
+		Scratch.Effects.GetKeys(Attributes);
 	}
 	else
 	{

@@ -606,7 +606,14 @@ Gevor's choices: automation tests on a harness game instance (not AFunctionalTes
   - [x] H1e SHOW ME / OPEN PANEL (open, scroll, pulse), assistant docked right in Default and Lighting Desk
   - [x] H1f tests (Sse, Knowledge, Search, Routing, HowTo), builds, Shipping scan, scripted runs H1a/H1b, ADR 0030 sections 13-14, STATE #72
 - [ ] H1 manual verification (Gevor): ask how-to questions in English and Armenian in the docked assistant, click SHOW ME and OPEN PANEL, float and re-dock the assistant tab; a packaged build answers from the help articles
-- [ ] H2 StageShowDiagnostics, StageFixtureExplain, Problems list
+- [x] H2 StageShowDiagnostics, StageFixtureExplain, Problems list (STATE.md #73, ADR 0030 section 15)
+  - [x] H2a StageShowMix::ExplainAttribute (layer, playback, effect, masters) and the show's BuildLayers shared with the mix; FindSettingCue (tracked from)
+  - [x] H2b StageShowDiagnostics::Run (18 codes, worst first), EN/HY sentences, places mapped to panel anchors
+  - [x] H2c StageFixtureExplain (first dark cause along the chain, and what keeps a real fixture from following), EN/HY
+  - [x] H2d UStageShowDiagnosticsSubsystem (push, once a frame, only while listened to) and the Problems panel (GO TO selects and shows the fix)
+  - [x] H2e assistant intents explain_fixture / list_problems (grammar EN/HY, online tool), SHOW ME at the cause; help articles why-dark and problems
+  - [x] H2f tests (Show.Explain, Show.Diagnostics, Assistant.Diagnostics), builds, Shipping scan, scripted run H2
+- [ ] H2 manual verification (Gevor): open Window > Problems, click a problem (fixtures selected, the fixing control shown); ask "why is fixture N dark?" and "any problems?" in English and Armenian and click SHOW ME
 - [ ] H3 tool catalogue, proposal cards, one-undo-step plans with rollback, bounded online loop with append-only history and cached prefix, key in the vault
 - [ ] H4 offline multi-step, conversation memory, new actions (rest of Phase 26)
 - [ ] I0 ADR 0031: asset source, VAT crowd technique (AnimToTexture bake, instanced meshes), crowd GPU budget measured at 1k / 5k / 20k; OverCrowd evaluated

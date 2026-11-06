@@ -74,6 +74,12 @@ namespace StageAIArmenian
 			{ TEXT("քանի"), TEXT("how many") }, { TEXT("ինչ"), TEXT("what") }, { TEXT("որքան"), TEXT("what") }, { TEXT("որն"), TEXT("what") },
 			{ TEXT("ցույց"), TEXT("show") }, { TEXT("ասա"), TEXT("tell") }, { TEXT("ասեք"), TEXT("tell") },
 
+			// Diagnostics (Docs/ADR/0030 §5): "ինչու է 12 սարքը մութ", "ինչ խնդիրներ կան", "ինչն է սխալ".
+			{ TEXT("ինչու"), TEXT("why") }, { TEXT("բացատր"), TEXT("explain") },
+			{ TEXT("մութ"), TEXT("dark") }, { TEXT("չի"), TEXT("not"), Exact }, { TEXT("չեն"), TEXT("not"), Exact },
+			{ TEXT("վառվ"), TEXT("lit") }, { TEXT("աշխատ"), TEXT("working") }, { TEXT("արձագանք"), TEXT("responding") },
+			{ TEXT("խնդիր"), TEXT("problems") }, { TEXT("սխալ"), TEXT("wrong") }, { TEXT("ստուգ"), TEXT("check") },
+
 			// Equipment.
 			{ TEXT("սարքավորում"), TEXT("equipment") }, { TEXT("սարք"), TEXT("fixture") },
 			{ TEXT("լույս"), TEXT("light") }, { TEXT("լուսատու"), TEXT("light") }, { TEXT("լուսարձակ"), TEXT("light") }, { TEXT("պրոժեկտոր"), TEXT("light") },

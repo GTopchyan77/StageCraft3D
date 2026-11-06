@@ -14,6 +14,7 @@
 #include "UI/StagePalettesPanel.h"
 #include "UI/StagePatchPanel.h"
 #include "UI/StagePlaybackPanel.h"
+#include "UI/StageProblemsPanel.h"
 #include "Workspace/StageWorkspaceTypes.h"
 
 #include UE_INLINE_GENERATED_CPP_BY_NAME(StageUIAnchors)
@@ -111,7 +112,43 @@ namespace StageUIAnchors
 			{ StageCraftTags::Panel_Patch, UStagePatchPanel::GetAnchors() },
 			{ StageCraftTags::Panel_Groups, UStageGroupsPanel::GetAnchors() },
 			{ StageCraftTags::Panel_Palettes, UStagePalettesPanel::GetAnchors() },
+			{ StageCraftTags::Panel_Problems, UStageProblemsPanel::GetAnchors() },
 		};
+	}
+
+	bool GetPlaceTarget(EStageDiagnosticPlace Place, FGameplayTag& OutPanel, FName& OutControl)
+	{
+		struct FTarget
+		{
+			EStageDiagnosticPlace Place;
+			FGameplayTag Panel;
+			const TCHAR* Control;
+		};
+		// Every control named here is an anchor of that panel (StageCraft.Show.Diagnostics checks it).
+		const FTarget Targets[] = {
+			{ EStageDiagnosticPlace::Patch, StageCraftTags::Panel_Patch, TEXT("PatchSheet") },
+			{ EStageDiagnosticPlace::DMXIn, StageCraftTags::Panel_Patch, TEXT("DMXIn") },
+			{ EStageDiagnosticPlace::DMXOut, StageCraftTags::Panel_Patch, TEXT("DMXOut") },
+			{ EStageDiagnosticPlace::Cues, StageCraftTags::Panel_Cues, TEXT("CueList") },
+			{ EStageDiagnosticPlace::ControlSource, StageCraftTags::Panel_Cues, TEXT("Internal") },
+			{ EStageDiagnosticPlace::Playback, StageCraftTags::Panel_Playback, TEXT("Fader") },
+			{ EStageDiagnosticPlace::GrandMaster, StageCraftTags::Panel_Playback, TEXT("GrandMaster") },
+			{ EStageDiagnosticPlace::Blackout, StageCraftTags::Panel_Playback, TEXT("Blackout") },
+			{ EStageDiagnosticPlace::Audio, StageCraftTags::Panel_Audio, TEXT("SourceFile") },
+			{ EStageDiagnosticPlace::AudioKill, StageCraftTags::Panel_Playback, TEXT("AudioKill") },
+			{ EStageDiagnosticPlace::Programmer, StageCraftTags::Panel_Groups, TEXT("ClearProgrammer") },
+			{ EStageDiagnosticPlace::Effects, StageCraftTags::Panel_Effects, TEXT("StopAll") },
+		};
+		for (const FTarget& Target : Targets)
+		{
+			if (Target.Place == Place)
+			{
+				OutPanel = Target.Panel;
+				OutControl = Target.Control;
+				return true;
+			}
+		}
+		return false;
 	}
 
 	const FStageUIAnchor* Find(const FGameplayTag& Panel, FName ControlId)

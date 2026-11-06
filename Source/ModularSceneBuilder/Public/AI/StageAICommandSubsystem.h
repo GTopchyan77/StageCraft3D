@@ -135,6 +135,12 @@ private:
 	 * when the knowledge has no confident answer. Commands are described with the asking player's current key bindings.
 	 */
 	bool AnswerFromKnowledge(const FString& Prompt, FStageAIInterpretation& OutReply) const;
+
+	/**
+	 * ExplainFixture and ListProblems, answered from the live stage by UStageShowDiagnosticsSubsystem (Docs/ADR/0030 §5).
+	 * OutReference points SHOW ME at where the cause is fixed (the Problems panel for a list). Read-only.
+	 */
+	FText AnswerDiagnostics(const FStageAICommand& Command, FStageAIReference& OutReference) const;
 	void SetState(EStageAIAssistantState NewState);
 
 	/** The online model's answer, or a fallback to the local parser when it failed. */

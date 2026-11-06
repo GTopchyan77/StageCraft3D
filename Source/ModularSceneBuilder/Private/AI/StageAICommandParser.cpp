@@ -1795,6 +1795,59 @@ namespace StageAICommandParser
 		}
 
 		/** The English grammar's rules, in order. */
+		/**
+		 * "Why is fixture 12 dark?", "why is it not responding", "explain fixture 3" (ExplainFixture), and "any problems?", "what's
+		 * wrong", "check the show" (ListProblems), Docs/ADR/0030 §5. A why-question about no fixture in particular ("why is a fixture
+		 * dark") is left to the help articles. Questions about how to fix something ("how do I fix ...") are too.
+		 */
+		TOptional<FStageAICommand> ParseDiagnostics(const FPrompt& Prompt)
+		{
+			if (Prompt.Has(TEXT("how")))
+			{
+				return {};
+			}
+			FStageAICommand Command;
+			const bool bWhy = Prompt.Has(TEXT("why"));
+			const bool bExplain = Prompt.Has(TEXT("explain"));
+			const bool bSymptom = Prompt.HasAny({ TEXT("dark"), TEXT("off"), TEXT("black"), TEXT("lit"), TEXT("on"), TEXT("dim"), TEXT("responding"), TEXT("respond"),
+				TEXT("reacting"), TEXT("react"), TEXT("working"), TEXT("work"), TEXT("light"), TEXT("lighting"), TEXT("bright"), TEXT("following"), TEXT("follow") });
+			TOptional<int32> Number;
+			for (const FString& Word : Prompt.Words)
+			{
+				if (!Word.IsEmpty() && Word.Len() <= 9 && Algo::AllOf(Word, [](TCHAR Char) { return FChar::IsDigit(Char); }))
+				{
+					Number = FCString::Atoi(*Word);
+					break;
+				}
+			}
+			const bool bSelection = Prompt.HasAny({ TEXT("it"), TEXT("this"), TEXT("that"), TEXT("selected"), TEXT("selection") });
+			if ((bWhy && bSymptom) || (bExplain && Prompt.HasAny({ TEXT("fixture"), TEXT("light"), TEXT("lamp"), TEXT("unit") })))
+			{
+				if (Number.IsSet() && *Number > 0)
+				{
+					Command.Intent = EStageAIIntent::ExplainFixture;
+					Command.FixtureId = *Number;
+					return Command;
+				}
+				if (bSelection)
+				{
+					Command.Intent = EStageAIIntent::ExplainFixture;
+					return Command;
+				}
+				return {};
+			}
+			const bool bWrong = Prompt.HasAny({ TEXT("wrong") }) && Prompt.HasAny({ TEXT("what"), TEXT("whats"), TEXT("anything"), TEXT("something"), TEXT("is") });
+			const bool bProblemWords = Prompt.HasAny({ TEXT("problems"), TEXT("problem"), TEXT("issues"), TEXT("issue"), TEXT("diagnose"), TEXT("diagnostics"),
+				TEXT("diagnostic"), TEXT("errors"), TEXT("warnings") });
+			const bool bCheckShow = Prompt.Has(TEXT("check")) && Prompt.HasAny({ TEXT("show"), TEXT("stage"), TEXT("everything"), TEXT("setup"), TEXT("patch") });
+			if (bWrong || bProblemWords || bCheckShow)
+			{
+				Command.Intent = EStageAIIntent::ListProblems;
+				return Command;
+			}
+			return {};
+		}
+
 		TOptional<FStageAICommand> ParseGrammar(const FString& Text)
 		{
 			const FPrompt Prompt(Text);
@@ -1812,6 +1865,11 @@ namespace StageAICommandParser
 			if (TOptional<FStageAICommand> Marketplace = ParseMarketplace(Prompt))
 			{
 				return Marketplace;
+			}
+			// Before the fixture controls: "why is light 3 off" asks, it does not turn anything off.
+			if (TOptional<FStageAICommand> Diagnostics = ParseDiagnostics(Prompt))
+			{
+				return Diagnostics;
 			}
 			if (Prompt.HasAny({ TEXT("help"), TEXT("commands") }) || Prompt.HasPhrase({ TEXT("what"), TEXT("can"), TEXT("you"), TEXT("do") })
 				|| Prompt.IsExactly({ TEXT("hi") }) || Prompt.IsExactly({ TEXT("hello") }))
