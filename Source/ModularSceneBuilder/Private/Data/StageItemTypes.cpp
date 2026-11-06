@@ -12,6 +12,7 @@ namespace StageCraftTags
 	UE_DEFINE_GAMEPLAY_TAG_COMMENT(Category_Lighting,	"StageCraft.Category.Lighting",	"Moving heads, pars, washes and other fixtures.");
 	UE_DEFINE_GAMEPLAY_TAG_COMMENT(Category_Prop,		"StageCraft.Category.Prop",		"Instruments, furniture and set dressing.");
 	UE_DEFINE_GAMEPLAY_TAG_COMMENT(Category_Cable,		"StageCraft.Category.Cable",	"Cable runs, cable ramps and power distribution lines.");
+	UE_DEFINE_GAMEPLAY_TAG_COMMENT(Category_People,		"StageCraft.Category.People",	"Audience, band members and crew (procedural stand-in people).");
 	UE_DEFINE_GAMEPLAY_TAG_COMMENT(Category_Imported,	"StageCraft.Category.Imported",	"Models imported from .glb, .gltf, .obj or .fbx files while the app runs.");
 
 	UE_DEFINE_GAMEPLAY_TAG_COMMENT(Category_Stage_Deck,				"StageCraft.Category.Stage.Deck",			"Modular stage decks (e.g. 2x1 m platforms).");
@@ -34,4 +35,9 @@ namespace StageCraftTags
 	UE_DEFINE_GAMEPLAY_TAG_COMMENT(Category_Audio_Monitor,			"StageCraft.Category.Audio.Monitor",		"Wedges, side fills and front fills.");
 	UE_DEFINE_GAMEPLAY_TAG_COMMENT(Category_Audio_Console,			"StageCraft.Category.Audio.Console",		"FOH and monitor mixing consoles.");
 	UE_DEFINE_GAMEPLAY_TAG_COMMENT(Category_Audio_Amplifier,		"StageCraft.Category.Audio.Amplifier",		"Amplifier racks and system processors.");
+	UE_DEFINE_GAMEPLAY_TAG_COMMENT(Category_People_Audience,		"StageCraft.Category.People.Audience",		"Audience areas filled with an animated crowd.");
+	UE_DEFINE_GAMEPLAY_TAG_COMMENT(Category_People_Band,			"StageCraft.Category.People.Band",			"Performers with their instruments.");
+	UE_DEFINE_GAMEPLAY_TAG_COMMENT(Category_People_Crew,			"StageCraft.Category.People.Crew",			"Technicians at their desks and stagehands in the wings.");
+	UE_DEFINE_GAMEPLAY_TAG_COMMENT(Category_Prop_Backline,		"StageCraft.Category.Prop.Backline",		"Amplifiers, drum kits and keyboards on stage.");
+	UE_DEFINE_GAMEPLAY_TAG_COMMENT(Category_Stage_Set,			"StageCraft.Category.Stage.Set",			"Backdrops, LED walls and other set structures.");
 }

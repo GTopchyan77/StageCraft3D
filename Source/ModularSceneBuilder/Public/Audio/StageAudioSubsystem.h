@@ -5,19 +5,17 @@
 #include "CoreMinimal.h"
 #include "Subsystems/GameInstanceSubsystem.h"
 #include "Containers/Ticker.h"
-#include "GameplayTagContainer.h"
 #include "StageAudioSubsystem.generated.h"
 
 DECLARE_DYNAMIC_MULTICAST_DELEGATE(FOnStageAudioSettingsChanged);
 
 /**
- * Central audio manager: plays feedback cues and owns the user's audio preferences.
+ * Central audio manager: owns the user's audio preferences.
  *
- * - Cues: PlayCue(StageCraft.Sound.*) looks the tag up in UStageAudioDeveloperSettings. Sounds stream in
- *   asynchronously at startup; a cue whose sound is not loaded yet is skipped (logged once).
+ * - The editor makes no interface sounds: clicks, selection, placement and refusals are silent (STATE.md #76; the feedback cues
+ *   of #23 were removed on Gevor's request). Sound in StageCraft is the music the show follows (UStageAudioReactiveSubsystem).
  * - Master volume and Mute apply to every sound: a sound-mix class override on the project's default
- *   (master) sound class, applied to its children. Effects volume is a per-play gain on cues, which is
- *   why every interface/interaction sound must go through PlayCue.
+ *   (master) sound class, applied to its children.
  * - Preferences are stored in UStageCraftUserSettings (single source of truth). Setters apply immediately,
  *   broadcast OnAudioSettingsChanged and save to disk debounced (~1 s; flushed on shutdown).
  *
@@ -34,15 +32,8 @@ public:
 	virtual void Deinitialize() override;
 	//~ End USubsystem Interface
 
-	/** Plays a feedback cue in 2D. Silent while muted, for unknown tags, unloaded sounds or a too-soon retrigger. */
-	UFUNCTION(BlueprintCallable, Category = "StageCraft|Audio")
-	void PlayCue(FGameplayTag CueTag);
-
 	UFUNCTION(BlueprintPure, Category = "StageCraft|Audio")
 	float GetMasterVolume() const;
-
-	UFUNCTION(BlueprintPure, Category = "StageCraft|Audio")
-	float GetEffectsVolume() const;
 
 	UFUNCTION(BlueprintPure, Category = "StageCraft|Audio")
 	bool IsMuted() const;
@@ -50,10 +41,6 @@ public:
 	/** Linear gain, clamped to [0, 1]. */
 	UFUNCTION(BlueprintCallable, Category = "StageCraft|Audio")
 	void SetMasterVolume(float Volume);
-
-	/** Linear gain for feedback cues, clamped to [0, 1]. */
-	UFUNCTION(BlueprintCallable, Category = "StageCraft|Audio")
-	void SetEffectsVolume(float Volume);
 
 	UFUNCTION(BlueprintCallable, Category = "StageCraft|Audio")
 	void SetMuted(bool bMuted);
@@ -76,17 +63,6 @@ public:
 	FOnStageAudioSettingsChanged OnAudioSettingsChanged;
 
 private:
-	struct FLoadedCue
-	{
-		TSoftObjectPtr<class USoundBase> Sound;
-		float VolumeScale = 1.f;
-		float MinRetriggerInterval = 0.f;
-		double LastPlayedTime = -UE_BIG_NUMBER;
-		bool bReportedMissing = false;
-	};
-
-	void BuildCueTable();
-	void RequestCueSounds();
 	void HandlePostLoadMap(class UWorld* LoadedWorld);
 	void ApplyMasterGain();
 	void ApplyBackgroundPlayback();
@@ -107,9 +83,6 @@ private:
 
 	UPROPERTY(Transient)
 	TObjectPtr<class USoundClass> MasterSoundClass = nullptr;
-
-	TMap<FGameplayTag, FLoadedCue> Cues;
-	TSharedPtr<struct FStreamableHandle> CueLoadHandle;
 
 	/** Audio devices the mix has been pushed to, so re-applying after travel never stacks pushes. */
 	TSet<uint32> MixPushedDeviceIds;

@@ -91,6 +91,7 @@ namespace StageCraftTags
 	UE_DEFINE_GAMEPLAY_TAG_COMMENT(FeatureGroup_Rigging,		"StageCraft.FeatureGroup.Rigging",		"Truss and hoist specs.");
 	UE_DEFINE_GAMEPLAY_TAG_COMMENT(FeatureGroup_Span,			"StageCraft.FeatureGroup.Span",			"Length and segments of a linear run (truss, railing, cable).");
 	UE_DEFINE_GAMEPLAY_TAG_COMMENT(FeatureGroup_Deck,			"StageCraft.FeatureGroup.Deck",			"Height and footprint of a stage deck or riser.");
+	UE_DEFINE_GAMEPLAY_TAG_COMMENT(FeatureGroup_Audience,		"StageCraft.FeatureGroup.Audience",		"Size, density and mood of an audience area.");
 	UE_DEFINE_GAMEPLAY_TAG_COMMENT(FeatureGroup_Stairs,		"StageCraft.FeatureGroup.Stairs",		"Rise, width, steps and handrails of stage stairs.");
 	UE_DEFINE_GAMEPLAY_TAG_COMMENT(FeatureGroup_ArcTruss,		"StageCraft.FeatureGroup.ArcTruss",		"Radius, angle and sections of a curved truss.");
 	UE_DEFINE_GAMEPLAY_TAG_COMMENT(FeatureGroup_Shapers,		"StageCraft.FeatureGroup.Shapers",		"Framing shutters (blades) of a profile fixture.");
@@ -135,6 +136,11 @@ namespace StageCraftTags
 	UE_DEFINE_GAMEPLAY_TAG_COMMENT(Param_Deck_Area,			"StageCraft.Param.Deck.Area",			"Deck top area in square metres (read-only).");
 	UE_DEFINE_GAMEPLAY_TAG_COMMENT(Param_Deck_Panels,			"StageCraft.Param.Deck.Panels",			"Rental deck panels needed to cover the footprint (read-only).");
 	UE_DEFINE_GAMEPLAY_TAG_COMMENT(Param_Deck_Corners,			"StageCraft.Param.Deck.Corners",		"Corners of the deck outline (read-only).");
+	UE_DEFINE_GAMEPLAY_TAG_COMMENT(Param_Audience_Width,		"StageCraft.Param.Audience.Width",		"Width of an audience area in cm (across the stage).");
+	UE_DEFINE_GAMEPLAY_TAG_COMMENT(Param_Audience_Depth,		"StageCraft.Param.Audience.Depth",		"Depth of an audience area in cm (away from the stage).");
+	UE_DEFINE_GAMEPLAY_TAG_COMMENT(Param_Audience_Density,	"StageCraft.Param.Audience.Density",	"People per square metre in an audience area.");
+	UE_DEFINE_GAMEPLAY_TAG_COMMENT(Param_Audience_Mood,		"StageCraft.Param.Audience.Mood",		"What the audience does: calm, dancing or cheering.");
+	UE_DEFINE_GAMEPLAY_TAG_COMMENT(Param_Audience_People,		"StageCraft.Param.Audience.People",		"People shown in an audience area (read-only).");
 	UE_DEFINE_GAMEPLAY_TAG_COMMENT(Param_Stairs_Rise,			"StageCraft.Param.Stairs.Rise",			"Height the stairs climb, in cm (the deck they lead to).");
 	UE_DEFINE_GAMEPLAY_TAG_COMMENT(Param_Stairs_Width,			"StageCraft.Param.Stairs.Width",		"Stair width in cm.");
 	UE_DEFINE_GAMEPLAY_TAG_COMMENT(Param_Stairs_Handrails,		"StageCraft.Param.Stairs.Handrails",	"Handrails on both sides.");
@@ -205,7 +211,9 @@ namespace StageCraftTags
 	bool IsShapeParameter(const FGameplayTag& ParameterId)
 	{
 		return IsQuantityParameter(ParameterId) || ParameterId == Param_Span_Sag || ParameterId == Param_Deck_Height
-			|| ParameterId == Param_Stairs_Rise || ParameterId == Param_Stairs_Width || ParameterId == Param_Stairs_Handrails;
+			|| ParameterId == Param_Stairs_Rise || ParameterId == Param_Stairs_Width || ParameterId == Param_Stairs_Handrails
+			|| ParameterId == Param_Audience_Width || ParameterId == Param_Audience_Depth || ParameterId == Param_Audience_Density
+			|| ParameterId == Param_Audience_Mood;
 	}
 
 	bool IsFixtureLookParameter(const FGameplayTag& ParameterId)

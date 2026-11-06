@@ -26,6 +26,7 @@
 #include "Placement/StagePlacementPreview.h"
 #include "Placement/StagePlacementToolComponent.h"
 #include "Placement/StageSnappingComponent.h"
+#include "Sketch/StageSketchTypes.h"
 #include "Player/ModularPlayerController.h"
 #include "Subsystems/StageItemSubsystem.h"
 
@@ -179,6 +180,37 @@ namespace StagePlacementCommands
 			}
 		}
 		UE_LOG(LogStageCraft, Display, TEXT("StageCraft.Edit.Arm: no catalog item named %s (catalog loaded: %s)."), *Name, Items->IsCatalogLoaded() ? TEXT("yes") : TEXT("no"));
+	}
+
+	/** Places a catalog item at a point through the controller's build request (the rules, one undo step), for scripts and starter stages. */
+	void PlaceAt(const TArray<FString>& Args, UWorld* World)
+	{
+		AModularPlayerController* Controller = GetController(World);
+		const UGameInstance* GameInstance = World ? World->GetGameInstance() : nullptr;
+		const UStageItemSubsystem* Items = GameInstance ? GameInstance->GetSubsystem<UStageItemSubsystem>() : nullptr;
+		double X = 0.0;
+		double Y = 0.0;
+		double Z = 0.0;
+		double Yaw = 0.0;
+		if (!Controller || !Items || Args.Num() < 3 || !LexTryParseString(X, *Args[1]) || !LexTryParseString(Y, *Args[2])
+			|| (Args.Num() > 3 && !LexTryParseString(Z, *Args[3])) || (Args.Num() > 4 && !LexTryParseString(Yaw, *Args[4])))
+		{
+			UE_LOG(LogStageCraft, Display, TEXT("Usage: StageCraft.Edit.PlaceAt <ItemAssetName> <X m> <Y m> [Z m] [Yaw deg]"));
+			return;
+		}
+		UBaseItemData* const* Found = Items->GetCatalog().FindByPredicate([&Args](const UBaseItemData* Item) { return Item && Item->GetName().Equals(Args[0], ESearchCase::IgnoreCase); });
+		if (!Found)
+		{
+			UE_LOG(LogStageCraft, Display, TEXT("StageCraft.Edit.PlaceAt: no catalog item named %s."), *Args[0]);
+			return;
+		}
+		FStageSketchBuildPlan Plan;
+		FStageSketchItemPlan& Entry = Plan.Items.AddDefaulted_GetRef();
+		Entry.Item = *Found;
+		Entry.Transform = FTransform(FRotator(0.0, Yaw, 0.0), FVector(X, Y, Z) * 100.0);
+		const FStageSketchGenerateResult Result = Controller->RequestBuildPlan(Plan, (*Found)->DisplayName);
+		UE_LOG(LogStageCraft, Display, TEXT("StageCraft.Edit.PlaceAt %s at (%.2f, %.2f, %.2f) m yaw %.0f: %s"), *(*Found)->GetName(), X, Y, Z, Yaw,
+			Result.bSucceeded ? TEXT("placed") : *Result.Message.ToString());
 	}
 
 	void PlaceMode(const TArray<FString>& Args, UWorld* World)
@@ -539,6 +571,8 @@ namespace StagePlacementCommands
 		FConsoleCommandWithWorldAndArgsDelegate::CreateStatic(&Status));
 	FAutoConsoleCommandWithWorldAndArgs ArmCommand(TEXT("StageCraft.Edit.Arm"), TEXT("<ItemAssetName> Same as clicking the item in the Library: arm it and enter Place mode."),
 		FConsoleCommandWithWorldAndArgsDelegate::CreateStatic(&Arm));
+	FAutoConsoleCommandWithWorldAndArgs PlaceAtCommand(TEXT("StageCraft.Edit.PlaceAt"), TEXT("<ItemAssetName> <X m> <Y m> [Z m] [Yaw deg] Places a catalog item at a point (one undo step)."),
+		FConsoleCommandWithWorldAndArgsDelegate::CreateStatic(&PlaceAt));
 	FAutoConsoleCommandWithWorldAndArgs PlaceModeCommand(TEXT("StageCraft.Edit.PlaceMode"), TEXT("[on|off|toggle] Enters or leaves Place mode."),
 		FConsoleCommandWithWorldAndArgsDelegate::CreateStatic(&PlaceMode));
 	FAutoConsoleCommandWithWorldAndArgs PointerAtCommand(TEXT("StageCraft.Edit.PointerAt"), TEXT("<U> <V> Simulates the cursor at a fraction of the viewport (0-1)."),

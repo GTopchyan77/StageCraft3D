@@ -38,12 +38,10 @@ public:
 	//~ End UGameUserSettings Interface
 
 	float GetMasterVolume() const { return MasterVolume; }
-	float GetEffectsVolume() const { return EffectsVolume; }
 	bool IsAudioMuted() const { return bAudioMuted; }
 
 	/** Clamped to [0, 1]. Returns true if the stored value changed. Does not save. */
 	bool SetMasterVolume(float Volume);
-	bool SetEffectsVolume(float Volume);
 	bool SetAudioMuted(bool bMuted);
 
 	/** Object snapping while placing and moving items (UStageSnappingComponent is the only writer). */
@@ -169,9 +167,6 @@ private:
 
 	UPROPERTY(Config)
 	float MasterVolume = 1.f;
-
-	UPROPERTY(Config)
-	float EffectsVolume = 1.f;
 
 	UPROPERTY(Config)
 	bool bAudioMuted = false;

@@ -11,7 +11,6 @@
 #include "Settings/StageCraftUserSettings.h"
 #include "Algo/AllOf.h"
 #include "Audio/StageAudioSubsystem.h"
-#include "Audio/StageEditorAudioFeedbackComponent.h"
 #include "Blueprint/UserWidget.h"
 #include "Components/SceneComponent.h"
 #include "Components/SelectionComponent.h"
@@ -108,7 +107,6 @@ AModularPlayerController::AModularPlayerController()
 	SpawnSystem = CreateDefaultSubobject<USpawnSystemComponent>(TEXT("SpawnSystem"));
 	Selection = CreateDefaultSubobject<USelectionComponent>(TEXT("Selection"));
 	PlacementTool = CreateDefaultSubobject<UStagePlacementToolComponent>(TEXT("PlacementTool"));
-	AudioFeedback = CreateDefaultSubobject<UStageEditorAudioFeedbackComponent>(TEXT("AudioFeedback"));
 	EditHistory = CreateDefaultSubobject<UStageEditHistoryComponent>(TEXT("EditHistory"));
 	Snapping = CreateDefaultSubobject<UStageSnappingComponent>(TEXT("Snapping"));
 	GroupTransform = CreateDefaultSubobject<UStageGroupTransformComponent>(TEXT("GroupTransform"));
@@ -2905,6 +2903,14 @@ void AModularPlayerController::HandleSceneOperationFinished(const FStageSceneOpe
 	if (Result.Operation == EStageSceneOperation::Load || Result.Operation == EStageSceneOperation::OpenTemplate)
 	{
 		RequestPreviewRefresh();
+	}
+	// A starter stage is shown on its own: no welcome screen or floating panel stays over it (STATE.md #76).
+	if (Result.Operation == EStageSceneOperation::OpenTemplate)
+	{
+		if (UStageWorkspaceSubsystem* Workspace = GetGameInstance() ? GetGameInstance()->GetSubsystem<UStageWorkspaceSubsystem>() : nullptr)
+		{
+			Workspace->PresentStarterStage();
+		}
 	}
 	// A starter stage is presented: the camera glides to a three-quarter view of everything on it.
 	if (Result.Operation == EStageSceneOperation::OpenTemplate && CameraNavigation)

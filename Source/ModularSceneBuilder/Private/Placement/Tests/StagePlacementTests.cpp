@@ -109,9 +109,6 @@ bool FStageAudioMathTest::RunTest(const FString& Parameters)
 	TestEqual(TEXT("Master gain is the master volume"), ComputeMasterGain(0.6f, false), 0.6f);
 	TestEqual(TEXT("Mute wins over any master volume"), ComputeMasterGain(1.f, true), 0.f);
 
-	TestEqual(TEXT("Cue gain is effects x cue level"), ComputeCueGain(0.5f, 0.8f), 0.4f, 1.e-5f);
-	TestEqual(TEXT("Effects at 0 silences cues"), ComputeCueGain(0.f, 1.f), 0.f);
-	TestEqual(TEXT("A negative cue level is silent, not inverted"), ComputeCueGain(1.f, -1.f), 0.f);
 	return true;
 }
 
@@ -123,21 +120,17 @@ bool FStageAudioUserSettingsTest::RunTest(const FString& Parameters)
 	UStageCraftUserSettings* Settings = NewObject<UStageCraftUserSettings>(GetTransientPackage());
 
 	TestEqual(TEXT("Default master"), Settings->GetMasterVolume(), 1.f);
-	TestEqual(TEXT("Default effects"), Settings->GetEffectsVolume(), 1.f);
 	TestFalse(TEXT("Default unmuted"), Settings->IsAudioMuted());
 
 	TestTrue(TEXT("Changing master reports a change"), Settings->SetMasterVolume(0.25f));
 	TestFalse(TEXT("Setting the same master again reports no change"), Settings->SetMasterVolume(0.25f));
 	Settings->SetMasterVolume(7.f);
 	TestEqual(TEXT("Master is clamped to 1"), Settings->GetMasterVolume(), 1.f);
-	Settings->SetEffectsVolume(-1.f);
-	TestEqual(TEXT("Effects is clamped to 0"), Settings->GetEffectsVolume(), 0.f);
 	TestTrue(TEXT("Muting reports a change"), Settings->SetAudioMuted(true));
 	TestTrue(TEXT("Muted"), Settings->IsAudioMuted());
 
 	Settings->SetToDefaults();
 	TestEqual(TEXT("SetToDefaults resets master"), Settings->GetMasterVolume(), 1.f);
-	TestEqual(TEXT("SetToDefaults resets effects"), Settings->GetEffectsVolume(), 1.f);
 	TestFalse(TEXT("SetToDefaults unmutes"), Settings->IsAudioMuted());
 	return true;
 }

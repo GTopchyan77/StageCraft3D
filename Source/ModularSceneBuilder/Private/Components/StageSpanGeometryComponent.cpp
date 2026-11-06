@@ -15,29 +15,21 @@ namespace StageSpanGeometry
 {
 	// Same as the placement ghost: above beams and haze cards, so the run being drawn is never painted over.
 	constexpr int32 PreviewTranslucencySortPriority = 900;
+}
 
-	/** The instances of one mesh + material pair, gathered before any component is touched. */
-	struct FPendingBatch
+UStageSpanGeometryComponent::FPendingBatch& UStageSpanGeometryComponent::FindOrAddBatch(TArray<FPendingBatch>& Batches, UStaticMesh* Mesh, UMaterialInterface* Material)
+{
+	for (FPendingBatch& Batch : Batches)
 	{
-		UStaticMesh* Mesh = nullptr;
-		UMaterialInterface* Material = nullptr;
-		TArray<FTransform> Transforms;
-	};
-
-	FPendingBatch& FindOrAddBatch(TArray<FPendingBatch>& Batches, UStaticMesh* Mesh, UMaterialInterface* Material)
-	{
-		for (FPendingBatch& Batch : Batches)
+		if (Batch.Mesh == Mesh && Batch.Material == Material)
 		{
-			if (Batch.Mesh == Mesh && Batch.Material == Material)
-			{
-				return Batch;
-			}
+			return Batch;
 		}
-		FPendingBatch& Batch = Batches.AddDefaulted_GetRef();
-		Batch.Mesh = Mesh;
-		Batch.Material = Material;
-		return Batch;
 	}
+	FPendingBatch& Batch = Batches.AddDefaulted_GetRef();
+	Batch.Mesh = Mesh;
+	Batch.Material = Material;
+	return Batch;
 }
 
 UStageSpanGeometryComponent::UStageSpanGeometryComponent()
@@ -55,8 +47,6 @@ void UStageSpanGeometryComponent::SetUsage(EStageSpanGeometryUsage InUsage, UMat
 
 void UStageSpanGeometryComponent::Build(const UStageSpanData* Data, const FStageSpanPathLayout& Layout)
 {
-	using namespace StageSpanGeometry;
-
 	if (!IsRegistered())
 	{
 		return;
@@ -101,6 +91,28 @@ void UStageSpanGeometryComponent::Build(const UStageSpanData* Data, const FStage
 	AddPartsAt(Data->JointParts, Joints);
 	AddPartsAt(Data->CornerParts.IsEmpty() ? Data->JointParts : Data->CornerParts, Corners);
 
+	ShowBatches(Pending);
+}
+
+void UStageSpanGeometryComponent::BuildParts(TConstArrayView<FStageSpanPart> Parts)
+{
+	if (!IsRegistered())
+	{
+		return;
+	}
+	TArray<FPendingBatch> Pending;
+	for (const FStageSpanPart& Part : Parts)
+	{
+		if (UStaticMesh* Mesh = Part.Mesh.LoadSynchronous())
+		{
+			FindOrAddBatch(Pending, Mesh, Part.Material.LoadSynchronous()).Transforms.Add(Part.Transform);
+		}
+	}
+	ShowBatches(Pending);
+}
+
+void UStageSpanGeometryComponent::ShowBatches(const TArray<FPendingBatch>& Pending)
+{
 	for (int32 Index = 0; Index < Pending.Num(); ++Index)
 	{
 		UInstancedStaticMeshComponent* Batch = AcquireBatch(Index);

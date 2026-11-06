@@ -12,7 +12,7 @@ public class ModularSceneBuilder : ModuleRules
 		PublicDependencyModuleNames.AddRange(new string[] { "Core", "CoreUObject", "Engine", "InputCore", "EnhancedInput", "GameplayTags", "UMG" });
 
 		// ApplicationCore: FDisplayMetrics and DPI scale (monitor work areas). Json: workspace layout files.
-		// DeveloperSettings: StageCraft Audio project settings (feedback cue table).
+		// DeveloperSettings: project settings classes (assistant, cabling).
 		// RenderCore, RHI: render-thread GPU readback of still renders. ImageCore: resizing supersampled renders.
 		// HTTP: the AI assistant's optional online model (Claude Messages API, ADR 0016).
 		PrivateDependencyModuleNames.AddRange(new string[] { "ProceduralMeshComponent", "Slate", "SlateCore", "ApplicationCore", "Json", "DeveloperSettings", "RenderCore", "RHI", "ImageCore", "HTTP" });

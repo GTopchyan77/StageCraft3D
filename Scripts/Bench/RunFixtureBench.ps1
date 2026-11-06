@@ -34,6 +34,10 @@ param(
     [switch]$DMXOut,
     # Make the effects follow the test signal at 128 BPM (needs -Effects 1..3; ADR 0029 section 8).
     [switch]$Audio,
+    # Also stand an audience area of this many people under the fixtures (ADR 0031 section 6); 0 for none.
+    [ValidateRange(0, 20000)][int]$Crowd = 0,
+    # Camera for the run as "X Y Z Pitch Yaw" (metres, degrees; StageCraft.View.Camera), so the crowd is in view; empty keeps the stage view.
+    [string]$Camera = '',
     [int]$ResX = 1600,
     [int]$ResY = 900,
     [int]$StartDelaySeconds = 10,
@@ -60,7 +64,9 @@ $BenchCommand = "StageCraft.Bench.Fixtures $($Counts -join ' ') Seconds=$Seconds
 if ($Item) { $BenchCommand += " Item=$Item" }
 if ($DMXOut) { $BenchCommand += " DMXOut=1" }
 if ($Audio) { $BenchCommand += " Audio=1" }
+if ($Crowd -gt 0) { $BenchCommand += " Crowd=$Crowd" }
 $ExecCmds = "StageCraft.Workspace.Delay $StartDelaySeconds $BenchCommand"
+if ($Camera) { $ExecCmds = "StageCraft.Workspace.Delay $($StartDelaySeconds - 1) StageCraft.View.Camera $Camera," + $ExecCmds }
 
 Write-Host "Running: $BenchCommand"
 $Game = Start-Process -FilePath $Editor -PassThru -ArgumentList @(

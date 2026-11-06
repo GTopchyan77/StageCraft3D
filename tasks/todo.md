@@ -631,8 +631,13 @@ Gevor's choices: automation tests on a harness game instance (not AFunctionalTes
   - [x] H4e tests (Assistant.MultiStep, Assistant.ToolGrammar, Assistant.ToolSchema, Assistant.Memory), builds, Shipping scan, scripted run H4
 - [ ] H4 manual verification (Gevor): type "add 4 pars and make them blue", APPLY, one Ctrl+Z; "select fixtures 1 to 2 and record a group called Front"; "start a circle effect on group front", "effect speed 1 hz", "stop all effects"; "do it again on group front" after a colour; the same in Armenian
 - [ ] H4 follow-ups: add or remove fixtures of an existing group, rename palettes and groups, per-fixture palettes, effect settings beyond rate and size, BOM answers and export completion in chat (Phase 26)
-- [ ] I0 ADR 0031: asset source, VAT crowd technique (AnimToTexture bake, instanced meshes), crowd GPU budget measured at 1k / 5k / 20k; OverCrowd evaluated
-- [ ] I1 Audience area item (outline, density, capacity in reports, crowd energy from audio), Bench.Crowd
-- [ ] I2 band members and backline items
+- [x] UI overrides (Gevor 2026-11-06, STATE.md #76): no interface sounds (feedback cues, their table, SFX assets, Effects volume removed); a starter stage opens with the welcome screen and every floating panel closed, nothing opened
+- [x] I0 ADR 0031 (STATE.md #76): procedural stand-in people on a bone-animation-texture contract (art source still open for Gevor: real art drops into the same contract), crowd budget measured with Bench.Fixtures Crowd=N; OverCrowd not used
+  - [x] I0a StageFigureRig: 11-bone rigid humanoid, 3 LODs (348 / 168 / 72 triangles), 10 clips (crowd idle / bounce / cheer / clap, drummer, guitarist, vocalist, keyboardist, desk operator, stagehand), baked 22 x 320 RGBA32F texture
+  - [x] I0b UStageFigureAssetSubsystem (engine subsystem: runtime mesh, texture, material instances), M_StageFigure (WPO from the texture, turned normals, region colours from per-instance data)
+- [x] I1 Audience area item (width, depth, density, mood; deterministic fill, undoable, sanitized on load), HISM crowd without shadows, floor pick box on the item channel only, Bench.Fixtures Crowd=N (STATE.md #76)
+- [x] I2 band members (drummer with kit, guitarist, bassist, vocalist, keyboardist), crew (FOH lighting and sound positions, monitor desk, stagehand), backline amp stack, LED wall backdrop, crowd barrier span (STATE.md #76)
+- [ ] Phase I manual verification (Gevor): open the Concert starter stage from the welcome screen (no floating windows, no sounds); click the crowd (selects the area), change Width / Density / Mood in the inspector and Ctrl+Z; place a drummer and a FOH desk from the Library (People category); orbit the camera over the crowd
+- [ ] Phase I follow-ups: crowd energy and band tempo from the music (ADR 0029 features), audience polygon outlines, capacity in reports and the bill of materials, a placement ghost for prop and audience items, real character art through the ADR 0031 §3.4 contract
 - [ ] I3 haze machine item; starter stages v2 (Arena, Festival, Club, Theatre, Conference) with mixed fixtures
 - [ ] I4 packaged Shipping validation per template

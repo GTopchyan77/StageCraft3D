@@ -11,6 +11,8 @@
 //   (DMXOut=1 also sends every bench universe as Art-Net and sACN unicast to 127.0.0.1 on unused ports; Docs/ADR/0019 §9.7.)
 //   (Audio=1, with Effects, makes those effects follow the test signal at 128 BPM: the circle synced, the dimmer sine modulated by the bass,
 //   the rainbow synced to the bar; needs the audio source off; Docs/ADR/0029 §8.)
+//   (Crowd=N also stands an audience area of N people (at most 20000) under the fixtures for every run: the GPU cost of the crowd of
+//   Docs/ADR/0031 §6 measured with the show. Set the camera first, e.g. StageCraft.View.Camera, so the crowd is in view.)
 //   (Zoom=0 keeps the zoom fixed: a cone change rebuilds the engine's light proxy, so zoom fades are measured apart.)
 //   StageCraft.Bench.Cancel
 //
@@ -21,9 +23,11 @@
 
 #if !UE_BUILD_SHIPPING
 
+#include "Actors/StageAudienceActor.h"
 #include "Actors/LightingFixtureActor.h"
 #include "Components/SpawnSystemComponent.h"
 #include "Containers/Ticker.h"
+#include "Data/StageAudienceData.h"
 #include "Data/LightingFixtureData.h"
 #include "Data/StageParameterTypes.h"
 #include "Diagnostics/StageFrameStats.h"
@@ -92,6 +96,8 @@ namespace StageFixtureBenchmark
 		 * unless the audio source is off; it is switched off again at the end.
 		 */
 		bool bAudio = false;
+		/** Crowd=N: an audience area of N people (density 4 per m²) under the fixtures for every run; 0 for none. */
+		int32 Crowd = 0;
 	};
 
 	/** Per-frame samples of one measured phase, in milliseconds. */
@@ -107,6 +113,7 @@ namespace StageFixtureBenchmark
 	{
 		int32 RequestedFixtures = 0;
 		int32 SpawnedFixtures = 0;
+		int32 CrowdPeople = 0;
 		FPhaseSamples Idle;
 		FPhaseSamples Crossfade;
 		int32 CuesStarted = 0;
@@ -456,8 +463,46 @@ namespace StageFixtureBenchmark
 				}
 			}
 			Current.SpawnedFixtures = Spawned.Num();
+			if (Settings.Crowd > 0 && Spawner)
+			{
+				SpawnCrowd(*Spawner);
+			}
 			UE_LOG(LogStageCraft, Display, TEXT("StageCraft.Bench: spawned %d of %d fixtures; settling %.0f s."), Current.SpawnedFixtures, Current.RequestedFixtures, Settings.SettleSeconds);
 			SetStep(EStep::Settle);
+		}
+
+		/** Crowd=N: one audience area at 4 people per m², 1.6 times as wide as deep, centred under the fixture grid. */
+		void SpawnCrowd(USpawnSystemComponent& Spawner)
+		{
+			const UGameInstance* GameInstance = World->GetGameInstance();
+			const UStageItemSubsystem* Items = GameInstance ? GameInstance->GetSubsystem<UStageItemSubsystem>() : nullptr;
+			UStageAudienceData* AudienceData = nullptr;
+			for (UBaseItemData* Item : Items ? Items->GetCatalog() : TArray<UBaseItemData*>())
+			{
+				AudienceData = AudienceData ? AudienceData : Cast<UStageAudienceData>(Item);
+			}
+			if (!AudienceData)
+			{
+				UE_LOG(LogStageCraft, Display, TEXT("StageCraft.Bench: Crowd needs an audience item in the catalog; measuring without one."));
+				return;
+			}
+			constexpr double Density = 4.0;
+			const double DepthCm = FMath::Sqrt(Settings.Crowd / Density / 1.6) * 100.0;
+			const double WidthCm = DepthCm * 1.6;
+			AStageAudienceActor* Area = Cast<AStageAudienceActor>(Spawner.SpawnItem(AudienceData, FTransform(FVector(-DepthCm * 0.5, 0.0, 0.0))));
+			if (!Area)
+			{
+				UE_LOG(LogStageCraft, Display, TEXT("StageCraft.Bench: the crowd could not be placed; measuring without one."));
+				return;
+			}
+			for (const TPair<FGameplayTag, double>& Setting : { TPair<FGameplayTag, double>(StageCraftTags::Param_Audience_Density, Density),
+				TPair<FGameplayTag, double>(StageCraftTags::Param_Audience_Width, WidthCm), TPair<FGameplayTag, double>(StageCraftTags::Param_Audience_Depth, DepthCm) })
+			{
+				IStageParameterInterface::Execute_SetParameterValue(Area, Setting.Key, FStageParameterValue::MakeFloat(Setting.Value));
+			}
+			CrowdArea = Area;
+			Current.CrowdPeople = Area->GetPeopleCount();
+			UE_LOG(LogStageCraft, Display, TEXT("StageCraft.Bench: crowd of %d people (%.1f x %.1f m)."), Current.CrowdPeople, WidthCm / 100.0, DepthCm / 100.0);
 		}
 
 		void ApplyLook(bool bBright)
@@ -631,6 +676,14 @@ namespace StageFixtureBenchmark
 				}
 			}
 			Spawned.Reset();
+			if (AStageAudienceActor* Area = CrowdArea.Get())
+			{
+				if (!(Spawner && Spawner->TryDeleteActor(Area)))
+				{
+					Area->Destroy();
+				}
+			}
+			CrowdArea.Reset();
 
 			if (Show)
 			{
@@ -682,7 +735,7 @@ namespace StageFixtureBenchmark
 
 		void Report() const
 		{
-			FString Csv = TEXT("Fixtures,Phase,Frames,FrameMeanMs,FrameP50Ms,FrameP95Ms,FrameP99Ms,FrameMaxMs,GameMeanMs,GameP95Ms,GpuMeanMs,GpuP95Ms,ShowTicks,ShowTickMeanMs,ShowTickMaxMs,DroppedFrames,CuesStarted\r\n");
+			FString Csv = TEXT("Fixtures,Crowd,Phase,Frames,FrameMeanMs,FrameP50Ms,FrameP95Ms,FrameP99Ms,FrameMaxMs,GameMeanMs,GameP95Ms,GpuMeanMs,GpuP95Ms,ShowTicks,ShowTickMeanMs,ShowTickMaxMs,DroppedFrames,CuesStarted\r\n");
 			for (const FRunResult& Result : Results)
 			{
 				const FStageFrameStatsSummary IdleFrame = StageFrameStats::Summarize(Result.Idle.Frame);
@@ -698,11 +751,11 @@ namespace StageFixtureBenchmark
 					const int32 Dropped = StageFrameStats::CountDroppedFrames(Samples.Frame, FrameBudgetMs, IdleFrame.Median, DropFactor);
 					const TCHAR* PhaseName = bCrossfade ? TEXT("crossfade") : TEXT("idle");
 
-					UE_LOG(LogStageCraft, Display, TEXT("StageCraft.Bench: %4d fixtures %-9s %5d frames | frame %s | game %6.2f / p95 %6.2f | GPU %6.2f / p95 %6.2f | show tick %5d x %.3f ms (max %.3f) | dropped %d"),
-						Result.SpawnedFixtures, PhaseName, Frame.Count, *Describe(Frame), Game.Mean, Game.P95, Gpu.Mean, Gpu.P95,
+					UE_LOG(LogStageCraft, Display, TEXT("StageCraft.Bench: %4d fixtures %5d people %-9s %5d frames | frame %s | game %6.2f / p95 %6.2f | GPU %6.2f / p95 %6.2f | show tick %5d x %.3f ms (max %.3f) | dropped %d"),
+						Result.SpawnedFixtures, Result.CrowdPeople, PhaseName, Frame.Count, *Describe(Frame), Game.Mean, Game.P95, Gpu.Mean, Gpu.P95,
 						Samples.ShowTick.Ticks, ShowMeanMs, ShowMaxMs, Dropped);
-					Csv += FString::Printf(TEXT("%d,%s,%d,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%d,%.4f,%.4f,%d,%d\r\n"),
-						Result.SpawnedFixtures, PhaseName, Frame.Count, Frame.Mean, Frame.Median, Frame.P95, Frame.P99, Frame.Max, Game.Mean, Game.P95,
+					Csv += FString::Printf(TEXT("%d,%d,%s,%d,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%d,%.4f,%.4f,%d,%d\r\n"),
+						Result.SpawnedFixtures, Result.CrowdPeople, PhaseName, Frame.Count, Frame.Mean, Frame.Median, Frame.P95, Frame.P99, Frame.Max, Game.Mean, Game.P95,
 						Gpu.Mean, Gpu.P95, Samples.ShowTick.Ticks, ShowMeanMs, ShowMaxMs, bCrossfade ? Dropped : 0, bCrossfade ? Result.CuesStarted : 0);
 				}
 			}
@@ -719,6 +772,7 @@ namespace StageFixtureBenchmark
 		FSettings Settings;
 		TWeakObjectPtr<ULightingFixtureData> FixtureData;
 		TArray<TWeakObjectPtr<ALightingFixtureActor>> Spawned;
+		TWeakObjectPtr<AStageAudienceActor> CrowdArea;
 		// The user's show before the run, given back by Cleanup.
 		TArray<FShowCue> SavedCues;
 		float SavedActiveCue = -1.f;
@@ -802,9 +856,13 @@ namespace StageFixtureBenchmark
 				{
 					Out.bAudio = Value == TEXT("1");
 				}
+				else if (Key.Equals(TEXT("Crowd"), ESearchCase::IgnoreCase) && Value.IsNumeric() && Number >= 0.0 && Number <= 20000.0)
+				{
+					Out.Crowd = FCString::Atoi(*Value);
+				}
 				else
 				{
-					UE_LOG(LogStageCraft, Display, TEXT("StageCraft.Bench: ignored \"%s\" (Seconds 1..600, Fade 0.1..60, Settle 0..60, Zoom 0|1, Item=<asset name>, GM 0..1, Effects 0|1|2|3, DMXOut 0|1, Audio 0|1)."), *Arg);
+					UE_LOG(LogStageCraft, Display, TEXT("StageCraft.Bench: ignored \"%s\" (Seconds 1..600, Fade 0.1..60, Settle 0..60, Zoom 0|1, Item=<asset name>, GM 0..1, Effects 0|1|2|3, DMXOut 0|1, Audio 0|1, Crowd 0..20000)."), *Arg);
 				}
 				continue;
 			}

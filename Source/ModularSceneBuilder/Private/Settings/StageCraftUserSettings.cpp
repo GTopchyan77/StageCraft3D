@@ -75,14 +75,6 @@ bool UStageCraftUserSettings::SetMasterVolume(float Volume)
 	return bChanged;
 }
 
-bool UStageCraftUserSettings::SetEffectsVolume(float Volume)
-{
-	const float Sanitized = StageAudioMath::SanitizeVolume(Volume);
-	const bool bChanged = !FMath::IsNearlyEqual(EffectsVolume, Sanitized);
-	EffectsVolume = Sanitized;
-	return bChanged;
-}
-
 bool UStageCraftUserSettings::SetAudioMuted(bool bMuted)
 {
 	const bool bChanged = bAudioMuted != bMuted;
@@ -108,7 +100,6 @@ bool UStageCraftUserSettings::SetRenderSettings(const FStageRenderSettings& Sett
 void UStageCraftUserSettings::ResetAudioToDefaults()
 {
 	MasterVolume = 1.f;
-	EffectsVolume = 1.f;
 	bAudioMuted = false;
 	AudioSettingsVersion = CurrentAudioSettingsVersion;
 }
@@ -116,7 +107,6 @@ void UStageCraftUserSettings::ResetAudioToDefaults()
 void UStageCraftUserSettings::SanitizeAudio()
 {
 	MasterVolume = StageAudioMath::SanitizeVolume(MasterVolume);
-	EffectsVolume = StageAudioMath::SanitizeVolume(EffectsVolume);
 }
 
 bool UStageCraftUserSettings::SetGridSnapCm(float Cm)

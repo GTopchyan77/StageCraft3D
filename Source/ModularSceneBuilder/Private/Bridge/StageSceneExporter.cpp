@@ -359,7 +359,7 @@ void FStageSceneExporter::DestroyExportWorld(UWorld* World)
 	World->DestroyWorld(/*bInformEngineOfWorld*/ false);
 }
 
-FString FStageSceneExporter::GetTempPath(const FString& Path)
+FString FStageSceneExporter::GetExportTempPath(const FString& Path)
 {
 	// Written next to the target and moved into place: a reader (the add-on, the user's file browser) never sees a partial file.
 	return FPaths::Combine(FPaths::GetPath(Path), FPaths::GetBaseFilename(Path) + TEXT(".writing") + FileExtension);
@@ -428,7 +428,7 @@ FStageBridgeResultInfo FStageSceneExporter::ExportDocument(const FStageSceneDocu
 	Counts.InvalidInFile = InvalidItemsInFile;
 
 	IFileManager::Get().MakeDirectory(*FPaths::GetPath(Path), /*Tree*/ true);
-	const FString TempPath = GetTempPath(Path);
+	const FString TempPath = GetExportTempPath(Path);
 	FGLTFExportMessages Messages;
 	bool bExported = false;
 	{

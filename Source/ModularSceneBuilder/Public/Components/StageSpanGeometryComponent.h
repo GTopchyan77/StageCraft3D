@@ -42,6 +42,12 @@ public:
 	 */
 	void Build(const class UStageSpanData* Data, const FStageSpanPathLayout& Layout);
 
+	/**
+	 * Shows each part once at its own transform (a prop item's parts, AStagePropActor; Docs/ADR/0031 §5), batched by mesh and
+	 * material like a run. Parts without a mesh are skipped. Ignored while unregistered, like Build.
+	 */
+	void BuildParts(TConstArrayView<struct FStageSpanPart> Parts);
+
 	/** Removes every instance and instanced component. Idempotent. */
 	void Clear();
 
@@ -55,6 +61,19 @@ public:
 	int32 GetBatchCount() const { return Batches.Num(); }
 
 private:
+	/** The instances of one mesh + material pair, gathered before any component is touched. */
+	struct FPendingBatch
+	{
+		class UStaticMesh* Mesh = nullptr;
+		class UMaterialInterface* Material = nullptr;
+		TArray<FTransform> Transforms;
+	};
+
+	static FPendingBatch& FindOrAddBatch(TArray<FPendingBatch>& Batches, class UStaticMesh* Mesh, class UMaterialInterface* Material);
+
+	/** Shows Pending as the run: one instanced component per entry, extra components removed. */
+	void ShowBatches(const TArray<FPendingBatch>& Pending);
+
 	/** The instanced component for batch Index, created on first use. */
 	class UInstancedStaticMeshComponent* AcquireBatch(int32 Index);
 	void ConfigureBatch(class UInstancedStaticMeshComponent& Batch) const;

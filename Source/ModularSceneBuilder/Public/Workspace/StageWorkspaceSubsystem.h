@@ -143,6 +143,13 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "StageCraft|Workspace")
 	EStagePanelHost GetPanelHost(FGameplayTag PanelTag) const;
 
+	/**
+	 * A starter stage was opened (welcome screen, File > New from Template, the assistant or a console command): the stage is shown
+	 * on its own, with nothing popping up over it (STATE.md #76). Closes the welcome screen and every panel in a floating window;
+	 * panels docked in the main window stay as they are, and nothing is opened. Returns the floating panels closed. Idempotent.
+	 */
+	int32 PresentStarterStage();
+
 	// --- Layouts ---
 
 	/**

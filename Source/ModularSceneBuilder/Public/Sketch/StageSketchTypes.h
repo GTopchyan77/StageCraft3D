@@ -161,6 +161,13 @@ struct FStageSketchFixturePlan
 	EStageSketchFixtureMount Mount = EStageSketchFixtureMount::Floor;
 };
 
+/** Any catalog item placed as it is at a transform (props, people, set pieces; STATE.md #76): the starter stages and scripts. */
+struct FStageSketchItemPlan
+{
+	TWeakObjectPtr<class UBaseItemData> Item;
+	FTransform Transform = FTransform::Identity;
+};
+
 /** Stairs to build (the AI assistant's build_shape, Docs/ADR/0018 §5.2); the actor sanitizes the sizes against its item. */
 struct FStageSketchStairsPlan
 {
@@ -198,11 +205,13 @@ struct FStageSketchBuildPlan
 	/** Not drawn in the Sketch window; planned by the AI assistant's build_shape. */
 	TArray<FStageSketchStairsPlan> Stairs;
 	TArray<FStageSketchArcTrussPlan> ArcTrusses;
+	/** Not drawn in the Sketch window: other catalog items at their transforms, placed last. */
+	TArray<FStageSketchItemPlan> Items;
 
 	/** Strokes skipped or changed, user-facing, in stroke order. */
 	TArray<FText> Warnings;
 
-	int32 Num() const { return Decks.Num() + Trusses.Num() + Fixtures.Num() + Stairs.Num() + ArcTrusses.Num(); }
+	int32 Num() const { return Decks.Num() + Trusses.Num() + Fixtures.Num() + Stairs.Num() + ArcTrusses.Num() + Items.Num(); }
 	bool IsEmpty() const { return Num() == 0; }
 	int32 GetPanelCount() const;
 	int32 GetSegmentCount() const;

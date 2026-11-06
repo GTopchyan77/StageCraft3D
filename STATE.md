@@ -7573,7 +7573,7 @@ All times in ms.
 - **Benchmark:** not run. H4 changes no show tick, mix or render path; the parser and memory run once per prompt.
 - **Awaiting manual verification (Gevor):** see todo.md, "H4 manual verification".
 
-**Commit:** uncommitted (working tree).
+**Commit:** `76d464a`.
 
 **Known issues / follow-ups**
 - Not offered:
@@ -7585,3 +7585,178 @@ All times in ms.
 - "Select the spots and washes" finds nothing: a name query needs every word in one item's name (as for deletes).
 - FindLabel takes every word after "called" up to fade / with / in / and, so "create a group called Front from the spots" names it "Front from the spots"; say the target first.
 - From #74, still open: the "cue on stage" goes stale after undoing a store; H3b.
+
+## #76 — Phase I: stage people (audience, band, crew), realistic props and set, no UI sounds, clean starter stages (2026-11-06)
+
+**Housekeeping first:** #75 now carries `76d464a`, since Gevor committed H4.
+
+**What & why**
+- Gevor's brief (2026-11-06, auto mode) asks for Phase I:
+  - realistic stage elements with instancing and LODs;
+  - a scalable animated crowd (VAT / GPU instancing, 120+ FPS aim);
+  - animated band members and crew;
+  - a zero-regression benchmark gate;
+  - 0 warnings on every target.
+- The same brief asks for two UI overrides:
+  - no extra windows or panels when a default stage is picked;
+  - no UI action sounds.
+- **Art source:** the roadmap's I0 asked Gevor to choose one (MetaHuman, Fab or commissioned), and the project has no character art. The brief asked for "visual proxies", so Phase I builds procedural stand-ins on a contract real art can fill later (ADR 0031 §3.4).
+- **Design:** `Docs/ADR/0031-stage-people-and-realism.md` (new, awaiting Gevor's approval).
+
+**UI overrides**
+- **No interface sounds.** Removed:
+  - `UStageEditorAudioFeedbackComponent` (selection, placement, snap and refusal cues; from #23) and its controller subobject;
+  - the cue table (`UStageAudioDeveloperSettings`, its `DefaultGame.ini` section and the `/Game/StageCraft/Audio` cook entry);
+  - `PlayCue` and the cue loading in `UStageAudioSubsystem`;
+  - the `StageCraft.Sound.*` tags and `StageAudioMath::ComputeCueGain`;
+  - the Effects volume (user setting, Preferences slider, Audio menu slider);
+  - the dev commands `StageCraft.Audio.Effects` and `.Play`;
+  - the four `SFX_*` assets and `make_feedback_wavs.ps1`.
+
+  Master volume and Mute stay; they now govern only the music the show follows. A leftover `EffectsVolume` line in a user's ini is ignored.
+- **Starter stages open on their own.** New `UStageWorkspaceSubsystem::PresentStarterStage`, called by `AModularPlayerController::HandleSceneOperationFinished` on every successful OpenTemplate (welcome card, File > New from Template, assistant, console). It:
+  - clears the pending welcome timer;
+  - closes the welcome screen;
+  - closes every panel in a floating window.
+
+  Docked panels stay, and nothing opens.
+  - **Cause found in a scripted run:** Gevor's restored layout reopens 7 floating panel windows (Cues, Effects, Groups, Palettes, Patch, Playback, Sketch) behind the welcome screen, so they appeared as a stage was picked.
+  - Also, the console route left the welcome screen open.
+
+**Phase I (ADR 0031)**
+- **Figure** (`People/StageFigureRig`, pure):
+  - an 11-bone rigid humanoid, 175 cm, built in code in 3 LODs (348 / 168 / 72 triangles);
+  - UV1 holds the bone and the body region;
+  - 10 looping clips (crowd idle, bounce, cheer and clap; drummer seated; guitarist; vocalist; keyboardist; desk operator; stagehand), solved by forward kinematics;
+  - the bounce keeps the feet planted and the clap aims the hands together;
+  - baked into a 22 x 320 RGBA32F bone animation texture (rotation and translation per bone per frame, hemisphere-consistent).
+- **`UStageFigureAssetSubsystem`** (an engine subsystem, so the export and editor worlds have it too):
+  - builds the runtime static mesh (LOD screen sizes 1 / 0.16 / 0.05, extended bounds, simple box collision used as complex) and the texture once;
+  - hands out one dynamic material instance per figure material;
+  - 8 custom data floats per instance.
+- **`M_StageFigure`** (content, `Scripts/Content/create_people_content.py`): world position offset from two blended texture frames; the normal turned in the vertex shader and passed as a world normal; colour by region from the shirt RGB, skin tone and trouser shade.
+- **Audience area** (`AStageAudienceActor`, `UStageAudienceData`, `People/StageAudienceMath`):
+  - width, depth, density and mood are SaveGame values plus a seed; they are sanitized and counted on restore, and are undoable shape parameters (`IsShapeParameter`). People is read-only.
+  - **Fill:** a deterministic jittered grid (nobody overlaps), clips from the mood mix, random phase, speed, height, turn and clothes.
+  - **Drawing:** one HISM with no shadows, distance fields or ray tracing, culled at 300 m.
+  - **Picking:** a 2 cm floor box answers only the stage item channel, so clicking the crowd selects it while placement, camera pivots and fixtures beyond are untouched.
+- **Props** (`AStagePropActor`, `UStagePropData`, `FStageFigurePlacement`):
+  - parts through the new `UStageSpanGeometryComponent::BuildParts` (one instanced batch per mesh and material);
+  - figures in one ISM that answers only the stage item channel;
+  - the overlay is drawn on the parts only.
+- **Shared helper:** `People/StageFigureActors` (configure the component, show the people, make the custom data).
+- **Catalog** (13 items, `create_people_content.py`; engine cubes and cylinders, 12 `M_Prop*` materials):
+  - `DA_Audience_Standing`;
+  - band: drummer with kit, guitarist, bassist, vocalist, keyboardist;
+  - crew: FOH lighting position, FOH sound position, monitor position, stagehand with a road case;
+  - `DA_Backline_AmpStack` and `DA_Set_LEDBackdrop` (8 x 4.5 m);
+  - `DA_Span_Barricade` (span, whole 1 m sections).
+
+  New categories `People` (`.Audience`, `.Band`, `.Crew`), `Prop.Backline` and `Stage.Set`. New tags `Param_Audience_*` and `FeatureGroup_Audience`.
+- **Concert starter stage:** its build script now places a dancing crowd (16 x 10 m, 320 people), the band, two amp stacks, the LED wall, the FOH desks and crew. `build_starter_stages.ps1` reran, now `-WithoutUserImports`.
+  - Concert has 26 items.
+  - All four templates were regenerated, so the three unchanged ones moved from scene format v5 to v11 with the current fixture fields.
+- **Build plans** gained `Items` (any catalog item at a transform, placed last, rolled back with the rest), which `StageCraft.Edit.PlaceAt` uses.
+- **New dev commands** (`#if !UE_BUILD_SHIPPING`):
+  - `StageCraft.Edit.PlaceAt <Item> <x> <y> [z] [yaw]` (metres; one undo step through `RequestBuildPlan`);
+  - `StageCraft.View.Camera <x> <y> <z> <pitch> <yaw>`;
+  - `StageCraft.People.Status` (areas, people, figures, and the figure material's compile errors in editor builds);
+  - `StageCraft.Bench.Fixtures ... Crowd=N` (an audience of N people under the bench fixtures; CSV column Crowd).
+
+  `RunFixtureBench.ps1` gained `-Crowd` and `-Camera`.
+- **Latent link bug fixed:** `FStageSceneExporter::GetTempPath` collided with the Windows `GetTempPath` macro (`GetTempPathW`). A fresh worktree of `76d464a` failed to link; the main tree's unity grouping happened to hide it. Renamed to `GetExportTempPath`.
+
+**Files changed**
+- New, `Public/` and `Private/`:
+  - `People/` (StageFigureRig, StageFigureAssetSubsystem, StageAudienceMath, StageFigureActors);
+  - `Actors/StageAudienceActor`, `Actors/StagePropActor`;
+  - `Data/StageAudienceData`, `Data/StagePropData`;
+  - `Private/People/StagePeopleConsoleCommands.cpp`;
+  - `Private/People/Tests/StagePeopleTests.cpp`.
+- Changed:
+  - `Audio/StageAudioSubsystem.h/.cpp`, `Audio/StageAudioTypes.h`, `Audio/StageAudioConsoleCommands.cpp`;
+  - `Settings/StageCraftUserSettings.h/.cpp`, `UI/StagePreferencesPanel.cpp`, `Workspace/SStageWorkspaceMenuBar.cpp`;
+  - `Player/ModularPlayerController.h/.cpp`, `Workspace/StageWorkspaceSubsystem.h/.cpp`;
+  - `Components/StageSpanGeometryComponent.h/.cpp`;
+  - `Data/StageItemTypes.h/.cpp`, `Data/StageParameterTypes.h/.cpp`;
+  - `Sketch/StageSketchTypes.h`, `Sketch/StageSketchBuilder.h/.cpp`;
+  - `Placement/StagePlacementConsoleCommands.cpp`, `Viewport/StageViewportConsoleCommands.cpp`, `Diagnostics/StageFixtureBenchmark.cpp`;
+  - `Bridge/StageSceneExporter.h/.cpp`, `Bridge/StageSceneExportJob.cpp`, `Bridge/Tests/StageBridgeLoopbackTests.cpp`;
+  - `Placement/Tests/StagePlacementTests.cpp`;
+  - `ModularSceneBuilder.Build.cs` (comment only).
+- Deleted:
+  - `Audio/StageEditorAudioFeedbackComponent.h/.cpp`, `Audio/StageAudioDeveloperSettings.h`, `Audio/StageAudioTypes.cpp`;
+  - `Content/StageCraft/Audio/Feedback/SFX_*.uasset` (4);
+  - `Scripts/Content/make_feedback_wavs.ps1`.
+- Content:
+  - `Content/StageCraft/People/M_StageFigure` and 12 `M_Prop*`;
+  - `Content/StageCraft/Items/DA_Audience_Standing`, `DA_Band_*` (5), `DA_Crew_*` (4), `DA_Backline_AmpStack`, `DA_Set_LEDBackdrop`, `DA_Span_Barricade`;
+  - `Content/StageCraft/Templates/*.json` (4).
+- Config: `DefaultGame.ini` (cue section and audio cook entry removed).
+- Scripts:
+  - new `Scripts/Content/create_people_content.py`;
+  - changed `build_starter_stages.ps1`, `create_placement_audio_content.py`, `Scripts/Bench/RunFixtureBench.ps1`.
+- Docs: `Docs/ADR/0031` (new), `Docs/CURRENT_SYSTEMS.md` (Phase I row, controller components, 226 tests), `tasks/todo.md`, STATE.md (#75 hash, #76).
+- No maps or input actions.
+
+**Verification**
+- **Builds:** Editor, Game Development and Game Shipping, all 0 warnings.
+- **Shipping UTF-16 scan:**
+  - absent: `StageCraft.Edit.PlaceAt`, `StageCraft.View.Camera`, `StageCraft.People.Status`, `StageCraft.Bench.Fixtures`, `StageCraft.Audio.Effects`, `StageCraft.Audio.Play`;
+  - present: the audience actor's text namespace and moods.
+- **Tests:** 226/226 without a renderer and 226/226 with the offscreen renderer. User data unchanged.
+  - **New:**
+    - `StageCraft.People.FigureRig`: rest pose, LOD validity and winding, height, loops, smooth frames, feet planted, cheer hands above the head, drummer seated with the feet on the pedals, bounce, clap, texture layout and hemispheres.
+    - `StageCraft.People.AudienceMath`: counts, caps, invalid input, mood shares, determinism, bounds, facing, no overlap.
+    - `StageCraft.People.FigureAssets`: mesh LODs and screen sizes, bounds, texture, shared instances, custom data.
+    - `StageCraft.People.Items`: area defaults, parameters, clamps, refusals, undoable tags, save and restore of the same crowd, 4 counted repairs, prop parts and figures, collision channels, missing material.
+    - `StageCraft.People.NoUISounds`.
+  - The every-catalog-item glTF export test (`StageCraft.Bridge.ExportCompleteness`) now covers the 13 new items, people included (rest pose).
+  - `StageCraft.Audio.Math` and `.UserSettings` lost their cue and effects checks.
+- **Scripted runs** (`-game`, user data restored; `C:\Users\gevor\AppData\Local\Temp\StageCraftRuns\I0a` to `I1f`):
+  - **I0a** found the 7 floating windows and the welcome screen left open.
+  - **I1** logged "welcome closed, 7 floating panel(s) closed".
+  - **I1b and I1c** found `M_StageFigure` failing to compile:
+    - first, the Linear Color sampler had an sRGB default texture, so it now uses `BaseFlattenLinearColor`;
+    - then, the Transform nodes had no input, because the pin is `""` and not `"Input"`.
+    - `StageCraft.People.Status` printed the errors.
+  - **I1d:** crowd, band and crew rendered and animated (screenshots).
+  - **I1e:** the regenerated Concert from a normal start: welcome closed, 7 floating windows closed, 26 items, 320 people, 9 figures, material without errors.
+  - **I1f:** the LED wall's glow was reduced after it blew out at night exposure.
+- **Benchmark, no-regression gate** (`RunFixtureBench -Effects 1`, A/B against a `76d464a` worktree with Gevor's workspace copied in and his model imports set aside):
+
+  | | 200 fixtures idle | 200 crossfade | 500 idle | 500 crossfade |
+  |---|---|---|---|---|
+  | Show tick, baseline | 4.45 ms | 4.83 ms | 11.37 ms | 13.46 ms |
+  | Show tick, now | 4.18 ms | 4.95 ms | 10.72 ms | 12.74 ms |
+  | Frame mean, baseline | 13.40 ms | 13.47 ms | 24.86 ms | 26.80 ms |
+  | Frame mean, now | 12.42 ms | 13.07 ms | 23.55 ms | 25.16 ms |
+  | GPU, baseline | 8.52 ms | 8.69 ms | 11.05 ms | 11.79 ms |
+  | GPU, now | 8.33 ms | 8.58 ms | 10.92 ms | 11.56 ms |
+
+  No regression, within run noise.
+- **Crowd cost** (200 fixtures, Effects 1, camera at -40 0 12 looking at the crowd), idle GPU and frame:
+
+  | People | GPU | Frame |
+  |---|---|---|
+  | 0 | 8.19 ms | 12.68 ms |
+  | 1,000 | 8.13 ms | 12.59 ms |
+  | 5,000 | 8.34 ms | 12.57 ms |
+  | 17,888 | 9.23 ms | 12.56 ms |
+
+  (A request for 20,000 was capped by the item's 80 m width.) The crowd costs no CPU (game thread and show tick flat). The GPU cost is about +1 ms at 18k people on this PC.
+- **Awaiting manual verification (Gevor):** see todo.md, "Phase I manual verification".
+
+**Commit:** uncommitted (working tree).
+
+**Known issues / follow-ups**
+- Not done:
+  - crowd energy and band tempo from the music (ADR 0029 features);
+  - audience polygon outlines;
+  - capacity in the reports and the bill of materials;
+  - a placement ghost for prop and audience items (decks have none either);
+  - real character art (MetaHuman, Fab or commissioned) through the ADR 0031 §3.4 contract;
+  - I3 (haze, starter stages v2) and I4 (packaged validation per template).
+- The starter-stage camera now frames the whole Concert stage including the FOH desks 21 m out, so the opening view is wider than before.
+- The hover and selection overlay shows on prop parts only, never on the people.
+- The figures are stylised box people: convincing at crowd distance, clearly proxies close up.

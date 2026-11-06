@@ -295,7 +295,7 @@ bool FStageBridgeExportJobTest::RunTest(const FString& Parameters)
 		TestEqual(TEXT("with every item"), Outcome->Result.ExportedItems, Scene.Items.Num() - Outcome->Result.SkippedItems);
 		TestTrue(TEXT("over several frames"), Outcome->Frames > 4);
 		TestEqual(TEXT("The SHA-1 is the file's"), Outcome->Sha1, Sha1OfFile(Params.Path));
-		TestFalse(TEXT("No temporary file is left"), IFileManager::Get().FileExists(*FStageSceneExporter::GetTempPath(Params.Path)));
+		TestFalse(TEXT("No temporary file is left"), IFileManager::Get().FileExists(*FStageSceneExporter::GetExportTempPath(Params.Path)));
 		AddInfo(FString::Printf(TEXT("%d frames, longest slice %.1f ms; %s"), Outcome->Frames, Outcome->LongestSliceMs, *Outcome->Timings.ToString()));
 	}
 	TestFalse(TEXT("The job is done"), Job->IsRunning());
@@ -324,7 +324,7 @@ bool FStageBridgeExportJobTest::RunTest(const FString& Parameters)
 	TestFalse(TEXT("No callback after a cancel"), bCalled);
 	TestEqual(TEXT("No world left"), GEngine->GetWorldContexts().Num(), ContextsBefore);
 	TestFalse(TEXT("No file written"), IFileManager::Get().FileExists(*Cancelled.Path));
-	TestFalse(TEXT("No temporary file left"), IFileManager::Get().FileExists(*FStageSceneExporter::GetTempPath(Cancelled.Path)));
+	TestFalse(TEXT("No temporary file left"), IFileManager::Get().FileExists(*FStageSceneExporter::GetExportTempPath(Cancelled.Path)));
 
 	AddInfo(TEXT("Through the bridge: one export at a time; the outcome goes to its requester."));
 	TOptional<FStageBridgeResultInfo> First;

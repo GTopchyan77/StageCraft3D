@@ -37,7 +37,7 @@ enum class EStageSelectionClick : uint8
  *   UStagePlacementToolComponent (edit mode, ghost preview, single-click placement),
  *   USpawnSystemComponent (spawn/delete executor), USelectionComponent (selection),
  *   AModularTransformGizmo (move/rotate/scale), AStageCameraPawn (fly camera),
- *   UStageEditorAudioFeedbackComponent (feedback cues), UStageEditHistoryComponent (undo/redo),
+ *   UStageEditHistoryComponent (undo/redo),
  *   UStageSnappingComponent (object snapping for placement and gizmo moves),
  *   UStageSpanToolComponent (two-click placement of spans: truss runs, railings, cables).
  *
@@ -782,9 +782,6 @@ protected:
 
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Components")
 	TObjectPtr<class UStagePlacementToolComponent> PlacementTool = nullptr;
-
-	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Components")
-	TObjectPtr<class UStageEditorAudioFeedbackComponent> AudioFeedback = nullptr;
 
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Components")
 	TObjectPtr<class UStageEditHistoryComponent> EditHistory = nullptr;

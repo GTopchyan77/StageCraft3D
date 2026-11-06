@@ -31,7 +31,8 @@ $VenueLook = @('StageCraft.Environment.Set Lighting Level', 'StageCraft.Environm
 
 $Steps = @('3 StageCraft.Workspace.OpenPanel StageCraft.Panel.Environment')
 
-# Concert: a 12 x 8 m main deck at 1.2 m with a thrust into the audience, a front and a back truss at 7 m, moving lights.
+# Concert: a 12 x 8 m main deck at 1.2 m with a thrust into the audience, a front and a back truss at 7 m, moving lights,
+# and (Phase I) the audience, band, LED wall and crew.
 $Steps += Stage 5 'Concert' @(
 	'StageCraft.Sketch.Set DeckHeight 120', 'StageCraft.Sketch.Set TrussHeight 700',
 	'StageCraft.Sketch.Add Shape -4:-6 4:-6 4:6 -4:6 closed',
@@ -40,7 +41,16 @@ $Steps += Stage 5 'Concert' @(
 	'StageCraft.Sketch.Add Truss 4:-8 4:8',
 	'StageCraft.Sketch.Add Fixture -6:-6', 'StageCraft.Sketch.Add Fixture -6:-3', 'StageCraft.Sketch.Add Fixture -6:0',
 	'StageCraft.Sketch.Add Fixture -6:3', 'StageCraft.Sketch.Add Fixture -6:6',
-	'StageCraft.Sketch.Add Fixture 4:-5', 'StageCraft.Sketch.Add Fixture 4:-2', 'StageCraft.Sketch.Add Fixture 4:2', 'StageCraft.Sketch.Add Fixture 4:5'
+	'StageCraft.Sketch.Add Fixture 4:-5', 'StageCraft.Sketch.Add Fixture 4:-2', 'StageCraft.Sketch.Add Fixture 4:2', 'StageCraft.Sketch.Add Fixture 4:5',
+	# Phase I (STATE.md #76): a dancing crowd in front of the thrust, the band on the deck facing it, an LED wall behind, the FOH
+	# positions behind the crowd and crew in the wings. Positions are in metres (x, y, z) with a yaw; the deck top is at 1.2 m.
+	'StageCraft.Edit.PlaceAt DA_Audience_Standing -9.5 0 0 180',
+	'StageCraft.Edit.PlaceAt DA_Band_Drummer 2 0 1.2 180', 'StageCraft.Edit.PlaceAt DA_Band_Guitarist -1 -3 1.2 180',
+	'StageCraft.Edit.PlaceAt DA_Band_Bassist -1 3 1.2 180', 'StageCraft.Edit.PlaceAt DA_Band_Vocalist -3 0 1.2 180',
+	'StageCraft.Edit.PlaceAt DA_Band_Keyboardist 1 -5 1.2 160', 'StageCraft.Edit.PlaceAt DA_Backline_AmpStack 0.8 -3 1.2 180',
+	'StageCraft.Edit.PlaceAt DA_Backline_AmpStack 0.8 3 1.2 180', 'StageCraft.Edit.PlaceAt DA_Set_LEDBackdrop 4.7 0 0 180',
+	'StageCraft.Edit.PlaceAt DA_Crew_LightingDesk -21 -1.5 0 0', 'StageCraft.Edit.PlaceAt DA_Crew_SoundDesk -21 1.5 0 0',
+	'StageCraft.Edit.PlaceAt DA_Crew_Stagehand 1 -7.5 0 90', 'StageCraft.Edit.PlaceAt DA_Crew_MonitorDesk 2 7.5 0 -90'
 ) @('StageCraft.Environment.Atmosphere Cyberpunk Night')
 
 # Theatre: a 6 x 10 m proscenium deck at 0.9 m and three lighting bars at 6.5 m, in the venue's own lighting.
@@ -65,5 +75,5 @@ $Steps += Stage 35 'Conference' @(
 $Steps += Stage 50 'Empty Stage' @() @('StageCraft.Environment.Atmosphere Clear Daytime')
 $Steps += '62 quit'
 
-& (Join-Path $Root 'Scripts\Tests\RunGameScripted.ps1') -Name 'StarterStages' -Steps $Steps -Extra '-StageNoWelcome' -TimeoutSeconds 300 `
+& (Join-Path $Root 'Scripts\Tests\RunGameScripted.ps1') -Name 'StarterStages' -Steps $Steps -Extra '-StageNoWelcome' -WithoutUserImports -TimeoutSeconds 300 `
 	-CollectScenes 'Concert', 'Theatre', 'Conference', 'Empty Stage' -CollectTo $Templates

@@ -162,13 +162,26 @@ namespace StageSketchBuilder
 			bOk = Place(*FixtureItem, 1, [&]() { return Spawner.SpawnItem(FixtureItem, Fixture.Transform); });
 			Outcome.FixtureCount += bOk ? 1 : 0;
 		}
+		for (int32 Index = 0; bOk && Index < Plan.Items.Num(); ++Index)
+		{
+			const FStageSketchItemPlan& Entry = Plan.Items[Index];
+			UBaseItemData* Item = Entry.Item.Get();
+			if (!Item)
+			{
+				Outcome.Result = MissingItem(LOCTEXT("Item", "item"));
+				bOk = false;
+				break;
+			}
+			bOk = Place(*Item, 1, [&]() { return Spawner.SpawnItem(Item, Entry.Transform); });
+			Outcome.ItemCount += bOk ? 1 : 0;
+		}
 
 		if (!bOk)
 		{
 			UE_LOG(LogStageCraft, Log, TEXT("Sketch build refused after %d of %d items (%s): %s; rolling back."), Placed.Num(), Plan.Num(),
 				*UEnum::GetValueAsString(Outcome.Result.Code), *Outcome.Result.Message.ToString());
 			RollBack(Spawner, Placed);
-			Outcome.DeckCount = Outcome.TrussCount = Outcome.FixtureCount = Outcome.StairsCount = Outcome.ArcTrussCount = 0;
+			Outcome.DeckCount = Outcome.TrussCount = Outcome.FixtureCount = Outcome.StairsCount = Outcome.ArcTrussCount = Outcome.ItemCount = 0;
 			return Outcome;
 		}
 		Outcome.Result = FStageEconomyResultInfo::Ok();

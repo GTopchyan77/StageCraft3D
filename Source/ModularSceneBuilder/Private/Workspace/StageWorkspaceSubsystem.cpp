@@ -727,6 +727,30 @@ EStagePanelHost UStageWorkspaceSubsystem::GetPanelHost(FGameplayTag PanelTag) co
 	return State == EStageWorkspaceState::Ready ? Shell->GetPanelHost(PanelTag) : EStagePanelHost::Closed;
 }
 
+int32 UStageWorkspaceSubsystem::PresentStarterStage()
+{
+	// A stage opened before the welcome screen came up (a console command at startup) must not be covered by it afterwards.
+	if (UGameInstance* GameInstance = GetGameInstance())
+	{
+		GameInstance->GetTimerManager().ClearTimer(WelcomeTimer);
+	}
+	CloseWelcome();
+	if (State != EStageWorkspaceState::Ready)
+	{
+		return 0;
+	}
+	int32 Closed = 0;
+	for (const FGameplayTag& PanelTag : GetAvailablePanels())
+	{
+		if (Shell->GetPanelHost(PanelTag) == EStagePanelHost::FloatingWindow && Shell->ClosePanel(PanelTag))
+		{
+			++Closed;
+		}
+	}
+	UE_LOG(LogStageWorkspace, Log, TEXT("Starter stage shown: welcome closed, %d floating panel(s) closed."), Closed);
+	return Closed;
+}
+
 void UStageWorkspaceSubsystem::HandlePanelHostChanged(const FGameplayTag& PanelTag, EStagePanelHost NewHost, EStagePanelHost PreviousHost)
 {
 	UE_LOG(LogStageWorkspace, Log, TEXT("Panel %s: %s -> %s."), *PanelTag.ToString(), *UEnum::GetValueAsString(PreviousHost), *UEnum::GetValueAsString(NewHost));

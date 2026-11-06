@@ -10,7 +10,7 @@
 /** What executing a plan did. On failure nothing it spawned is left on the stage. */
 struct FStageSketchBuildOutcome
 {
-	/** Every item spawned, decks first, then stairs, truss runs, curved truss and fixtures. Empty on failure. */
+	/** Every item spawned, decks first, then stairs, truss runs, curved truss, fixtures and other items. Empty on failure. */
 	TArray<class AModularBaseActor*> Placed;
 
 	int32 DeckCount = 0;
@@ -18,6 +18,7 @@ struct FStageSketchBuildOutcome
 	int32 FixtureCount = 0;
 	int32 StairsCount = 0;
 	int32 ArcTrussCount = 0;
+	int32 ItemCount = 0;
 
 	/** Ok, or why the build was refused (the first element the rules or the spawn turned down). */
 	FStageEconomyResultInfo Result;

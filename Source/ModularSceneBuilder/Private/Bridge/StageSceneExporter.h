@@ -135,7 +135,7 @@ public:
 	/** Logs the engine exporter's errors and warnings, capped. */
 	static void LogExportMessages(const struct FGLTFExportMessages& Messages);
 	/** Where the file is written before it is moved to Path. */
-	static FString GetTempPath(const FString& Path);
+	static FString GetExportTempPath(const FString& Path);
 
 	/**
 	 * The private world an export spawns into: GamePreview, actors initialized, play never begun (nothing registers with the

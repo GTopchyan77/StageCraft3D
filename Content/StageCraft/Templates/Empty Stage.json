@@ -1,9 +1,9 @@
 {
 	"format": "StageCraftScene",
-	"version": 5,
+	"version": 11,
 	"name": "Empty Stage",
 	"level": "L_StageTest",
-	"savedAt": "2026-11-02T15:44:13.375Z",
+	"savedAt": "2026-11-06T13:52:33.251Z",
 	"items": [],
 	"environment":
 	{
@@ -32,5 +32,149 @@
 			]
 		}
 	},
-	"cues": []
+	"cues": [],
+	"programmer": [],
+	"programmerEffects": [],
+	"programmerEffectStops": [],
+	"groups": [],
+	"palettes": [
+		{
+			"id": "53435041-4C45-5454-4500-000000000001",
+			"name": "White",
+			"kind": "Color",
+			"color": [
+				1,
+				1,
+				1
+			],
+			"values":
+			{
+			},
+			"fixtures": []
+		},
+		{
+			"id": "53435041-4C45-5454-4500-000000000002",
+			"name": "Red",
+			"kind": "Color",
+			"color": [
+				1,
+				0,
+				0
+			],
+			"values":
+			{
+			},
+			"fixtures": []
+		},
+		{
+			"id": "53435041-4C45-5454-4500-000000000003",
+			"name": "Green",
+			"kind": "Color",
+			"color": [
+				0,
+				1,
+				0
+			],
+			"values":
+			{
+			},
+			"fixtures": []
+		},
+		{
+			"id": "53435041-4C45-5454-4500-000000000004",
+			"name": "Blue",
+			"kind": "Color",
+			"color": [
+				0,
+				0,
+				1
+			],
+			"values":
+			{
+			},
+			"fixtures": []
+		},
+		{
+			"id": "53435041-4C45-5454-4500-000000000005",
+			"name": "Amber",
+			"kind": "Color",
+			"color": [
+				1,
+				0.5,
+				0
+			],
+			"values":
+			{
+			},
+			"fixtures": []
+		},
+		{
+			"id": "53435041-4C45-5454-4500-000000000006",
+			"name": "Magenta",
+			"kind": "Color",
+			"color": [
+				1,
+				0,
+				1
+			],
+			"values":
+			{
+			},
+			"fixtures": []
+		},
+		{
+			"id": "53435041-4C45-5454-4500-000000000007",
+			"name": "Cyan",
+			"kind": "Color",
+			"color": [
+				0,
+				1,
+				1
+			],
+			"values":
+			{
+			},
+			"fixtures": []
+		},
+		{
+			"id": "53435041-4C45-5454-4500-000000000008",
+			"name": "UV",
+			"kind": "Color",
+			"color": [
+				0.30000001192092896,
+				0,
+				1
+			],
+			"values":
+			{
+			},
+			"fixtures": []
+		},
+		{
+			"id": "53435041-4C45-5454-4500-000000000009",
+			"name": "Home",
+			"kind": "Position",
+			"values":
+			{
+				"StageCraft.Attribute.Pan": 0,
+				"StageCraft.Attribute.Tilt": 0
+			},
+			"fixtures": []
+		},
+		{
+			"id": "53435041-4C45-5454-4500-00000000000A",
+			"name": "Open",
+			"kind": "Beam",
+			"values":
+			{
+				"StageCraft.Attribute.Shutter": 0,
+				"StageCraft.Attribute.Gobo": 0,
+				"StageCraft.Attribute.Gobo2": 0,
+				"StageCraft.Attribute.Prism": 0,
+				"StageCraft.Attribute.Iris": 0
+			},
+			"fixtures": []
+		}
+	],
+	"playbacks": []
 }

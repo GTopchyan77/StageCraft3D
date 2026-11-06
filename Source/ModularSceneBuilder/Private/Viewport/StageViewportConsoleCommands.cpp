@@ -68,6 +68,27 @@ namespace StageViewportCommands
 		return Origin;
 	}
 
+	/** Puts the perspective camera at a point (metres) looking along pitch and yaw, for scripted screenshots and benchmarks. */
+	void Camera(const TArray<FString>& Args, UWorld* World)
+	{
+		AModularPlayerController* Controller = GetController(World);
+		double Values[5] = {};
+		bool bParsed = Controller && Controller->GetPawn() && Args.Num() >= 5;
+		for (int32 Index = 0; bParsed && Index < 5; ++Index)
+		{
+			bParsed = LexTryParseString(Values[Index], *Args[Index]);
+		}
+		if (!bParsed)
+		{
+			UE_LOG(LogStageCraft, Display, TEXT("Usage: StageCraft.View.Camera <X m> <Y m> <Z m> <Pitch> <Yaw>"));
+			return;
+		}
+		Controller->GetPawn()->SetActorLocation(FVector(Values[0], Values[1], Values[2]) * 100.0);
+		Controller->SetControlRotation(FRotator(Values[3], Values[4], 0.0));
+		UE_LOG(LogStageCraft, Display, TEXT("StageCraft.View.Camera: at %s rot %s."), *Controller->GetPawn()->GetActorLocation().ToCompactString(),
+			*Controller->GetControlRotation().ToCompactString());
+	}
+
 	void Status(const TArray<FString>& Args, UWorld* World)
 	{
 		AModularPlayerController* Controller = GetController(World);
@@ -412,6 +433,8 @@ namespace StageViewportCommands
 		UE_LOG(LogStageCraft, Display, TEXT("StageCraft.Snap.Angle %s: %s."), *Args[0], Controller->GetSnapping()->SetAngleSnap(FCString::Atof(*Args[0])) ? TEXT("ok") : TEXT("refused"));
 	}
 
+	FAutoConsoleCommandWithWorldAndArgs CameraCommand(TEXT("StageCraft.View.Camera"), TEXT("<X m> <Y m> <Z m> <Pitch> <Yaw> Puts the camera at a point looking along pitch and yaw."),
+		FConsoleCommandWithWorldAndArgsDelegate::CreateStatic(&Camera));
 	FAutoConsoleCommandWithWorldAndArgs StatusCommand(TEXT("StageCraft.View.Status"), TEXT("Logs projection, view mode, camera, grid and snaps."),
 		FConsoleCommandWithWorldAndArgsDelegate::CreateStatic(&Status));
 	FAutoConsoleCommandWithWorldAndArgs ProjectionCommand(TEXT("StageCraft.View.Projection"), TEXT("<Perspective|Top|Front|Back|Left|Right> The toolbar's projection switch."),

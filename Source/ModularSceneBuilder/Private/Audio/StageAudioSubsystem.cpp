@@ -4,18 +4,14 @@
 
 #include "AudioDevice.h"
 #include "AudioDeviceManager.h"
-#include "Audio/StageAudioDeveloperSettings.h"
 #include "Audio/StageAudioTypes.h"
-#include "Engine/AssetManager.h"
 #include "Engine/Engine.h"
 #include "Engine/GameInstance.h"
 #include "Engine/World.h"
 #include "Misc/App.h"
-#include "Kismet/GameplayStatics.h"
 #include "ModularSceneBuilder.h"
 #include "Settings/StageCraftUserSettings.h"
 #include "Sound/AudioSettings.h"
-#include "Sound/SoundBase.h"
 #include "Sound/SoundClass.h"
 #include "Sound/SoundMix.h"
 #include "UObject/UObjectGlobals.h"
@@ -51,8 +47,6 @@ void UStageAudioSubsystem::Initialize(FSubsystemCollectionBase& Collection)
 	UserVolumeMix->FadeOutTime = 0.f;
 	UserVolumeMix->Duration = -1.f;
 
-	BuildCueTable();
-	RequestCueSounds();
 	ApplyMasterGain();
 	UnfocusedVolumeBefore = FApp::GetUnfocusedVolumeMultiplier();
 	ApplyBackgroundPlayback();
@@ -60,8 +54,7 @@ void UStageAudioSubsystem::Initialize(FSubsystemCollectionBase& Collection)
 	// PIE worlds can own their own audio device, and travel may bring a new one; the override must follow.
 	PostLoadMapHandle = FCoreUObjectDelegates::PostLoadMapWithWorld.AddUObject(this, &ThisClass::HandlePostLoadMap);
 
-	UE_LOG(LogStageCraft, Log, TEXT("StageAudio: master %.2f, effects %.2f, muted %s, %d cue(s) configured."),
-		GetMasterVolume(), GetEffectsVolume(), IsMuted() ? TEXT("yes") : TEXT("no"), Cues.Num());
+	UE_LOG(LogStageCraft, Log, TEXT("StageAudio: master %.2f, muted %s."), GetMasterVolume(), IsMuted() ? TEXT("yes") : TEXT("no"));
 }
 
 void UStageAudioSubsystem::Deinitialize()
@@ -73,99 +66,7 @@ void UStageAudioSubsystem::Deinitialize()
 	ReleaseMixer();
 	FApp::SetUnfocusedVolumeMultiplier(UnfocusedVolumeBefore);
 
-	if (CueLoadHandle.IsValid())
-	{
-		CueLoadHandle->CancelHandle();
-		CueLoadHandle.Reset();
-	}
-	Cues.Reset();
-
 	Super::Deinitialize();
-}
-
-// --- Cues ---
-
-void UStageAudioSubsystem::BuildCueTable()
-{
-	Cues.Reset();
-	for (const FStageAudioCue& Cue : GetDefault<UStageAudioDeveloperSettings>()->Cues)
-	{
-		if (!Cue.CueTag.IsValid())
-		{
-			UE_LOG(LogStageCraft, Warning, TEXT("StageAudio: a cue in Project Settings > StageCraft Audio has no tag; it is ignored."));
-			continue;
-		}
-		if (Cues.Contains(Cue.CueTag))
-		{
-			UE_LOG(LogStageCraft, Warning, TEXT("StageAudio: cue %s is configured twice; the first entry wins."), *Cue.CueTag.ToString());
-			continue;
-		}
-
-		FLoadedCue& Loaded = Cues.Add(Cue.CueTag);
-		Loaded.Sound = Cue.Sound;
-		Loaded.VolumeScale = Cue.VolumeScale;
-		Loaded.MinRetriggerInterval = FMath::Max(Cue.MinRetriggerInterval, 0.f);
-	}
-}
-
-void UStageAudioSubsystem::RequestCueSounds()
-{
-	TArray<FSoftObjectPath> Paths;
-	for (const TPair<FGameplayTag, FLoadedCue>& Pair : Cues)
-	{
-		if (!Pair.Value.Sound.IsNull())
-		{
-			Paths.AddUnique(Pair.Value.Sound.ToSoftObjectPath());
-		}
-	}
-	if (Paths.IsEmpty())
-	{
-		return;
-	}
-
-	// The handle keeps the sounds resident for the whole run; they are small one-shot waves.
-	CueLoadHandle = UAssetManager::GetStreamableManager().RequestAsyncLoad(Paths, FStreamableDelegate::CreateWeakLambda(this, [this]()
-	{
-		UE_LOG(LogStageCraft, Log, TEXT("StageAudio: feedback sounds loaded."));
-	}));
-}
-
-void UStageAudioSubsystem::PlayCue(FGameplayTag CueTag)
-{
-	FLoadedCue* Cue = Cues.Find(CueTag);
-	if (!Cue || IsMuted())
-	{
-		return;
-	}
-
-	USoundBase* Sound = Cue->Sound.Get();
-	if (!Sound)
-	{
-		if (!Cue->bReportedMissing)
-		{
-			Cue->bReportedMissing = true;
-			UE_LOG(LogStageCraft, Warning, TEXT("StageAudio: cue %s has no loaded sound (%s); it stays silent."), *CueTag.ToString(), *Cue->Sound.ToString());
-		}
-		return;
-	}
-
-	const double Now = FPlatformTime::Seconds();
-	if (Now - Cue->LastPlayedTime < Cue->MinRetriggerInterval)
-	{
-		return;
-	}
-
-	const float Gain = StageAudioMath::ComputeCueGain(GetEffectsVolume(), Cue->VolumeScale);
-	UWorld* World = GetPlaybackWorld();
-	if (Gain <= 0.f || !World)
-	{
-		return;
-	}
-
-	Cue->LastPlayedTime = Now;
-	UE_LOG(LogStageCraft, Verbose, TEXT("StageAudio: cue %s at gain %.2f."), *CueTag.ToString(), Gain);
-	// UI sound: keeps playing while the game is paused, never spatialised.
-	UGameplayStatics::PlaySound2D(World, Sound, Gain, 1.f, 0.f, nullptr, nullptr, /*bIsUISound*/ true);
 }
 
 // --- Preferences ---
@@ -173,11 +74,6 @@ void UStageAudioSubsystem::PlayCue(FGameplayTag CueTag)
 float UStageAudioSubsystem::GetMasterVolume() const
 {
 	return Settings ? Settings->GetMasterVolume() : 1.f;
-}
-
-float UStageAudioSubsystem::GetEffectsVolume() const
-{
-	return Settings ? Settings->GetEffectsVolume() : 1.f;
 }
 
 bool UStageAudioSubsystem::IsMuted() const
@@ -188,14 +84,6 @@ bool UStageAudioSubsystem::IsMuted() const
 void UStageAudioSubsystem::SetMasterVolume(float Volume)
 {
 	if (Settings && Settings->SetMasterVolume(Volume))
-	{
-		HandleSettingsChanged();
-	}
-}
-
-void UStageAudioSubsystem::SetEffectsVolume(float Volume)
-{
-	if (Settings && Settings->SetEffectsVolume(Volume))
 	{
 		HandleSettingsChanged();
 	}
@@ -324,8 +212,8 @@ bool UStageAudioSubsystem::HandleSaveTimer(float DeltaTime)
 	if (Settings && Settings == UStageCraftUserSettings::Get())
 	{
 		Settings->SaveSettings();
-		UE_LOG(LogStageCraft, Log, TEXT("StageAudio: preferences saved (master %.2f, effects %.2f, muted %s)."),
-			GetMasterVolume(), GetEffectsVolume(), IsMuted() ? TEXT("yes") : TEXT("no"));
+		UE_LOG(LogStageCraft, Log, TEXT("StageAudio: preferences saved (master %.2f, muted %s)."),
+			GetMasterVolume(), IsMuted() ? TEXT("yes") : TEXT("no"));
 	}
 	return false; // One-shot.
 }

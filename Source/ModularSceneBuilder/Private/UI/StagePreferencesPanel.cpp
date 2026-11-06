@@ -45,7 +45,6 @@ namespace StagePreferencesPanel
 	{
 		LookSensitivity,
 		MasterVolume,
-		EffectsVolume,
 		Count
 	};
 
@@ -170,7 +169,6 @@ void UStagePreferencesPanel::BuildTree()
 
 	Add(BuildSectionTitle(LOCTEXT("Audio", "AUDIO")));
 	Add(BuildSliderRow(LOCTEXT("Master", "Master"), LOCTEXT("MasterTip", "Volume of every sound."), int32(ESlider::MasterVolume), 0.f, 1.f));
-	Add(BuildSliderRow(LOCTEXT("Effects", "Effects"), LOCTEXT("EffectsTip", "Volume of the editor's feedback sounds."), int32(ESlider::EffectsVolume), 0.f, 1.f));
 	Add(BuildChoiceRow(LOCTEXT("Mute", "Mute all"), LOCTEXT("MuteTip", "Silence every sound; the volumes are kept for when you unmute."),
 		{ LOCTEXT("Off", "Off"), LOCTEXT("On", "On") }, MuteButtons, &ThisClass::HandleMutePicked), SectionGap);
 
@@ -549,9 +547,7 @@ void UStagePreferencesPanel::Refresh()
 
 	const UStageAudioSubsystem* Audio = BoundAudio.Get();
 	const float Master = Audio ? Audio->GetMasterVolume() : 0.f;
-	const float Effects = Audio ? Audio->GetEffectsVolume() : 0.f;
 	ShowSlider(ESlider::MasterVolume, Master, FText::AsPercent(Master), Audio != nullptr);
-	ShowSlider(ESlider::EffectsVolume, Effects, FText::AsPercent(Effects), Audio != nullptr);
 	StyleRow(MuteButtons, Audio && Audio->IsMuted() ? 1 : 0, Audio != nullptr);
 
 	const FStageKeyBindings Bindings = Preferences ? Preferences->GetKeyBindings() : FStageKeyBindings::MakeDefaults();
@@ -648,12 +644,6 @@ void UStagePreferencesPanel::HandleSliderMoved(int32 SliderIndex, float Value)
 		if (UStageAudioSubsystem* Audio = BoundAudio.Get())
 		{
 			Audio->SetMasterVolume(Value);
-		}
-		break;
-	case ESlider::EffectsVolume:
-		if (UStageAudioSubsystem* Audio = BoundAudio.Get())
-		{
-			Audio->SetEffectsVolume(Value);
 		}
 		break;
 	default:

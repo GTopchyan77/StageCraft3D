@@ -651,7 +651,6 @@ void SStageWorkspaceMenuBar::FillAudioMenu(FMenuBuilder& MenuBuilder)
 
 	MenuBuilder.BeginSection(TEXT("Volume"), LOCTEXT("VolumeSection", "Volume"));
 	MenuBuilder.AddWidget(MakeVolumeSlider(&UStageAudioSubsystem::GetMasterVolume, &UStageAudioSubsystem::SetMasterVolume), LOCTEXT("Master", "Master"));
-	MenuBuilder.AddWidget(MakeVolumeSlider(&UStageAudioSubsystem::GetEffectsVolume, &UStageAudioSubsystem::SetEffectsVolume), LOCTEXT("Effects", "Effects"));
 	MenuBuilder.EndSection();
 }
 

@@ -311,7 +311,7 @@ void FStageSceneExportJob::StepExport()
 	TRACE_CPUPROFILER_EVENT_SCOPE(StageSceneExportJob_Gltf);
 	const double Start = FPlatformTime::Seconds();
 	IFileManager::Get().MakeDirectory(*FPaths::GetPath(Params.Path), /*Tree*/ true);
-	TempPath = FStageSceneExporter::GetTempPath(Params.Path);
+	TempPath = FStageSceneExporter::GetExportTempPath(Params.Path);
 	TSet<AActor*> Selected;
 	for (AActor* Actor : Actors)
 	{

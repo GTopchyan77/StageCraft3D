@@ -1,22 +1,17 @@
-# Creates the content assets for placement mode and editor audio (Docs/ADR/0002-placement-and-audio.md):
+# Creates the content assets for placement mode (editor feedback sounds were removed in STATE.md #76) (Docs/ADR/0002-placement-and-audio.md):
 #   /Game/StageCraft/Placement/M_PlacementGhost   translucent unlit ghost, "GhostColor" vector parameter
 #   /Game/StageCraft/Placement/M_PlacementMarker  deferred decal ring, "MarkerColor" vector parameter
-#   /Game/StageCraft/Audio/Feedback/SFX_*         feedback sounds imported from Scripts/Content/make_feedback_wavs.ps1 output
 #   /Game/StageCraft/UI/Panels/DA_Panel_Library   workspace panel definition for UStageItemLibraryPanel
 #
 # Headless (no editor window needed; the project's editor must be closed):
-#   powershell -File Scripts/Content/make_feedback_wavs.ps1
 #   UnrealEditor-Cmd.exe <Project>.uproject -run=pythonscript -script="<abs path>/create_placement_audio_content.py" -unattended -nullrhi
 #
 # Idempotent: existing assets are replaced, so the script is the source of truth for these assets.
 
-import os
 import unreal
 
 PLACEMENT_DIR = "/Game/StageCraft/Placement"
-AUDIO_DIR = "/Game/StageCraft/Audio/Feedback"
 PANELS_DIR = "/Game/StageCraft/UI/Panels"
-WAV_DIR = os.path.normpath(os.path.join(unreal.Paths.project_saved_dir(), "ContentSource", "Feedback"))
 
 mel = unreal.MaterialEditingLibrary
 eal = unreal.EditorAssetLibrary
@@ -134,29 +129,6 @@ def create_marker_material():
     finish(material)
 
 
-def import_sounds():
-    tasks = []
-    for name in ("SFX_Select", "SFX_Place", "SFX_Snap", "SFX_Error"):
-        source = os.path.join(WAV_DIR, name + ".wav")
-        if not os.path.isfile(source):
-            raise RuntimeError("Missing " + source + " (run Scripts/Content/make_feedback_wavs.ps1 first)")
-        task = unreal.AssetImportTask()
-        task.set_editor_property("filename", source)
-        task.set_editor_property("destination_path", AUDIO_DIR)
-        task.set_editor_property("destination_name", name)
-        task.set_editor_property("automated", True)
-        task.set_editor_property("replace_existing", True)
-        task.set_editor_property("save", True)
-        tasks.append(task)
-
-    asset_tools.import_asset_tasks(tasks)
-    for task in tasks:
-        imported = task.get_editor_property("imported_object_paths")
-        if not imported:
-            raise RuntimeError("Import failed: " + task.get_editor_property("filename"))
-        log("Imported " + ", ".join(imported))
-
-
 def create_library_panel_definition():
     name = "DA_Panel_Library"
     path = PANELS_DIR + "/" + name
@@ -177,6 +149,5 @@ def create_library_panel_definition():
 
 create_ghost_material()
 create_marker_material()
-import_sounds()
 create_library_panel_definition()
 log("Done.")
