@@ -104,6 +104,8 @@ private:
 	class UWidget* BuildQuickColumn();
 	/** A wrap box of quick-effect buttons for QuickEffects[First, First + Count). */
 	class UWidget* BuildQuickGrid(int32 First, int32 Count);
+	/** The AUDIO master and KILL above the audio quick effects (Docs/ADR/0029 §7). */
+	class UWidget* BuildAudioMasterRow();
 	class UWidget* BuildEditor();
 	class UWidget* BuildRunningColumn();
 	class UWidget* BuildSettingRow(ESetting Setting, const FText& Label, const FText& ToolTip);
@@ -161,6 +163,8 @@ private:
 	void HandleCueEvent(float CueNumber);
 	void HandleStopAllPicked(int32 ChoiceIndex);
 	void HandleTapPicked(int32 ChoiceIndex);
+	void HandleAudioMasterMoved(int32 SliderIndex, float Value);
+	void HandleAudioKillPicked(int32 ChoiceIndex);
 
 	/** Built once in BuildTree; the widget tree owns the widgets (weak references here). */
 	TArray<FSettingRow> SettingRows;
@@ -186,6 +190,10 @@ private:
 
 	UPROPERTY(Transient)
 	TObjectPtr<class UTextBlock> StatusText = nullptr;
+
+	TWeakObjectPtr<class UStageValueSlider> AudioMasterSlider;
+	TWeakObjectPtr<class UTextBlock> AudioMasterText;
+	TWeakObjectPtr<class UStageChoiceButton> AudioKillButton;
 
 	/** The plain quick effects, then the audio ones (Docs/ADR/0029 §5) from AudioQuickStart on. */
 	TArray<FStageEffect> QuickEffects;

@@ -31,6 +31,7 @@ namespace StagePlaybackPanel
 	constexpr float FaderHeight = 150.f;
 	/** The Grand Master fader reports this index; playback faders report their playback's index. */
 	constexpr int32 GrandMasterIndex = 100;
+	constexpr int32 AudioMasterIndex = 101;
 
 	FText FormatLevel(float Level)
 	{
@@ -243,6 +244,30 @@ UWidget* UStagePlaybackPanel::BuildStrip(int32 Index)
 
 UWidget* UStagePlaybackPanel::BuildMasters()
 {
+	UHorizontalBox* Masters = WidgetTree->ConstructWidget<UHorizontalBox>(UHorizontalBox::StaticClass());
+	Masters->AddChildToHorizontalBox(BuildMasterColumn(LOCTEXT("GrandMaster", "GM"),
+		LOCTEXT("GrandMasterTitleTip", "Grand Master: scales every light's intensity last, whatever plays or is held."),
+		StagePlaybackPanel::GrandMasterIndex, LOCTEXT("GrandMasterTip", "Grand Master. A stage always opens at full."),
+		LOCTEXT("Blackout", "BLACKOUT"), LOCTEXT("BlackoutTip", "Take every light to zero at once (Ctrl+Shift+B). Click again to bring them back."),
+		GrandMasterFader, GrandMasterText, BlackoutButton));
+	BlackoutButton->OnPicked.BindUObject(this, &ThisClass::HandleBlackoutPicked);
+	// Effects that follow the music (Docs/ADR/0029 §7): down scales them towards how they run without music; KILL is 0 at once.
+	UWidget* Audio = BuildMasterColumn(LOCTEXT("AudioMaster", "AUDIO"),
+		LOCTEXT("AudioMasterTitleTip", "AUDIO master: how much effects that follow the music follow it. Down, a pulse breathes less; at 0 they run as without music."),
+		StagePlaybackPanel::AudioMasterIndex, LOCTEXT("AudioMasterTip", "AUDIO master. A stage always opens at full."),
+		LOCTEXT("AudioKill", "KILL"), LOCTEXT("AudioKillTip", "Stop every effect from following the music at once: pulses stay open, chases hold, synced effects keep their last tempo. Click again to follow the music."),
+		AudioMasterFader, AudioMasterText, AudioKillButton);
+	AudioKillButton->OnPicked.BindUObject(this, &ThisClass::HandleAudioKillPicked);
+	if (UHorizontalBoxSlot* AudioSlot = Masters->AddChildToHorizontalBox(Audio))
+	{
+		AudioSlot->SetPadding(FMargin(4.f, 0.f, 0.f, 0.f));
+	}
+	return Masters;
+}
+
+UWidget* UStagePlaybackPanel::BuildMasterColumn(const FText& TitleText, const FText& TitleTip, int32 FaderIndex, const FText& FaderTip, const FText& ButtonLabel,
+	const FText& ButtonTip, TObjectPtr<UStageValueSlider>& OutFader, TObjectPtr<UTextBlock>& OutLevel, TObjectPtr<UStageChoiceButton>& OutButton)
+{
 	using namespace StageCraftWidgetStyle;
 	using namespace StagePlaybackPanel;
 	const UStageCraftUITheme& UITheme = GetTheme();
@@ -256,24 +281,23 @@ UWidget* UStagePlaybackPanel::BuildMasters()
 	UVerticalBox* Column = WidgetTree->ConstructWidget<UVerticalBox>(UVerticalBox::StaticClass());
 	Frame->SetContent(Column);
 
-	UTextBlock* Title = MakeText(LOCTEXT("GrandMaster", "GM"), 8, TEXT("Bold"), UITheme.TextPrimary);
-	Title->SetToolTipText(LOCTEXT("GrandMasterTitleTip", "Grand Master: scales every light's intensity last, whatever plays or is held."));
+	UTextBlock* Title = MakeText(TitleText, 8, TEXT("Bold"), UITheme.TextPrimary);
+	Title->SetToolTipText(TitleTip);
 	Column->AddChildToVerticalBox(Title);
 	Column->AddChildToVerticalBox(MakeText(LOCTEXT("Masters", "MASTER"), 7, TEXT("Regular"), UITheme.TextSecondary));
 	USizeBox* FaderBox = WidgetTree->ConstructWidget<USizeBox>(USizeBox::StaticClass());
 	FaderBox->SetHeightOverride(FaderHeight);
-	GrandMasterFader = MakeFader(GrandMasterIndex, LOCTEXT("GrandMasterTip", "Grand Master. A stage always opens at full."));
-	FaderBox->SetContent(GrandMasterFader);
+	OutFader = MakeFader(FaderIndex, FaderTip);
+	FaderBox->SetContent(OutFader);
 	if (UVerticalBoxSlot* FaderSlot = Column->AddChildToVerticalBox(FaderBox))
 	{
 		FaderSlot->SetPadding(FMargin(0.f, 4.f));
 		FaderSlot->SetHorizontalAlignment(HAlign_Center);
 	}
-	GrandMasterText = MakeText(FText::GetEmpty(), 7, TEXT("Bold"), UITheme.TextSecondary);
-	Column->AddChildToVerticalBox(GrandMasterText);
-	BlackoutButton = MakeButton(LOCTEXT("Blackout", "BLACKOUT"), LOCTEXT("BlackoutTip", "Take every light to zero at once (Ctrl+Shift+B). Click again to bring them back."), 0, false);
-	BlackoutButton->OnPicked.BindUObject(this, &ThisClass::HandleBlackoutPicked);
-	if (UVerticalBoxSlot* BlackoutSlot = Column->AddChildToVerticalBox(BlackoutButton))
+	OutLevel = MakeText(FText::GetEmpty(), 7, TEXT("Bold"), UITheme.TextSecondary);
+	Column->AddChildToVerticalBox(OutLevel);
+	OutButton = MakeButton(ButtonLabel, ButtonTip, 0, false);
+	if (UVerticalBoxSlot* BlackoutSlot = Column->AddChildToVerticalBox(OutButton))
 	{
 		BlackoutSlot->SetPadding(FMargin(0.f, 4.f, 0.f, 0.f));
 	}
@@ -396,6 +420,14 @@ void UStagePlaybackPanel::Refresh()
 	{
 		Label->SetColorAndOpacity(FSlateColor(Subsystem->IsBlackout() ? UITheme.TextPrimary : UITheme.TextSecondary));
 	}
+	AudioMasterFader->SetValue(Subsystem->GetAudioMaster());
+	// The fader's own level, as GM shows its level under BLACKOUT; the lit KILL says the rest.
+	AudioMasterText->SetText(StagePlaybackPanel::FormatLevel(Subsystem->GetAudioMaster()));
+	AudioKillButton->SetStyle(MakeButtonStyle(Subsystem->IsAudioKilled(), UITheme.WarningColor));
+	if (UTextBlock* Label = Cast<UTextBlock>(AudioKillButton->GetChildAt(0)))
+	{
+		Label->SetColorAndOpacity(FSlateColor(Subsystem->IsAudioKilled() ? UITheme.TextPrimary : UITheme.TextSecondary));
+	}
 }
 
 void UStagePlaybackPanel::HandleFaderMoved(int32 FaderIndex, float Value)
@@ -408,6 +440,10 @@ void UStagePlaybackPanel::HandleFaderMoved(int32 FaderIndex, float Value)
 	if (FaderIndex == StagePlaybackPanel::GrandMasterIndex)
 	{
 		Controller->RequestSetGrandMaster(Value);
+	}
+	else if (FaderIndex == StagePlaybackPanel::AudioMasterIndex)
+	{
+		Controller->RequestSetAudioMaster(Value);
 	}
 	else
 	{
@@ -468,6 +504,17 @@ void UStagePlaybackPanel::HandleBlackoutPicked(int32 ChoiceIndex)
 	if (Controller && Subsystem)
 	{
 		Controller->RequestSetBlackout(!Subsystem->IsBlackout());
+	}
+	RequestRefresh();
+}
+
+void UStagePlaybackPanel::HandleAudioKillPicked(int32 ChoiceIndex)
+{
+	AModularPlayerController* Controller = GetStageController();
+	const UShowControlSubsystem* Subsystem = ShowControl.Get();
+	if (Controller && Subsystem)
+	{
+		Controller->RequestSetAudioKill(!Subsystem->IsAudioKilled());
 	}
 	RequestRefresh();
 }

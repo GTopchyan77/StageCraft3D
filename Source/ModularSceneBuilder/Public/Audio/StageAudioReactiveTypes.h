@@ -206,6 +206,14 @@ struct MODULARSCENEBUILDER_API FStageAudioReactiveSettings
 	UPROPERTY(Config, BlueprintReadWrite, Category = "StageCraft|Audio")
 	float TestSignalBPM = 128.f;
 
+	/**
+	 * Flash safety on real lights (ADR 0029 §7): an intensity driven by the music may rise from below 20 % to above 80 % of its range
+	 * at most this many times a second, and a music-driven strobe may not run faster. 1..10; 3 is the general flash threshold of
+	 * photosensitive seizure guidance (WCAG 2.3.1), and the Audio panel warns above it.
+	 */
+	UPROPERTY(Config, BlueprintReadWrite, Category = "StageCraft|Audio")
+	float FlashLimitHz = 3.f;
+
 	bool operator==(const FStageAudioReactiveSettings& Other) const = default;
 };
 
@@ -247,6 +255,10 @@ namespace StageAudioReactive
 	constexpr float MaxInputGainDb = 24.f;
 	constexpr float MinTestSignalBPM = 60.f;
 	constexpr float MaxTestSignalBPM = 200.f;
+	constexpr float MinFlashLimitHz = 1.f;
+	constexpr float MaxFlashLimitHz = 10.f;
+	/** Above this the Audio panel warns that the flash rate is past photosensitive seizure guidance. */
+	constexpr float SafeFlashLimitHz = 3.f;
 	/** The analysis runs at 48 kHz; band edges above Nyquist margin are clamped here. */
 	constexpr float MinBandHz = 20.f;
 	constexpr float MaxBandHz = 20000.f;

@@ -264,6 +264,20 @@ public:
 	void SetBlackout(bool bOn);
 	bool IsBlackout() const { return bBlackout; }
 
+	/**
+	 * AUDIO master 0..1 (Docs/ADR/0029 §7): scales every effect that follows the music towards how it runs without music (Modulate
+	 * fully open; at 0 Sync keeps its last tempo and Trigger holds). Not saved: a stage always opens at full.
+	 */
+	void SetAudioMaster(float Level);
+	float GetAudioMaster() const { return AudioMaster; }
+
+	/** AUDIO KILL: the AUDIO master at 0 while on, without moving the fader. Not saved. */
+	void SetAudioKill(bool bOn);
+	bool IsAudioKilled() const { return bAudioKill; }
+
+	/** The flash limit the effects apply now: this PC's setting (StageAudioReactiveSettings::FlashLimitHz), pushed on every change. */
+	float GetEffectFlashLimitHz() const { return EffectRunner.GetFlashLimitHz(); }
+
 	UPROPERTY(BlueprintAssignable, Category = "StageCraft|Show")
 	FOnShowPlaybacksChanged OnPlaybacksChanged;
 
@@ -478,6 +492,9 @@ private:
 	/** The programmer's effects or stops changed: the effects re-gather at once (RefreshEffectSources). */
 	void HandleProgrammerEffectsChanged();
 
+	/** The audio settings may have changed: the effects take this PC's flash limit (Docs/ADR/0029 §7). */
+	void HandleAudioStatusChanged();
+
 	/**
 	 * Hands the runner every source's effects (Docs/ADR/0027 §5): the main list's, the active playbacks' in activation order, the
 	 * programmer's, the same id once as its latest, the programmer's stops left out. TimedBy (the cue being played) fades what it
@@ -547,6 +564,7 @@ private:
 
 	FDelegateHandle ProgrammerChangedHandle;
 	FDelegateHandle ProgrammerEffectsHandle;
+	FDelegateHandle AudioStatusHandle;
 
 	/** The running effects' clocks, fades and per-fixture output (Docs/ADR/0027 §3, §5). */
 	FStageEffectRunner EffectRunner;
@@ -592,6 +610,8 @@ private:
 	uint32 ActivationCounter = 0;
 	float GrandMaster = 1.f;
 	bool bBlackout = false;
+	float AudioMaster = 1.f;
+	bool bAudioKill = false;
 	float ActiveCueNumber = -1.f;
 	float DMXOutputAccumulator = 0.f;
 	/** Universes whose fixtures changed since they were last sent (Internal output only). */

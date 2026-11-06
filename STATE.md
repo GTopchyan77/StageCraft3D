@@ -6893,7 +6893,7 @@ All times in ms.
 - The baseline worktree `E:/SC_Baseline` was removed afterwards. CSVs: `Saved/StageCraft/Benchmarks/FixtureBench_20261105-1800*` to `-181*` (the baseline's were in the worktree).
 
 
-**Commit:** uncommitted (working tree).
+**Commit:** `9acfa3c` (committed by Gevor).
 
 **Known issues / follow-ups**
 - **The flash limiter is G3.** Until then an audio-driven chase or sparkle can reach real fixtures through DMX OUT without a cap. High Sparkle can step up to 10 times a second on onsets. Do G3 before using audio looks on real lights.
@@ -6905,3 +6905,128 @@ All times in ms.
   - real music on each source.
 - **Seek restarts the analysis** (as in G1): Sync keeps the last tempo meanwhile; Trigger holds.
 - Effects whose Level modulation applies to Color have no visible effect: Level reads Low/High, which colour does not use. The panel still offers it.
+
+
+## #71 — Phase G3: flash limiter, AUDIO master and KILL, LISTENING, latency offsets (2026-11-05)
+
+**Housekeeping first.** #70 said "uncommitted"; it now carries `9acfa3c` (Gevor committed G2).
+
+**What & why**
+- Gevor's brief (2026-11-05) asked for Phase G3 "in auto mode":
+  - a DMX flash limiter (3 Hz default) on audio-driven intensity and strobe;
+  - an AUDIO master fader and an AUDIO KILL;
+  - a Listening indicator and a per-source latency offset slider in the Audio panel;
+  - tests, 0-warning builds, a benchmark with no regression, todo.md and STATE.md.
+- ADR 0029 §6 and §7 (approved) govern the details, and §15 records how G3 realised them. Where the brief and the ADR differ:
+  - **KILL** is the ADR's "no-signal value", not a blackout. A pulse goes fully open and a chase holds; BLACKOUT is still the way to dark.
+  - **The limiter** follows the ADR's scope: effects that follow the music only. Programmed effects are the operator's responsibility.
+  - **LISTENING** shows in the status bar (ADR §6) as well as in the Audio panel (brief).
+- No plan-mode stop: the brief said auto mode. The plan is in `tasks/todo.md` (G3a–G3f).
+
+**Design** (details in ADR 0029 §15)
+- **Flash gate** (`StageEffects::FFlashGate`, `Public/Show/StageEffects.h`): a flash is a rise from below 20 % to above 80 % of the range.
+  - At most `FlashLimitHz` flashes a second.
+  - A refused rise **holds the last value shown** (at most 80 %). A clamp at 80 % would have let a 10 Hz square flicker between 0 and 80 % at full rate.
+  - Values between the thresholds and a light that stays up pass unchanged.
+  - Idempotent within a frame (the show can mix a fixture twice in a frame), on the runner's own clock.
+- **Strobe cap** (`StageEffects::GetStrobeShutterCap`): a music-driven Shutter is capped so the fixture's strobe is no faster than the limit. A fixture whose slowest strobe is already faster stays open.
+- **Runner** (`FStageEffectRunner`):
+  - `Evaluate` collects the attributes that effects following the music give a fixture. After composing, it passes their intensities through a gate per fixture and attribute, and caps their Shutter (`LimitFlashes`).
+  - Gates survive cue changes while the fixture stays driven, and are pruned in `RebuildDrives`.
+  - `SetAudioMaster` (KILL = 0): Modulate reads `1 + (band − 1) × master`. At 0 every audio effect gets the silent input: Sync keeps its last tempo, Trigger holds and primes again without catching up.
+  - `SetFlashLimitHz` is clamped to 1..10.
+- **Show** (`UShowControlSubsystem`):
+  - `SetAudioMaster` and `SetAudioKill` are session-only and broadcast `OnDeskStateChanged`. KILL is logged.
+  - The flash limit is pushed from `UStageAudioReactiveSubsystem::OnAudioStatusChanged` (bound in Initialize, removed in Deinitialize).
+  - `GetEffectFlashLimitHz` reads the limit.
+- **Requests:** `AModularPlayerController::RequestSetAudioMaster` and `RequestSetAudioKill`, judged as `EStageCueRequest::Masters` (the GM's gate).
+- **Setting:** `FStageAudioReactiveSettings::FlashLimitHz` (Config, default 3, sanitised 1..10).
+- **Live latency:**
+  - `FStageAudioAnalyzer::SetHeardDelaySeconds` is an atomic read per block.
+  - `UStageAudioReactiveSubsystem::ApplySettings` now restarts the analysis only for band edges and the test tempo. Before, every settings change restarted it, and the tempo took about 3 s to come back.
+- **UI:**
+  - **Audio panel:**
+    - "● LISTENING" in the header while Input or SystemAudio is Starting or Running;
+    - LATENCY (−500..+500 ms in 5 ms steps, for the source playing; hidden for TEST and OFF);
+    - FLASH (1..10 a second, with a seizure warning above 3).
+    - Both sliders apply on release as one settings request. `DraggedSetting` replaces `bGainDragged`.
+  - **Status bar:** "● LISTENING", pushed by `OnAudioStatusChanged`.
+  - **Playback panel:** an AUDIO fader and KILL next to GM and BLACKOUT, built by the new `BuildMasterColumn`, which the GM column now uses too.
+  - **Effects panel:** an AUDIO slider and KILL above the audio quick effects.
+- **Dev console** (`#if !UE_BUILD_SHIPPING`):
+  - `StageCraft.Music.Master [0..1]`, `StageCraft.Music.Kill [On|Off]`, `StageCraft.Music.Settings FlashLimit=<Hz>`;
+  - `StageCraft.Workspace.ScrollPanels end horizontal`, to scroll the playback desk to its masters for screenshots.
+
+**Files changed** (under `Source/ModularSceneBuilder` unless noted)
+- `Public/Audio/StageAudioReactiveTypes.h`, `Private/Audio/StageAudioReactiveTypes.cpp`: `FlashLimitHz` and its bounds; Sanitize.
+- `Public/Show/StageEffects.h`, `Private/Show/StageEffects.cpp`: `ApplyAudioMaster`, `FFlashGate`, `GetStrobeShutterCap`, thresholds.
+- `Public/Show/StageEffectRunner.h`, `Private/Show/StageEffectRunner.cpp`: master, limit, clock, flash gates, `LimitFlashes`.
+- `Public/Subsystems/ShowControlSubsystem.h`, `Private/Subsystems/ShowControlSubsystem.cpp`: AUDIO master and KILL, limit push.
+- `Public/Player/ModularPlayerController.h`, `Private/Player/ModularPlayerControllerProgrammer.cpp`: the two requests.
+- `Private/Audio/StageAudioAnalyzer.h`, `Private/Audio/StageAudioAnalyzer.cpp`: live heard delay.
+- `Private/Subsystems/StageAudioReactiveSubsystem.cpp`: no restart for timing changes.
+- `Private/Audio/StageAudioReactiveConsoleCommands.cpp`: Master, Kill, FlashLimit.
+- `Public/UI/StageAudioPanel.h`, `Private/UI/StageAudioPanel.cpp`: LISTENING, LATENCY, FLASH.
+- `Public/UI/StageStatusBarWidget.h`, `Private/UI/StageStatusBarWidget.cpp`: LISTENING.
+- `Public/UI/StagePlaybackPanel.h`, `Private/UI/StagePlaybackPanel.cpp`: the AUDIO column, `BuildMasterColumn`.
+- `Public/UI/StageEffectsPanel.h`, `Private/UI/StageEffectsPanel.cpp`: the AUDIO row.
+- `Private/Workspace/StageWorkspaceConsoleCommands.cpp`: ScrollPanels horizontal.
+- `Private/Show/Tests/StageAudioEffectTests.cpp`: three new tests, and `AudioOnFixtures` extended.
+- Docs: `Docs/ADR/0029-audio-analysis-and-audio-reactive-effects.md` (status line and §15), `Docs/CURRENT_SYSTEMS.md` (a new row; 204 tests).
+- Records: `tasks/todo.md` (G3 and G3a–f), `STATE.md` (#70 carries `9acfa3c`; this entry).
+- No content assets, maps or input actions changed. The Audio panel definition is unchanged; the new rows are built in C++.
+
+**Verification**
+- **Tests:** 204/204 with NullRHI and 204/204 with the offscreen renderer (`RunAutomation.ps1 -ExpectedCount 204`), user data unchanged both times.
+  - New: `Show.FlashLimiter`, `Show.AudioMaster`, `Show.FlashLimitOnFixtures`; `Show.AudioOnFixtures` extended.
+  - Measured in the tests:
+    - a 10 Hz square at limit 3 went from 30 flashes in 3 s to 9, shortest gap 0.333 s;
+    - an 8 Hz beat-synced square on a real fixture gave 8 flashes at limit 3 (gap ≥ 0.367 s), 24 at limit 10 and 25 without music;
+    - Bass Pulse with the bass silent read 0.000 at master 1, 0.500 at 0.5 and 1.000 at 0 (KILL);
+    - a latency change kept the analyser's 128 BPM.
+  - The first Show-filter run reported GameUserSettings.ini changed: the engine wrote the new `FlashLimitHz=3` key once (the known first-run effect of a new Config field). Both full runs afterwards: unchanged.
+- **Builds:** Editor, Game Development and Game Shipping succeeded with 0 warnings.
+- **Shipping UTF-16 scan:** absent: `StageCraft.Music.Master`, `StageCraft.Music.Kill`, `StageCraft.Music.Settings`, `[FlashLimit=<Hz>]`, `StageCraft.Bench.Fixtures`. Present: the seizure warning, LISTENING, the KILL tooltip, the latency tooltip.
+- **Scripted run G3a** (Concert stage, `-WithoutUserImports`; user data restored):
+  - TestSignal at 128 with a Strobe synced at a quarter beat and Bass Pulse;
+  - FLASH at 5 shows the warning; LATENCY hidden for TEST;
+  - Music.Master 0.5 and Kill On/Off logged;
+  - SYSTEM shows LISTENING in the status bar and the panel header, with LATENCY +40 ms;
+  - OFF removes LISTENING.
+  - Screenshots: `%TEMP%\StageCraftRuns\G3a`.
+- **Scripted run G3b:**
+  - The Effects panel (in front) shows the AUDIO slider and a lit KILL above the audio quick effects.
+  - The Playback panel, scrolled to its masters with `ScrollPanels end horizontal`, shows GM 100 % with BLACKOUT, and AUDIO 60 % with a lit KILL.
+  - After that run the level text was changed to always show the fader's percent, because the lit KILL already says it is on and "KILL KILL" was redundant. Rebuilt, and the tests were run again afterwards.
+  - Screenshots: `%TEMP%\StageCraftRuns\G3b`.
+- **Benchmark** (`Bench.Fixtures 200 500`, imports set aside and restored, against a `9acfa3c` worktree with the same workspace layout, run order alternated). Show tick mean in ms:
+
+  | Case | 200 idle | 200 crossfade | 500 idle | 500 crossfade |
+  |---|---|---|---|---|
+  | Base, Effects=1 Audio=1 (3 runs) | 4.37 | 4.90 | 10.88 | 12.76 |
+  | G3, Effects=1 Audio=1 (2 runs) | 4.41 | 4.98 | 11.33 | 13.31 |
+  | Base, Effects=1 (2 runs) | 4.44 | 5.09 | 10.68 | 12.52 |
+  | G3, Effects=1 (2 runs) | 4.09 | 4.70 | 10.68 | 12.40 |
+  | Base, no effects (2 runs, crossfade only) | | 4.21 | | 9.62 |
+  | G3, no effects (2 runs, crossfade only) | | 4.21 | | 9.55 |
+
+  - **Audio=1 against Audio=1** (the limiter and master at work on 200 or 500 music-driven dimmers) is within +1 % to +4 %, inside the 5 % gate.
+    - The G3 run that went first matched the base exactly at 500 (10.72 against 10.70 idle, 12.63 against 12.63 crossfade).
+    - The +4 % comes from the G3 run that followed a base run.
+  - Without audio effects the limiter does no work, and G3 matches or beats the base. With no effects the show does not tick at rest in either tree.
+  - The analyser used 0.34–0.36 % of a core at 128.04 BPM, with 0 samples dropped.
+  - **Discarded:** one G3 Audio=1 run. Mid-run, at 500 fixtures, its log shows the "Theatre" starter stage opened from the welcome screen, replacing the bench stage (100 show ticks, then none). That takes a click or key in the game window, so it was outside input, not code. A replacement pair (G3 first, then base) was run.
+  - A first no-effects pair was 10 % apart at 500 crossfade, with every frame time raised. A rerun of two pairs in alternating order matched (above).
+  - The `E:/SC_Baseline` worktree was removed.
+- **Awaiting Gevor (manual):**
+  - by mouse: LATENCY and FLASH drags, the AUDIO fader and KILL in both panels;
+  - real music on each source, with a strobe-like audio effect on DMX OUT watched on a visualiser (3 a second);
+  - a packaged Shipping run through the Audio panel.
+
+**Commit:** uncommitted (working tree).
+
+**Known issues / follow-ups**
+- Colour effects that follow the music are not flash-limited (ADR §7 scope is intensity and strobe). An RGB fixture can still flash through a music-driven colour change.
+- A limited attribute that also has a programmed effect on it is limited as a whole.
+- Still awaiting Gevor: removing `E:/SC_G0`, `E:/SC_G0_Package` and branch `spike/g0-audio`; ADR 0030 decisions.
+- **Phase G is complete in code.** H0 (assistant spike) is next on the roadmap.

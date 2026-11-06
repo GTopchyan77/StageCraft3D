@@ -147,6 +147,9 @@ private:
 	UFUNCTION()
 	void HandleModelImportFinished(const FStageMeshImportOutcome& Outcome);
 
+	/** Shows LISTENING while a capture source (microphone, line input, this PC's output) is live (Docs/ADR/0029 §6). */
+	void HandleAudioStatusChanged();
+
 	UPROPERTY(Transient)
 	TObjectPtr<class UBorder> ModeChip = nullptr;
 
@@ -162,6 +165,10 @@ private:
 	/** "Unsaved changes", shown while the session is dirty. */
 	UPROPERTY(Transient)
 	TObjectPtr<class UTextBlock> UnsavedText = nullptr;
+
+	/** "Listening", shown while audio-reactive lighting analyses a capture source (privacy, ADR 0029 §6). */
+	UPROPERTY(Transient)
+	TObjectPtr<class UTextBlock> ListeningText = nullptr;
 
 	TWeakObjectPtr<class UStageSessionSubsystem> Session;
 
@@ -179,6 +186,8 @@ private:
 	TWeakObjectPtr<class UStageCableScheduleSubsystem> CableSchedule;
 	TWeakObjectPtr<class UStageMeshImportSubsystem> Importer;
 	TWeakObjectPtr<class UStageInputPreferencesSubsystem> InputPreferences;
+	TWeakObjectPtr<class UStageAudioReactiveSubsystem> AudioReactive;
+	FDelegateHandle AudioStatusHandle;
 
 	FTimerHandle MessageTimer;
 };

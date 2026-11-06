@@ -221,8 +221,51 @@ UWidget* UStageEffectsPanel::BuildQuickColumn()
 	{
 		TitleSlot->SetPadding(FMargin(0.f, 8.f, 0.f, 3.f));
 	}
+	if (UVerticalBoxSlot* MasterSlot = Groups->AddChildToVerticalBox(BuildAudioMasterRow()))
+	{
+		MasterSlot->SetPadding(FMargin(0.f, 0.f, 0.f, 4.f));
+	}
 	Groups->AddChildToVerticalBox(BuildQuickGrid(AudioQuickStart, QuickEffects.Num() - AudioQuickStart));
 	return Width;
+}
+
+UWidget* UStageEffectsPanel::BuildAudioMasterRow()
+{
+	const UStageCraftUITheme& UITheme = GetTheme();
+	UHorizontalBox* Row = WidgetTree->ConstructWidget<UHorizontalBox>(UHorizontalBox::StaticClass());
+	Row->SetToolTipText(LOCTEXT("AudioMasterTip", "AUDIO master: how much effects that follow the music follow it. Down, a pulse breathes less; at 0 they run as without music. A stage always opens at full."));
+	UStageValueSlider* Slider = WidgetTree->ConstructWidget<UStageValueSlider>(UStageValueSlider::StaticClass());
+	Slider->SetWidgetStyle(StageCraftWidgetStyle::MakeSlider(UITheme));
+	Slider->SetSliderHandleColor(FLinearColor::White);
+	Slider->SetMinValue(0.f);
+	Slider->SetMaxValue(1.f);
+	Slider->SetStepSize(0.01f);
+	Slider->OnMoved.BindUObject(this, &ThisClass::HandleAudioMasterMoved);
+	AudioMasterSlider = Slider;
+	if (UHorizontalBoxSlot* SliderSlot = Row->AddChildToHorizontalBox(Slider))
+	{
+		SliderSlot->SetSize(FSlateChildSize(ESlateSizeRule::Fill));
+		SliderSlot->SetVerticalAlignment(VAlign_Center);
+	}
+	USizeBox* ValueBox = WidgetTree->ConstructWidget<USizeBox>(USizeBox::StaticClass());
+	ValueBox->SetWidthOverride(32.f);
+	UTextBlock* Value = MakeText(FText::GetEmpty(), 7, TEXT("Regular"), UITheme.TextPrimary);
+	Value->SetJustification(ETextJustify::Right);
+	ValueBox->SetContent(Value);
+	AudioMasterText = Value;
+	if (UHorizontalBoxSlot* ValueSlot = Row->AddChildToHorizontalBox(ValueBox))
+	{
+		ValueSlot->SetVerticalAlignment(VAlign_Center);
+		ValueSlot->SetPadding(FMargin(4.f, 0.f));
+	}
+	UStageChoiceButton* Kill = MakeButton(LOCTEXT("AudioKill", "KILL"), LOCTEXT("AudioKillTip", "Stop every effect from following the music at once: pulses stay open, chases hold, synced effects keep their last tempo. Click again to follow the music."), 0, false);
+	Kill->OnPicked.BindUObject(this, &ThisClass::HandleAudioKillPicked);
+	AudioKillButton = Kill;
+	if (UHorizontalBoxSlot* KillSlot = Row->AddChildToHorizontalBox(Kill))
+	{
+		KillSlot->SetVerticalAlignment(VAlign_Center);
+	}
+	return Row;
 }
 
 UWidget* UStageEffectsPanel::BuildQuickGrid(int32 First, int32 Count)
@@ -647,6 +690,25 @@ void UStageEffectsPanel::Refresh()
 		: FText::Format(LOCTEXT("Running", "{0} running · TAP the rate in time with the music."), FText::AsNumber(Count)));
 	RefreshRunningList(bEnabled);
 	RefreshEditor(FindSelected(), bEnabled && IsSelectedEditable());
+
+	const UStageCraftUITheme& UITheme = GetTheme();
+	if (UStageValueSlider* Slider = AudioMasterSlider.Get(); Slider && !Slider->HasMouseCapture())
+	{
+		Slider->SetValue(Show->GetAudioMaster());
+	}
+	if (UTextBlock* Value = AudioMasterText.Get())
+	{
+		// The slider's own level; the lit KILL beside it says when the music is ignored.
+		Value->SetText(FText::Format(LOCTEXT("AudioMasterValue", "{0}%"), FText::AsNumber(FMath::RoundToInt(Show->GetAudioMaster() * 100.f))));
+	}
+	if (UStageChoiceButton* Kill = AudioKillButton.Get())
+	{
+		Kill->SetStyle(MakeButtonStyle(Show->IsAudioKilled(), UITheme.WarningColor));
+		if (UTextBlock* Label = Cast<UTextBlock>(Kill->GetChildAt(0)))
+		{
+			Label->SetColorAndOpacity(FSlateColor(Show->IsAudioKilled() ? UITheme.TextPrimary : UITheme.TextSecondary));
+		}
+	}
 }
 
 void UStageEffectsPanel::RefreshRunningList(bool bEnabled)
@@ -981,6 +1043,26 @@ void UStageEffectsPanel::HandleEditPicked(int32 Index)
 	{
 		SelectedEffectId = Listed[Index].Entry.Id;
 		TapTimes.Reset();
+	}
+	RequestRefresh();
+}
+
+void UStageEffectsPanel::HandleAudioMasterMoved(int32 SliderIndex, float Value)
+{
+	if (AModularPlayerController* Controller = GetStageController())
+	{
+		Controller->RequestSetAudioMaster(Value);
+	}
+	RequestRefresh();
+}
+
+void UStageEffectsPanel::HandleAudioKillPicked(int32 ChoiceIndex)
+{
+	AModularPlayerController* Controller = GetStageController();
+	const UShowControlSubsystem* Show = ShowControl.Get();
+	if (Controller && Show)
+	{
+		Controller->RequestSetAudioKill(!Show->IsAudioKilled());
 	}
 	RequestRefresh();
 }

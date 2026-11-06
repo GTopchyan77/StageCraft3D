@@ -14,7 +14,7 @@
  * playback wing:
  *  - ten playback strips: name, current cue, a vertical fader, level, GO, FLASH (held), REC (record the programmer as the next
  *    cue), REL (release) and CLR (delete its cues);
- *  - the masters: the Grand Master fader and BLACKOUT.
+ *  - the masters: the Grand Master fader and BLACKOUT; the AUDIO master and KILL for effects that follow the music (ADR 0029 §7).
  *
  * A view in the project's binding pattern: reads UShowControlSubsystem and owns no state. The strips are built once (the desk
  * always has ten); OnPlaybacksChanged and OnDeskStateChanged refresh their texts and fader positions on the next tick, never
@@ -52,6 +52,9 @@ private:
 	void BuildTree();
 	class UWidget* BuildStrip(int32 Index);
 	class UWidget* BuildMasters();
+	/** One master: title, fader (reporting FaderIndex), level and a button under it. */
+	class UWidget* BuildMasterColumn(const FText& Title, const FText& TitleTip, int32 FaderIndex, const FText& FaderTip, const FText& ButtonLabel,
+		const FText& ButtonTip, TObjectPtr<class UStageValueSlider>& OutFader, TObjectPtr<class UTextBlock>& OutLevel, TObjectPtr<class UStageChoiceButton>& OutButton);
 	class UStageChoiceButton* MakeButton(const FText& Label, const FText& ToolTip, int32 ChoiceIndex, bool bLit);
 	FButtonStyle MakeButtonStyle(bool bLit, const FLinearColor& LitColor) const;
 	class UTextBlock* MakeText(const FText& Text, int32 Size, FName Typeface, const FLinearColor& Color);
@@ -75,6 +78,7 @@ private:
 	void HandleReleasePicked(int32 Index);
 	void HandleClearPicked(int32 Index);
 	void HandleBlackoutPicked(int32 ChoiceIndex);
+	void HandleAudioKillPicked(int32 ChoiceIndex);
 
 	/** Built once in BuildTree; the widget tree owns the widgets (weak references here). */
 	TArray<FStrip> Strips;
@@ -87,6 +91,15 @@ private:
 
 	UPROPERTY(Transient)
 	TObjectPtr<class UStageChoiceButton> BlackoutButton = nullptr;
+
+	UPROPERTY(Transient)
+	TObjectPtr<class UStageValueSlider> AudioMasterFader = nullptr;
+
+	UPROPERTY(Transient)
+	TObjectPtr<class UTextBlock> AudioMasterText = nullptr;
+
+	UPROPERTY(Transient)
+	TObjectPtr<class UStageChoiceButton> AudioKillButton = nullptr;
 
 	TWeakObjectPtr<class UShowControlSubsystem> ShowControl;
 	FTimerHandle RefreshTimer;

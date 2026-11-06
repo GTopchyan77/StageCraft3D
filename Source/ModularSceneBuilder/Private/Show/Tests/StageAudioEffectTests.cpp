@@ -413,6 +413,25 @@ bool FStageShowAudioOnFixturesTest::RunTest(const FString& Parameters)
 	TestTrue(TEXT("Sync: the clock runs at the music's tempo"), FMath::Abs(MeasuredBPM - 128.0) <= 2.0);
 	TestTrue(TEXT("Modulate: the pulse follows the kick"), HighestPulse >= 0.6f && LowestPulse <= 0.9f * HighestPulse);
 
+	// AUDIO KILL (Docs/ADR/0029 §7): the pulse opens fully at once, as without music; off again, it follows the kick.
+	Show->SetAudioKill(true);
+	TickReal();
+	TestEqual(TEXT("KILL: Bass Pulse fully lit"), B->GetAttribute(Dimmer), 1.f, 1e-3f);
+	Show->SetAudioKill(false);
+	TestEqual(TEXT("KILL off: the master is still 1"), Show->GetAudioMaster(), 1.f);
+
+	// The flash limit follows this PC's setting, and a latency change keeps the analysis running: the tempo is still known 1.5 s
+	// later, where a restart would need about 3 s to find it again.
+	FStageAudioReactiveSettings Changed = Audio->GetSettings();
+	Changed.FlashLimitHz = 5.f;
+	Changed.InputLatencyOffsetMs = 40.f;
+	Changed.FileLatencyOffsetMs = -20.f;
+	TestTrue(TEXT("Settings apply"), Audio->ApplySettings(Changed, Error));
+	TestEqual(TEXT("The show takes the new flash limit"), Show->GetEffectFlashLimitHz(), 5.f);
+	PumpUntil(1.5, [&]() { TickReal(); return false; });
+	const FStageAudioFeatures AfterOffset = Audio->GetFeatures();
+	TestTrue(TEXT("A latency change does not restart the analysis"), AfterOffset.bSignal && FMath::Abs(AfterOffset.BPM - 128.f) <= 1.f);
+
 	// External DMX: effects hold, the music is not read.
 	Show->SetControlSource(EStageControlSource::External);
 	const double Held = Show->GetEffectCycles(SwingId);
@@ -487,6 +506,318 @@ bool FStageSceneEffectAudioDataTest::RunTest(const FString& Parameters)
 		TEXT("{\"id\":\"%s\",\"fixtures\":[1],\"target\":\"Intensity\",\"waveform\":\"Square\"}]}"), *Id1);
 	TestTrue(TEXT("Version 10 parses"), FStageSceneStore::Parse(V10, Parsed = FStageSceneDocument(), Report = FStageSceneParseReport()) == EStageSceneResult::Success);
 	TestTrue(TEXT("Version 10: audio off"), Parsed.ProgrammerEffects.Num() == 1 && !Parsed.ProgrammerEffects[0].Effect.UsesAudio());
+	return true;
+}
+
+// --- Phase G3: flash safety, the AUDIO master and KILL (Docs/ADR/0029 §7) ---
+
+namespace StageAudioEffectTests
+{
+	/** Times (index × Step) at which Values rise from below the low flash threshold to above the high one. */
+	TArray<double> FindFlashes(TConstArrayView<float> Values, double Step)
+	{
+		TArray<double> Times;
+		bool bLow = true;
+		for (int32 Index = 0; Index < Values.Num(); ++Index)
+		{
+			if (Values[Index] < StageEffects::FlashLowFraction)
+			{
+				bLow = true;
+			}
+			else if (Values[Index] > StageEffects::FlashHighFraction && bLow)
+			{
+				Times.Add(Index * Step);
+				bLow = false;
+			}
+		}
+		return Times;
+	}
+
+	double GetShortestGap(TConstArrayView<double> Times)
+	{
+		double Shortest = TNumericLimits<double>::Max();
+		for (int32 Index = 1; Index < Times.Num(); ++Index)
+		{
+			Shortest = FMath::Min(Shortest, Times[Index] - Times[Index - 1]);
+		}
+		return Shortest;
+	}
+
+	/** A square of Hz sampled at 60 fps for Seconds, through one gate at LimitHz. */
+	void RunSquare(float Hz, float LimitHz, float Seconds, TArray<float>& OutIn, TArray<float>& OutOut)
+	{
+		StageEffects::FFlashGate Gate;
+		const int32 Frames = FMath::RoundToInt(Seconds / Frame);
+		for (int32 Index = 0; Index < Frames; ++Index)
+		{
+			const double Time = Index * static_cast<double>(Frame);
+			const float In = FMath::Frac(Time * Hz) < 0.5 ? 1.f : 0.f;
+			OutIn.Add(In);
+			OutOut.Add(Gate.Apply(In, Time, LimitHz));
+		}
+	}
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FStageShowFlashLimiterTest, "StageCraft.Show.FlashLimiter", StageAudioEffectTests::Flags)
+
+bool FStageShowFlashLimiterTest::RunTest(const FString& Parameters)
+{
+	using namespace StageAudioEffectTests;
+	const double Step = Frame;
+
+	// A 10 Hz square at the default 3: flashes no closer than a third of a second, and still flashing.
+	{
+		TArray<float> In, Out;
+		RunSquare(10.f, 3.f, 3.f, In, Out);
+		const TArray<double> InFlashes = FindFlashes(In, Step);
+		const TArray<double> OutFlashes = FindFlashes(Out, Step);
+		AddInfo(FString::Printf(TEXT("10 Hz square at limit 3: %d flashes in, %d out, shortest gap %.3f s"), InFlashes.Num(), OutFlashes.Num(), GetShortestGap(OutFlashes)));
+		TestTrue(TEXT("10 Hz: the input flashes 10 times a second"), InFlashes.Num() >= 29);
+		TestTrue(TEXT("10 Hz at 3: at most 3 a second"), OutFlashes.Num() <= 10 && OutFlashes.Num() >= 6);
+		TestTrue(TEXT("10 Hz at 3: never closer than 1/3 s"), GetShortestGap(OutFlashes) >= 1.0 / 3.0 - 1e-6);
+		bool bOnlyShown = true;
+		for (int32 Index = 0; Index < Out.Num(); ++Index)
+		{
+			// A refused rise holds what was shown, never a value the input did not have.
+			bOnlyShown &= Out[Index] == In[Index] || Out[Index] == 0.f;
+		}
+		TestTrue(TEXT("A refused rise holds dark"), bOnlyShown);
+	}
+	// Slow enough patterns pass untouched: 2 Hz at 3, 8 Hz at 10.
+	for (const TPair<float, float>& Case : { TPair<float, float>(2.f, 3.f), TPair<float, float>(8.f, 10.f) })
+	{
+		TArray<float> In, Out;
+		RunSquare(Case.Key, Case.Value, 3.f, In, Out);
+		TestTrue(*FString::Printf(TEXT("%.0f Hz at %.0f passes unchanged"), Case.Key, Case.Value), In == Out);
+	}
+	// The lowest limit: one a second.
+	{
+		TArray<float> In, Out;
+		RunSquare(6.f, 1.f, 4.f, In, Out);
+		const TArray<double> OutFlashes = FindFlashes(Out, Step);
+		TestTrue(TEXT("Limit 1: a second apart"), OutFlashes.Num() >= 3 && GetShortestGap(OutFlashes) >= 1.0 - 1e-6);
+	}
+	// Between the thresholds, and a light that stays up, nothing is limited.
+	{
+		StageEffects::FFlashGate Mid;
+		StageEffects::FFlashGate High;
+		bool bMid = true;
+		bool bHigh = true;
+		for (int32 Index = 0; Index < 120; ++Index)
+		{
+			const double Time = Index * Step;
+			const float Value = 0.5f + 0.25f * FMath::Sin(Time * 20.0 * UE_DOUBLE_TWO_PI);
+			bMid &= Mid.Apply(Value, Time, 3.f) == Value;
+			bHigh &= High.Apply(1.f, Time, 3.f) == 1.f;
+		}
+		TestTrue(TEXT("20 Hz between 20 % and 80 % passes"), bMid);
+		TestTrue(TEXT("A steady light passes"), bHigh);
+	}
+	// Asked twice in a frame (the show mixes a fixture more than once), the gate answers from the frame's start: even a different
+	// first value leaves the result and the next frames as a single call would.
+	{
+		StageEffects::FFlashGate Once;
+		StageEffects::FFlashGate Twice;
+		bool bSame = true;
+		for (int32 Index = 0; Index < 180; ++Index)
+		{
+			const double Time = Index * Step;
+			const float In = FMath::Frac(Time * 9.0) < 0.5 ? 1.f : 0.f;
+			Twice.Apply(1.f - In, Time, 3.f);
+			bSame &= Once.Apply(In, Time, 3.f) == Twice.Apply(In, Time, 3.f);
+		}
+		TestTrue(TEXT("Idempotent within a frame"), bSame);
+	}
+
+	// The strobe cap: the shutter value whose strobe is no faster than the limit.
+	TestEqual(TEXT("1-20 Hz strobe at 3: 2/19"), StageEffects::GetStrobeShutterCap(FVector2D(1.0, 20.0), 3.f), 2.f / 19.f, Tolerance);
+	TestEqual(TEXT("Slowest strobe above the limit: open only"), StageEffects::GetStrobeShutterCap(FVector2D(5.0, 20.0), 3.f), 0.f);
+	TestEqual(TEXT("A fixed 2 Hz strobe at 3"), StageEffects::GetStrobeShutterCap(FVector2D(2.0, 2.0), 3.f), 1.f);
+	TestEqual(TEXT("A fixed 2 Hz strobe at 1"), StageEffects::GetStrobeShutterCap(FVector2D(2.0, 2.0), 1.f), 0.f);
+	TestEqual(TEXT("A limit above the fastest strobe"), StageEffects::GetStrobeShutterCap(FVector2D(1.0, 20.0), 25.f), 1.f);
+
+	// The AUDIO master's share of a band, and the setting's bounds.
+	TestEqual(TEXT("Master 1 keeps the band"), StageEffects::ApplyAudioMaster(0.2f, 1.f), 0.2f, Tolerance);
+	TestEqual(TEXT("Master 0 reads no music"), StageEffects::ApplyAudioMaster(0.2f, 0.f), 1.f, Tolerance);
+	TestEqual(TEXT("Master 0.5 halfway"), StageEffects::ApplyAudioMaster(0.2f, 0.5f), 0.6f, Tolerance);
+	FStageAudioReactiveSettings Hostile;
+	Hostile.FlashLimitHz = 0.f;
+	TestEqual(TEXT("Flash limit at least 1"), StageAudioReactive::Sanitize(Hostile).FlashLimitHz, StageAudioReactive::MinFlashLimitHz);
+	Hostile.FlashLimitHz = 50.f;
+	TestEqual(TEXT("Flash limit at most 10"), StageAudioReactive::Sanitize(Hostile).FlashLimitHz, StageAudioReactive::MaxFlashLimitHz);
+	Hostile.FlashLimitHz = std::numeric_limits<float>::quiet_NaN();
+	TestEqual(TEXT("Flash limit NaN: the default 3"), StageAudioReactive::Sanitize(Hostile).FlashLimitHz, 3.f);
+	FStageEffectRunner Runner;
+	Runner.SetFlashLimitHz(0.f);
+	Runner.SetAudioMaster(2.f);
+	TestTrue(TEXT("The runner clamps too"), Runner.GetFlashLimitHz() == StageAudioReactive::MinFlashLimitHz && Runner.GetAudioMaster() == 1.f);
+	Runner.SetAudioMaster(std::numeric_limits<float>::quiet_NaN());
+	TestEqual(TEXT("NaN keeps the master"), Runner.GetAudioMaster(), 1.f);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FStageShowAudioMasterTest, "StageCraft.Show.AudioMaster", StageAudioEffectTests::Flags)
+
+bool FStageShowAudioMasterTest::RunTest(const FString& Parameters)
+{
+	using namespace StageAudioEffectTests;
+	TArray<int32> Released;
+
+	// Modulate Rate from a band at 0.5: 1.5 cycles a second at full, 1.75 at half (the band read halfway to 1), 2 at 0 (as no music).
+	{
+		FStageEffect Rate = MakeEffect(EStageEffectTarget::Intensity, EStageEffectWaveform::Sine, 1.f, EStageEffectAudioMode::Modulate);
+		Rate.Audio.Modulates = EStageEffectAudioTarget::Rate;
+		Rate.Audio.Band = EStageAudioBand::Bass;
+		Rate.Audio.Amount = 1.f;
+		Rate.Audio.Response = EStageEffectAudioResponse::Fast;
+		const FGuid Id = FGuid::NewGuid();
+		FStageEffectRunner Runner;
+		Runner.SetEffects({ MakeSourced(Id, Rate, { 1 }) }, &FindNone, nullptr);
+		const StageEffects::FAudioInput Input = MakeInput(0.0, 120.f, 1.f, true, 0.5f);
+		for (int32 Index = 0; Index < 60; ++Index)
+		{
+			Runner.Advance(Frame, Released, &Input);
+		}
+		const auto MeasureRate = [&]()
+		{
+			const double Before = Runner.GetCycles(Id);
+			Runner.Advance(Frame, Released, &Input);
+			return (Runner.GetCycles(Id) - Before) / Frame;
+		};
+		TestEqual(TEXT("Master 1: rate 1.5"), MeasureRate(), 1.5, 1e-3);
+		Runner.SetAudioMaster(0.5f);
+		TestEqual(TEXT("Master 0.5: rate 1.75"), MeasureRate(), 1.75, 1e-3);
+		Runner.SetAudioMaster(0.f);
+		TestEqual(TEXT("Master 0 (KILL): rate 2, as without music"), MeasureRate(), 2.0, 1e-3);
+		Runner.SetAudioMaster(1.f);
+	}
+
+	// Trigger: master 0 holds the pattern; back at 1 it primes again without catching up the beats it missed.
+	{
+		FStageEffect Chase = MakeEffect(EStageEffectTarget::Intensity, EStageEffectWaveform::Square, 1.f, EStageEffectAudioMode::Trigger);
+		Chase.Audio.Band = EStageAudioBand::Bass;
+		Chase.Audio.BeatsPerCycle = EStageEffectBeatDivision::One;
+		const FGuid Id = FGuid::NewGuid();
+		FStageEffectRunner Runner;
+		Runner.SetEffects({ MakeSourced(Id, Chase, { 1, 2, 3, 4 }) }, &FindNone, nullptr);
+		StageEffects::FAudioInput Input = MakeInput(0.0, 120.f);
+		Runner.Advance(Frame, Released, &Input);
+		Input.Beats = 1.0;
+		Runner.Advance(Frame, Released, &Input);
+		TestEqual(TEXT("A beat steps a quarter"), Runner.GetCycles(Id), 0.25, 1e-9);
+		Runner.SetAudioMaster(0.f);
+		Input.Beats = 2.0;
+		Runner.Advance(Frame, Released, &Input);
+		TestEqual(TEXT("KILL: holds"), Runner.GetCycles(Id), 0.25, 1e-9);
+		Runner.SetAudioMaster(1.f);
+		Input.Beats = 3.0;
+		Runner.Advance(Frame, Released, &Input);
+		TestEqual(TEXT("Back: primes without a step"), Runner.GetCycles(Id), 0.25, 1e-9);
+		Input.Beats = 4.0;
+		Runner.Advance(Frame, Released, &Input);
+		TestEqual(TEXT("Back: the next beat steps"), Runner.GetCycles(Id), 0.5, 1e-9);
+	}
+
+	// Sync: master 0 runs on at the last tempo it followed, without the pull to the beat.
+	{
+		FStageEffect Swing = MakeEffect(EStageEffectTarget::Position, EStageEffectWaveform::Sine, 0.5f, EStageEffectAudioMode::Sync);
+		Swing.Audio.BeatsPerCycle = EStageEffectBeatDivision::One;
+		const FGuid Id = FGuid::NewGuid();
+		FStageEffectRunner Runner;
+		Runner.SetEffects({ MakeSourced(Id, Swing, { 1 }) }, &FindNone, nullptr);
+		for (int32 Index = 0; Index < 60; ++Index)
+		{
+			const StageEffects::FAudioInput Input = MakeInput(Index * static_cast<double>(Frame) * 2.0, 120.f);
+			Runner.Advance(Frame, Released, &Input);
+		}
+		Runner.SetAudioMaster(0.f);
+		// A beat far from the clock: followed, it would pull.
+		const StageEffects::FAudioInput Far = MakeInput(Runner.GetCycles(Id) + 0.4, 120.f);
+		const double Before = Runner.GetCycles(Id);
+		Runner.Advance(Frame, Released, &Far);
+		TestEqual(TEXT("KILL: the last tempo (2 cycles a second), no pull"), (Runner.GetCycles(Id) - Before) / Frame, 2.0, 1e-3);
+	}
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FStageShowFlashLimitOnFixturesTest, "StageCraft.Show.FlashLimitOnFixtures", StageAudioEffectTests::Flags)
+
+bool FStageShowFlashLimitOnFixturesTest::RunTest(const FString& Parameters)
+{
+	using namespace StageAudioEffectTests;
+	const FGameplayTag Dimmer = StageCraftTags::Attribute_Dimmer;
+	const FGameplayTag Shutter = StageCraftTags::Attribute_Shutter;
+
+	FScopedWorld Scoped;
+	ALightingFixtureActor* A = Scoped.SpawnMover();
+	if (!TestNotNull(TEXT("Fixture"), A) || !TestTrue(TEXT("Dimmer and shutter"), A->GetAttributes().Contains(Dimmer) && A->GetAttributes().Contains(Shutter)))
+	{
+		return false;
+	}
+	const auto Find = [A](int32 Id) -> ALightingFixtureActor* { return A->GetFixtureId() == Id ? A : nullptr; };
+
+	// Three seconds of an effect on A at 60 fps with an 8-beats-a-second test beat: the attribute's values.
+	const auto Run = [&](const FStageEffect& Effect, float LimitHz, const FGameplayTag& Attribute, TFunction<void(FStageEffectRunner&, int32)> EachFrame = nullptr)
+	{
+		FStageEffectRunner Runner;
+		Runner.SetFlashLimitHz(LimitHz);
+		Runner.SetEffects({ MakeSourced(FGuid::NewGuid(), Effect, { A->GetFixtureId() }) }, Find, nullptr);
+		TArray<float> Values;
+		TArray<int32> Released;
+		StageShowMix::FEffectMap Mixed;
+		for (int32 Index = 0; Index < 180; ++Index)
+		{
+			if (EachFrame)
+			{
+				EachFrame(Runner, Index);
+			}
+			const StageEffects::FAudioInput Input = MakeInput(Index * static_cast<double>(Frame) * 8.0, 480.f, 1.f, true, 0.f);
+			Runner.Advance(Frame, Released, &Input);
+			Runner.Evaluate(*A, Mixed);
+			const StageShowMix::FEffectValue* Value = Mixed.Find(Attribute);
+			Values.Add(Value ? Value->Value : -1.f);
+		}
+		return Values;
+	};
+
+	// A square synced to the beat flashes 8 times a second: limited to 3 when it follows the music, untouched at 10 or without music.
+	FStageEffect Square = MakeEffect(EStageEffectTarget::Intensity, EStageEffectWaveform::Square, 8.f, EStageEffectAudioMode::Sync);
+	Square.Audio.BeatsPerCycle = EStageEffectBeatDivision::One;
+	FStageEffect Plain = Square;
+	Plain.Audio.Mode = EStageEffectAudioMode::Off;
+	const TArray<double> Limited = FindFlashes(Run(Square, 3.f, Dimmer), Frame);
+	const TArray<double> Ten = FindFlashes(Run(Square, 10.f, Dimmer), Frame);
+	const TArray<double> Programmed = FindFlashes(Run(Plain, 3.f, Dimmer), Frame);
+	AddInfo(FString::Printf(TEXT("8 Hz synced square: %d flashes at limit 3 (shortest gap %.3f s), %d at 10, %d without music"),
+		Limited.Num(), GetShortestGap(Limited), Ten.Num(), Programmed.Num()));
+	TestTrue(TEXT("Limit 3: at most 3 a second, never closer than 1/3 s"), Limited.Num() >= 6 && Limited.Num() <= 10 && GetShortestGap(Limited) >= 1.0 / 3.0 - 1e-6);
+	TestTrue(TEXT("Limit 10: the beat's 8 a second"), Ten.Num() >= 20);
+	TestTrue(TEXT("An effect without music is the operator's: not limited"), Programmed.Num() >= 20);
+
+	// A music-driven strobe runs no faster than the limit: the 1-20 Hz shutter is capped at 2/19 (3 Hz); a programmed one reaches 1.
+	FStageEffect Strobe = MakeEffect(EStageEffectTarget::Beam, EStageEffectWaveform::Square, 8.f, EStageEffectAudioMode::Sync);
+	Strobe.Attribute = Shutter;
+	Strobe.Audio.BeatsPerCycle = EStageEffectBeatDivision::One;
+	FStageEffect PlainStrobe = Strobe;
+	PlainStrobe.Audio.Mode = EStageEffectAudioMode::Off;
+	const TArray<float> Capped = Run(Strobe, 3.f, Shutter);
+	const TArray<float> Free = Run(PlainStrobe, 3.f, Shutter);
+	const float Cap = StageEffects::GetStrobeShutterCap(A->GetFixtureData()->StrobeRateHz, 3.f);
+	TestTrue(TEXT("Music-driven strobe capped at 3 Hz"), FMath::Max(Capped) <= Cap + Tolerance && FMath::Max(Capped) > 0.f);
+	TestEqual(TEXT("Programmed strobe free"), FMath::Max(Free), 1.f, Tolerance);
+
+	// The AUDIO master on Bass Pulse with the bass silent: closed at full master, open at 0 (KILL), between at half.
+	const FStageEffect Pulse = StageEffectRules::MakeAudioQuickEffects()[0];
+	const auto PulseAt = [&](float Master)
+	{
+		return Run(Pulse, 3.f, Dimmer, [Master](FStageEffectRunner& Runner, int32) { Runner.SetAudioMaster(Master); }).Last();
+	};
+	const float Full = PulseAt(1.f);
+	const float Half = PulseAt(0.5f);
+	const float Killed = PulseAt(0.f);
+	AddInfo(FString::Printf(TEXT("Bass Pulse, bass silent: %.3f at master 1, %.3f at 0.5, %.3f at 0"), Full, Half, Killed));
+	TestTrue(TEXT("Master scales Modulate towards no music"), Full < Half && Half < Killed);
+	TestEqual(TEXT("KILL: as without music, fully lit"), Killed, 1.f, 1e-3f);
 	return true;
 }
 

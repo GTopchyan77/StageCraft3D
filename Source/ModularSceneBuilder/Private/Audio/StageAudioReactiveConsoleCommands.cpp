@@ -20,6 +20,7 @@
 #include "HAL/IConsoleManager.h"
 #include "ModularSceneBuilder.h"
 #include "Player/ModularPlayerController.h"
+#include "Subsystems/ShowControlSubsystem.h"
 #include "Subsystems/StageAudioReactiveSubsystem.h"
 
 namespace StageAudioReactiveCommands
@@ -140,7 +141,7 @@ namespace StageAudioReactiveCommands
 		Controller->RequestAudioTransport(Request);
 	}
 
-	/** [FileDelay=<ms>] [FileOffset|InputOffset|SystemOffset=<ms>] [Gain=<dB>] [Device=<id>|Default] [Loop=On|Off] [Background=On|Off] */
+	/** [FileDelay=<ms>] [FileOffset|InputOffset|SystemOffset=<ms>] [Gain=<dB>] [Device=<id>|Default] [Loop=On|Off] [Background=On|Off] [FlashLimit=<Hz>] */
 	void Settings(const TArray<FString>& Args, UWorld* World)
 	{
 		AModularPlayerController* Controller = GetController(World);
@@ -167,6 +168,7 @@ namespace StageAudioReactiveCommands
 			else if (Key.Equals(TEXT("Device"), ESearchCase::IgnoreCase)) { Settings.InputDeviceId = Text.Equals(TEXT("Default"), ESearchCase::IgnoreCase) ? FString() : Text; bChanged = true; }
 			else if (Key.Equals(TEXT("Loop"), ESearchCase::IgnoreCase) && ParseOnOff(Text, bFlag)) { Settings.bLoopFile = bFlag; bChanged = true; }
 			else if (Key.Equals(TEXT("Background"), ESearchCase::IgnoreCase) && ParseOnOff(Text, bFlag)) { Controller->RequestSetPlayAudioInBackground(bFlag); }
+			else if (Key.Equals(TEXT("FlashLimit"), ESearchCase::IgnoreCase)) { Settings.FlashLimitHz = FCString::Atof(*Text); bChanged = true; }
 		}
 		if (bChanged)
 		{
@@ -174,10 +176,43 @@ namespace StageAudioReactiveCommands
 		}
 		const FStageAudioReactiveSettings Now = Audio->GetSettings();
 		const UStageAudioSubsystem* Sound = World->GetGameInstance() ? World->GetGameInstance()->GetSubsystem<UStageAudioSubsystem>() : nullptr;
-		UE_LOG(LogStageCraft, Display, TEXT("StageCraft.Music.Settings: file delay %.0f ms, offsets file %.0f / input %.0f / system %.0f ms, input gain %.1f dB, device \"%s\", loop %s, bands %.0f/%.0f/%.0f/%.0f Hz, background %s"),
+		UE_LOG(LogStageCraft, Display, TEXT("StageCraft.Music.Settings: file delay %.0f ms, offsets file %.0f / input %.0f / system %.0f ms, input gain %.1f dB, device \"%s\", loop %s, bands %.0f/%.0f/%.0f/%.0f Hz, background %s, flash limit %.0f Hz"),
 			Now.FileOutputDelayMs, Now.FileLatencyOffsetMs, Now.InputLatencyOffsetMs, Now.SystemAudioLatencyOffsetMs, Now.InputGainDb, *Now.InputDeviceId,
 			Now.bLoopFile ? TEXT("on") : TEXT("off"), Now.SubBassTopHz, Now.BassTopHz, Now.MidTopHz, Now.HighTopHz,
-			Sound && Sound->IsPlayedInBackground() ? TEXT("on") : TEXT("off"));
+			Sound && Sound->IsPlayedInBackground() ? TEXT("on") : TEXT("off"), Now.FlashLimitHz);
+	}
+
+	/** <0..1>: the AUDIO master, through the controller (Docs/ADR/0029 §7). */
+	void Master(const TArray<FString>& Args, UWorld* World)
+	{
+		AModularPlayerController* Controller = GetController(World);
+		const UShowControlSubsystem* Show = World ? World->GetSubsystem<UShowControlSubsystem>() : nullptr;
+		if (!Controller || !Show)
+		{
+			return;
+		}
+		if (!Args.IsEmpty())
+		{
+			Controller->RequestSetAudioMaster(FCString::Atof(*Args[0]));
+		}
+		UE_LOG(LogStageCraft, Display, TEXT("StageCraft.Music.Master: AUDIO %.2f, KILL %s"), Show->GetAudioMaster(), Show->IsAudioKilled() ? TEXT("on") : TEXT("off"));
+	}
+
+	/** On|Off: AUDIO KILL, through the controller. */
+	void Kill(const TArray<FString>& Args, UWorld* World)
+	{
+		AModularPlayerController* Controller = GetController(World);
+		const UShowControlSubsystem* Show = World ? World->GetSubsystem<UShowControlSubsystem>() : nullptr;
+		bool bOn = false;
+		if (!Controller || !Show)
+		{
+			return;
+		}
+		if (!Args.IsEmpty() && ParseOnOff(Args[0], bOn))
+		{
+			Controller->RequestSetAudioKill(bOn);
+		}
+		UE_LOG(LogStageCraft, Display, TEXT("StageCraft.Music.Kill: KILL %s, AUDIO %.2f"), Show->IsAudioKilled() ? TEXT("on") : TEXT("off"), Show->GetAudioMaster());
 	}
 
 	void Devices(const TArray<FString>& Args, UWorld* World)
@@ -326,8 +361,12 @@ namespace StageAudioReactiveCommands
 		FConsoleCommandWithWorldAndArgsDelegate::CreateStatic(&Status));
 	FAutoConsoleCommandWithWorldAndArgs TransportCommand(TEXT("StageCraft.Music.Transport"), TEXT("Play | Pause | Stop | Seek <seconds> | Loop On|Off: the music file's transport."),
 		FConsoleCommandWithWorldAndArgsDelegate::CreateStatic(&Transport));
-	FAutoConsoleCommandWithWorldAndArgs SettingsCommand(TEXT("StageCraft.Music.Settings"), TEXT("[FileDelay=<ms>] [FileOffset|InputOffset|SystemOffset=<ms>] [Gain=<dB>] [Device=<id>|Default] [Loop=On|Off] [Background=On|Off]: logs or changes the audio settings (saved on this PC)."),
+	FAutoConsoleCommandWithWorldAndArgs SettingsCommand(TEXT("StageCraft.Music.Settings"), TEXT("[FileDelay=<ms>] [FileOffset|InputOffset|SystemOffset=<ms>] [Gain=<dB>] [Device=<id>|Default] [Loop=On|Off] [Background=On|Off] [FlashLimit=<Hz>]: logs or changes the audio settings (saved on this PC)."),
 		FConsoleCommandWithWorldAndArgsDelegate::CreateStatic(&Settings));
+	FAutoConsoleCommandWithWorldAndArgs MasterCommand(TEXT("StageCraft.Music.Master"), TEXT("[0..1]: logs or sets the AUDIO master of effects that follow the music."),
+		FConsoleCommandWithWorldAndArgsDelegate::CreateStatic(&Master));
+	FAutoConsoleCommandWithWorldAndArgs KillCommand(TEXT("StageCraft.Music.Kill"), TEXT("[On|Off]: logs or sets AUDIO KILL (effects that follow the music run as without it)."),
+		FConsoleCommandWithWorldAndArgsDelegate::CreateStatic(&Kill));
 	FAutoConsoleCommandWithWorldAndArgs DevicesCommand(TEXT("StageCraft.Music.Devices"), TEXT("Lists the recording devices the Input source can use."),
 		FConsoleCommandWithWorldAndArgsDelegate::CreateStatic(&Devices));
 }

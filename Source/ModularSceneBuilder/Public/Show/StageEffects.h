@@ -112,4 +112,46 @@ namespace StageEffects
 
 	/** Shortest signed distance from Cycles to Target on the cycle, -0.5 .. 0.5. */
 	MODULARSCENEBUILDER_API double GetCycleError(double Cycles, double Target);
+
+	/** The AUDIO master's share of Band for Modulate: 1 (as without music) at Master 0, Band itself at 1. */
+	MODULARSCENEBUILDER_API float ApplyAudioMaster(float Band, float Master);
+
+	// --- Flash safety (Docs/ADR/0029-audio-analysis-and-audio-reactive-effects.md §7) ---
+
+	/** A flash is a rise from below FlashLowFraction to above FlashHighFraction of an attribute's range. */
+	inline constexpr float FlashLowFraction = 0.2f;
+	inline constexpr float FlashHighFraction = 0.8f;
+
+	/**
+	 * Limits one music-driven intensity to at most LimitHz flashes a second. A rise that would flash sooner is refused: the output
+	 * holds its last value (at most FlashHighFraction) until the flash is due, so a too-fast pattern shows its flashes at the
+	 * limit instead of a reshaped flicker. Values between the thresholds, and a light that stays high, pass unchanged.
+	 *
+	 * Called with the same NowSeconds again (the show mixes a fixture more than once in a frame), it answers from the state the
+	 * frame started with, so it is idempotent within a frame. Value object, game thread, no allocation.
+	 */
+	struct FFlashGate
+	{
+		/** Fraction 0..1 of the attribute's range at NowSeconds (seconds on the caller's own clock) -> the fraction to show. */
+		MODULARSCENEBUILDER_API float Apply(float Fraction, double NowSeconds, float LimitHz);
+
+	private:
+		struct FState
+		{
+			double LastFlashSeconds = -1.0e9;
+			/** Below FlashLowFraction since the last flash: the next rise above FlashHighFraction is a flash. */
+			bool bArmed = true;
+			float Output = 0.f;
+		};
+		/** As of the end of the previous frame, and after this frame's call. */
+		FState Committed;
+		FState Current;
+		double FrameSeconds = -1.0e9;
+	};
+
+	/**
+	 * The highest Shutter value (0 = open, 0..1 = strobe rate across StrobeRateHz, ALightingFixtureActor::GetStrobeRateHz) whose
+	 * strobe is no faster than LimitHz. 0 (open) when even the slowest strobe is faster.
+	 */
+	MODULARSCENEBUILDER_API float GetStrobeShutterCap(const FVector2D& StrobeRateHz, float LimitHz);
 }

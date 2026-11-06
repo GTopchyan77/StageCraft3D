@@ -42,7 +42,53 @@ namespace StageAudioPanel
 	constexpr float LampOnPhase = 0.15f;
 
 	enum ETransport : int32 { PlayPause, Stop, Loop };
-	enum ESlider : int32 { Seek, Gain };
+	enum ESlider : int32 { Seek, Gain, Latency, FlashLimit };
+
+	/** The latency slider moves in steps this size. */
+	constexpr float LatencyStepMs = 5.f;
+
+	/** The setting that holds Source's latency offset; null for a source without one (Off, TestSignal). */
+	float* FindLatencyOffset(FStageAudioReactiveSettings& Settings, EStageAudioSource Source)
+	{
+		switch (Source)
+		{
+		case EStageAudioSource::File: return &Settings.FileLatencyOffsetMs;
+		case EStageAudioSource::Input: return &Settings.InputLatencyOffsetMs;
+		case EStageAudioSource::SystemAudio: return &Settings.SystemAudioLatencyOffsetMs;
+		default: return nullptr;
+		}
+	}
+
+	float LatencyToSlider(float Ms)
+	{
+		return (Ms - StageAudioReactive::MinLatencyOffsetMs) / (StageAudioReactive::MaxLatencyOffsetMs - StageAudioReactive::MinLatencyOffsetMs);
+	}
+
+	float SliderToLatency(float Value)
+	{
+		const float Ms = FMath::Lerp(StageAudioReactive::MinLatencyOffsetMs, StageAudioReactive::MaxLatencyOffsetMs, FMath::Clamp(Value, 0.f, 1.f));
+		return FMath::RoundToFloat(Ms / LatencyStepMs) * LatencyStepMs;
+	}
+
+	FText FormatLatency(float Ms)
+	{
+		return FText::FromString(FString::Printf(TEXT("%+d ms"), FMath::RoundToInt(Ms)));
+	}
+
+	float FlashToSlider(float Hz)
+	{
+		return (Hz - StageAudioReactive::MinFlashLimitHz) / (StageAudioReactive::MaxFlashLimitHz - StageAudioReactive::MinFlashLimitHz);
+	}
+
+	float SliderToFlash(float Value)
+	{
+		return FMath::RoundToFloat(FMath::Lerp(StageAudioReactive::MinFlashLimitHz, StageAudioReactive::MaxFlashLimitHz, FMath::Clamp(Value, 0.f, 1.f)));
+	}
+
+	FText FormatFlash(float Hz)
+	{
+		return FText::Format(LOCTEXT("FlashValue", "{0} a second"), FText::AsNumber(FMath::RoundToInt(Hz)));
+	}
 
 	/** Up to one decimal (exactly one with bFixed), no grouping. */
 	const FNumberFormattingOptions& OneDecimal(bool bFixed)
@@ -172,7 +218,17 @@ void UStageAudioPanel::BuildTree()
 	UHorizontalBox* HeaderLine = WidgetTree->ConstructWidget<UHorizontalBox>(UHorizontalBox::StaticClass());
 	Header->SetContent(HeaderLine);
 	HeaderLine->AddChildToHorizontalBox(MakeText(LOCTEXT("Title", "AUDIO"), 9, TEXT("Bold"), UITheme.TextPrimary));
-	StatusText = MakeText(FText::GetEmpty(), 7, TEXT("Regular"), UITheme.TextSecondary);
+	// Privacy (ADR 0029 §6): whoever is near this PC can see when its microphone, line input or output is being listened to.
+	UTextBlock* Listening = MakeText(LOCTEXT("Listening", "● LISTENING"), 8, TEXT("Bold"), UITheme.WarningColor);
+	Listening->SetToolTipText(LOCTEXT("ListeningTip", "A microphone, line input or this PC's own output is being listened to. It is analysed in memory only: nothing is recorded, saved or sent. OFF stops it."));
+	Listening->SetVisibility(ESlateVisibility::Collapsed);
+	ListeningText = Listening;
+	if (UHorizontalBoxSlot* ListeningSlot = HeaderLine->AddChildToHorizontalBox(Listening))
+	{
+		ListeningSlot->SetPadding(FMargin(10.f, 0.f, 0.f, 0.f));
+		ListeningSlot->SetVerticalAlignment(VAlign_Center);
+	}
+	StatusText =MakeText(FText::GetEmpty(), 7, TEXT("Regular"), UITheme.TextSecondary);
 	if (UHorizontalBoxSlot* StatusSlot = HeaderLine->AddChildToHorizontalBox(StatusText))
 	{
 		StatusSlot->SetPadding(FMargin(12.f, 0.f, 0.f, 0.f));
@@ -191,7 +247,7 @@ void UStageAudioPanel::BuildTree()
 	}
 	UVerticalBox* Rows = WidgetTree->ConstructWidget<UVerticalBox>(UVerticalBox::StaticClass());
 	Scroll->AddChild(Rows);
-	for (UWidget* Row : { BuildSourceRow(), BuildFileRow(), BuildInputRow(), BuildMeters(), BuildFooter() })
+	for (UWidget* Row : { BuildSourceRow(), BuildFileRow(), BuildInputRow(), BuildMeters(), BuildSafetyRows(), BuildFooter() })
 	{
 		if (UVerticalBoxSlot* RowSlot = Rows->AddChildToVerticalBox(Row))
 		{
@@ -385,6 +441,66 @@ UWidget* UStageAudioPanel::BuildMeters()
 	return MakeLabeledRow(LOCTEXT("Music", "MUSIC"), Block);
 }
 
+UWidget* UStageAudioPanel::MakeSliderLine(int32 SliderIndex, float StepSize, TWeakObjectPtr<UStageValueSlider>& OutSlider, TWeakObjectPtr<UTextBlock>& OutValue)
+{
+	const UStageCraftUITheme& UITheme = GetTheme();
+	UHorizontalBox* Line = WidgetTree->ConstructWidget<UHorizontalBox>(UHorizontalBox::StaticClass());
+	UStageValueSlider* Slider = WidgetTree->ConstructWidget<UStageValueSlider>(UStageValueSlider::StaticClass());
+	Slider->SetWidgetStyle(StageCraftWidgetStyle::MakeSlider(UITheme));
+	Slider->SetSliderHandleColor(FLinearColor::White);
+	Slider->SetStepSize(StepSize);
+	Slider->SetSliderIndex(SliderIndex);
+	Slider->OnMoved.BindUObject(this, &ThisClass::HandleSliderMoved);
+	Slider->OnMouseCaptureEnd.AddUniqueDynamic(this, &ThisClass::HandleSliderReleased);
+	OutSlider = Slider;
+	if (UHorizontalBoxSlot* SliderSlot = Line->AddChildToHorizontalBox(Slider))
+	{
+		SliderSlot->SetSize(FSlateChildSize(ESlateSizeRule::Fill));
+		SliderSlot->SetVerticalAlignment(VAlign_Center);
+		SliderSlot->SetPadding(FMargin(0.f, 0.f, 6.f, 0.f));
+	}
+	USizeBox* ValueBox = WidgetTree->ConstructWidget<USizeBox>(USizeBox::StaticClass());
+	ValueBox->SetWidthOverride(StageAudioPanel::ValueWidth);
+	UTextBlock* Value = MakeText(FText::GetEmpty(), 7, TEXT("Regular"), UITheme.TextPrimary);
+	Value->SetJustification(ETextJustify::Right);
+	ValueBox->SetContent(Value);
+	OutValue = Value;
+	Line->AddChildToHorizontalBox(ValueBox);
+	return Line;
+}
+
+UWidget* UStageAudioPanel::BuildSafetyRows()
+{
+	const UStageCraftUITheme& UITheme = GetTheme();
+	UVerticalBox* Block = WidgetTree->ConstructWidget<UVerticalBox>(UVerticalBox::StaticClass());
+
+	const float LatencySteps = (StageAudioReactive::MaxLatencyOffsetMs - StageAudioReactive::MinLatencyOffsetMs) / StageAudioPanel::LatencyStepMs;
+	UWidget* Latency = MakeLabeledRow(LOCTEXT("Latency", "LATENCY"), MakeSliderLine(StageAudioPanel::Latency, 1.f / LatencySteps, LatencySlider, LatencyText));
+	Latency->SetToolTipText(LOCTEXT("LatencyTip", "Moves the lights against the sound for this source, if they land before or after the beat you hear: positive makes them later, negative earlier (-500 .. +500 ms). Remembered per source on this PC."));
+	LatencyRow = Latency;
+	Block->AddChildToVerticalBox(Latency);
+
+	UVerticalBox* FlashBlock = WidgetTree->ConstructWidget<UVerticalBox>(UVerticalBox::StaticClass());
+	const float FlashSteps = StageAudioReactive::MaxFlashLimitHz - StageAudioReactive::MinFlashLimitHz;
+	FlashBlock->AddChildToVerticalBox(MakeSliderLine(StageAudioPanel::FlashLimit, 1.f / FlashSteps, FlashSlider, FlashText));
+	UTextBlock* Warning = MakeText(LOCTEXT("FlashWarning", "Above 3 flashes a second can trigger seizures in people with photosensitive epilepsy. Keep 3 when an audience can see the lights."),
+		7, TEXT("Regular"), UITheme.WarningColor);
+	Warning->SetAutoWrapText(true);
+	Warning->SetVisibility(ESlateVisibility::Collapsed);
+	FlashWarning = Warning;
+	if (UVerticalBoxSlot* WarningSlot = FlashBlock->AddChildToVerticalBox(Warning))
+	{
+		WarningSlot->SetPadding(FMargin(0.f, 2.f, 0.f, 0.f));
+	}
+	UWidget* Flash = MakeLabeledRow(LOCTEXT("Flash", "FLASH"), FlashBlock);
+	Flash->SetToolTipText(LOCTEXT("FlashTip", "Flash limit for effects that follow the music, on screen and on DMX OUT: a light may flash from dark to bright at most this often, and a strobe may run no faster. Effects programmed without music are not limited. Remembered on this PC."));
+	if (UVerticalBoxSlot* FlashSlot = Block->AddChildToVerticalBox(Flash))
+	{
+		FlashSlot->SetPadding(FMargin(0.f, 6.f, 0.f, 0.f));
+	}
+	return Block;
+}
+
 UWidget* UStageAudioPanel::BuildFooter()
 {
 	const UStageCraftUITheme& UITheme = GetTheme();
@@ -571,6 +687,45 @@ void UStageAudioPanel::Refresh()
 		GainValue->SetText(FText::Format(LOCTEXT("GainValue", "{0} dB"), FText::AsNumber(FMath::RoundToInt(Settings.InputGainDb))));
 	}
 
+	// Safety and privacy (Phase G3): the latency of the source playing, the flash limit, and LISTENING.
+	const bool bLive = Status.State == EStageAudioSourceState::Starting || bRunning;
+	FStageAudioReactiveSettings Editable = Settings;
+	const float* Offset = StageAudioPanel::FindLatencyOffset(Editable, Status.Source);
+	if (UWidget* Row = LatencyRow.Get())
+	{
+		Row->SetVisibility(Offset && bLive ? ESlateVisibility::Visible : ESlateVisibility::Collapsed);
+	}
+	if (Offset)
+	{
+		if (UStageValueSlider* Latency = LatencySlider.Get(); Latency && !Latency->HasMouseCapture())
+		{
+			Latency->SetValue(StageAudioPanel::LatencyToSlider(*Offset));
+		}
+		if (UTextBlock* LatencyValue = LatencyText.Get(); LatencyValue && DraggedSetting != StageAudioPanel::Latency)
+		{
+			LatencyValue->SetText(StageAudioPanel::FormatLatency(*Offset));
+		}
+	}
+	if (UStageValueSlider* Flash = FlashSlider.Get(); Flash && !Flash->HasMouseCapture())
+	{
+		Flash->SetValue(StageAudioPanel::FlashToSlider(Settings.FlashLimitHz));
+	}
+	if (DraggedSetting != StageAudioPanel::FlashLimit)
+	{
+		if (UTextBlock* FlashValue = FlashText.Get())
+		{
+			FlashValue->SetText(StageAudioPanel::FormatFlash(Settings.FlashLimitHz));
+		}
+		if (UTextBlock* Warning = FlashWarning.Get())
+		{
+			Warning->SetVisibility(Settings.FlashLimitHz > StageAudioReactive::SafeFlashLimitHz ? ESlateVisibility::Visible : ESlateVisibility::Collapsed);
+		}
+	}
+	if (UTextBlock* Listening = ListeningText.Get())
+	{
+		Listening->SetVisibility(bLive && StageAudioReactive::IsCaptureSource(Status.Source) ? ESlateVisibility::HitTestInvisible : ESlateVisibility::Collapsed);
+	}
+
 	// Background playback lives with the other sound preferences (UStageAudioSubsystem).
 	const UGameInstance* GameInstance = GetGameInstance();
 	const UStageAudioSubsystem* Sound = GameInstance ? GameInstance->GetSubsystem<UStageAudioSubsystem>() : nullptr;
@@ -720,11 +875,32 @@ void UStageAudioPanel::HandleSliderMoved(int32 SliderIndex, float Value)
 	}
 	else if (SliderIndex == StageAudioPanel::Gain)
 	{
-		bGainDragged = true;
+		DraggedSetting = SliderIndex;
 		if (UTextBlock* GainValue = GainText.Get())
 		{
 			const float Db = FMath::Lerp(StageAudioReactive::MinInputGainDb, StageAudioReactive::MaxInputGainDb, FMath::Clamp(Value, 0.f, 1.f));
 			GainValue->SetText(FText::Format(LOCTEXT("GainValue", "{0} dB"), FText::AsNumber(FMath::RoundToInt(Db))));
+		}
+	}
+	else if (SliderIndex == StageAudioPanel::Latency)
+	{
+		DraggedSetting = SliderIndex;
+		if (UTextBlock* LatencyValue = LatencyText.Get())
+		{
+			LatencyValue->SetText(StageAudioPanel::FormatLatency(StageAudioPanel::SliderToLatency(Value)));
+		}
+	}
+	else if (SliderIndex == StageAudioPanel::FlashLimit)
+	{
+		DraggedSetting = SliderIndex;
+		const float Hz = StageAudioPanel::SliderToFlash(Value);
+		if (UTextBlock* FlashValue = FlashText.Get())
+		{
+			FlashValue->SetText(StageAudioPanel::FormatFlash(Hz));
+		}
+		if (UTextBlock* Warning = FlashWarning.Get())
+		{
+			Warning->SetVisibility(Hz > StageAudioReactive::SafeFlashLimitHz ? ESlateVisibility::Visible : ESlateVisibility::Collapsed);
 		}
 	}
 }
@@ -744,17 +920,35 @@ void UStageAudioPanel::HandleSliderReleased()
 		SeekPreviewSeconds.Reset();
 		Controller->RequestAudioTransport(Request);
 	}
-	const bool bGain = bGainDragged;
-	bGainDragged = false;
-	if (const UStageValueSlider* Gain = GainSlider.Get(); bGain && Gain && GetAudio())
+	const int32 Dragged = DraggedSetting;
+	DraggedSetting = INDEX_NONE;
+	UStageAudioReactiveSubsystem* Subsystem = GetAudio();
+	if (!Subsystem || Dragged == INDEX_NONE)
 	{
-		FStageAudioReactiveSettings Settings = GetAudio()->GetSettings();
-		const float Db = static_cast<float>(FMath::RoundToInt(FMath::Lerp(StageAudioReactive::MinInputGainDb, StageAudioReactive::MaxInputGainDb, Gain->GetValue())));
-		if (Db != Settings.InputGainDb)
+		RequestRefresh();
+		return;
+	}
+	// One request per release: the settings are saved, and a drag would otherwise write the file on every step.
+	FStageAudioReactiveSettings Settings = Subsystem->GetSettings();
+	const FStageAudioReactiveSettings Before = Settings;
+	if (const UStageValueSlider* Gain = GainSlider.Get(); Dragged == StageAudioPanel::Gain && Gain)
+	{
+		Settings.InputGainDb = static_cast<float>(FMath::RoundToInt(FMath::Lerp(StageAudioReactive::MinInputGainDb, StageAudioReactive::MaxInputGainDb, Gain->GetValue())));
+	}
+	else if (const UStageValueSlider* Latency = LatencySlider.Get(); Dragged == StageAudioPanel::Latency && Latency)
+	{
+		if (float* Offset = StageAudioPanel::FindLatencyOffset(Settings, Status.Source))
 		{
-			Settings.InputGainDb = Db;
-			Controller->RequestApplyAudioSettings(Settings);
+			*Offset = StageAudioPanel::SliderToLatency(Latency->GetValue());
 		}
+	}
+	else if (const UStageValueSlider* Flash = FlashSlider.Get(); Dragged == StageAudioPanel::FlashLimit && Flash)
+	{
+		Settings.FlashLimitHz = StageAudioPanel::SliderToFlash(Flash->GetValue());
+	}
+	if (!(Settings == Before))
+	{
+		Controller->RequestApplyAudioSettings(Settings);
 	}
 	RequestRefresh();
 }

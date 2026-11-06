@@ -81,6 +81,21 @@ public:
 	/** An effect running now follows the music: the show then hands Advance a snapshot of it. */
 	bool NeedsAudio() const { return bNeedsAudio; }
 
+	/**
+	 * The AUDIO master with KILL applied (Docs/ADR/0029 §7), 0..1: scales every Modulate towards its no-signal value (the band read
+	 * as 1). At 0 every audio effect runs as without music: Sync keeps its last tempo, Trigger holds, Modulate is fully open.
+	 * Takes effect on the next Advance.
+	 */
+	void SetAudioMaster(float Master);
+	float GetAudioMaster() const { return AudioMaster; }
+
+	/**
+	 * Flashes per second allowed to an intensity or shutter an audio effect drives (Docs/ADR/0029 §7): a rise from below 20 % to
+	 * above 80 % of the range at most this often, a strobe no faster. Clamped to StageAudioReactive::MinFlashLimitHz..Max.
+	 */
+	void SetFlashLimitHz(float LimitHz);
+	float GetFlashLimitHz() const { return FlashLimitHz; }
+
 	bool DrivesFixture(int32 FixtureId) const { return ByFixture.Contains(FixtureId); }
 
 	/** A fixture an effect drives, and the ID it was found under (a different ID now means it was renumbered). */
@@ -97,7 +112,8 @@ public:
 	 * What the effects give Fixture now (OutValues reset first): Position adds degrees to pan and tilt; Intensity and Beam set each
 	 * attribute between Low and High of the fixture's range; Color sets the fixture's own match of the colour. Each value carries its
 	 * effect's fade weight; where two effects drive one attribute they compose in order (StageShowMix::ComposeEffect). False when no
-	 * effect drives Fixture.
+	 * effect drives Fixture. Where an audio effect drives an intensity or the shutter, the composed value passes the flash limiter
+	 * (SetFlashLimitHz) on the runner's clock: calling Evaluate again in the same frame gives the same values.
 	 */
 	bool Evaluate(const class ALightingFixtureActor& Fixture, StageShowMix::FEffectMap& OutValues) const;
 
@@ -150,11 +166,11 @@ private:
 		const FStageEffect& GetEvaluated() const { return Modulated.IsSet() ? Modulated.GetValue() : Source.Entry.Effect; }
 	};
 
-	/** Moves Item's clock on by DeltaSeconds at Rate (cycles per second), following Audio where its effect uses audio. */
-	static void AdvanceClock(FRunning& Item, double Rate, float DeltaSeconds, const StageEffects::FAudioInput& Audio);
+	/** Moves Item's clock on by DeltaSeconds at Rate (cycles per second), following Audio under Master where its effect uses audio. */
+	static void AdvanceClock(FRunning& Item, double Rate, float DeltaSeconds, const StageEffects::FAudioInput& Audio, float Master);
 
-	/** Refreshes Item.Modulated from its smoothed band (Modulate Level or Size), or clears it. */
-	static void UpdateModulated(FRunning& Item);
+	/** Refreshes Item.Modulated from its smoothed band under Master (Modulate Level or Size), or clears it. */
+	static void UpdateModulated(FRunning& Item, float Master);
 
 	/** One effect's hold on a fixture: which effect, and the fixture's place in its order. */
 	struct FDrive
@@ -176,7 +192,12 @@ private:
 	static void EvaluateEffect(const class ALightingFixtureActor& Fixture, const FStageEffect& Effect, int32 Index, int32 Count, double Cycles,
 		TFunctionRef<void(const FGameplayTag& /*Attribute*/, float /*Value*/, bool /*bRelative*/)> Emit);
 
-	void EvaluateDrive(const class ALightingFixtureActor& Fixture, const FDrive& Drive, StageShowMix::FEffectMap& OutValues) const;
+	/** Adds Drive's values to OutValues; the attributes it gives, when its effect follows the music, to OutAudioAttributes. */
+	void EvaluateDrive(const class ALightingFixtureActor& Fixture, const FDrive& Drive, StageShowMix::FEffectMap& OutValues,
+		TArray<FGameplayTag, TInlineAllocator<4>>& OutAudioAttributes) const;
+
+	/** Passes Fixture's music-driven intensities and shutter in Values through their flash gates. */
+	void LimitFlashes(const class ALightingFixtureActor& Fixture, TConstArrayView<FGameplayTag> AudioAttributes, StageShowMix::FEffectMap& Values) const;
 
 	TArray<FRunning> Running;
 	/** Per fixture ID, the effects driving it in mix order. */
@@ -184,6 +205,15 @@ private:
 	TArray<FDrivenFixture> DrivenFixtures;
 	/** Any running effect uses audio; refreshed whenever Running changes. */
 	bool bNeedsAudio = false;
+	float AudioMaster = 1.f;
+	float FlashLimitHz = 3.f;
+	/** Seconds advanced so far: the flash gates' clock (deterministic, unlike the wall clock). */
+	double ClockSeconds = 0.0;
+	/**
+	 * Per fixture ID and attribute, the flash gate of a music-driven intensity or shutter. Mutable: Evaluate is the only place the
+	 * composed value exists, and the gate is idempotent within a frame (FFlashGate). Pruned to driven fixtures in RebuildDrives.
+	 */
+	mutable TMap<TPair<int32, FGameplayTag>, StageEffects::FFlashGate> FlashGates;
 
 	void RefreshNeedsAudio();
 };

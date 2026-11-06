@@ -121,7 +121,7 @@ bool FStageEffectRunner::SetEffects(TConstArrayView<FSourcedEntry> Entries, FFin
 		{
 			// New audio settings start their trigger count afresh; the modulated look follows at once, not a frame late.
 			Item.bTriggerPrimed = false;
-			UpdateModulated(Item);
+			UpdateModulated(Item, AudioMaster);
 			Item.Transition.Reset();
 			if (TimedBy)
 			{
@@ -163,6 +163,15 @@ void FStageEffectRunner::RebuildDrives(const FFindFixture* FindFixture)
 			ByFixture.FindOrAdd(FixtureIds[Index]).Add({ EffectIndex, Index });
 		}
 	}
+	// A fixture no effect drives any more has no flash to limit. One still driven keeps its gate, so a cue change cannot let a
+	// flash through early.
+	for (auto It = FlashGates.CreateIterator(); It; ++It)
+	{
+		if (!ByFixture.Contains(It.Key().Key))
+		{
+			It.RemoveCurrent();
+		}
+	}
 	if (!FindFixture)
 	{
 		// Only effects left: every fixture still driven was already found.
@@ -185,7 +194,17 @@ void FStageEffectRunner::RefreshNeedsAudio()
 	bNeedsAudio = Running.ContainsByPredicate([](const FRunning& Item) { return Item.Source.Entry.Effect.UsesAudio(); });
 }
 
-void FStageEffectRunner::UpdateModulated(FRunning& Item)
+void FStageEffectRunner::SetAudioMaster(float Master)
+{
+	AudioMaster = FMath::IsFinite(Master) ? FMath::Clamp(Master, 0.f, 1.f) : AudioMaster;
+}
+
+void FStageEffectRunner::SetFlashLimitHz(float LimitHz)
+{
+	FlashLimitHz = FMath::IsFinite(LimitHz) ? FMath::Clamp(LimitHz, StageAudioReactive::MinFlashLimitHz, StageAudioReactive::MaxFlashLimitHz) : FlashLimitHz;
+}
+
+void FStageEffectRunner::UpdateModulated(FRunning& Item, float Master)
 {
 	const FStageEffect& Effect = Item.Source.Entry.Effect;
 	if (Effect.Audio.Mode != EStageEffectAudioMode::Modulate || Effect.Audio.Modulates == EStageEffectAudioTarget::Rate)
@@ -202,10 +221,10 @@ void FStageEffectRunner::UpdateModulated(FRunning& Item)
 	{
 		Item.Modulated.Emplace(Effect);
 	}
-	StageEffects::ApplyModulation(Item.Modulated.GetValue(), Item.SmoothedBand);
+	StageEffects::ApplyModulation(Item.Modulated.GetValue(), StageEffects::ApplyAudioMaster(Item.SmoothedBand, Master));
 }
 
-void FStageEffectRunner::AdvanceClock(FRunning& Item, double Rate, float DeltaSeconds, const StageEffects::FAudioInput& Audio)
+void FStageEffectRunner::AdvanceClock(FRunning& Item, double Rate, float DeltaSeconds, const StageEffects::FAudioInput& Audio, float Master)
 {
 	const FStageEffect& Effect = Item.Source.Entry.Effect;
 	switch (Effect.Audio.Mode)
@@ -234,7 +253,7 @@ void FStageEffectRunner::AdvanceClock(FRunning& Item, double Rate, float DeltaSe
 
 	case EStageEffectAudioMode::Modulate:
 		Item.SmoothedBand = StageEffects::SmoothBand(Item.SmoothedBand, StageEffects::GetModulationBand(Effect.Audio, Audio), DeltaSeconds, Effect.Audio.Response);
-		Item.Cycles += StageEffects::GetModulatedRate(Effect, static_cast<float>(Rate), Item.SmoothedBand) * DeltaSeconds;
+		Item.Cycles += StageEffects::GetModulatedRate(Effect, static_cast<float>(Rate), StageEffects::ApplyAudioMaster(Item.SmoothedBand, Master)) * DeltaSeconds;
 		break;
 
 	case EStageEffectAudioMode::Trigger:
@@ -259,7 +278,7 @@ void FStageEffectRunner::AdvanceClock(FRunning& Item, double Rate, float DeltaSe
 		break;
 	}
 	}
-	UpdateModulated(Item);
+	UpdateModulated(Item, Master);
 }
 
 void FStageEffectRunner::Advance(float DeltaSeconds, TArray<int32>& OutReleased, const StageEffects::FAudioInput* Audio)
@@ -268,9 +287,10 @@ void FStageEffectRunner::Advance(float DeltaSeconds, TArray<int32>& OutReleased,
 	{
 		return;
 	}
-	// No music handed in reads as silence: every audio effect falls back (Docs/ADR/0029 §4).
+	ClockSeconds += DeltaSeconds;
+	// No music handed in, or the AUDIO master at 0 (KILL), reads as silence: every audio effect falls back (Docs/ADR/0029 §4, §7).
 	static const StageEffects::FAudioInput Silence;
-	const StageEffects::FAudioInput& Input = Audio ? *Audio : Silence;
+	const StageEffects::FAudioInput& Input = Audio && AudioMaster > 0.f ? *Audio : Silence;
 	bool bAnyEnded = false;
 	for (FRunning& Item : Running)
 	{
@@ -280,7 +300,7 @@ void FStageEffectRunner::Advance(float DeltaSeconds, TArray<int32>& OutReleased,
 			// A morph blends the rate too, so the pattern speeds up or slows down smoothly.
 			Rate = FMath::Lerp(Item.Transition->MorphFrom->RateHz, Rate, Item.Transition->GetAlpha());
 		}
-		AdvanceClock(Item, Rate, DeltaSeconds, Input);
+		AdvanceClock(Item, Rate, DeltaSeconds, Input, AudioMaster);
 		// Wrapped every 2^20 cycles (days at the top rate): keeps the double's fraction exact, and every waveform repeats by then
 		// except Random, whose sequence simply carries on from another point.
 		Item.Cycles = FMath::Fmod(Item.Cycles, 1048576.0);
@@ -347,14 +367,59 @@ bool FStageEffectRunner::Evaluate(const ALightingFixtureActor& Fixture, StageSho
 	{
 		return false;
 	}
+	TArray<FGameplayTag, TInlineAllocator<4>> AudioAttributes;
 	for (const FDrive& Drive : *Drives)
 	{
-		EvaluateDrive(Fixture, Drive, OutValues);
+		EvaluateDrive(Fixture, Drive, OutValues, AudioAttributes);
+	}
+	if (!AudioAttributes.IsEmpty())
+	{
+		LimitFlashes(Fixture, AudioAttributes, OutValues);
 	}
 	return !OutValues.IsEmpty();
 }
 
-void FStageEffectRunner::EvaluateDrive(const ALightingFixtureActor& Fixture, const FDrive& Drive, StageShowMix::FEffectMap& OutValues) const
+void FStageEffectRunner::LimitFlashes(const ALightingFixtureActor& Fixture, TConstArrayView<FGameplayTag> AudioAttributes, StageShowMix::FEffectMap& Values) const
+{
+	const ULightingFixtureData* Data = Fixture.GetFixtureData();
+	for (const FGameplayTag& Attribute : AudioAttributes)
+	{
+		StageShowMix::FEffectValue* Value = Values.Find(Attribute);
+		if (!Value || Value->bRelative)
+		{
+			continue;
+		}
+		if (Attribute == StageCraftTags::Attribute_Shutter)
+		{
+			// The strobe rate is capped outright; open (0) and slow strobes pass.
+			if (Data && Data->bHasShutter)
+			{
+				Value->Value = FMath::Min(Value->Value, StageEffects::GetStrobeShutterCap(Data->StrobeRateHz, FlashLimitHz));
+			}
+			continue;
+		}
+		if (StagePaletteRules::GetAttributeKind(Attribute) != EStagePaletteKind::Intensity)
+		{
+			continue;
+		}
+		float Min = 0.f;
+		float Max = 1.f;
+		if (Data && !Data->GetAttributeRange(Attribute, Min, Max))
+		{
+			continue;
+		}
+		const float Range = Max - Min;
+		if (Range <= UE_SMALL_NUMBER)
+		{
+			continue;
+		}
+		StageEffects::FFlashGate& Gate = FlashGates.FindOrAdd({ Fixture.GetFixtureId(), Attribute });
+		Value->Value = Min + Range * Gate.Apply((Value->Value - Min) / Range, ClockSeconds, FlashLimitHz);
+	}
+}
+
+void FStageEffectRunner::EvaluateDrive(const ALightingFixtureActor& Fixture, const FDrive& Drive, StageShowMix::FEffectMap& OutValues,
+	TArray<FGameplayTag, TInlineAllocator<4>>& OutAudioAttributes) const
 {
 	const FRunning& Item = Running[Drive.Effect];
 	const float Weight = Item.GetWeight();
@@ -381,8 +446,13 @@ void FStageEffectRunner::EvaluateDrive(const ALightingFixtureActor& Fixture, con
 
 	// A playback's fader scales its intensity effects as it scales its intensity (Docs/ADR/0027 §5).
 	const float Scale = Effect.Target == EStageEffectTarget::Intensity ? Item.Source.IntensityScale : 1.f;
+	const bool bFollowsMusic = Entry.Effect.UsesAudio();
 	EvaluateEffect(Fixture, Effect, Drive.Index, Count, Item.Cycles, [&](const FGameplayTag& Attribute, float Value, bool bRelative)
 	{
+		if (bFollowsMusic)
+		{
+			OutAudioAttributes.AddUnique(Attribute);
+		}
 		if (const StageShowMix::FEffectValue* From = MorphFromValues.Find(Attribute); From && From->bRelative == bRelative)
 		{
 			Value = FMath::Lerp(From->Value, Value, MorphAlpha);

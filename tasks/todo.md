@@ -589,7 +589,13 @@ Gevor's choices: automation tests on a harness game instance (not AFunctionalTes
   - [x] G2d Effects panel AUDIO rows, six audio quick effects, audio markers in running list, Cues and Playback panels
   - [x] G2e Audio panel (source, device, gain, meters, BPM and beat lamp, transport, background toggle)
   - [x] G2f Bench.Fixtures Audio=1, file heard-delay measurement, tests, builds, A/B against a85475f, STATE #70
-- [ ] G3 flash limiter (3 Hz default), AUDIO master and KILL, Listening indicator, latency offset; manual check with real music on every source (Gevor)
+- [x] G3 flash limiter (3 Hz default), AUDIO master and KILL, Listening indicator, latency offset (STATE.md #71: done; mouse check, real music on every source and packaged Shipping run by Gevor)
+  - [x] G3a pure flash gate (rise from below 20 % to above 80 % of the range at most N per second; a refused rise holds the last value; idempotent within a frame) and the strobe cap (shutter limited to N Hz); FlashLimitHz per PC (1-10, default 3)
+  - [x] G3b runner: gate composed effect values of audio-driven intensity and shutter attributes per fixture; AUDIO master scales Modulate towards no signal, 0 or KILL makes every audio effect fall back as without music
+  - [x] G3c show: AudioMaster and AudioKill (session only, reset per stage), RequestSetAudioMaster / RequestSetAudioKill through the Masters gate, limit pushed from the audio settings
+  - [x] G3d analyser heard delay changeable live (no restart on a latency change); Audio panel latency offset per source, flash limit slider with a warning above 3, LISTENING indicator; status bar LISTENING
+  - [x] G3e AUDIO fader and KILL in the Playback panel and the Effects panel
+  - [x] G3f tests, Bench.Fixtures Audio=1 A/B against 9acfa3c, builds, Shipping scan, scripted run, ADR 0029 §15, STATE #71
 - [ ] H0 spike: HTTP streaming, prompt-cache hit, latency and cost per model
 - [ ] H1 knowledge index from code (UI anchors, key map, parameters, panels), help articles EN/HY, offline BM25 search, SHOW ME (Phase 26)
 - [ ] H2 StageShowDiagnostics, StageFixtureExplain, Problems list

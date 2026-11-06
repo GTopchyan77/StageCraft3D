@@ -27,6 +27,7 @@
 #include "Report/StageCableScheduleSubsystem.h"
 #include "Report/StagePatchSheetSubsystem.h"
 #include "Scene/StageSceneComponent.h"
+#include "Subsystems/StageAudioReactiveSubsystem.h"
 #include "Subsystems/StageEconomySubsystem.h"
 #include "Subsystems/StageSessionSubsystem.h"
 #include "TimerManager.h"
@@ -242,6 +243,19 @@ void UStageStatusBarWidget::BuildTree()
 		UnsavedSlot->SetVerticalAlignment(VAlign_Center);
 		UnsavedSlot->SetPadding(FMargin(12.f, 0.f, 0.f, 0.f));
 	}
+
+	// Pushed by the audio subsystem's OnAudioStatusChanged: whoever is near this PC can see it is listening.
+	ListeningText = WidgetTree->ConstructWidget<UTextBlock>(UTextBlock::StaticClass(), TEXT("ListeningText"));
+	ListeningText->SetFont(MakeFont(8, TEXT("Bold")));
+	ListeningText->SetColorAndOpacity(FSlateColor(Palette.WarningColor));
+	ListeningText->SetText(LOCTEXT("Listening", "● LISTENING"));
+	ListeningText->SetToolTipText(LOCTEXT("ListeningTip", "Audio-reactive lighting is listening to a microphone, line input or this PC's own output. It is analysed in memory only: nothing is recorded, saved or sent. Switch the Audio panel's source OFF to stop."));
+	ListeningText->SetVisibility(ESlateVisibility::Collapsed);
+	if (UHorizontalBoxSlot* ListeningSlot = Row->AddChildToHorizontalBox(ListeningText))
+	{
+		ListeningSlot->SetVerticalAlignment(VAlign_Center);
+		ListeningSlot->SetPadding(FMargin(12.f, 0.f, 0.f, 0.f));
+	}
 }
 
 void UStageStatusBarWidget::NativeConstruct()
@@ -337,6 +351,12 @@ void UStageStatusBarWidget::BindSources()
 		PatchSheet = PatchSheetSubsystem;
 		PatchSheetSubsystem->OnExportFinished.AddUniqueDynamic(this, &ThisClass::HandleReportExportFinished);
 	}
+	if (UStageAudioReactiveSubsystem* AudioSubsystem = UWorld::GetSubsystem<UStageAudioReactiveSubsystem>(GetWorld()); AudioSubsystem && !AudioStatusHandle.IsValid())
+	{
+		AudioReactive = AudioSubsystem;
+		AudioStatusHandle = AudioSubsystem->OnAudioStatusChanged.AddUObject(this, &ThisClass::HandleAudioStatusChanged);
+		HandleAudioStatusChanged();
+	}
 	if (UStageCableScheduleSubsystem* CableScheduleSubsystem = UWorld::GetSubsystem<UStageCableScheduleSubsystem>(GetWorld()))
 	{
 		CableSchedule = CableScheduleSubsystem;
@@ -355,6 +375,17 @@ void UStageStatusBarWidget::BindSources()
 	{
 		InputPreferences = Preferences;
 		Preferences->OnInputPreferencesChanged.AddUniqueDynamic(this, &ThisClass::HandleInputPreferencesChanged);
+	}
+}
+
+void UStageStatusBarWidget::HandleAudioStatusChanged()
+{
+	const UStageAudioReactiveSubsystem* AudioSubsystem = AudioReactive.Get();
+	const bool bListening = AudioSubsystem && StageAudioReactive::IsCaptureSource(AudioSubsystem->GetSource())
+		&& (AudioSubsystem->GetState() == EStageAudioSourceState::Starting || AudioSubsystem->GetState() == EStageAudioSourceState::Running);
+	if (ListeningText)
+	{
+		ListeningText->SetVisibility(bListening ? ESlateVisibility::HitTestInvisible : ESlateVisibility::Collapsed);
 	}
 }
 
@@ -404,6 +435,12 @@ void UStageStatusBarWidget::UnbindSources()
 	{
 		Report->OnExportFinished.RemoveDynamic(this, &ThisClass::HandleReportExportFinished);
 	}
+	if (UStageAudioReactiveSubsystem* AudioSubsystem = AudioReactive.Get())
+	{
+		AudioSubsystem->OnAudioStatusChanged.Remove(AudioStatusHandle);
+	}
+	AudioStatusHandle.Reset();
+	AudioReactive.Reset();
 	if (UStagePatchSheetSubsystem* PatchSheetSubsystem = PatchSheet.Get())
 	{
 		PatchSheetSubsystem->OnExportFinished.RemoveDynamic(this, &ThisClass::HandleReportExportFinished);

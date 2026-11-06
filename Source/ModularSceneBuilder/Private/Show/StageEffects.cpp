@@ -273,4 +273,52 @@ namespace StageEffects
 		const double Difference = Target - Cycles;
 		return Difference - FMath::FloorToDouble(Difference + 0.5);
 	}
+
+	float ApplyAudioMaster(float Band, float Master)
+	{
+		return 1.f + (Band - 1.f) * FMath::Clamp(Master, 0.f, 1.f);
+	}
+
+	float FFlashGate::Apply(float Fraction, double NowSeconds, float LimitHz)
+	{
+		if (NowSeconds != FrameSeconds)
+		{
+			Committed = Current;
+			FrameSeconds = NowSeconds;
+		}
+		FState Next = Committed;
+		float Output = Fraction;
+		if (Fraction < FlashLowFraction)
+		{
+			Next.bArmed = true;
+		}
+		else if (Fraction > FlashHighFraction && Committed.bArmed)
+		{
+			const double Interval = 1.0 / FMath::Max(static_cast<double>(LimitHz), 1e-3);
+			if (NowSeconds - Committed.LastFlashSeconds >= Interval)
+			{
+				Next.LastFlashSeconds = NowSeconds;
+				Next.bArmed = false;
+			}
+			else
+			{
+				// Too soon: hold what was shown. Armed means nothing above the high threshold has been shown since the last dip.
+				Output = FMath::Min(Committed.Output, FlashHighFraction);
+			}
+		}
+		Next.Output = Output;
+		Current = Next;
+		return Output;
+	}
+
+	float GetStrobeShutterCap(const FVector2D& StrobeRateHz, float LimitHz)
+	{
+		const float Slowest = static_cast<float>(StrobeRateHz.X);
+		const float Fastest = static_cast<float>(StrobeRateHz.Y);
+		if (Fastest <= Slowest)
+		{
+			return Slowest <= LimitHz ? 1.f : 0.f;
+		}
+		return FMath::Clamp((LimitHz - Slowest) / (Fastest - Slowest), 0.f, 1.f);
+	}
 }

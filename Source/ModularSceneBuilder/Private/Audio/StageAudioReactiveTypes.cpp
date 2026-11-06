@@ -57,6 +57,7 @@ namespace StageAudioReactive
 		Out.InputLatencyOffsetMs = SanitizeFloat(Settings.InputLatencyOffsetMs, 0.f, MinLatencyOffsetMs, MaxLatencyOffsetMs);
 		Out.SystemAudioLatencyOffsetMs = SanitizeFloat(Settings.SystemAudioLatencyOffsetMs, 0.f, MinLatencyOffsetMs, MaxLatencyOffsetMs);
 		Out.TestSignalBPM = SanitizeFloat(Settings.TestSignalBPM, Defaults.TestSignalBPM, MinTestSignalBPM, MaxTestSignalBPM);
+		Out.FlashLimitHz = SanitizeFloat(Settings.FlashLimitHz, Defaults.FlashLimitHz, MinFlashLimitHz, MaxFlashLimitHz);
 
 		// Ascending edges, each at least 10 Hz above the previous; a set that cannot be made ascending falls back to the defaults.
 		float Edges[4] = {

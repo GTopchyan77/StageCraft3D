@@ -4,7 +4,7 @@
   - Spike G0 done (STATE.md #68, §2.1): it changed the file source (§3) and the module dependencies (§11).
   - G1 implemented (STATE.md #69, §13): sources, analyser, subsystem, settings, requests.
   - G2 implemented (STATE.md #70, §14): audio in effects, the Audio panel, scene v11, `Bench.Fixtures Audio=1`.
-  - G3 not started.
+  - G3 implemented (STATE.md #71, §15): the flash limiter, the AUDIO master and KILL, LISTENING, latency offsets in the Audio panel.
 - **Related:**
   - ADR 0027 (effects engine; this ADR amends §2 and §4 with an audio setting on `FStageEffect`).
   - ADR 0025 / 0026 (the output mix and its masters; the show control stays the only writer).
@@ -320,3 +320,58 @@ How G2 realised §4, §5 and §8, and what it settled that §4 left open.
   - On this PC the file's beat trailed Windows' output by 7.4 ms (median of 1,596 frames, 10–90 % from −10.4 to −5.8 ms).
   - That is inside the 10 ms tolerance, so the default stays at 78 ms.
 - **Cost:** `Bench.Fixtures Effects=1 Audio=1` against `Effects=1`; see STATE.md #70.
+
+
+## 15. G3 implementation notes (STATE.md #71)
+
+How G3 realised §6 and §7, and what it settled that they left open.
+
+### Flash limiter
+- **Where:** `FStageEffectRunner::Evaluate`, after an attribute's effect values are composed. It applies to every intensity attribute (palette kind Intensity) and the Shutter attribute that an effect following the music drives. If a programmed effect drives the same attribute, the composed value is limited too.
+- **The gate** (`StageEffects::FFlashGate`, one per fixture and attribute):
+  - A flash is a rise from below 20 % to above 80 % of the attribute's range, at most `FlashLimitHz` a second.
+  - **A refused rise holds the last value shown**, at most 80 %. A clamp at 80 % would have let a 10 Hz square flicker between 0 and 80 % at full rate. Holding shows the pattern's flashes at the limit instead, so a too-fast pattern reads as a slower one.
+  - Values between the thresholds and a light that stays up pass unchanged.
+  - The gate runs on the runner's own clock (seconds advanced), so it is deterministic.
+  - It is idempotent within a frame: a second call with the same time answers from the state the frame started with. The show mixes a fixture more than once in some frames.
+  - Gates are kept while a fixture stays driven, so a cue change cannot let a flash through early. They are dropped when no effect drives the fixture.
+- **Strobe:** a music-driven Shutter is capped at the value whose strobe rate (`StrobeRateHz` across 0..1) equals the limit. A fixture whose slowest strobe is already faster than the limit stays open (0).
+- **Setting:** `FStageAudioReactiveSettings::FlashLimitHz`, default 3, sanitised to 1..10.
+  - It is set by the Audio panel's FLASH slider, which warns above 3, or by `StageCraft.Music.Settings FlashLimit=<Hz>`.
+  - The show takes it from `OnAudioStatusChanged`, so it is pushed, never polled.
+- **Not limited:**
+  - effects that do not follow the music (§7: the operator's responsibility);
+  - colour effects. An RGB fixture can still flash through a music-driven colour effect, which is an open follow-up.
+- **Cost:** a map lookup and a few compares per limited attribute and fixture per frame. Measured in STATE.md #71.
+
+### AUDIO master and KILL
+- **Owner:** `UShowControlSubsystem` (`SetAudioMaster`, `SetAudioKill`). Session only: a stage always opens at full with KILL off.
+- **Requests:** `AModularPlayerController::RequestSetAudioMaster` and `RequestSetAudioKill`, judged as `EStageCueRequest::Masters` like the Grand Master and BLACKOUT.
+- **Effect on the runner** (`FStageEffectRunner::SetAudioMaster`, with KILL meaning 0):
+  - Modulate reads the band as `1 + (band − 1) × master`: fully open at 0, as without music.
+  - At 0 every audio effect gets the silent input: Sync keeps its last tempo without the pull, and Trigger holds, then primes again without catching up when the master returns.
+  - Between 0 and 1, Sync and Trigger follow the music fully. Only Modulate has a degree.
+- **KILL is not a blackout.** The brief asked for an "immediate mute". §7 defines KILL as the no-signal value, so a pulse goes fully open and a chase holds; the lights do not go dark. BLACKOUT is still the way to dark.
+- **UI:**
+  - an AUDIO fader and KILL next to GM and BLACKOUT in the Playback panel;
+  - an AUDIO slider and KILL above the audio quick effects in the Effects panel;
+  - `StageCraft.Music.Master` and `StageCraft.Music.Kill` (dev).
+
+### Listening (§6)
+- "● LISTENING" shows in the status bar and in the Audio panel's header while Input or SystemAudio is Starting or Running.
+- Both are pushed by `OnAudioStatusChanged`.
+
+### Latency offsets
+- **The Audio panel's LATENCY slider** (−500..+500 ms, 5 ms steps):
+  - It edits the offset of the source playing (File, Input or SystemAudio) and is hidden for TestSignal and Off.
+  - Positive makes the lights later.
+  - The value is applied on release, as one settings request.
+- **No restart:** `ApplySettings` now restarts the analysis only for band edges and the test signal's tempo.
+  - Timing changes go to the running analyser (`FStageAudioAnalyzer::SetHeardDelaySeconds`, an atomic read per block), so a latency change does not lose the tempo. Before G3 every settings change restarted it, which took about 3 s to find the beat again.
+  - Frames already held keep the delay they were stamped with.
+
+### Tests
+- `Show.FlashLimiter` (the gate, the strobe cap, the master's band, the setting bounds);
+- `Show.AudioMaster` (Modulate Rate at 1, 0.5 and 0; Trigger holds and primes again; Sync keeps its tempo);
+- `Show.FlashLimitOnFixtures` (an 8 Hz synced square limited to 3 a second on a real fixture, untouched at 10 and without music; the shutter capped; Bass Pulse under the master);
+- `Show.AudioOnFixtures`, extended with KILL on the show, the limit pushed from the settings, and a latency change that keeps the tempo.

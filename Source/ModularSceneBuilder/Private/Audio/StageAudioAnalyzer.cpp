@@ -36,6 +36,7 @@ bool FStageAudioAnalyzer::Start(const TSharedRef<FStageAudioTap>& InTap, const F
 	Shutdown();
 	Config = InConfig;
 	Config.Settings = StageAudioReactive::Sanitize(InConfig.Settings);
+	HeardDelaySeconds.store(InConfig.HeardDelaySeconds, std::memory_order_relaxed);
 	Tap = InTap;
 	if (!Extractor.Init(Config.Settings))
 	{
@@ -148,10 +149,11 @@ void FStageAudioAnalyzer::Analyse(double NowSeconds)
 
 		Resampled.Reset();
 		Resampler.Process(MakeArrayView(Raw.GetData(), Count), Resampled);
-		Extractor.Push(Resampled, BlockTime, [this](const FStageAudioFeatures& Frame)
+		const double HeardDelay = HeardDelaySeconds.load(std::memory_order_relaxed);
+		Extractor.Push(Resampled, BlockTime, [this, HeardDelay](const FStageAudioFeatures& Frame)
 			{
 				FStageAudioFeatures Heard = Frame;
-				Heard.Timestamp += Config.HeardDelaySeconds;
+				Heard.Timestamp += HeardDelay;
 				Hold(Heard);
 			});
 		AnalysedSamples.fetch_add(Resampled.Num(), std::memory_order_relaxed);

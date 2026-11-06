@@ -149,7 +149,15 @@ bool UStageAudioReactiveSubsystem::ApplySettings(const FStageAudioReactiveSettin
 			Decoder->SetLoop(Settings.bLoopFile);
 		}
 	}
-	if (State == EStageAudioSourceState::Running && Tap)
+	// Only the band edges and the test signal live inside the analysis. Timing (output delay, latency offsets) is applied to the
+	// running analyser, so moving the latency slider does not lose the tempo; the flash limit belongs to the show.
+	const bool bAnalysisChanged = Settings.SubBassTopHz != Before.SubBassTopHz || Settings.BassTopHz != Before.BassTopHz
+		|| Settings.MidTopHz != Before.MidTopHz || Settings.HighTopHz != Before.HighTopHz || Settings.TestSignalBPM != Before.TestSignalBPM;
+	if (State == EStageAudioSourceState::Running && Tap && !bAnalysisChanged)
+	{
+		Analyzer->SetHeardDelaySeconds(StageAudioReactive::GetHeardDelaySeconds(Settings, Source));
+	}
+	else if (State == EStageAudioSourceState::Running && Tap)
 	{
 		Analyzer->Shutdown();
 		if (!StartAnalyzer(OutError))

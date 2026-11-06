@@ -51,7 +51,12 @@ void UShowControlSubsystem::Initialize(FSubsystemCollectionBase& Collection)
 		ProgrammerEffectsHandle = Programmer->OnEffectsChanged.AddUObject(this, &ThisClass::HandleProgrammerEffectsChanged);
 	}
 	AudioReactive = Collection.InitializeDependency<UStageAudioReactiveSubsystem>();
-	Library = Collection.InitializeDependency<UStageShowLibrarySubsystem>();
+	if (AudioReactive)
+	{
+		AudioStatusHandle = AudioReactive->OnAudioStatusChanged.AddUObject(this, &ThisClass::HandleAudioStatusChanged);
+		HandleAudioStatusChanged();
+	}
+	Library =Collection.InitializeDependency<UStageShowLibrarySubsystem>();
 	if (Library)
 	{
 		Library->OnPalettesChanged.AddUniqueDynamic(this, &ThisClass::HandlePalettesChanged);
@@ -77,6 +82,11 @@ void UShowControlSubsystem::Deinitialize()
 	EffectRunner = FStageEffectRunner();
 	MainEffects.Reset();
 	Programmer = nullptr;
+	if (AudioReactive)
+	{
+		AudioReactive->OnAudioStatusChanged.Remove(AudioStatusHandle);
+	}
+	AudioStatusHandle.Reset();
 	AudioReactive = nullptr;
 	if (Library)
 	{
@@ -1221,6 +1231,29 @@ void UShowControlSubsystem::SetBlackout(bool bOn)
 	}
 }
 
+void UShowControlSubsystem::SetAudioMaster(float Level)
+{
+	const float Clamped = FMath::IsFinite(Level) ? FMath::Clamp(Level, 0.f, 1.f) : AudioMaster;
+	if (!FMath::IsNearlyEqual(Clamped, AudioMaster))
+	{
+		AudioMaster = Clamped;
+		EffectRunner.SetAudioMaster(bAudioKill ? 0.f : AudioMaster);
+		// Only effects that follow the music change, and they are mixed again on every tick: no re-mix here.
+		OnDeskStateChanged.Broadcast();
+	}
+}
+
+void UShowControlSubsystem::SetAudioKill(bool bOn)
+{
+	if (bOn != bAudioKill)
+	{
+		bAudioKill = bOn;
+		EffectRunner.SetAudioMaster(bAudioKill ? 0.f : AudioMaster);
+		UE_LOG(LogStageCraft, Log, TEXT("AUDIO KILL %s."), bOn ? TEXT("on: effects run as without music") : TEXT("off"));
+		OnDeskStateChanged.Broadcast();
+	}
+}
+
 void UShowControlSubsystem::ApplyMastersChange()
 {
 	if (ControlSource == EStageControlSource::External)
@@ -1306,6 +1339,14 @@ void UShowControlSubsystem::HandleProgrammerFixturesChanged(TConstArrayView<int3
 void UShowControlSubsystem::HandleProgrammerEffectsChanged()
 {
 	RefreshEffectSources(nullptr);
+}
+
+void UShowControlSubsystem::HandleAudioStatusChanged()
+{
+	if (AudioReactive)
+	{
+		EffectRunner.SetFlashLimitHz(AudioReactive->GetSettings().FlashLimitHz);
+	}
 }
 
 void UShowControlSubsystem::RefreshEffectSources(const FShowCue* TimedBy)

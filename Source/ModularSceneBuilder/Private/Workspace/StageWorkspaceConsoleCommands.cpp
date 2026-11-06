@@ -244,10 +244,12 @@ namespace StageWorkspaceCommands
 	void ScrollPanels(const TArray<FString>& Args, UWorld* World)
 	{
 		const bool bToEnd = Args.IsEmpty() || !Args[0].Equals(TEXT("start"), ESearchCase::IgnoreCase);
+		// "horizontal" scrolls the side-scrolling lists instead, such as the playback desk (its masters sit at the end).
+		const EOrientation Orientation = Args.Num() > 1 && Args[1].Equals(TEXT("horizontal"), ESearchCase::IgnoreCase) ? Orient_Horizontal : Orient_Vertical;
 		int32 Count = 0;
 		for (TObjectIterator<UScrollBox> It; It; ++It)
 		{
-			if (It->GetWorld() == World && It->GetOrientation() == Orient_Vertical && !It->IsTemplate())
+			if (It->GetWorld() == World && It->GetOrientation() == Orientation && !It->IsTemplate())
 			{
 				bToEnd ? It->ScrollToEnd() : It->ScrollToStart();
 				++Count;
@@ -521,7 +523,7 @@ namespace StageWorkspaceCommands
 		FConsoleCommandWithWorldAndArgsDelegate::CreateStatic(&ScreenshotWindow));
 	FAutoConsoleCommandWithWorldAndArgs DumpWidgetCommand(TEXT("StageCraft.Workspace.DumpWidget"), TEXT("<ClassNamePart> Logs a live widget's tree (names, classes, slot types)."),
 		FConsoleCommandWithWorldAndArgsDelegate::CreateStatic(&DumpWidget));
-	FAutoConsoleCommandWithWorldAndArgs ScrollPanelsCommand(TEXT("StageCraft.Workspace.ScrollPanels"), TEXT("[end|start] Scrolls every vertical panel list to its end (default) or start, for screenshots."),
+	FAutoConsoleCommandWithWorldAndArgs ScrollPanelsCommand(TEXT("StageCraft.Workspace.ScrollPanels"), TEXT("[end|start] [horizontal] Scrolls every vertical (or horizontal) panel list to its end (default) or start, for screenshots."),
 		FConsoleCommandWithWorldAndArgsDelegate::CreateStatic(&ScrollPanels));
 	FAutoConsoleCommandWithWorldAndArgs ViewportOnlyCommand(TEXT("StageCraft.Workspace.ViewportOnly"), TEXT("Shows only the viewport, filling the main window (profiling comparison)."),
 		FConsoleCommandWithWorldAndArgsDelegate::CreateStatic(&ViewportOnly));

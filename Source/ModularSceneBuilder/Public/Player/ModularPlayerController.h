@@ -392,6 +392,14 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "StageCraft|Requests")
 	bool RequestSetBlackout(bool bOn);
 
+	/** AUDIO master 0..1 for effects that follow the music (Docs/ADR/0029 §7); judged like the other masters. */
+	UFUNCTION(BlueprintCallable, Category = "StageCraft|Requests")
+	bool RequestSetAudioMaster(float Level);
+
+	/** AUDIO KILL: every effect that follows the music runs as without music while on. */
+	UFUNCTION(BlueprintCallable, Category = "StageCraft|Requests")
+	bool RequestSetAudioKill(bool bOn);
+
 	UFUNCTION(BlueprintCallable, Category = "StageCraft|Requests")
 	bool RequestDeleteCue(float CueNumber);
 

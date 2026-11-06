@@ -424,6 +424,26 @@ bool AModularPlayerController::RequestSetBlackout(bool bOn)
 	return Show != nullptr;
 }
 
+bool AModularPlayerController::RequestSetAudioMaster(float Level)
+{
+	UShowControlSubsystem* Show = ApproveCueRequest(EStageCueRequest::Masters, 0.f);
+	if (Show)
+	{
+		Show->SetAudioMaster(Level);
+	}
+	return Show != nullptr;
+}
+
+bool AModularPlayerController::RequestSetAudioKill(bool bOn)
+{
+	UShowControlSubsystem* Show = ApproveCueRequest(EStageCueRequest::Masters, 0.f);
+	if (Show)
+	{
+		Show->SetAudioKill(bOn);
+	}
+	return Show != nullptr;
+}
+
 // --- Effects (Docs/ADR/0027-effects-engine.md §4, §5) ---
 
 UStageProgrammerSubsystem* AModularPlayerController::ApproveEffectRequest()

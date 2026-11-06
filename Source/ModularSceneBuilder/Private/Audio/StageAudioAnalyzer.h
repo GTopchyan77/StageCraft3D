@@ -49,6 +49,12 @@ public:
 	bool IsRunning() const { return Thread.IsValid(); }
 
 	/**
+	 * Game thread: a new heard delay (a latency offset changed), used from the next analysed block on. The analysis keeps running,
+	 * so the tempo is not found again. Frames already held keep the delay they were stamped with.
+	 */
+	void SetHeardDelaySeconds(double Seconds) { HeardDelaySeconds.store(Seconds, std::memory_order_relaxed); }
+
+	/**
 	 * Game thread: the newest released frame. When nothing has been released for StaleSeconds (the source went quiet or stalled),
 	 * the frame is returned without signal and with the bands at 0, so effects fall back instead of freezing on old music.
 	 */
@@ -75,6 +81,8 @@ private:
 	TSharedPtr<FStageAudioTap> Tap;
 	TUniquePtr<class FRunnableThread> Thread;
 	std::atomic<bool> bStopping{ false };
+	/** Config.HeardDelaySeconds at Start, then SetHeardDelaySeconds: written by the game thread, read by the thread per block. */
+	std::atomic<double> HeardDelaySeconds{ 0.0 };
 
 	// The thread's.
 	StageAudioAnalysis::FFeatureExtractor Extractor;
