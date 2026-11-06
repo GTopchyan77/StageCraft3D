@@ -107,10 +107,29 @@ namespace StageAIPlanTests
 		bool bFinishInside = false;
 		UStageAICommandSubsystem* Assistant = nullptr;
 		bool bAsk = false;
+		/** The player's selected fixtures, by ID. */
+		TArray<int32> Selected;
+		/** The fixtures an add places. */
+		TArray<int32> AddedIds = { 101, 102, 103, 104 };
+
+		/** The fixtures Command acts on, as the runner reports them (AffectedFixtureIds); a group's are unknown here. */
+		TArray<int32> AffectedBy(const FStageAICommand& Command) const
+		{
+			if (Command.Intent == EStageAIIntent::AddFixtures)
+			{
+				return AddedIds;
+			}
+			if (!StageAIToolCatalogue::GetTool(Command.Intent).bTargetsFixtures)
+			{
+				return {};
+			}
+			return Command.Target == EStageAITarget::Fixtures ? Command.FixtureIds : Command.Target == EStageAITarget::Selection ? Selected : TArray<int32>();
+		}
 
 		FStageAIActionHost MakeHost()
 		{
 			FStageAIActionHost Host;
+			Host.SelectedFixtures = FStageAISelectedFixtures::CreateLambda([this]() { return Selected; });
 			Host.Execute = FStageAICommandExecutor::CreateLambda([this](const FStageAICommand& Command)
 			{
 				Executed.Add(Command);
@@ -131,7 +150,9 @@ namespace StageAIPlanTests
 					}
 					return FStageAIActionOutcome::Make(EStageAIOutcome::Pending, FText::FromString(TEXT("working")));
 				}
-				return FStageAIActionOutcome::Make(EStageAIOutcome::Succeeded, FText::FromString(StageAICommandSchema::GetIntentName(Command.Intent) + TEXT(" done")));
+				FStageAIActionOutcome Outcome = FStageAIActionOutcome::Make(EStageAIOutcome::Succeeded, FText::FromString(StageAICommandSchema::GetIntentName(Command.Intent) + TEXT(" done")));
+				Outcome.AffectedFixtureIds = AffectedBy(Command);
+				return Outcome;
 			});
 			Host.BeginPlan = FStageAIPlanBegin::CreateLambda([this](const FText& Description) { return History->BeginGroup(Description); });
 			Host.EndPlan = FStageAIPlanEnd::CreateLambda([this](bool bKeep)
@@ -570,6 +591,91 @@ bool FStageAssistantOnlinePlanTest::RunTest(const FString& Parameters)
 		TEXT("{\"type\":\"tool_use\",\"id\":\"b\",\"name\":\"stage_command\",\"input\":{\"intent\":\"store_cue\"}}]}"));
 	Assistant->SubmitPrompt(TEXT("undo that and store again"), Player.MakeHost());
 	TestTrue(TEXT("Undo in a plan refused"), Assistant->GetMessages().Last().Outcome == EStageAIOutcome::Refused && Player.Executed.Num() == 3);
+	return true;
+}
+
+// Phase H4 (Docs/ADR/0030 §6, §17): several changes typed in one prompt are one card and one undo step; "them" is what the
+// conversation last changed unless the player selected others since; "again" repeats the last change, on new fixtures when named.
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FStageAssistantMemoryTest, "StageCraft.Assistant.Memory", StageAIPlanTests::Flags)
+
+bool FStageAssistantMemoryTest::RunTest(const FString& Parameters)
+{
+	using namespace StageAIPlanTests;
+	FScopedWorld Scope;
+	UStageAICommandSubsystem* Assistant = UWorld::GetSubsystem<UStageAICommandSubsystem>(Scope.World);
+	UStageEditHistorySubsystem* History = UWorld::GetSubsystem<UStageEditHistorySubsystem>(Scope.World);
+	if (!TestNotNull(TEXT("Assistant"), Assistant) || !TestNotNull(TEXT("History"), History))
+	{
+		return false;
+	}
+	FFakePlayer Player;
+	Player.History = History;
+	Player.Assistant = Assistant;
+	const auto Last = [Assistant]() { return Assistant->GetMessages().Last(); };
+	const auto Ids = [](TConstArrayView<int32> FixtureIds) { return FString::JoinBy(FixtureIds, TEXT(","), [](int32 Id) { return FString::FromInt(Id); }); };
+
+	// Nothing remembered yet: "them" is the selection.
+	Player.Selected = { 1, 2 };
+	Assistant->SubmitPrompt(TEXT("make them red"), Player.MakeHost());
+	TestTrue(TEXT("No memory: the selection"), Player.Executed.Num() == 1 && Player.Executed.Last().Target == EStageAITarget::Selection);
+	TestEqual(TEXT("... remembered"), Ids(Assistant->GetRememberedFixtureIds()), FString(TEXT("1,2")));
+
+	// Two changes typed at once: one card, then one undo step; "them" is what the step before placed.
+	const int32 Steps = History->GetUndoCount();
+	Assistant->SubmitPrompt(TEXT("add 4 pars and make them blue"), Player.MakeHost());
+	const FString Card = Last().Text.ToString();
+	TestTrue(TEXT("A card of two"), Assistant->GetOpenProposalId() != 0 && Card.Contains(TEXT("1. Add 4 pars")) && Card.Contains(TEXT("2. Set colour blue on the same fixtures")));
+	TestEqual(TEXT("... nothing ran yet"), Player.Executed.Num(), 1);
+	Assistant->SubmitPrompt(TEXT("yes"), Player.MakeHost());
+	TestEqual(TEXT("Both ran"), Player.Executed.Num(), 3);
+	TestTrue(TEXT("... the colour on the pars just added"), Player.Executed.Num() == 3 && Player.Executed[2].Target == EStageAITarget::Fixtures
+		&& Ids(Player.Executed[2].FixtureIds) == TEXT("101,102,103,104"));
+	TestEqual(TEXT("... as one undo step"), History->GetUndoCount(), Steps + 1);
+	TestEqual(TEXT("... the pars remembered"), Ids(Assistant->GetRememberedFixtureIds()), FString(TEXT("101,102,103,104")));
+
+	// The next prompt: still the pars while the player's selection has not moved.
+	Assistant->SubmitPrompt(TEXT("make them green"), Player.MakeHost());
+	TestTrue(TEXT("Them across prompts"), Player.Executed.Last().Target == EStageAITarget::Fixtures && Ids(Player.Executed.Last().FixtureIds) == TEXT("101,102,103,104"));
+
+	// The player selects others: "them" is the new selection.
+	Player.Selected = { 7, 8 };
+	Assistant->SubmitPrompt(TEXT("make them red"), Player.MakeHost());
+	TestTrue(TEXT("A new selection wins"), Player.Executed.Last().Target == EStageAITarget::Selection);
+
+	// Again, on a group: the same change.
+	Assistant->SubmitPrompt(TEXT("do it again on group 2"), Player.MakeHost());
+	const FStageAICommand Again = Player.Executed.Last();
+	TestTrue(TEXT("Again on group 2"), Player.Executed.Num() == 6 && Again.Intent == EStageAIIntent::SetFixture && Again.Target == EStageAITarget::Group
+		&& Again.Group == TEXT("2") && Again.FixtureSettings.Num() == 1 && Again.FixtureSettings[0].Name == TEXT("red"));
+	Assistant->SubmitPrompt(TEXT("again"), Player.MakeHost());
+	TestTrue(TEXT("Again as it was"), Player.Executed.Num() == 7 && Player.Executed.Last().Target == EStageAITarget::Group);
+
+	// Armenian, typed at once.
+	Assistant->SubmitPrompt(TEXT("ավելացրու 2 փար և պահիր կյու 3"), Player.MakeHost());
+	TestTrue(TEXT("HY card"), Assistant->GetOpenProposalId() != 0 && Last().Text.ToString().Contains(TEXT("Կկատարեմ այս 2")));
+	Assistant->SubmitPrompt(TEXT("ոչ"), Player.MakeHost());
+	TestTrue(TEXT("... cancelled"), Assistant->GetOpenProposalId() == 0 && Player.Executed.Num() == 7);
+
+	// A change that acts on no fixtures repeats only as it was.
+	Assistant->SubmitPrompt(TEXT("store cue 9"), Player.MakeHost());
+	TestEqual(TEXT("Store ran"), Player.Executed.Num(), 8);
+	Assistant->SubmitPrompt(TEXT("do it again on group 2"), Player.MakeHost());
+	TestTrue(TEXT("... not on a group"), Player.Executed.Num() == 8 && Last().Outcome == EStageAIOutcome::Refused);
+
+	// A plan rolled back leaves the memory as it was before it: "them" never names what the rollback removed.
+	Player.Refuse = { EStageAIIntent::StoreCue };
+	const FString Before = Ids(Assistant->GetRememberedFixtureIds());
+	Assistant->SubmitPrompt(TEXT("add 4 pars and store cue 10"), Player.MakeHost());
+	TestTrue(TEXT("Rollback plan proposed"), Assistant->ApplyProposal(Player.MakeHost()));
+	TestTrue(TEXT("... refused"), Last().Outcome == EStageAIOutcome::Refused && Last().Text.ToString().Contains(TEXT("Step 2 of 2")));
+	TestEqual(TEXT("... memory as before the plan"), Ids(Assistant->GetRememberedFixtureIds()), Before);
+	Player.Refuse.Reset();
+
+	// A new conversation forgets.
+	Assistant->ClearConversation();
+	TestTrue(TEXT("Cleared"), Assistant->GetRememberedFixtureIds().IsEmpty());
+	Assistant->SubmitPrompt(TEXT("again"), Player.MakeHost());
+	TestTrue(TEXT("Nothing to repeat"), Last().Outcome == EStageAIOutcome::Refused && Last().Text.ToString().Contains(TEXT("repeat")));
 	return true;
 }
 

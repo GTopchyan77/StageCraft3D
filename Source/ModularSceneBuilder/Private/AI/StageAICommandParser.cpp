@@ -3,9 +3,11 @@
 #include "AI/StageAICommandParser.h"
 
 #include "AI/StageAIArmenian.h"
+#include "AI/StageAIToolCatalogue.h"
 #include "Algo/AllOf.h"
 #include "Algo/AnyOf.h"
 #include "Algo/Find.h"
+#include "Show/StageEffectTypes.h"
 
 #define LOCTEXT_NAMESPACE "StageAICommandParser"
 
@@ -1096,6 +1098,10 @@ namespace StageAICommandParser
 			return true;
 		}
 
+		// Defined with the H4 rules below ParseDiagnostics.
+		bool IsRecentWord(const FString& Word);
+		bool ReadFixtureRefs(const FPrompt& Prompt, TArray<bool>& Used, FStageAICommand& Command);
+
 		TOptional<FStageAICommand> ParseSetFixture(const FPrompt& Prompt)
 		{
 			if (IsQuestionNotRequest(Prompt))
@@ -1115,6 +1121,9 @@ namespace StageAICommandParser
 			}
 			TArray<bool> Used;
 			Used.Init(false, Prompt.Words.Num());
+			// "fixture 3", "fixtures 1 to 4", "group 2": the target, read first so no control takes their numbers.
+			FStageAICommand RefTarget;
+			const bool bRefs = ReadFixtureRefs(Prompt, Used, RefTarget);
 			TArray<FStageAIFixtureSetting> Settings;
 			const auto Add = [&Settings](EStageAIFixtureControl Control, TOptional<double> Value, const FString& Name = FString())
 			{
@@ -1342,6 +1351,20 @@ namespace StageAICommandParser
 			Command.Intent = EStageAIIntent::SetFixture;
 			Command.FixtureSettings = MoveTemp(Settings);
 			ReadTarget(Prompt, Used, Command);
+			if (bRefs)
+			{
+				Command.Target = RefTarget.Target;
+				Command.Group = RefTarget.Group;
+				Command.FixtureIds = RefTarget.FixtureIds;
+				Command.ItemQuery.Reset();
+				Command.Count.Reset();
+			}
+			else if (Command.Target == EStageAITarget::Selection && Command.ItemQuery.IsEmpty() && Algo::AnyOf(Prompt.Words, [](const FString& Word) { return IsRecentWord(Word); })
+				&& !Prompt.HasAny({ TEXT("selected"), TEXT("selection"), TEXT("this"), TEXT("these"), TEXT("current") }))
+			{
+				// "Make them red": the fixtures the conversation last changed, unless the player selected others since (resolved at run time).
+				Command.Target = EStageAITarget::Recent;
+			}
 			return Command;
 		}
 
@@ -2036,6 +2059,657 @@ namespace StageAICommandParser
 			return {};
 		}
 
+		// --- Selection, palettes, groups, effects and repeats (Docs/ADR/0030 §6, Phase H4) ---
+
+		/** "Them", "those", "it": what the conversation last changed (EStageAITarget::Recent). "This", "these" stay the selection. */
+		bool IsRecentWord(const FString& Word)
+		{
+			return IsOneOf(Word, { TEXT("them"), TEXT("they"), TEXT("those"), TEXT("it") });
+		}
+
+		/** Names of pools and effects leave out these. */
+		bool IsNameFiller(const FString& Word)
+		{
+			return IsOneOf(Word, { TEXT("the"), TEXT("a"), TEXT("an"), TEXT("my"), TEXT("our"), TEXT("please"), TEXT("now"), TEXT("number"), TEXT("no"),
+				TEXT("called"), TEXT("named"), TEXT("new"), TEXT("of"), TEXT("from"), TEXT("as"), TEXT("this"), TEXT("that"), TEXT("current") });
+		}
+
+		/** A unit right after a number makes it a value, not a fixture ID ("fixture 3 to 50%"). */
+		bool HasUnitAfter(const FPrompt& Prompt, int32 Index)
+		{
+			const FString& Word = Prompt.Words[Index];
+			return (Index + 1 < Prompt.Words.Num() && IsOneOf(Prompt.Words[Index + 1], { TEXT("percent"), TEXT("pct"), TEXT("deg"), TEXT("degree"), TEXT("degrees"),
+					TEXT("hz"), TEXT("bpm"), TEXT("rpm"), TEXT("s"), TEXT("sec"), TEXT("seconds") }))
+				|| Prompt.Raw.Contains(Word + TEXT("%")) || Prompt.Raw.Contains(Word + TEXT(" %"));
+		}
+
+		/** A word as a pool name's word: a number word as digits ("two" -> "2"), anything else as it is. */
+		FString NameWord(const FString& Word)
+		{
+			const TOptional<double> Number = ParseNumber(Word);
+			return Number.IsSet() && *Number == FMath::RoundToDouble(*Number) && *Number < 1.0e6 ? FString::FromInt(int32(*Number)) : Word;
+		}
+
+		/** IDs before a fixture word ("1 to 4 fixtures", as Armenian says it): a range or one number ending at Index - 1. */
+		int32 ReadIdsBefore(const FPrompt& Prompt, const TArray<bool>& Used, int32 Index, TArray<int32>& OutIds)
+		{
+			const TArray<FString>& Words = Prompt.Words;
+			if (Index < 1 || Used[Index - 1] || !IsWholeNumberWord(Words[Index - 1]) || HasUnitAfter(Prompt, Index - 1))
+			{
+				return Index;
+			}
+			const int32 Last = FCString::Atoi(*Words[Index - 1]);
+			if (Index >= 3 && !Used[Index - 2] && !Used[Index - 3] && IsOneOf(Words[Index - 2], { TEXT("to"), TEXT("thru"), TEXT("through") })
+				&& IsWholeNumberWord(Words[Index - 3]) && FCString::Atoi(*Words[Index - 3]) < Last)
+			{
+				for (int32 Id = FCString::Atoi(*Words[Index - 3]); Id <= Last && OutIds.Num() <= MaxEditTargets; ++Id)
+				{
+					OutIds.AddUnique(Id);
+				}
+				return Index - 3;
+			}
+			OutIds.Add(Last);
+			return Index - 1;
+		}
+
+		/**
+		 * "group 2", "group front wash", "fixture 3", "fixtures 1 to 4", "lights 1, 2 and 5", "1 to 4 fixtures": the target of a fixture
+		 * tool, its words marked used. False, nothing marked, when the prompt names neither.
+		 */
+		bool ReadFixtureRefs(const FPrompt& Prompt, TArray<bool>& Used, FStageAICommand& Command)
+		{
+			const TArray<FString>& Words = Prompt.Words;
+			for (int32 Index = 0; Index < Words.Num(); ++Index)
+			{
+				if (Used[Index])
+				{
+					continue;
+				}
+				const FString One = Singular(Words[Index]);
+				if (One == TEXT("group"))
+				{
+					int32 Next = Index + 1;
+					while (Next < Words.Num() && !Used[Next] && IsOneOf(Words[Next], { TEXT("number"), TEXT("no") }))
+					{
+						++Next;
+					}
+					TArray<FString> Name;
+					for (; Next < Words.Num() && !Used[Next]; ++Next)
+					{
+						const FString& Word = Words[Next];
+						if (ParseNumber(Word).IsSet())
+						{
+							if (Name.IsEmpty())
+							{
+								Name.Add(NameWord(Word));
+								++Next;
+							}
+							break;
+						}
+						if (IsEditFiller(Word) || IsControlFiller(Word) || IsControlWord(Word) || IsSelectionWord(Word) || FindColorName(Word).IsSet())
+						{
+							break;
+						}
+						Name.Add(Word);
+					}
+					int32 First = Index;
+					if (Name.IsEmpty() && Index > 0 && !Used[Index - 1] && IsWholeNumberWord(Words[Index - 1]))
+					{
+						// "2 group": the Armenian order.
+						Name.Add(Words[Index - 1]);
+						First = Index - 1;
+					}
+					if (!Name.IsEmpty())
+					{
+						for (int32 Mark = First; Mark < Next; ++Mark)
+						{
+							Used[Mark] = true;
+						}
+						Command.Target = EStageAITarget::Group;
+						Command.Group = FString::Join(Name, TEXT(" "));
+						return true;
+					}
+					continue;
+				}
+				if (!IsOneOf(One, { TEXT("fixture"), TEXT("light"), TEXT("unit"), TEXT("lamp") }))
+				{
+					continue;
+				}
+				TArray<int32> Ids;
+				int32 Next = Index + 1;
+				while (Next < Words.Num() && !Used[Next] && IsOneOf(Words[Next], { TEXT("number"), TEXT("no"), TEXT("id"), TEXT("ids") }))
+				{
+					++Next;
+				}
+				while (Next < Words.Num() && !Used[Next] && IsWholeNumberWord(Words[Next]) && !HasUnitAfter(Prompt, Next) && Ids.Num() <= MaxEditTargets)
+				{
+					const int32 First = FCString::Atoi(*Words[Next]);
+					int32 Last = First;
+					if (Next + 2 < Words.Num() && !Used[Next + 1] && !Used[Next + 2]
+						&& IsOneOf(Words[Next + 1], { TEXT("to"), TEXT("thru"), TEXT("through"), TEXT("till"), TEXT("until") })
+						&& IsWholeNumberWord(Words[Next + 2]) && !HasUnitAfter(Prompt, Next + 2) && FCString::Atoi(*Words[Next + 2]) > First)
+					{
+						Last = FCString::Atoi(*Words[Next + 2]);
+						Next += 2;
+					}
+					// One beyond the cap at most, so validation refuses a huge range instead of this building it.
+					for (int32 Id = First; Id <= Last && Ids.Num() <= MaxEditTargets; ++Id)
+					{
+						Ids.AddUnique(Id);
+					}
+					++Next;
+					if (Next + 1 < Words.Num() && Words[Next] == TEXT("and") && IsWholeNumberWord(Words[Next + 1]))
+					{
+						++Next;
+					}
+				}
+				int32 First = Index;
+				if (Ids.IsEmpty())
+				{
+					First = ReadIdsBefore(Prompt, Used, Index, Ids);
+				}
+				if (!Ids.IsEmpty())
+				{
+					for (int32 Mark = First; Mark < FMath::Max(Next, Index + 1); ++Mark)
+					{
+						Used[Mark] = true;
+					}
+					Command.Target = EStageAITarget::Fixtures;
+					Command.FixtureIds = MoveTemp(Ids);
+					return true;
+				}
+			}
+			return false;
+		}
+
+		/**
+		 * The target of a fixture tool from the words still unused: fixture IDs or a group, else "them" (Recent), the selection, or the
+		 * placed fixtures named by the rest ("the spots").
+		 */
+		void ReadToolTarget(const FPrompt& Prompt, TArray<bool>& Used, FStageAICommand& Command)
+		{
+			if (ReadFixtureRefs(Prompt, Used, Command))
+			{
+				return;
+			}
+			bool bRecent = false;
+			bool bSelection = false;
+			TArray<FString> Query;
+			for (int32 Index = 0; Index < Prompt.Words.Num(); ++Index)
+			{
+				const FString& Word = Prompt.Words[Index];
+				if (Used[Index])
+				{
+					continue;
+				}
+				if (IsRecentWord(Word))
+				{
+					bRecent = true;
+				}
+				else if (IsSelectionWord(Word))
+				{
+					bSelection = true;
+				}
+				else if (!IsEditFiller(Word) && !IsControlFiller(Word) && !IsNameFiller(Word))
+				{
+					Query.Add(Word);
+				}
+			}
+			Command.ItemQuery = FString::Join(Query, TEXT(" "));
+			Command.Target = !Query.IsEmpty() && !bSelection ? EStageAITarget::Named
+				: bRecent && !bSelection && Query.IsEmpty() ? EStageAITarget::Recent : EStageAITarget::Selection;
+		}
+
+		/** Marks the words of Phrase (a label taken from the raw prompt) where they first appear in a row, and the "called" before them. */
+		void MarkPhrase(const FPrompt& Prompt, TArray<bool>& Used, const FString& Phrase)
+		{
+			const TArray<FString> Words = FPrompt(Phrase).Words;
+			for (int32 Start = 0; !Words.IsEmpty() && Start + Words.Num() <= Prompt.Words.Num(); ++Start)
+			{
+				bool bMatch = true;
+				for (int32 Offset = 0; Offset < Words.Num() && bMatch; ++Offset)
+				{
+					bMatch = Prompt.Words[Start + Offset] == Words[Offset];
+				}
+				if (bMatch)
+				{
+					for (int32 Offset = 0; Offset < Words.Num(); ++Offset)
+					{
+						Used[Start + Offset] = true;
+					}
+					break;
+				}
+			}
+			for (int32 Index = 0; Index < Prompt.Words.Num(); ++Index)
+			{
+				Used[Index] |= IsOneOf(Prompt.Words[Index], { TEXT("called"), TEXT("named"), TEXT("label"), TEXT("labelled"), TEXT("labeled"), TEXT("titled") });
+			}
+		}
+
+		/** Marks every word of Candidates used; true when any was there. */
+		bool MarkWords(const FPrompt& Prompt, TArray<bool>& Used, std::initializer_list<const TCHAR*> Candidates)
+		{
+			bool bAny = false;
+			for (int32 Index = 0; Index < Prompt.Words.Num(); ++Index)
+			{
+				if (IsOneOf(Prompt.Words[Index], Candidates))
+				{
+					Used[Index] = true;
+					bAny = true;
+				}
+			}
+			return bAny;
+		}
+
+		/** The first of Candidates in Prompt from From on, or INDEX_NONE. */
+		int32 FindAny(const FPrompt& Prompt, std::initializer_list<const TCHAR*> Candidates, int32 From = 0)
+		{
+			for (int32 Index = FMath::Max(From, 0); Index < Prompt.Words.Num(); ++Index)
+			{
+				if (IsOneOf(Prompt.Words[Index], Candidates))
+				{
+					return Index;
+				}
+			}
+			return INDEX_NONE;
+		}
+
+		/** Whether Word may be part of a pool or effect name: not a filler, "them" or the selection. Numbers always may ("palette one"). */
+		bool IsNamePart(const FString& Word)
+		{
+			return ParseNumber(Word).IsSet()
+				|| !(IsNameFiller(Word) || IsEditFiller(Word) || IsControlFiller(Word) || IsSelectionWord(Word) || IsRecentWord(Word));
+		}
+
+		/** A word as names are compared: singular, numbers as digits, "color" as "colour". */
+		FString VocabularyWord(const FString& Word)
+		{
+			const FString One = NameWord(Singular(Word));
+			return One == TEXT("color") ? FString(TEXT("colour")) : One;
+		}
+
+		/** Every word of the quick effects' names (StageEffectRules), as VocabularyWord: what an effect named without "effect" may say. */
+		const TArray<FString>& GetEffectVocabulary()
+		{
+			static const TArray<FString> Vocabulary = []()
+			{
+				TArray<FStageEffect> Effects = StageEffectRules::MakeQuickEffects();
+				Effects.Append(StageEffectRules::MakeAudioQuickEffects());
+				TArray<FString> Words;
+				for (const FStageEffect& Effect : Effects)
+				{
+					for (const FString& Word : FPrompt(Effect.Name.ToString()).Words)
+					{
+						Words.AddUnique(VocabularyWord(Word));
+					}
+				}
+				return Words;
+			}();
+			return Vocabulary;
+		}
+
+		/**
+		 * The name next to the word at Anchor ("the red palette", "palette 3", "group front wash"), its words marked used: the unused name
+		 * words right before it, else right after it (bAfterFirst: after, else before). With bAnchorInName the anchor is a word of the
+		 * name itself ("start a rainbow") and the name runs both ways, over Vocabulary's words only. Armenian has no "to" or "on" between
+		 * a name and its target, so the name is what stands next to its anchor.
+		 */
+		FString TakeNameAround(const FPrompt& Prompt, TArray<bool>& Used, int32 Anchor, bool bAfterFirst, bool bAnchorInName = false,
+			const TArray<FString>* Vocabulary = nullptr)
+		{
+			const auto Fits = [&Prompt, &Used, Vocabulary](int32 Index)
+			{
+				return Prompt.Words.IsValidIndex(Index) && !Used[Index] && IsNamePart(Prompt.Words[Index])
+					&& (!Vocabulary || Vocabulary->Contains(VocabularyWord(Prompt.Words[Index])));
+			};
+			const auto Run = [&Fits, Anchor](int32 Step)
+			{
+				TArray<int32> Indices;
+				for (int32 Index = Anchor + Step; Fits(Index); Index += Step)
+				{
+					Indices.Add(Index);
+				}
+				return Indices;
+			};
+			TArray<int32> Indices;
+			if (bAnchorInName)
+			{
+				Indices = Run(-1);
+				Indices.Add(Anchor);
+				Indices.Append(Run(1));
+			}
+			else
+			{
+				Indices = bAfterFirst ? Run(1) : Run(-1);
+				if (Indices.IsEmpty())
+				{
+					Indices = bAfterFirst ? Run(-1) : Run(1);
+				}
+			}
+			Indices.Sort();
+			TArray<FString> Name;
+			for (const int32 Index : Indices)
+			{
+				Used[Index] = true;
+				Name.Add(NameWord(Prompt.Words[Index]));
+			}
+			return FString::Join(Name, TEXT(" "));
+		}
+
+		/** "select the spots", "select fixtures 1 to 4", "select group 2", "select all fixtures", "select them". */
+		TOptional<FStageAICommand> ParseSelect(const FPrompt& Prompt)
+		{
+			const int32 Verb = FindAny(Prompt, { TEXT("select"), TEXT("choose") });
+			if (Verb == INDEX_NONE || IsQuestionNotRequest(Prompt) || Algo::AnyOf(Prompt.Words, [](const FString& Word) { return IsControlWord(Word) || FindColorName(Word).IsSet(); }))
+			{
+				return {};
+			}
+			TArray<bool> Used;
+			Used.Init(false, Prompt.Words.Num());
+			Used[Verb] = true;
+			FStageAICommand Command;
+			Command.Intent = EStageAIIntent::SelectFixtures;
+			ReadToolTarget(Prompt, Used, Command);
+			if (Command.Target == EStageAITarget::Selection && Command.ItemQuery.IsEmpty() && Prompt.HasAny({ TEXT("all"), TEXT("every"), TEXT("everything") }))
+			{
+				// "Select all": every fixture (the generic word matches any fixture, MatchesItemName).
+				Command.Target = EStageAITarget::Named;
+				Command.ItemQuery = TEXT("fixtures");
+			}
+			return Command;
+		}
+
+		/** A palette kind word ("colour palette"), marked used. */
+		TOptional<EStagePaletteKind> ReadPaletteKind(const FPrompt& Prompt, TArray<bool>& Used)
+		{
+			struct FKindWord { const TCHAR* Word; EStagePaletteKind Kind; };
+			static const FKindWord KindWords[] = {
+				{ TEXT("color"), EStagePaletteKind::Color }, { TEXT("colour"), EStagePaletteKind::Color }, { TEXT("position"), EStagePaletteKind::Position },
+				{ TEXT("positions"), EStagePaletteKind::Position }, { TEXT("beam"), EStagePaletteKind::Beam }, { TEXT("focus"), EStagePaletteKind::Focus },
+				{ TEXT("intensity"), EStagePaletteKind::Intensity }, { TEXT("dimmer"), EStagePaletteKind::Intensity } };
+			for (int32 Index = 0; Index < Prompt.Words.Num(); ++Index)
+			{
+				for (const FKindWord& Entry : KindWords)
+				{
+					if (!Used[Index] && Prompt.Words[Index] == Entry.Word)
+					{
+						Used[Index] = true;
+						return Entry.Kind;
+					}
+				}
+			}
+			return {};
+		}
+
+		/**
+		 * "apply palette 3", "apply the warm palette to group 2", "use palette red on them", "record a colour palette called sunset",
+		 * "store a position palette from fixtures 1 to 4", "delete palette 2".
+		 */
+		TOptional<FStageAICommand> ParsePalette(const FPrompt& Prompt)
+		{
+			const int32 PaletteWord = FindAny(Prompt, { TEXT("palette"), TEXT("palettes"), TEXT("preset"), TEXT("presets") });
+			if (PaletteWord == INDEX_NONE || IsQuestionNotRequest(Prompt))
+			{
+				return {};
+			}
+			TArray<bool> Used;
+			Used.Init(false, Prompt.Words.Num());
+			Used[PaletteWord] = true;
+			FStageAICommand Command;
+			if (MarkWords(Prompt, Used, { TEXT("delete"), TEXT("remove"), TEXT("erase") }))
+			{
+				Command.Intent = EStageAIIntent::DeletePalette;
+				Command.Palette = TakeNameAround(Prompt, Used, PaletteWord, /*bAfterFirst*/ false);
+				return Command;
+			}
+			if (MarkWords(Prompt, Used, { TEXT("record"), TEXT("store"), TEXT("save"), TEXT("create"), TEXT("make") }))
+			{
+				Command.Intent = EStageAIIntent::RecordPalette;
+				Command.PaletteKind = ReadPaletteKind(Prompt, Used).Get(EStagePaletteKind::All);
+				Command.Label = FindLabel(Prompt);
+				MarkPhrase(Prompt, Used, Command.Label);
+				ReadToolTarget(Prompt, Used, Command);
+				return Command;
+			}
+			MarkWords(Prompt, Used, { TEXT("apply"), TEXT("use"), TEXT("put"), TEXT("recall"), TEXT("load"), TEXT("give"), TEXT("set") });
+			Command.Intent = EStageAIIntent::ApplyPalette;
+			// The palette's name stands next to "palette" ("the red palette", "palette 3"); the other words are its target.
+			Command.Palette = TakeNameAround(Prompt, Used, PaletteWord, /*bAfterFirst*/ false);
+			ReadToolTarget(Prompt, Used, Command);
+			return Command;
+		}
+
+		/**
+		 * "record a group called front", "store the selection as group 5", "make a group of fixtures 1 to 4", "delete group 2",
+		 * "remove the front group". Selecting a group is ParseSelect's; "make group 2 red" is a fixture control.
+		 */
+		TOptional<FStageAICommand> ParseGroup(const FPrompt& Prompt)
+		{
+			const int32 GroupWord = FindAny(Prompt, { TEXT("group"), TEXT("groups") });
+			if (GroupWord == INDEX_NONE || IsQuestionNotRequest(Prompt))
+			{
+				return {};
+			}
+			TArray<bool> Used;
+			Used.Init(false, Prompt.Words.Num());
+			Used[GroupWord] = true;
+			FStageAICommand Command;
+			if (MarkWords(Prompt, Used, { TEXT("delete"), TEXT("remove"), TEXT("erase") }))
+			{
+				// The group's name follows "group" or comes before it; any other word means this is not about deleting a group.
+				Command.Intent = EStageAIIntent::DeleteGroup;
+				Command.Group = TakeNameAround(Prompt, Used, GroupWord, /*bAfterFirst*/ true);
+				// "remove the spots from group 2" takes fixtures out of a group (not offered); it does not delete the group.
+				bool bOtherWords = false;
+				for (int32 Index = 0; Index < Prompt.Words.Num(); ++Index)
+				{
+					bOtherWords |= !Used[Index] && !IsNameFiller(Prompt.Words[Index]) && !IsEditFiller(Prompt.Words[Index]);
+				}
+				if (Command.Group.IsEmpty() || bOtherWords || FPrompt(Command.Group).Words.Num() > 3)
+				{
+					return {};
+				}
+				return Command;
+			}
+			const bool bMakeA = Prompt.HasPhrase({ TEXT("make"), TEXT("a"), TEXT("group") }) || Prompt.HasPhrase({ TEXT("make"), TEXT("a"), TEXT("new"), TEXT("group") });
+			if (!bMakeA && !MarkWords(Prompt, Used, { TEXT("record"), TEXT("store"), TEXT("save"), TEXT("create") }))
+			{
+				return {};
+			}
+			MarkWords(Prompt, Used, { TEXT("make"), TEXT("new"), TEXT("as"), TEXT("into") });
+			Command.Intent = EStageAIIntent::RecordGroup;
+			Command.Label = FindLabel(Prompt);
+			MarkPhrase(Prompt, Used, Command.Label);
+			if (Command.Label.IsEmpty() && GroupWord + 1 < Prompt.Words.Num() && IsWholeNumberWord(Prompt.Words[GroupWord + 1]))
+			{
+				// "record group 5": its name, as the pool names its groups.
+				Command.Label = FString::Printf(TEXT("Group %s"), *Prompt.Words[GroupWord + 1]);
+				Used[GroupWord + 1] = true;
+			}
+			ReadToolTarget(Prompt, Used, Command);
+			return Command;
+		}
+
+		/** Words that name a quick effect without the word "effect" ("start a rainbow"); never a fixture control's own word. */
+		bool IsEffectNameWord(const FString& Word)
+		{
+			return IsOneOf(Singular(Word), { TEXT("circle"), TEXT("figure"), TEXT("sweep"), TEXT("wave"), TEXT("chase"), TEXT("sparkle"), TEXT("rainbow"),
+				TEXT("breathe"), TEXT("swing"), TEXT("pulse") });
+		}
+
+		/** "2 hz", "120 bpm", "speed 2", "rate 0.5": cycles per second, its words marked used. */
+		TOptional<float> ReadEffectRate(const FPrompt& Prompt, TArray<bool>& Used)
+		{
+			MarkWords(Prompt, Used, { TEXT("speed"), TEXT("rate"), TEXT("tempo") });
+			for (int32 Index = 0; Index + 1 < Prompt.Words.Num(); ++Index)
+			{
+				const TOptional<double> Number = ParseNumber(Prompt.Words[Index]);
+				if (Number.IsSet() && IsOneOf(Prompt.Words[Index + 1], { TEXT("hz"), TEXT("bpm") }))
+				{
+					Used[Index] = Used[Index + 1] = true;
+					return float(Prompt.Words[Index + 1] == TEXT("bpm") ? *Number / 60.0 : *Number);
+				}
+			}
+			for (int32 Index = 0; Index < Prompt.Words.Num(); ++Index)
+			{
+				if (!IsOneOf(Prompt.Words[Index], { TEXT("speed"), TEXT("rate"), TEXT("tempo") }))
+				{
+					continue;
+				}
+				Used[Index] = true;
+				for (int32 Next = Index + 1; Next < Prompt.Words.Num() && Next <= Index + 3; ++Next)
+				{
+					if (const TOptional<double> Number = ParseNumber(Prompt.Words[Next]))
+					{
+						Used[Next] = true;
+						return float(*Number);
+					}
+					if (!IsOneOf(Prompt.Words[Next], { TEXT("to"), TEXT("at"), TEXT("of"), TEXT("is") }))
+					{
+						break;
+					}
+				}
+			}
+			return {};
+		}
+
+		/** "size 40", "size to 0.5": the effect size, its words marked used. */
+		TOptional<float> ReadEffectSize(const FPrompt& Prompt, TArray<bool>& Used)
+		{
+			for (int32 Index = 0; Index < Prompt.Words.Num(); ++Index)
+			{
+				if (!IsOneOf(Prompt.Words[Index], { TEXT("size"), TEXT("amplitude"), TEXT("width") }))
+				{
+					continue;
+				}
+				Used[Index] = true;
+				for (int32 Next = Index + 1; Next < Prompt.Words.Num() && Next <= Index + 3; ++Next)
+				{
+					if (const TOptional<double> Number = ParseNumber(Prompt.Words[Next]))
+					{
+						Used[Next] = true;
+						if (Next + 1 < Prompt.Words.Num() && IsOneOf(Prompt.Words[Next + 1], { TEXT("deg"), TEXT("degree"), TEXT("degrees") }))
+						{
+							Used[Next + 1] = true;
+						}
+						return float(*Number);
+					}
+					if (!IsOneOf(Prompt.Words[Next], { TEXT("to"), TEXT("at"), TEXT("of"), TEXT("is") }))
+					{
+						break;
+					}
+				}
+			}
+			return {};
+		}
+
+		/**
+		 * "start a circle effect on the movers", "run a rainbow on group 2 at 0.5 hz", "add a dimmer chase effect to them", "stop all
+		 * effects", "stop the circle", "set the effect speed to 2 hz", "effect size 40".
+		 */
+		TOptional<FStageAICommand> ParseEffect(const FPrompt& Prompt)
+		{
+			const bool bEffectWord = Prompt.HasAny({ TEXT("effect"), TEXT("effects"), TEXT("fx") });
+			const bool bStartVerb = Prompt.HasAny({ TEXT("start"), TEXT("run"), TEXT("launch"), TEXT("begin") });
+			const bool bStopVerb = Prompt.HasAny({ TEXT("stop"), TEXT("kill"), TEXT("end"), TEXT("halt") });
+			const bool bNamed = Algo::AnyOf(Prompt.Words, [](const FString& Word) { return IsEffectNameWord(Word); });
+			if (IsQuestionNotRequest(Prompt) || (!bEffectWord && !((bStartVerb || bStopVerb) && bNamed))
+				|| Prompt.HasAny({ TEXT("cue"), TEXT("cues"), TEXT("truss"), TEXT("riser"), TEXT("deck"), TEXT("stairs") }))
+			{
+				return {};
+			}
+			TArray<bool> Used;
+			Used.Init(false, Prompt.Words.Num());
+			const int32 EffectWord = FindAny(Prompt, { TEXT("effect"), TEXT("effects"), TEXT("fx") });
+			if (EffectWord != INDEX_NONE)
+			{
+				Used[EffectWord] = true;
+			}
+			// The effect's name stands next to "effect", or is made of the quick effects' own words ("start a rainbow").
+			const auto TakeEffectName = [&Prompt, &Used, EffectWord]()
+			{
+				if (EffectWord != INDEX_NONE)
+				{
+					return TakeNameAround(Prompt, Used, EffectWord, /*bAfterFirst*/ false);
+				}
+				for (int32 Index = 0; Index < Prompt.Words.Num(); ++Index)
+				{
+					if (!Used[Index] && IsEffectNameWord(Prompt.Words[Index]))
+					{
+						return TakeNameAround(Prompt, Used, Index, /*bAfterFirst*/ false, /*bAnchorInName*/ true, &GetEffectVocabulary());
+					}
+				}
+				return FString();
+			};
+			FStageAICommand Command;
+			if (MarkWords(Prompt, Used, { TEXT("stop"), TEXT("kill"), TEXT("end"), TEXT("halt"), TEXT("clear"), TEXT("remove") }))
+			{
+				// Effects stop as a whole, wherever they run.
+				Command.Intent = EStageAIIntent::StopEffect;
+				MarkWords(Prompt, Used, { TEXT("all"), TEXT("every"), TEXT("running"), TEXT("off") });
+				Command.Effect = TakeEffectName();
+				return Command;
+			}
+			const TOptional<float> Rate = ReadEffectRate(Prompt, Used);
+			const TOptional<float> Size = ReadEffectSize(Prompt, Used);
+			const bool bStart = MarkWords(Prompt, Used, { TEXT("start"), TEXT("run"), TEXT("launch"), TEXT("begin"), TEXT("add"), TEXT("give"), TEXT("put"), TEXT("apply") });
+			if (!bStart)
+			{
+				// No start: a change of what runs ("set the effect speed to 2 hz").
+				if (!Rate.IsSet() && !Size.IsSet())
+				{
+					return {};
+				}
+				MarkWords(Prompt, Used, { TEXT("set"), TEXT("change"), TEXT("make"), TEXT("all"), TEXT("every"), TEXT("running") });
+				Command.Intent = EStageAIIntent::UpdateEffect;
+				Command.RateHz = Rate;
+				Command.EffectSize = Size;
+				Command.Effect = TakeEffectName();
+				return Command;
+			}
+			Command.Intent = EStageAIIntent::StartEffect;
+			Command.RateHz = Rate;
+			Command.EffectSize = Size;
+			Command.Effect = TakeEffectName();
+			ReadToolTarget(Prompt, Used, Command);
+			return Command;
+		}
+
+		/** "again", "do it again", "repeat that on group 2", "same for the spots", "do the same to fixtures 5 to 8". */
+		TOptional<FStageAICommand> ParseRepeat(const FPrompt& Prompt)
+		{
+			// "Same" in any place: Armenian says «նույնը արա» (the same do); words beyond a repeat's own are checked below.
+			const bool bAgain = Prompt.HasAny({ TEXT("again"), TEXT("repeat"), TEXT("same") });
+			// "Do it again" starts like a question ("do you ...") but is not one; only a question mark makes it one.
+			if (!bAgain || Prompt.Raw.Contains(TEXT("?")))
+			{
+				return {};
+			}
+			TArray<bool> Used;
+			Used.Init(false, Prompt.Words.Num());
+			MarkWords(Prompt, Used, { TEXT("do"), TEXT("again"), TEXT("repeat"), TEXT("same"), TEXT("thing"), TEXT("last"), TEXT("step"), TEXT("change"), TEXT("but"),
+				TEXT("just"), TEXT("also"), TEXT("on"), TEXT("for"), TEXT("to"), TEXT("with"), TEXT("onto"), TEXT("that"), TEXT("this"), TEXT("one") });
+			// Any other request word means it is not a bare repeat ("make it red again").
+			for (int32 Index = 0; Index < Prompt.Words.Num(); ++Index)
+			{
+				const FString& Word = Prompt.Words[Index];
+				if (!Used[Index] && (IsControlWord(Word) || FindColorName(Word).IsSet() || IsOneOf(Word, { TEXT("make"), TEXT("set"), TEXT("add"), TEXT("store"),
+					TEXT("delete"), TEXT("move"), TEXT("go"), TEXT("patch"), TEXT("select"), TEXT("apply"), TEXT("record"), TEXT("start"), TEXT("stop"), TEXT("cue") })))
+				{
+					return {};
+				}
+			}
+			FStageAICommand Command;
+			Command.Intent = EStageAIIntent::Repeat;
+			ReadToolTarget(Prompt, Used, Command);
+			if (Command.Target == EStageAITarget::Selection && Command.ItemQuery.IsEmpty() && !Prompt.HasAny({ TEXT("selected"), TEXT("selection"), TEXT("these") }))
+			{
+				// No target: the same one as before.
+				Command.Target = EStageAITarget::Recent;
+			}
+			return Command;
+		}
+
 		TOptional<FStageAICommand> ParseGrammar(const FString& Text)
 		{
 			const FPrompt Prompt(Text);
@@ -2072,6 +2746,28 @@ namespace StageAICommandParser
 			if (TOptional<FStageAICommand> Patch = ParsePatch(Prompt))
 			{
 				return Patch;
+			}
+			// Their own words ("again", "palette", "group" with a record or delete, "effect", "select") before cues and fixture controls:
+			// "make a group of the red pars" records a group, "stop the circle" stops an effect.
+			if (TOptional<FStageAICommand> Repeat = ParseRepeat(Prompt))
+			{
+				return Repeat;
+			}
+			if (TOptional<FStageAICommand> Palette = ParsePalette(Prompt))
+			{
+				return Palette;
+			}
+			if (TOptional<FStageAICommand> Group = ParseGroup(Prompt))
+			{
+				return Group;
+			}
+			if (TOptional<FStageAICommand> Effect = ParseEffect(Prompt))
+			{
+				return Effect;
+			}
+			if (TOptional<FStageAICommand> Select = ParseSelect(Prompt))
+			{
+				return Select;
 			}
 			// Before storing: "make cue 4 fade 3 seconds" changes cue 4, it does not record it again.
 			if (TOptional<FStageAICommand> CueEdit = ParseCueEdit(Prompt))
@@ -2177,6 +2873,227 @@ namespace StageAICommandParser
 			Command->Language = Language;
 		}
 		return Command;
+	}
+
+	namespace
+	{
+		/** One part of a prompt between separators: [Begin, End) of the prompt text. */
+		struct FClause
+		{
+			int32 Begin = 0;
+			int32 End = 0;
+		};
+
+		/** , ; . ! and the Armenian full stop ։ after a word end a clause. */
+		bool IsClauseEnd(TCHAR Char)
+		{
+			return Char == TEXT(',') || Char == TEXT(';') || Char == TEXT('.') || Char == TEXT('!') || Char == TCHAR(0x0589);
+		}
+
+		/**
+		 * Text split where one request may end and the next begin: at the words "and", "then" (Armenian և, ու, հետո, ապա, իսկ) and after
+		 * a word ending in , ; . ։ or !, or at a line break; never inside quotes ("" “” «»). Separators belong to no clause.
+		 */
+		TArray<FClause> SplitClauses(const FString& Text)
+		{
+			TArray<FClause> Clauses;
+			int32 ClauseBegin = INDEX_NONE;
+			int32 ClauseEnd = INDEX_NONE;
+			const auto Close = [&Clauses, &ClauseBegin, &ClauseEnd]()
+			{
+				if (ClauseBegin != INDEX_NONE)
+				{
+					Clauses.Add({ ClauseBegin, ClauseEnd });
+					ClauseBegin = INDEX_NONE;
+				}
+			};
+			bool bQuoted = false;
+			int32 Index = 0;
+			while (Index < Text.Len())
+			{
+				if (FChar::IsWhitespace(Text[Index]))
+				{
+					if (Text[Index] == TEXT('\n') && !bQuoted)
+					{
+						Close();
+					}
+					++Index;
+					continue;
+				}
+				int32 WordEnd = Index;
+				while (WordEnd < Text.Len() && !FChar::IsWhitespace(Text[WordEnd]))
+				{
+					++WordEnd;
+				}
+				const bool bQuotedBefore = bQuoted;
+				for (int32 Char = Index; Char < WordEnd; ++Char)
+				{
+					const TCHAR C = Text[Char];
+					bQuoted = C == TEXT('"') ? !bQuoted : (C == TEXT('«') || C == TEXT('“')) ? true : (C == TEXT('»') || C == TEXT('”')) ? false : bQuoted;
+				}
+				int32 BareEnd = WordEnd;
+				while (BareEnd > Index && IsClauseEnd(Text[BareEnd - 1]))
+				{
+					--BareEnd;
+				}
+				const FString Bare = Text.Mid(Index, BareEnd - Index).ToLower();
+				const bool bSeparator = !bQuotedBefore && !bQuoted && IsOneOf(Bare, { TEXT("and"), TEXT("then"), TEXT("և"), TEXT("ու"), TEXT("հետո"), TEXT("ապա"), TEXT("իսկ") });
+				if (bSeparator)
+				{
+					Close();
+				}
+				else if (BareEnd > Index)
+				{
+					if (ClauseBegin == INDEX_NONE)
+					{
+						ClauseBegin = Index;
+					}
+					ClauseEnd = BareEnd;
+				}
+				if (BareEnd < WordEnd && !bQuoted)
+				{
+					Close();
+				}
+				Index = WordEnd;
+			}
+			Close();
+			return Clauses;
+		}
+
+		/** The clause names its fixtures itself ("them", "the selected", a name, IDs or a group): it does not continue another's. */
+		bool NamesOwnTarget(const FStageAICommand& Command, const FString& ClauseText)
+		{
+			if (Command.Target != EStageAITarget::Selection || !Command.ItemQuery.IsEmpty())
+			{
+				return true;
+			}
+			const FPrompt Prompt(StageAIArmenian::TranslateToGrammar(ClauseText));
+			return Algo::AnyOf(Prompt.Words, [](const FString& Word) { return IsSelectionWord(Word) || IsRecentWord(Word); });
+		}
+	}
+
+	TArray<FStageAICommand> ParsePlan(const FString& Text)
+	{
+		const FString Capped = Text.Left(MaxPromptLength);
+		const TArray<FClause> Clauses = SplitClauses(Capped);
+		if (Clauses.Num() < 2 || Clauses.Num() > MaxPlanClauses)
+		{
+			return {};
+		}
+		// Every step answers in the prompt's language, also a clause of English words in an Armenian prompt.
+		const EStageAILanguage Language = StageAILanguage::Detect(Capped);
+		const auto ParseSpan = [&Capped, Language](int32 Begin, int32 End)
+		{
+			TOptional<FStageAICommand> Command = Parse(Capped.Mid(Begin, End - Begin));
+			if (Command.IsSet())
+			{
+				Command->Language = Language;
+			}
+			return Command;
+		};
+		const auto IsStep = [](const TOptional<FStageAICommand>& Command)
+		{
+			if (!Command.IsSet() || uint8(Command->Intent) >= uint8(EStageAIIntent::Count))
+			{
+				return false;
+			}
+			const FStageAITool& Tool = StageAIToolCatalogue::GetTool(Command->Intent);
+			return Tool.IsChange() && Tool.bPlannable;
+		};
+
+		TArray<FStageAICommand> Steps;
+		TArray<FClause> Spans;
+		FClause Span = Clauses[0];
+		TOptional<FStageAICommand> Current = ParseSpan(Span.Begin, Span.End);
+		for (int32 Index = 1; Index < Clauses.Num(); ++Index)
+		{
+			const FClause& Next = Clauses[Index];
+			TOptional<FStageAICommand> NextCommand = ParseSpan(Next.Begin, Next.End);
+			const bool bMoreControls = IsStep(Current) && IsStep(NextCommand) && Current->Intent == EStageAIIntent::SetFixture
+				&& NextCommand->Intent == EStageAIIntent::SetFixture && !NamesOwnTarget(*NextCommand, Capped.Mid(Next.Begin, Next.End - Next.Begin));
+			if (IsStep(Current) && IsStep(NextCommand) && !bMoreControls)
+			{
+				Steps.Add(MoveTemp(*Current));
+				Spans.Add(Span);
+				Span = Next;
+				Current = MoveTemp(NextCommand);
+				continue;
+			}
+			// One request across the separator ("delete the spots and the washes", "dimmer 50 and zoom wide").
+			Span.End = Next.End;
+			Current = ParseSpan(Span.Begin, Span.End);
+		}
+		if (!IsStep(Current))
+		{
+			return {};
+		}
+		Steps.Add(MoveTemp(*Current));
+		Spans.Add(Span);
+		if (Steps.Num() < 2)
+		{
+			return {};
+		}
+		for (int32 Index = 1; Index < Steps.Num(); ++Index)
+		{
+			// "Add 4 pars and set dimmer 50": the step goes on with the fixtures the one before it acted on.
+			const FStageAITool& Previous = StageAIToolCatalogue::GetTool(Steps[Index - 1].Intent);
+			const bool bPreviousFixtures = Previous.bTargetsFixtures || Steps[Index - 1].Intent == EStageAIIntent::AddFixtures;
+			if (bPreviousFixtures && StageAIToolCatalogue::GetTool(Steps[Index].Intent).bTargetsFixtures
+				&& !NamesOwnTarget(Steps[Index], Capped.Mid(Spans[Index].Begin, Spans[Index].End - Spans[Index].Begin)))
+			{
+				Steps[Index].Target = EStageAITarget::Recent;
+			}
+		}
+		return Steps;
+	}
+
+	FStageAINameMatch ResolveName(TConstArrayView<FString> Names, const FString& Query, bool bFirstOfSeveral)
+	{
+		FStageAINameMatch Match;
+		const FString Trimmed = Query.TrimStartAndEnd();
+		if (Trimmed.IsEmpty())
+		{
+			return Match;
+		}
+		for (int32 Index = 0; Index < Names.Num(); ++Index)
+		{
+			if (Names[Index].TrimStartAndEnd().Equals(Trimmed, ESearchCase::IgnoreCase))
+			{
+				Match.Index = Index;
+				return Match;
+			}
+		}
+		const auto WordsOf = [](const FString& Text)
+		{
+			TArray<FString> Words;
+			for (const FString& Word : FPrompt(Text).Words)
+			{
+				const FString One = NameWord(Singular(Word));
+				Words.Add(One == TEXT("color") ? FString(TEXT("colour")) : One);
+			}
+			return Words;
+		};
+		const TArray<FString> QueryWords = WordsOf(Trimmed);
+		for (int32 Index = 0; Index < Names.Num() && !QueryWords.IsEmpty(); ++Index)
+		{
+			const TArray<FString> NameWords = WordsOf(Names[Index]);
+			if (Algo::AllOf(QueryWords, [&NameWords](const FString& Word) { return NameWords.Contains(Word); }))
+			{
+				Match.Ambiguous.Add(Index);
+			}
+		}
+		if (Match.Ambiguous.Num() == 1 || (bFirstOfSeveral && !Match.Ambiguous.IsEmpty()))
+		{
+			Match.Index = Match.Ambiguous[0];
+			Match.Ambiguous.Reset();
+			return Match;
+		}
+		if (Match.Ambiguous.IsEmpty() && QueryWords.Num() == 1 && IsWholeNumberWord(QueryWords[0]))
+		{
+			const int32 Number = FCString::Atoi(*QueryWords[0]);
+			Match.Index = Number >= 1 && Number <= Names.Num() ? Number - 1 : INDEX_NONE;
+		}
+		return Match;
 	}
 
 	int32 MatchFixture(TConstArrayView<FStageAIFixtureCandidate> Candidates, const FString& Query)
@@ -2479,6 +3396,9 @@ namespace StageAIAnswers
 			"• \"delete the selected\", \"remove the spots\", \"move the selected 2 m left\", \"raise the truss 50 cm\", \"replace the pars with washes\"\n"
 			"• \"build a 4 m round riser 60 cm high\", \"add stairs 80 cm high\", \"add a 6 m circle truss at 7 m\", \"make a 180° arc truss radius 5 m\"\n"
 			"• \"make the washes red\", \"dimmer 50%\", \"lee 106 gel on the selected\", \"zoom 20 degrees\", \"frost on\", \"prism in\", \"gobo star\", \"half cto\", \"strobe the blinders\"\n"
+			"• \"select group 2\", \"set fixtures 1 to 4 to 50%\", \"apply palette warm to the spots\", \"record a colour palette called Sunset\", \"record a group called Front\"\n"
+			"• \"start a circle effect on the movers\", \"effect speed 2 Hz\", \"stop all effects\"\n"
+			"• several at once: \"add 4 pars and store cue 1\"; then \"make them blue\", \"do it again on group 2\"\n"
 			"• \"store cue 5 called Intro fade 3\", \"go\", \"back\", \"go to cue 2\"\n"
 			"• \"make it rain\", \"fog\", \"set time to 18:30\", \"sunset\", \"go outdoors\"\n"
 			"• \"export bill of materials\", \"export patch sheet\", \"export cable schedule\", \"export all reports\"\n"
@@ -2491,6 +3411,9 @@ namespace StageAIAnswers
 			"• ավելացրու 6 շարժական գլուխ · տեղադրիր մեկ LED փար\n"
 			"• ջնջիր ընտրվածը · հեռացրու սփոթերը · տեղափոխիր ընտրվածը 2 մ ձախ · բարձրացրու ֆերման 50 սմ · փոխարինիր փարերը վոշերով\n"
 			"• վոշերը դարձրու կարմիր · դիմեր 50 տոկոս · լի 106 ժել ընտրվածին · զում 20 աստիճան · միացրու ֆրոստը · պրիզմա · գոբո աստղ · ստրոբ\n"
+			"• ընտրիր 2 խումբը · ընտրիր 1-4 սարքերը · կիրառիր տաք պալիտրան · գրանցիր գույնի պալիտրա «Մայրամուտ» · գրանցիր խումբ «Առջև»\n"
+			"• սկսիր շրջան էֆեկտը · կանգնեցրու բոլոր էֆեկտները\n"
+			"• միանգամից մի քանիսը՝ ավելացրու 4 փար և պահիր կյու 1 · հետո՝ դրանք դարձրու կապույտ · նորից արա 2 խմբի համար\n"
 			"• կառուցիր 4 մ կլոր հարթակ 60 սմ բարձրությամբ · ավելացրու աստիճաններ 80 սմ բարձրությամբ · ավելացրու 6 մ շրջանաձև ֆերմա · ավելացրու 180 աստիճան աղեղաձև ֆերմա 5 մ շառավղով\n"
 			"• պահիր կյու 5 «Ներածություն» 3 վայրկյան · գնա · հետ · գնա կյու 2\n"
 			"• թող անձրև գա · մառախուղ · ժամը 18:30 · մայրամուտ · բացօթյա\n"

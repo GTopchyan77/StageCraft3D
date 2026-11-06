@@ -27,16 +27,21 @@ DECLARE_DELEGATE_RetVal_OneParam(bool, FStageAIPlanBegin, const FText& /*Descrip
  */
 DECLARE_DELEGATE_RetVal_OneParam(EStageCommandResult, FStageAIPlanEnd, bool /*bKeep*/);
 
+/** The asking player's selected fixtures, by ID (what "them" means once the player selected something new; Docs/ADR/0030 §6). */
+DECLARE_DELEGATE_RetVal(TArray<int32>, FStageAISelectedFixtures);
+
 /**
  * The asking player's side of an assistant prompt (Docs/ADR/0030 §6), supplied by AModularPlayerController: how a validated
- * command runs, how a plan becomes one undo step, and whether that player wants every change proposed first. Without
- * BeginPlan / EndPlan (tests, tools) a plan's steps still run in order, but are neither grouped nor rolled back.
+ * command runs, how a plan becomes one undo step, which fixtures the player has selected, and whether that player wants every
+ * change proposed first. Without BeginPlan / EndPlan (tests, tools) a plan's steps still run in order, but are neither grouped nor
+ * rolled back; without SelectedFixtures the player counts as having nothing selected.
  */
 struct FStageAIActionHost
 {
 	FStageAICommandExecutor Execute;
 	FStageAIPlanBegin BeginPlan;
 	FStageAIPlanEnd EndPlan;
+	FStageAISelectedFixtures SelectedFixtures;
 	/** The player's "ask before every change" preference: then even a local one-step plan waits for APPLY. */
 	bool bAskBeforeChanges = false;
 };
@@ -86,6 +91,9 @@ enum class EStageAIAssistantState : uint8
  *    cancelled in Deinitialize.
  *  - Marketplace (Docs/ADR/0021 §13): listing references are resolved here, against the marketplace's current results. A paid
  *    listing is bought only after the next prompt says yes, read locally (ParseConfirmation), never by the online model.
+ *  - Memory (Docs/ADR/0030 §6): each change that succeeds is remembered with the fixtures it acted on, so "them" in a later step or
+ *    prompt means those (unless the player has selected others since) and "do it again (on group 2)" repeats it. Several changes
+ *    typed in one prompt become one plan (StageAICommandParser::ParsePlan).
  *
  * Game and PIE worlds only. Never ticks and never iterates the world.
  */
@@ -139,6 +147,9 @@ public:
 
 	/** The open proposal's plan, or null. */
 	const FStageAIPlan* GetOpenProposal() const { return Proposal.IsSet() ? &Proposal->Plan : nullptr; }
+
+	/** The fixtures the conversation last changed, by ID: what "them" means (Docs/ADR/0030 §6). Empty before any such change. */
+	const TArray<int32>& GetRememberedFixtureIds() const { return Memory.FixtureIds; }
 
 #if !UE_BUILD_SHIPPING
 	/**
@@ -218,6 +229,21 @@ private:
 	bool AnswerProposal(const FString& Prompt, FStageAIActionHost& Host, TArray<FString>& SelectedItemNames);
 
 	/**
+	 * "Them" (EStageAITarget::Recent) for the step about to run: the fixtures the conversation last changed, unless there are none or
+	 * the player has selected other fixtures since; then the selection.
+	 */
+	void ResolveRecent(FStageAICommand& Step) const;
+
+	/** "Again" (EStageAIIntent::Repeat) as the last change, on Command's target when it names one. False, with the reason, when it cannot. */
+	bool ResolveRepeat(FStageAICommand& Command, FText& OutError) const;
+
+	/** Remembers a step that succeeded: the fixtures it acted on, the selection after it, and the step for "again". */
+	void RememberStep(const FStageAICommand& Step, const FStageAIActionOutcome& Outcome);
+
+	/** The asking player's selected fixtures (PendingHost), empty without a host. */
+	TArray<int32> GetSelectedFixtureIds() const;
+
+	/**
 	 * The reply to Prompt from the offline knowledge (UStageKnowledgeSubsystem, Docs/ADR/0030 §3), with what it points at; false
 	 * when the knowledge has no confident answer. Commands are described with the asking player's current key bindings.
 	 */
@@ -276,6 +302,21 @@ private:
 	TOptional<FProposal> Proposal;
 	int32 LastProposalId = 0;
 
+	/**
+	 * What the conversation remembers between prompts (Docs/ADR/0030 §6): what "them" and "again" mean. Tool state like the
+	 * conversation: never saved, emptied with it and with the world.
+	 */
+	struct FConversationMemory
+	{
+		/** The fixtures the last change acted on, by ID. */
+		TArray<int32> FixtureIds;
+		/** The asking player's selected fixtures right after it: a different selection since means "them" is the new selection. */
+		TArray<int32> SelectionAfter;
+		/** The last change made, as it ran: "do it again". */
+		TOptional<FStageAICommand> LastChange;
+	};
+	FConversationMemory Memory;
+
 	/** The plan being applied: its steps, the next one, each finished step's line, and whether it owns a history group. */
 	struct FRunningPlan
 	{
@@ -287,6 +328,10 @@ private:
 		/** A step answered Pending inside its own Execute call (FinishPendingAction re-entered): its outcome, read after Execute returns. */
 		TOptional<FStageAIActionOutcome> EarlyOutcome;
 		bool bExecuting = false;
+		/** The step running now, as it runs ("them" resolved): what the conversation remembers when it succeeds. */
+		FStageAICommand CurrentStep;
+		/** The memory before the plan: restored when the plan is rolled back, so "them" never names fixtures it removed again. */
+		FConversationMemory MemoryBefore;
 	};
 	TOptional<FRunningPlan> RunningPlan;
 

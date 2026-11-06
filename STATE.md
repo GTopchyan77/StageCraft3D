@@ -7431,7 +7431,7 @@ All times in ms.
   - `StageCraft.Assistant.Plan store cue 2 | patch fixtures 1 to 4 at 2.001`, then APPLY, then one Ctrl+Z;
   - turn ASK FIRST off again (it is saved per PC).
 
-**Commit:** uncommitted (working tree).
+**Commit:** `5f62474`.
 
 **Known issues / follow-ups**
 - **H3b (not started):** the bounded online read loop (read tools, 8 turns / 24 calls), append-only history replay with thinking blocks, the cached prefix in the live backend, the key in the credential vault, and cancelling a running plan from the panel.
@@ -7441,3 +7441,147 @@ All times in ms.
 - **Remaining tools:** apply_palette, start/stop_effect, select, record_group and the offline multi-step grammar are H4.
 - **Proposal card:** an online plan that is entirely cue playback or controls of the selected fixtures runs without one, by design (ADR §6).
 - **Still open from #72 / #73:** the paid H0 run, the H1 and H2 mouse checks, and a packaged build reading the help articles.
+
+## #75 — Phase H4: offline multi-step plans, conversation memory, palette / group / effect tools (2026-11-06)
+
+**Housekeeping first.** #74 said "uncommitted"; it now carries `5f62474` (Gevor committed H3).
+
+**What & why**
+- Gevor's brief (2026-11-06) asks for Phase H4 in auto mode:
+  - the offline grammar reads compound prompts in English and Armenian into one proposal card ("add 4 pars and store cue 1");
+  - short-term conversation memory for follow-ups ("now set their colour to blue");
+  - the remaining tools for palettes, groups and effect settings, inside H3's one-undo-step plans;
+  - 0-warning Editor / Game / Shipping builds, 217+ tests with no regression, todo.md and STATE.md.
+- **Scope:**
+  - Done: ADR 0030 §6's offline items, and Phase 26's multi-step and memory lines.
+  - Still open from Phase 26: BOM answers and export completion in chat.
+  - Still open from ADR §6: H3b (the online read loop, replay, the vault key).
+
+**Design (ADR 0030 §17)**
+- **Multi-step** (`StageAICommandParser::ParsePlan`, pure, public):
+  - **Splitting:** `SplitClauses` cuts the raw prompt at the words and / then (Armenian և, ու, հետո, ապա, իսկ) and after a word ending in , ; . ! or ։, and at line breaks. Never inside "" “” «». "2.001" is not a full stop.
+  - **Reading:** each part goes through `Parse` (Armenian through `StageAIArmenian`), and every step speaks the whole prompt's language.
+  - **Joining:**
+    - A part that is no plannable change on its own joins its neighbour, so "delete the spots and the washes" stays one delete.
+    - A SetFixture without its own target joins the SetFixture before it, so "set the spots to red and zoom wide" is one step.
+  - **Continuing:** a later fixture-tool step without a target, after a step that acted on fixtures (a fixture tool or an add), gets `Target = Recent`.
+  - **Result:** fewer than two steps, or more than 48 parts, means an empty result, and `Parse` reads the prompt as before.
+  - **In the subsystem:** `UStageAICommandSubsystem::InterpretLocally` tries `ParsePlan` first (never for how-to questions) and hands the steps on as `MoreCommands`. H3's `Respond` / `HandlePlan` then validate, check, propose or run them, as one undo step with rollback.
+- **Targets** (`EStageAITarget` gains `Fixtures`, `Group`, `Recent`; `FStageAICommand` gains `Group`, `Palette`, `PaletteKind`, `Effect`, `RateHz`, `EffectSize`; `FixtureIds` is reused):
+  - **IDs and groups:** the parser's `ReadFixtureRefs` reads them:
+    - "fixture 3", "fixtures 1 to 4", "lights 1, 2 and 5";
+    - IDs before the word, as Armenian puts them («1-4 սարքերը»);
+    - "group 2", "group front wash", and Armenian "2 group".
+    - A range end that carries a unit is a value, not an ID ("fixture 3 to 50%").
+  - **SetFixture** reads these first, so no control takes their numbers.
+  - **Recent** is what "them / they / those / it" means; "this / these / the selected" stay the selection.
+  - **`ValidateTarget`** (schema):
+    - IDs must be 1..200 and at least 1; a group must be named.
+    - Fixtures, Group and Recent belong to the fixture tools only (catalogue `bTargetsFixtures`), and are refused on delete / move / replace.
+  - **Runner:** `FindTargets` resolves Fixtures and Group:
+    - through `UShowControlSubsystem::FindFixture`;
+    - a group through `UStageShowLibrarySubsystem` and `ResolveName`.
+- **Memory** (subsystem, private `FConversationMemory`: `FixtureIds`, `SelectionAfter`, `LastChange`):
+  - **What is remembered:** `FStageAIActionOutcome::AffectedFixtureIds`.
+    - The runner fills it for add, set, select, patch, palettes, groups and effects.
+    - For an add, it is the placed fixtures that were not there before `RequestBuildPlan`.
+  - **When:**
+    - `RememberStep` runs after each succeeded plan step.
+    - `ResolveRecent` runs just before each step, so step 2 of a plan sees step 1's fixtures.
+  - **"Them" falls back to the selection** when nothing is remembered, or when the player's selected fixtures differ from those right after the last change.
+    - The selection comes from the new `FStageAIActionHost::SelectedFixtures`, bound in `ModularPlayerControllerAssistant::MakeHost`.
+  - **"Again":**
+    - `EStageAIIntent::Repeat` is local-only (catalogue `bLocalOnly`). It is left out of the online enum, and the schema refuses it from the model.
+    - `ResolveRepeat` swaps it for `LastChange` before validation; only a fixture tool takes a new target.
+  - **Lifetime:**
+    - A rolled-back plan restores the memory it found (`FRunningPlan::MemoryBefore`).
+    - `ClearConversation` and `Deinitialize` empty it.
+    - It is never saved.
+- **Nine new tools** (catalogue entries; schema fields `group`, `palette`, `palette_kind`, `effect`, `rate_hz`, `effect_size`; runner; grammar EN/HY):
+
+  | Tool | Effect | Undoable | Request(s) |
+  |---|---|---|---|
+  | `select_fixtures` | Selection (new) | no | `RequestSelectItems` |
+  | `apply_palette` | Fixtures | yes | `RequestApplyPalette` |
+  | `record_palette` | Library (new) | yes | `RequestRecordPalette` (Global) |
+  | `delete_palette` | Library | yes | `RequestDeletePalette` |
+  | `record_group` | Library | yes | `RequestRecordGroup` |
+  | `delete_group` | Library | yes | `RequestDeleteGroup` |
+  | `start_effect` | Fixtures | yes | `RequestStartEffect` (a quick effect by name, rate and size) |
+  | `update_effect` | Fixtures | yes | `RequestUpdateEffect` on the programmer's running effects |
+  | `stop_effect` | Fixtures | yes | `RequestStopEffect` (by name, or STOP ALL) |
+
+  - Selection tools select their target first: a selection is tool state, not an undo step.
+  - Pools are named through `StageAICommandParser::ResolveName`: the whole name, else the one name holding every word, else the place in the pool. Several matches are listed back.
+  - "Chase" means the Dimmer Chase (first of several, for effects only).
+  - An effect size is in degrees for position effects; for the others it is the wave's height above its bottom (0..1).
+  - Without the word "effect", only the quick effects' own words name one, so "stop the strobe" stays the strobe control and "add a circle truss" stays a shape.
+- **Applies without asking:**
+  - now also a selection, and palettes and effects on the selection or "them";
+  - `HasStepsNotUndone` ignores selections.
+- **Help** gained the new commands in English and Armenian (54 Armenian examples, all parsed by `StageCraft.AI.Armenian`).
+
+**Files changed**
+- Public: `AI/StageAITypes.h`, `AI/StageAIToolCatalogue.h`, `AI/StageAICommandParser.h`, `AI/StageAICommandSubsystem.h`.
+- Private:
+  - `AI/StageAITypes.cpp`, `AI/StageAIToolCatalogue.cpp`, `AI/StageAICommandSchema.cpp`, `AI/StageAICommandParser.cpp`;
+  - `AI/StageAIArmenian.cpp`, `AI/StageAICommandRunner.cpp`, `AI/StageAICommandSubsystem.cpp`;
+  - `Player/ModularPlayerController.cpp`.
+- Tests:
+  - new: `AI/Tests/StageAIMultiStepTests.cpp`;
+  - changed: `AI/Tests/StageAIPlanTests.cpp`, `StageAITests.cpp`, `StageAIFixtureTests.cpp`, `StageAIArmenianTests.cpp`.
+- Docs:
+  - `Docs/ADR/0030` (status line, §17), `Docs/CURRENT_SYSTEMS.md` (new row, 221 tests);
+  - `tasks/todo.md` (H4 a–e, the manual item, follow-ups; Phase 26 lines);
+  - STATE.md (#74 hash, #75).
+- No content assets, maps or input actions.
+
+**Verification**
+- **Builds:** Editor, Game Development and Game Shipping, all 0 warnings.
+- **Shipping UTF-16 scan:**
+  - absent: `StageCraft.Assistant.Plan`, `.Ask`, `.Apply`;
+  - present: the new tool names and replies.
+- **Tests:** 221/221 without a renderer and 221/221 with the offscreen renderer. User data unchanged (116 files).
+  - **New:**
+    - `StageCraft.Assistant.MultiStep`: splitting, joining, continuing, quotes, questions, undo, Armenian, the clause cap.
+    - `StageCraft.Assistant.ToolGrammar`: selection, ID and group targets, them, palettes, groups, effects, again, Armenian, `ResolveName`.
+    - `StageCraft.Assistant.ToolSchema`: what applies without asking, `repeat` local-only, the new fields and refusals, card lines.
+    - `StageCraft.Assistant.Memory`:
+      - them before any memory;
+      - "add 4 pars and make them blue" as one card, one undo step, blue on the added IDs;
+      - them across prompts, and a new selection winning;
+      - again on a group, and again as it was;
+      - an Armenian card cancelled;
+      - again refused for a cue;
+      - a rolled-back plan restoring memory;
+      - Clear forgetting.
+  - **Three earlier assertions updated to the intended behaviour:**
+    - "make them green" is now `Recent`, which resolves to the selection when nothing is remembered;
+    - the online enum leaves out the local-only `repeat`;
+    - the Armenian help has 54 examples.
+  - **One bug found by the tests and fixed:** "do it again …" starts with "do", which the grammar counts as the start of a question; Repeat now treats only "?" as a question.
+- **Scripted run H4** (`-game`, without user imports, user data restored; log and shots in `C:\Users\gevor\AppData\Local\Temp\StageCraftRuns\H4`):
+  - "add 4 fixtures and make them blue": a card (screenshot shows APPLY / CANCEL), yes, both steps as one undo step "Assistant: Add 4 fixtures (+1 more)", blue on the added beams.
+  - "select fixtures 1 to 2 and record a group called Front": a card, then applied.
+  - "record a colour palette called Ocean", then "make them red" (on the same two fixtures).
+  - "apply palette ocean to group front", "start a circle effect on group front at 0.5 hz", "effect speed 1 hz".
+  - "make fixtures 3 to 4 green", then "do it again on group front" (green on Front).
+  - "stop all effects", undone by Ctrl+Z.
+  - "delete palette ocean", "delete group front".
+  - «ընտրիր 1-4 սարքերը և դարձրու դրանք կարմիր»: two steps applied at once (selection and them).
+  - No refusals in the transcript.
+- **Benchmark:** not run. H4 changes no show tick, mix or render path; the parser and memory run once per prompt.
+- **Awaiting manual verification (Gevor):** see todo.md, "H4 manual verification".
+
+**Commit:** uncommitted (working tree).
+
+**Known issues / follow-ups**
+- Not offered:
+  - adding fixtures to or removing them from an existing group ("remove the spots from group 2" is deliberately not read as deleting the group);
+  - renaming palettes and groups;
+  - per-fixture palettes;
+  - effect settings other than rate and size;
+  - "make it faster" without a number.
+- "Select the spots and washes" finds nothing: a name query needs every word in one item's name (as for deletes).
+- FindLabel takes every word after "called" up to fade / with / in / and, so "create a group called Front from the spots" names it "Front from the spots"; say the target first.
+- From #74, still open: the "cue on stage" goes stale after undoing a store; H3b.

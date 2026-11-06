@@ -8,6 +8,7 @@
 #include "Environment/StageEnvironmentTypes.h"
 #include "GameplayTagContainer.h"
 #include "Marketplace/StageMarketplaceTypes.h"
+#include "Show/ShowControlTypes.h"
 #include "StageAITypes.generated.h"
 
 /**
@@ -62,6 +63,32 @@ enum class EStageAIIntent : uint8
 	/** Fixture controls (FixtureSettings) on the targeted fixtures (Docs/ADR/0020 §7). */
 	SetFixture,
 
+	// Selection, palettes, groups and effects (Docs/ADR/0030 §6). Tools that act on "the selection" select their target first
+	// when it is not the selection (fixtures by ID, a group, by name, "them").
+	/** Selects the targeted fixtures. */
+	SelectFixtures,
+	/** Puts the palette named Palette into the programmer for the targeted fixtures. */
+	ApplyPalette,
+	/** Records the targeted fixtures' look as a new palette of PaletteKind, named Label (the next free name when empty). */
+	RecordPalette,
+	/** Deletes the palette named Palette (its references become plain values). */
+	DeletePalette,
+	/** Records the targeted fixtures as a new group named Label. */
+	RecordGroup,
+	/** Deletes the group named Group. */
+	DeleteGroup,
+	/** Starts the quick effect named Effect on the targeted fixtures (RateHz, EffectSize override its own). */
+	StartEffect,
+	/** Changes the rate and / or size of the programmer's running effects named Effect (all of them when empty). */
+	UpdateEffect,
+	/** Stops the running effects named Effect (every one when empty). */
+	StopEffect,
+	/**
+	 * "Do it again (on group 2)": the conversation's last change, on a new target when one is given. Local only: the subsystem
+	 * replaces it with that change before validation, so it never runs and the online model never sends it.
+	 */
+	Repeat,
+
 	// The community marketplace (Docs/ADR/0021 §13). Listings are named by Listing, against the marketplace's current results.
 	/** Browses the marketplace (MarketplaceQuery); the answer lists the results by number. */
 	SearchMarketplace,
@@ -94,6 +121,15 @@ enum class EStageAITarget : uint8
 	Selection,
 	/** Placed items whose catalog name contains every word of ItemQuery (at most Count of them, the latest placed first). */
 	Named,
+	/** The fixtures FixtureIds ("fixtures 1 to 4"). Fixture tools only. */
+	Fixtures,
+	/** The fixtures of the group named Group ("group 2", "group front wash"). Fixture tools only. */
+	Group,
+	/**
+	 * "Them": the fixtures the conversation last changed (Docs/ADR/0030 §6), unless the player selected others since. Resolved by
+	 * UStageAICommandSubsystem into Fixtures or Selection before the command runs. Fixture tools only.
+	 */
+	Recent,
 };
 
 /** A MoveItems direction, as seen from the camera and snapped to the nearest stage axis (Up and Down are vertical). */
@@ -227,8 +263,29 @@ struct MODULARSCENEBUILDER_API FStageAICommand
 	/** ExplainFixture: the fixture ID (unset: the asking player's selected fixture). */
 	TOptional<int32> FixtureId;
 
-	/** PatchFixtures: the fixture IDs, in the order to patch them (empty: the asking player's selected fixtures, by ID). */
+	/**
+	 * PatchFixtures: the fixture IDs, in the order to patch them (empty: the asking player's selected fixtures, by ID). Fixture tools
+	 * with Target Fixtures: the fixtures they act on.
+	 */
 	TArray<int32> FixtureIds;
+
+	/** Target Group, DeleteGroup: the group's name, or its number in the group pool ("2"). */
+	FString Group;
+
+	/** ApplyPalette, DeletePalette: the palette's name, or its number in the palette pool. */
+	FString Palette;
+
+	/** RecordPalette: which attributes it records. */
+	EStagePaletteKind PaletteKind = EStagePaletteKind::All;
+
+	/** StartEffect: the quick effect ("circle", "rainbow"). UpdateEffect, StopEffect: the running effects named so (empty: all). */
+	FString Effect;
+
+	/** StartEffect, UpdateEffect: cycles per second (unset: the effect's own). */
+	TOptional<float> RateHz;
+
+	/** StartEffect, UpdateEffect: position effects' size in degrees, else the wave's span above its bottom, 0..1 (unset: the effect's own). */
+	TOptional<float> EffectSize;
 
 	/** PatchFixtures: the DMX universe (unset: 1) and the first address (unset: 1). */
 	TOptional<int32> Universe;
@@ -400,6 +457,12 @@ struct FStageAIActionOutcome
 
 	/** AcquireListing of a paid listing: the offer the reply asks the user to confirm. Nothing was bought. */
 	TOptional<FStageAIPurchaseOffer> PurchaseOffer;
+
+	/**
+	 * The fixtures a succeeded change acted on (added, set, selected, patched, given a palette or effect), by ID: what "them" means
+	 * next (Docs/ADR/0030 §6). Empty when it acted on no fixture.
+	 */
+	TArray<int32> AffectedFixtureIds;
 
 	static FStageAIActionOutcome Make(EStageAIOutcome InOutcome, const FText& InMessage)
 	{

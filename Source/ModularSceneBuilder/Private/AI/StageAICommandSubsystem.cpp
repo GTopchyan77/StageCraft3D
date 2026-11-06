@@ -64,6 +64,7 @@ void UStageAICommandSubsystem::Deinitialize()
 	StopMarketplaceWait();
 	PurchaseOffer.Reset();
 	Proposal.Reset();
+	Memory = FConversationMemory();
 	// A plan still being applied keeps what it did: the player's history component records its group when play ends.
 	RunningPlan.Reset();
 	PendingHost = FStageAIActionHost();
@@ -186,6 +187,18 @@ bool UStageAICommandSubsystem::SubmitPrompt(const FString& Prompt, FStageAIActio
 
 FStageAIInterpretation UStageAICommandSubsystem::InterpretLocally(const FString& Prompt) const
 {
+	// Several changes in one prompt ("add 4 pars and store cue 1"): one plan, proposed or run like the online model's (Docs/ADR/0030 §6).
+	// A question asked how ("how do I add pars and store a cue?") is the knowledge's, never a plan.
+	if (!StageKnowledgeSearch::IsHowToQuestion(Prompt))
+	{
+		TArray<FStageAICommand> Steps = StageAICommandParser::ParsePlan(Prompt);
+		if (Steps.Num() >= 2)
+		{
+			FStageAIInterpretation Plan = FStageAIInterpretation::MakeCommand(Steps[0]);
+			Plan.MoreCommands.Append(MakeArrayView(Steps).RightChop(1));
+			return Plan;
+		}
+	}
 	const TOptional<FStageAICommand> Command = StageAICommandParser::Parse(Prompt);
 	const StageKnowledgeSearch::ERoute Route = StageKnowledgeSearch::Route(Prompt, Command.GetPtrOrNull());
 	if (Route != StageKnowledgeSearch::ERoute::Command)
@@ -417,6 +430,13 @@ void UStageAICommandSubsystem::Respond(const FStageAIInterpretation& Interpretat
 
 	FStageAICommand Command = Interpretation.Command;
 	FText Error;
+	// "Do it again (on group 2)": the conversation's last change, validated like any command (Docs/ADR/0030 §6).
+	if (Command.Intent == EStageAIIntent::Repeat && !ResolveRepeat(Command, Error))
+	{
+		AddMessage(EStageAISpeaker::Assistant, EStageAIOutcome::Refused, WithNote(Error, Interpretation.Note));
+		EndPrompt();
+		return;
+	}
 	if (!StageAICommandSchema::Validate(Command, Error))
 	{
 		AddMessage(EStageAISpeaker::Assistant, EStageAIOutcome::Refused, WithNote(Error, Interpretation.Note));
@@ -637,6 +657,7 @@ void UStageAICommandSubsystem::RunPlan(FStageAIPlan Plan, const FText& Note)
 	RunningPlan.Emplace();
 	RunningPlan->Plan = MoveTemp(Plan);
 	RunningPlan->Note = Note;
+	RunningPlan->MemoryBefore = Memory;
 	RunningPlan->bGrouped = PendingHost.BeginPlan.IsBound() && PendingHost.BeginPlan.Execute(Description);
 	UE_LOG(LogStageCraft, Log, TEXT("AI assistant: applying %d step(s)%s."), RunningPlan->Plan.Steps.Num(), RunningPlan->bGrouped ? TEXT(" as one undo step") : TEXT(""));
 	OnConversationChanged.Broadcast();
@@ -653,7 +674,10 @@ void UStageAICommandSubsystem::AdvancePlan()
 				LOCTEXT("PlanNoPlayer", "There is no player to make that change for."), INVTEXT("Չկա խաղացող, որի համար կատարեմ այդ փոփոխությունը։"))));
 			return;
 		}
-		const FStageAICommand Step = RunningPlan->Plan.Steps[RunningPlan->NextStep];
+		// "Them" is resolved now, after the steps before it: "add 4 pars and make them red" colours the pars just placed.
+		FStageAICommand Step = RunningPlan->Plan.Steps[RunningPlan->NextStep];
+		ResolveRecent(Step);
+		RunningPlan->CurrentStep = Step;
 		UE_LOG(LogStageCraft, Log, TEXT("AI assistant: step %d of %d, %s."), RunningPlan->NextStep + 1, RunningPlan->Plan.Steps.Num(),
 			*StageAICommandSchema::GetIntentName(Step.Intent));
 		RunningPlan->bExecuting = true;
@@ -679,6 +703,7 @@ void UStageAICommandSubsystem::AdvancePlan()
 			FinishPlan(Outcome);
 			return;
 		}
+		RememberStep(RunningPlan->CurrentStep, Outcome);
 		RunningPlan->StepLines.Add(Outcome.Message);
 		++RunningPlan->NextStep;
 	}
@@ -695,6 +720,7 @@ void UStageAICommandSubsystem::HandleStepOutcome(const FStageAIActionOutcome& Ou
 		FinishPlan(Outcome);
 		return;
 	}
+	RememberStep(RunningPlan->CurrentStep, Outcome);
 	RunningPlan->StepLines.Add(Outcome.Message);
 	++RunningPlan->NextStep;
 	AdvancePlan();
@@ -743,6 +769,11 @@ void UStageAICommandSubsystem::FinishPlan(TOptional<FStageAIActionOutcome> Refus
 	}
 	const int32 Failed = Finished.NextStep;
 	UE_LOG(LogStageCraft, Log, TEXT("AI assistant: step %d of %d refused; rollback %s."), Failed + 1, StepCount, *UEnum::GetValueAsString(Rollback));
+	if (Rollback == EStageCommandResult::Succeeded || Rollback == EStageCommandResult::NothingToDo)
+	{
+		// What the plan did is gone again, so "them" and "again" mean what they meant before it.
+		Memory = MoveTemp(Finished.MemoryBefore);
+	}
 	if (StepCount == 1)
 	{
 		AddMessage(EStageAISpeaker::Assistant, EStageAIOutcome::Refused, WithNote(Refusal->Message, Finished.Note));
@@ -1014,7 +1045,80 @@ void UStageAICommandSubsystem::ClearConversation()
 	PurchaseOffer.Reset();
 	Proposal.Reset();
 	LastListing.Invalidate();
+	// A new conversation: "them" and "again" refer to nothing yet.
+	Memory = FConversationMemory();
 	OnConversationChanged.Broadcast();
+}
+
+TArray<int32> UStageAICommandSubsystem::GetSelectedFixtureIds() const
+{
+	return PendingHost.SelectedFixtures.IsBound() ? PendingHost.SelectedFixtures.Execute() : TArray<int32>();
+}
+
+void UStageAICommandSubsystem::ResolveRecent(FStageAICommand& Step) const
+{
+	if (Step.Target != EStageAITarget::Recent)
+	{
+		return;
+	}
+	// The player's own selection since the last change wins: "them" is what they now point at.
+	const TArray<int32> Selected = GetSelectedFixtureIds();
+	const bool bSelectionMoved = !Selected.IsEmpty()
+		&& (Selected.Num() != Memory.SelectionAfter.Num() || !Algo::AllOf(Selected, [this](int32 Id) { return Memory.SelectionAfter.Contains(Id); }));
+	if (Memory.FixtureIds.IsEmpty() || bSelectionMoved)
+	{
+		Step.Target = EStageAITarget::Selection;
+		return;
+	}
+	Step.Target = EStageAITarget::Fixtures;
+	Step.FixtureIds = Memory.FixtureIds;
+}
+
+bool UStageAICommandSubsystem::ResolveRepeat(FStageAICommand& Command, FText& OutError) const
+{
+	using StageAILanguage::Pick;
+	const EStageAILanguage Language = Command.Language;
+	if (!Memory.LastChange.IsSet())
+	{
+		OutError = Pick(Language, LOCTEXT("NothingToRepeat", "There is no change of mine to repeat yet."), INVTEXT("Դեռ կրկնելու փոփոխություն չունեմ։"));
+		return false;
+	}
+	FStageAICommand Again = *Memory.LastChange;
+	Again.Language = Language;
+	if (Command.Target != EStageAITarget::Recent)
+	{
+		// "Again on group 2": the same change, on the fixtures named now.
+		if (!StageAIToolCatalogue::GetTool(Again.Intent).bTargetsFixtures)
+		{
+			OutError = FText::Format(Pick(Language, LOCTEXT("RepeatNoTarget", "\"{0}\" does not act on fixtures, so I can only repeat it as it was: say \"again\"."),
+				INVTEXT("«{0}»-ը սարքերի վրա չի գործում, ուստի կարող եմ կրկնել միայն նույնությամբ՝ ասեք «նորից»։")), StageAIToolCatalogue::DescribeStep(Again, Language));
+			return false;
+		}
+		Again.Target = Command.Target;
+		Again.ItemQuery = Command.ItemQuery;
+		Again.Count = Command.Count;
+		Again.FixtureIds = Command.FixtureIds;
+		Again.Group = Command.Group;
+	}
+	Command = MoveTemp(Again);
+	return true;
+}
+
+void UStageAICommandSubsystem::RememberStep(const FStageAICommand& Step, const FStageAIActionOutcome& Outcome)
+{
+	if (Outcome.Outcome != EStageAIOutcome::Succeeded || uint8(Step.Intent) >= uint8(EStageAIIntent::Count) || !StageAIToolCatalogue::GetTool(Step.Intent).IsChange())
+	{
+		return;
+	}
+	if (!Outcome.AffectedFixtureIds.IsEmpty())
+	{
+		Memory.FixtureIds = Outcome.AffectedFixtureIds;
+	}
+	Memory.SelectionAfter = GetSelectedFixtureIds();
+	if (StageAIToolCatalogue::GetTool(Step.Intent).bPlannable)
+	{
+		Memory.LastChange = Step;
+	}
 }
 
 FText UStageAICommandSubsystem::GetInterpreterDescription() const

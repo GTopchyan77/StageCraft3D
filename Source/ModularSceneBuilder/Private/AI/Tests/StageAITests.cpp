@@ -290,7 +290,7 @@ bool FStageAISchemaTest::RunTest(const FString& Parameters)
 			const TSharedPtr<FJsonObject> Schema = Tool->GetObjectField(TEXT("input_schema"));
 			TestFalse(TEXT("No additional properties"), Schema->GetBoolField(TEXT("additionalProperties")));
 			const TArray<TSharedPtr<FJsonValue>> Intents = Schema->GetObjectField(TEXT("properties"))->GetObjectField(TEXT("intent"))->GetArrayField(TEXT("enum"));
-			TestEqual(TEXT("Every intent listed"), Intents.Num(), int32(EStageAIIntent::Count));
+			TestEqual(TEXT("Every intent listed but the local-only repeat"), Intents.Num(), int32(EStageAIIntent::Count) - 1);
 			TSet<FString> Unique;
 			for (int32 Intent = 0; Intent < int32(EStageAIIntent::Count); ++Intent)
 			{

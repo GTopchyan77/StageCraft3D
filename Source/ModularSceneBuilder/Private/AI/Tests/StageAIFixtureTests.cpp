@@ -96,7 +96,7 @@ bool FStageAIFixtureGrammarTest::RunTest(const FString& Parameters)
 	const FStageAICommand Many = ParseOrDefault(TEXT("make the 4 washes blue at 50% dimmer with frost"));
 	TestTrue(TEXT("several controls"), Find(Many, C::Color) && Has(Many, C::Dimmer, 0.5) && Has(Many, C::Frost, 1.0));
 	TestTrue(TEXT("... on 4 washes"), Many.Target == EStageAITarget::Named && Many.ItemQuery == TEXT("washes") && Many.Count.Get(0) == 4);
-	TestTrue(TEXT("them = the selection"), ParseOrDefault(TEXT("make them green")).Target == EStageAITarget::Selection);
+	TestTrue(TEXT("them = what was last changed, else the selection (resolved when it runs)"), ParseOrDefault(TEXT("make them green")).Target == EStageAITarget::Recent);
 	TestTrue(TEXT("nothing named = the selection"), ParseOrDefault(TEXT("zoom 15")).Target == EStageAITarget::Selection);
 	TestEqual(TEXT("the pixel bars"), ParseOrDefault(TEXT("turn the pixel bars magenta")).ItemQuery, FString(TEXT("pixel bars")));
 	TestTrue(TEXT("\"beam\" names a fixture"), Has(ParseOrDefault(TEXT("prism 2 on the beam 280")), C::Prism, 2.0) && ParseOrDefault(TEXT("prism 2 on the beam 280")).ItemQuery == TEXT("beam 280"));

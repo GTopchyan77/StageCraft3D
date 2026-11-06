@@ -25,7 +25,9 @@
 #include "Subsystems/ShowControlSubsystem.h"
 #include "Subsystems/StageDMXPatchSubsystem.h"
 #include "Subsystems/StageItemSubsystem.h"
+#include "Subsystems/StageProgrammerSubsystem.h"
 #include "Subsystems/StageSessionSubsystem.h"
+#include "Subsystems/StageShowLibrarySubsystem.h"
 
 #define LOCTEXT_NAMESPACE "StageAICommandRunner"
 
@@ -40,6 +42,20 @@ namespace StageAICommandRunner
 
 		FStageAIActionOutcome Done(const FText& Message) { return FStageAIActionOutcome::Make(EStageAIOutcome::Succeeded, Message); }
 		FStageAIActionOutcome Refused(const FText& Message) { return FStageAIActionOutcome::Make(EStageAIOutcome::Refused, Message); }
+
+		/** Outcome, naming the fixtures it acted on by ID: what "them" means next (Docs/ADR/0030 §6). */
+		FStageAIActionOutcome WithFixtures(FStageAIActionOutcome Outcome, TConstArrayView<ALightingFixtureActor*> Fixtures)
+		{
+			Outcome.AffectedFixtureIds.Reserve(Fixtures.Num());
+			for (const ALightingFixtureActor* Fixture : Fixtures)
+			{
+				if (IsValid(Fixture))
+				{
+					Outcome.AffectedFixtureIds.AddUnique(Fixture->GetFixtureId());
+				}
+			}
+			return Outcome;
+		}
 
 		/**
 		 * Work's first reported refusal, else Fallback. Refusals are worded by the rules that made them (GameMode, economy) in the UI
@@ -156,11 +172,26 @@ namespace StageAICommandRunner
 						INVTEXT("Ոչինչ չտեղադրվեց. խնդրողը դուրս է եկել։"))));
 					return;
 				}
+				// The fixtures placed are the ones that were not there before: "them" in the next request (Docs/ADR/0030 §6).
+				const UStageSessionSubsystem* PendingSession = UWorld::GetSubsystem<UStageSessionSubsystem>(PendingController->GetWorld());
+				TSet<const AModularBaseActor*> Before;
+				for (const AModularBaseActor* Placed : PendingSession ? PendingSession->GetPlacedItems() : TArray<AModularBaseActor*>())
+				{
+					Before.Add(Placed);
+				}
 				FStageSketchGenerateResult Result;
 				PendingController->RunCapturingRejections([&]() { Result = PendingController->RequestBuildPlan(Plan, StepName); });
+				TArray<ALightingFixtureActor*> Added;
+				for (AModularBaseActor* Placed : PendingSession && Result.bSucceeded ? PendingSession->GetPlacedItems() : TArray<AModularBaseActor*>())
+				{
+					if (ALightingFixtureActor* Fixture = Cast<ALightingFixtureActor>(Placed); Fixture && !Before.Contains(Placed))
+					{
+						Added.Add(Fixture);
+					}
+				}
 				PendingAssistant->FinishPendingAction(Result.bSucceeded
-					? Done(FText::Format(Pick(Language, LOCTEXT("Added", "Added {0} × {1} in a row on the floor, ready to move into place. Ctrl+Z removes all of them."),
-						INVTEXT("Ավելացվեց {0} × {1}՝ մեկ շարքով հատակին, պատրաստ տեղափոխման։ Ctrl+Z-ը կհեռացնի բոլորը։")), FText::AsNumber(Count), Name))
+					? WithFixtures(Done(FText::Format(Pick(Language, LOCTEXT("Added", "Added {0} × {1} in a row on the floor, ready to move into place. Ctrl+Z removes all of them."),
+						INVTEXT("Ավելացվեց {0} × {1}՝ մեկ շարքով հատակին, պատրաստ տեղափոխման։ Ctrl+Z-ը կհեռացնի բոլորը։")), FText::AsNumber(Count), Name)), Added)
 					: Refused(FText::Format(Pick(Language, LOCTEXT("AddRefused", "Nothing was placed: {0}"), INVTEXT("Ոչինչ չտեղադրվեց՝ {0}")), Result.Message)));
 			}));
 			return bStarted
@@ -301,8 +332,8 @@ namespace StageAICommandRunner
 			// Already there is what was asked for, not a refusal (a plan carries on).
 			if (Algo::AllOf(Plan, [](const FStageDMXPatchAssignment& Entry) { return Entry.Fixture.IsValid() && Entry.Fixture->GetPatch() == Entry.Patch; }))
 			{
-				return Done(FText::Format(Pick(Language, LOCTEXT("PatchAlready", "Those fixtures are already patched from {0}; nothing changed."),
-					INVTEXT("Այդ սարքերն արդեն պատչված են {0}-ից. ոչինչ չփոխվեց։")), StartText));
+				return WithFixtures(Done(FText::Format(Pick(Language, LOCTEXT("PatchAlready", "Those fixtures are already patched from {0}; nothing changed."),
+					INVTEXT("Այդ սարքերն արդեն պատչված են {0}-ից. ոչինչ չփոխվեց։")), StartText)), Fixtures);
 			}
 			FStageEconomyResultInfo Result;
 			const TArray<FStageEconomyResultInfo> Refusals = Controller.RunCapturingRejections([&]()
@@ -314,10 +345,10 @@ namespace StageAICommandRunner
 				return Refused(RefusalOf(Refusals, Result.Message));
 			}
 			const FStageDMXPatch& Last = Plan.Last().Patch;
-			return Done(FText::Format(Pick(Language, LOCTEXT("Patched", "Patched {0} {0}|plural(one=fixture,other=fixtures) from {1} to {2}. Ctrl+Z restores the old patch."),
+			return WithFixtures(Done(FText::Format(Pick(Language, LOCTEXT("Patched", "Patched {0} {0}|plural(one=fixture,other=fixtures) from {1} to {2}. Ctrl+Z restores the old patch."),
 				INVTEXT("Պատչվեց {0} սարք՝ {1}-ից մինչև {2}։ Ctrl+Z-ը կվերադարձնի նախորդ պատչը։")), FText::AsNumber(Plan.Num()),
 				FText::FromString(FString::Printf(TEXT("%d.%03d"), Plan[0].Patch.Universe, Plan[0].Patch.Address)),
-				FText::FromString(FString::Printf(TEXT("%d.%03d"), Last.Universe, Last.Address))));
+				FText::FromString(FString::Printf(TEXT("%d.%03d"), Last.Universe, Last.Address)))), Fixtures);
 		}
 
 		FStageAIActionOutcome PlayCue(AModularPlayerController& Controller, const FStageAICommand& Command)
@@ -511,13 +542,115 @@ namespace StageAICommandRunner
 			return FText::Join(LOCTEXT("ItemSeparator", ", "), Parts);
 		}
 
+		/** "A, B, C" for the first few names, "..." after them (what a pool holds, for a name that matched nothing). */
+		FText DescribeNames(TConstArrayView<FString> Names)
+		{
+			constexpr int32 MaxListed = 10;
+			TArray<FString> Listed(Names.GetData(), FMath::Min(Names.Num(), MaxListed));
+			if (Names.Num() > MaxListed)
+			{
+				Listed.Add(TEXT("..."));
+			}
+			return FText::FromString(FString::Join(Listed, TEXT(", ")));
+		}
+
+		/**
+		 * The entry of Names that Query means (StageAICommandParser::ResolveName), or INDEX_NONE with OutError saying the pool has none
+		 * ("There is no palette \"warm\". The palettes are: ...") or several.
+		 */
+		int32 ResolvePoolName(TConstArrayView<FString> Names, const FString& Query, const FText& PoolName, EStageAILanguage Language, FText& OutError)
+		{
+			const StageAICommandParser::FStageAINameMatch Match = StageAICommandParser::ResolveName(Names, Query);
+			if (Match.Index != INDEX_NONE)
+			{
+				return Match.Index;
+			}
+			if (Names.IsEmpty())
+			{
+				OutError = FText::Format(Pick(Language, LOCTEXT("PoolEmpty", "There are no {0} yet."), INVTEXT("Դեռ {0} չկան։")), PoolName);
+			}
+			else if (!Match.Ambiguous.IsEmpty())
+			{
+				TArray<FString> Several;
+				for (const int32 Index : Match.Ambiguous)
+				{
+					Several.Add(Names[Index]);
+				}
+				OutError = FText::Format(Pick(Language, LOCTEXT("PoolSeveral", "\"{0}\" matches several {1}: {2}. Say which."), INVTEXT("«{0}»-ին համապատասխանում են մի քանի {1}՝ {2}։ Նշեք որը։")),
+					FText::FromString(Query), PoolName, DescribeNames(Several));
+			}
+			else
+			{
+				OutError = FText::Format(Pick(Language, LOCTEXT("PoolNone", "There is no \"{0}\" among the {1}: {2}."), INVTEXT("{1}ի մեջ «{0}» չկա՝ {2}։")),
+					FText::FromString(Query), PoolName, DescribeNames(Names));
+			}
+			return INDEX_NONE;
+		}
+
+		/**
+		 * The fixtures a Fixtures or Group target names, in its order (IDs not on the stage are skipped). Empty, with OutError, when the
+		 * group is unknown or none of its fixtures is on the stage.
+		 */
+		TArray<AModularBaseActor*> FindFixturesById(const AModularPlayerController& Controller, const FStageAICommand& Command, FText& OutError)
+		{
+			const EStageAILanguage Language = Command.Language;
+			UWorld* World = Controller.GetWorld();
+			const UShowControlSubsystem* Show = UWorld::GetSubsystem<UShowControlSubsystem>(World);
+			TArray<int32> Ids = Command.FixtureIds;
+			if (Command.Target == EStageAITarget::Group)
+			{
+				const UStageShowLibrarySubsystem* Library = UWorld::GetSubsystem<UStageShowLibrarySubsystem>(World);
+				const TArray<FStageFixtureGroup> NoGroups;
+				const TArray<FStageFixtureGroup>& Groups = Library ? Library->GetGroups() : NoGroups;
+				TArray<FString> Names;
+				for (const FStageFixtureGroup& Group : Groups)
+				{
+					Names.Add(Group.Name.ToString());
+				}
+				const int32 Found = ResolvePoolName(Names, Command.Group, Pick(Language, LOCTEXT("PoolGroups", "groups"), INVTEXT("խմբեր")), Language, OutError);
+				if (Found == INDEX_NONE)
+				{
+					return {};
+				}
+				Ids = Groups[Found].FixtureIds;
+			}
+			TArray<AModularBaseActor*> Fixtures;
+			for (const int32 Id : Ids)
+			{
+				if (ALightingFixtureActor* Fixture = Show ? Show->FindFixture(Id) : nullptr; IsValid(Fixture))
+				{
+					Fixtures.AddUnique(Fixture);
+				}
+			}
+			if (Fixtures.IsEmpty())
+			{
+				OutError = Command.Target == EStageAITarget::Group
+					? FText::Format(Pick(Language, LOCTEXT("GroupEmpty", "None of the fixtures of group \"{0}\" is on the stage."), INVTEXT("«{0}» խմբի սարքերից ոչ մեկը բեմում չէ։")),
+						FText::FromString(Command.Group))
+					: Pick(Language, LOCTEXT("NoSuchFixtures", "None of those fixture IDs is on the stage. Say \"status\" to see what is."),
+						INVTEXT("Այդ համարներով սարքեր բեմում չկան։ Գրեք «վիճակը»՝ տեսնելու, թե ինչ կա։"));
+			}
+			else if (Fixtures.Num() > StageAICommandParser::MaxEditTargets)
+			{
+				OutError = FText::Format(Pick(Language, LOCTEXT("TooManyFixtures", "That is {0} fixtures; I change at most {1} at a time."),
+					INVTEXT("Դա {0} սարք է, իսկ ես միանգամից փոխում եմ առավելագույնը {1}։")), FText::AsNumber(Fixtures.Num()), FText::AsNumber(StageAICommandParser::MaxEditTargets));
+				Fixtures.Reset();
+			}
+			return Fixtures;
+		}
+
 		/**
 		 * The items a targeted edit applies to: the selection (narrowed by ItemQuery when it has one), or the placed items matching
-		 * ItemQuery, the latest placed first, at most Count. Empty, with OutError in the command's language, when none.
+		 * ItemQuery, the latest placed first, at most Count; for the fixture tools also fixtures by ID or a group. Empty, with OutError in
+		 * the command's language, when none.
 		 */
 		TArray<AModularBaseActor*> FindTargets(const AModularPlayerController& Controller, const FStageAICommand& Command, FText& OutError)
 		{
 			const EStageAILanguage Language = Command.Language;
+			if (Command.Target == EStageAITarget::Fixtures || Command.Target == EStageAITarget::Group)
+			{
+				return FindFixturesById(Controller, Command, OutError);
+			}
 			const auto Matches = [&Command](const AModularBaseActor& Item)
 			{
 				const UBaseItemData* Data = Item.GetItemData();
@@ -526,7 +659,8 @@ namespace StageAICommandRunner
 			};
 
 			TArray<AModularBaseActor*> Targets;
-			if (Command.Target == EStageAITarget::Selection)
+			// "Them" is resolved into fixture IDs before a command runs; one that was not falls back to the selection.
+			if (Command.Target == EStageAITarget::Selection || Command.Target == EStageAITarget::Recent)
 			{
 				const USelectionComponent* Selection = Controller.GetSelection();
 				for (AActor* Actor : Selection ? Selection->GetSelectedActors() : TArray<AActor*>())
@@ -1122,8 +1256,393 @@ namespace StageAICommandRunner
 			}
 			const FText Summary = FText::Format(Pick(Language, LOCTEXT("FixturesSet", "{0}: {1}."), INVTEXT("{0}՝ {1}։")),
 				DescribeItems(TArray<AModularBaseActor*>(Fixtures)), FText::Join(Separator, Applied));
-			return Done(Missing.IsEmpty() ? Summary : FText::Format(Pick(Language, LOCTEXT("FixturesSetPartly", "{0} Not available on them: {1}."),
-				INVTEXT("{0} Դրանք չունեն՝ {1}։")), Summary, FText::Join(Separator, Missing)));
+			return WithFixtures(Done(Missing.IsEmpty() ? Summary : FText::Format(Pick(Language, LOCTEXT("FixturesSetPartly", "{0} Not available on them: {1}."),
+				INVTEXT("{0} Դրանք չունեն՝ {1}։")), Summary, FText::Join(Separator, Missing))), Fixtures);
+		}
+
+		// --- Selection, palettes, groups and effects (Docs/ADR/0030 §6): the requests of the Groups, Palettes and Effects panels ---
+
+		/**
+		 * The lighting fixtures of a fixture tool's target. Fixtures named by words come in fixture-ID order (an effect runs its pattern
+		 * in that order); the selection and IDs keep theirs.
+		 */
+		TArray<ALightingFixtureActor*> FindFixtureTargets(const AModularPlayerController& Controller, const FStageAICommand& Command, FText& OutError)
+		{
+			TArray<ALightingFixtureActor*> Fixtures;
+			for (AModularBaseActor* Target : FindTargets(Controller, Command, OutError))
+			{
+				if (ALightingFixtureActor* Fixture = Cast<ALightingFixtureActor>(Target); Fixture && Fixture->GetFixtureData())
+				{
+					Fixtures.Add(Fixture);
+				}
+			}
+			if (Command.Target == EStageAITarget::Named)
+			{
+				Fixtures.Sort([](const ALightingFixtureActor& A, const ALightingFixtureActor& B) { return A.GetFixtureId() < B.GetFixtureId(); });
+			}
+			if (Fixtures.IsEmpty() && OutError.IsEmpty())
+			{
+				OutError = Pick(Command.Language, LOCTEXT("ToolNoFixtures", "None of those is a lighting fixture."), INVTEXT("Դրանցից ոչ մեկը լուսային սարք չէ։"));
+			}
+			return Fixtures;
+		}
+
+		/**
+		 * Makes Fixtures the player's selection, for a request that acts on the selection (palettes, groups, effects), unless they already
+		 * are. A selection is tool state, not an undo step. False, with the reason, when it was refused (a drag, Place mode guards).
+		 */
+		bool SelectForTool(AModularPlayerController& Controller, const TArray<ALightingFixtureActor*>& Fixtures, EStageAILanguage Language, FText& OutError)
+		{
+			const auto IsSelected = [&Controller, &Fixtures]()
+			{
+				const USelectionComponent* Selection = Controller.GetSelection();
+				const TArray<AActor*> Selected = Selection ? Selection->GetSelectedActors() : TArray<AActor*>();
+				return Selected.Num() == Fixtures.Num() && Algo::AllOf(Fixtures, [&Selected](ALightingFixtureActor* Fixture) { return Selected.Contains(Fixture); });
+			};
+			if (IsSelected())
+			{
+				return true;
+			}
+			const TArray<AModularBaseActor*> Items(Fixtures);
+			const TArray<FStageEconomyResultInfo> Refusals = Controller.RunCapturingRejections([&]() { Controller.RequestSelectItems(Items, EStageSelectionClick::Replace); });
+			if (IsSelected())
+			{
+				return true;
+			}
+			OutError = RefusalOf(Refusals, Pick(Language, LOCTEXT("SelectRefused", "I could not select them right now."), INVTEXT("Այս պահին չկարողացա ընտրել դրանք։")));
+			return false;
+		}
+
+		/** The fixtures of Command's target, selected; empty with OutError when there are none or the selection was refused. */
+		TArray<ALightingFixtureActor*> SelectToolTargets(AModularPlayerController& Controller, const FStageAICommand& Command, FText& OutError)
+		{
+			TArray<ALightingFixtureActor*> Fixtures = FindFixtureTargets(Controller, Command, OutError);
+			if (!Fixtures.IsEmpty() && !SelectForTool(Controller, Fixtures, Command.Language, OutError))
+			{
+				Fixtures.Reset();
+			}
+			return Fixtures;
+		}
+
+		FStageAIActionOutcome SelectFixtures(AModularPlayerController& Controller, const FStageAICommand& Command)
+		{
+			FText Error;
+			const TArray<ALightingFixtureActor*> Fixtures = SelectToolTargets(Controller, Command, Error);
+			if (Fixtures.IsEmpty())
+			{
+				return Refused(Error);
+			}
+			return WithFixtures(Done(FText::Format(Pick(Command.Language, LOCTEXT("Selected", "Selected {0}."), INVTEXT("Ընտրվեց {0}։")),
+				DescribeItems(TArray<AModularBaseActor*>(Fixtures)))), Fixtures);
+		}
+
+		const UStageShowLibrarySubsystem* GetLibrary(const AModularPlayerController& Controller)
+		{
+			return UWorld::GetSubsystem<UStageShowLibrarySubsystem>(Controller.GetWorld());
+		}
+
+		/** The palette Command names (by name or pool number), or null with OutError. */
+		const FStagePalette* FindPalette(const AModularPlayerController& Controller, const FStageAICommand& Command, FText& OutError)
+		{
+			const UStageShowLibrarySubsystem* Library = GetLibrary(Controller);
+			if (!Library)
+			{
+				OutError = Pick(Command.Language, LOCTEXT("NoLibrary", "Palettes and groups are not available in this level."), INVTEXT("Պալիտրաներն ու խմբերը հասանելի չեն այս մակարդակում։"));
+				return nullptr;
+			}
+			TArray<FString> Names;
+			for (const FStagePalette& Palette : Library->GetPalettes())
+			{
+				Names.Add(Palette.Name.ToString());
+			}
+			const int32 Found = ResolvePoolName(Names, Command.Palette, Pick(Command.Language, LOCTEXT("PoolPalettes", "palettes"), INVTEXT("պալիտրաներ")), Command.Language, OutError);
+			return Found == INDEX_NONE ? nullptr : &Library->GetPalettes()[Found];
+		}
+
+		FStageAIActionOutcome ApplyPalette(AModularPlayerController& Controller, const FStageAICommand& Command)
+		{
+			const EStageAILanguage Language = Command.Language;
+			FText Error;
+			const FStagePalette* Palette = FindPalette(Controller, Command, Error);
+			if (!Palette)
+			{
+				return Refused(Error);
+			}
+			const FGuid PaletteId = Palette->Id;
+			const FText PaletteName = Palette->Name;
+			const TArray<ALightingFixtureActor*> Fixtures = SelectToolTargets(Controller, Command, Error);
+			if (Fixtures.IsEmpty())
+			{
+				return Refused(Error);
+			}
+			FStageEconomyResultInfo Result;
+			const TArray<FStageEconomyResultInfo> Refusals = Controller.RunCapturingRejections([&]() { Result = Controller.RequestApplyPalette(PaletteId); });
+			if (!Result.IsSuccess())
+			{
+				return Refused(RefusalOf(Refusals, !Result.Message.IsEmpty() ? Result.Message : FText::Format(Pick(Language,
+					LOCTEXT("PaletteNotApplied", "Palette \"{0}\" has nothing for those fixtures."), INVTEXT("«{0}» պալիտրան այդ սարքերի համար ոչինչ չունի։")), PaletteName)));
+			}
+			return WithFixtures(Done(FText::Format(Pick(Language, LOCTEXT("PaletteApplied", "{0}: palette \"{1}\" (they follow it until a plain edit or Clear)."),
+				INVTEXT("{0}՝ «{1}» պալիտրա (կհետևեն դրան մինչև պարզ փոփոխություն կամ Clear)։")), DescribeItems(TArray<AModularBaseActor*>(Fixtures)), PaletteName)), Fixtures);
+		}
+
+		FStageAIActionOutcome RecordPalette(AModularPlayerController& Controller, const FStageAICommand& Command)
+		{
+			const EStageAILanguage Language = Command.Language;
+			FText Error;
+			const TArray<ALightingFixtureActor*> Fixtures = SelectToolTargets(Controller, Command, Error);
+			if (Fixtures.IsEmpty())
+			{
+				return Refused(Error);
+			}
+			FGuid PaletteId;
+			const TArray<FStageEconomyResultInfo> Refusals = Controller.RunCapturingRejections([&]()
+			{
+				PaletteId = Controller.RequestRecordPalette(Command.PaletteKind, FText::FromString(Command.Label), EStagePaletteScope::Global);
+			});
+			const UStageShowLibrarySubsystem* Library = GetLibrary(Controller);
+			const FStagePalette* Palette = Library && PaletteId.IsValid() ? Library->FindPalette(PaletteId) : nullptr;
+			if (!Palette)
+			{
+				return Refused(RefusalOf(Refusals, Pick(Language, LOCTEXT("PaletteNotRecorded", "Nothing was recorded: those fixtures show nothing of that kind."),
+					INVTEXT("Ոչինչ չգրանցվեց. այդ սարքերը այդ տեսակից ոչինչ ցույց չեն տալիս։"))));
+			}
+			return WithFixtures(Done(FText::Format(Pick(Language, LOCTEXT("PaletteRecorded", "Recorded palette \"{0}\" from {1}."), INVTEXT("Գրանցվեց «{0}» պալիտրան {1}-ից։")),
+				Palette->Name, DescribeItems(TArray<AModularBaseActor*>(Fixtures)))), Fixtures);
+		}
+
+		FStageAIActionOutcome DeletePalette(AModularPlayerController& Controller, const FStageAICommand& Command)
+		{
+			FText Error;
+			const FStagePalette* Palette = FindPalette(Controller, Command, Error);
+			if (!Palette)
+			{
+				return Refused(Error);
+			}
+			const FGuid PaletteId = Palette->Id;
+			const FText PaletteName = Palette->Name;
+			bool bDeleted = false;
+			const TArray<FStageEconomyResultInfo> Refusals = Controller.RunCapturingRejections([&]() { bDeleted = Controller.RequestDeletePalette(PaletteId); });
+			if (!bDeleted)
+			{
+				return Refused(RefusalOf(Refusals, FText::Format(Pick(Command.Language, LOCTEXT("PaletteNotDeleted", "Palette \"{0}\" could not be deleted."),
+					INVTEXT("«{0}» պալիտրան հնարավոր չեղավ ջնջել։")), PaletteName)));
+			}
+			return Done(FText::Format(Pick(Command.Language, LOCTEXT("PaletteDeleted", "Deleted palette \"{0}\"; cues that used it keep its values."),
+				INVTEXT("Ջնջվեց «{0}» պալիտրան. այն օգտագործող կյուները պահում են դրա արժեքները։")), PaletteName));
+		}
+
+		FStageAIActionOutcome RecordGroup(AModularPlayerController& Controller, const FStageAICommand& Command)
+		{
+			const EStageAILanguage Language = Command.Language;
+			FText Error;
+			const TArray<ALightingFixtureActor*> Fixtures = SelectToolTargets(Controller, Command, Error);
+			if (Fixtures.IsEmpty())
+			{
+				return Refused(Error);
+			}
+			FGuid GroupId;
+			const TArray<FStageEconomyResultInfo> Refusals = Controller.RunCapturingRejections([&]() { GroupId = Controller.RequestRecordGroup(FText::FromString(Command.Label)); });
+			const UStageShowLibrarySubsystem* Library = GetLibrary(Controller);
+			const FStageFixtureGroup* Group = Library && GroupId.IsValid() ? Library->FindGroup(GroupId) : nullptr;
+			if (!Group)
+			{
+				return Refused(RefusalOf(Refusals, Pick(Language, LOCTEXT("GroupNotRecorded", "The group could not be recorded."), INVTEXT("Խումբը հնարավոր չեղավ գրանցել։"))));
+			}
+			return WithFixtures(Done(FText::Format(Pick(Language, LOCTEXT("GroupRecorded", "Recorded group \"{0}\" with {1}."), INVTEXT("Գրանցվեց «{0}» խումբը՝ {1}։")),
+				Group->Name, DescribeItems(TArray<AModularBaseActor*>(Fixtures)))), Fixtures);
+		}
+
+		FStageAIActionOutcome DeleteGroup(AModularPlayerController& Controller, const FStageAICommand& Command)
+		{
+			const EStageAILanguage Language = Command.Language;
+			const UStageShowLibrarySubsystem* Library = GetLibrary(Controller);
+			if (!Library)
+			{
+				return Refused(Pick(Language, LOCTEXT("NoLibraryGroups", "Groups are not available in this level."), INVTEXT("Խմբերը հասանելի չեն այս մակարդակում։")));
+			}
+			TArray<FString> Names;
+			for (const FStageFixtureGroup& Group : Library->GetGroups())
+			{
+				Names.Add(Group.Name.ToString());
+			}
+			FText Error;
+			const int32 Found = ResolvePoolName(Names, Command.Group, Pick(Language, LOCTEXT("PoolGroupsDelete", "groups"), INVTEXT("խմբեր")), Language, Error);
+			if (Found == INDEX_NONE)
+			{
+				return Refused(Error);
+			}
+			const FGuid GroupId = Library->GetGroups()[Found].Id;
+			const FText GroupName = Library->GetGroups()[Found].Name;
+			bool bDeleted = false;
+			const TArray<FStageEconomyResultInfo> Refusals = Controller.RunCapturingRejections([&]() { bDeleted = Controller.RequestDeleteGroup(GroupId); });
+			if (!bDeleted)
+			{
+				return Refused(RefusalOf(Refusals, FText::Format(Pick(Language, LOCTEXT("GroupNotDeleted", "Group \"{0}\" could not be deleted."), INVTEXT("«{0}» խումբը հնարավոր չեղավ ջնջել։")),
+					GroupName)));
+			}
+			return Done(FText::Format(Pick(Language, LOCTEXT("GroupDeleted", "Deleted group \"{0}\"; its fixtures stay on the stage."), INVTEXT("Ջնջվեց «{0}» խումբը. դրա սարքերը մնում են բեմում։")),
+				GroupName));
+		}
+
+		/** Command's rate and size on Effect: a position effect's size is degrees, any other's is the wave's height above its bottom. */
+		void ApplyEffectSettings(const FStageAICommand& Command, FStageEffect& Effect)
+		{
+			if (Command.RateHz.IsSet())
+			{
+				Effect.RateHz = *Command.RateHz;
+			}
+			if (Command.EffectSize.IsSet())
+			{
+				if (Effect.Target == EStageEffectTarget::Position)
+				{
+					Effect.Size = *Command.EffectSize;
+				}
+				else
+				{
+					Effect.High = FMath::Clamp(Effect.Low + FMath::Min(*Command.EffectSize, 1.f), 0.f, 1.f);
+				}
+			}
+		}
+
+		/** The names of the effects TConstArrayView holds. */
+		TArray<FString> EffectNames(TConstArrayView<FStageEffect> Effects)
+		{
+			TArray<FString> Names;
+			for (const FStageEffect& Effect : Effects)
+			{
+				Names.Add(Effect.Name.ToString());
+			}
+			return Names;
+		}
+
+		/** Whether a running effect named Name is one Query names (empty: every effect). */
+		bool EffectMatches(const FText& Name, const FString& Query)
+		{
+			const FString NameText = Name.ToString();
+			return Query.IsEmpty() || StageAICommandParser::ResolveName(MakeArrayView(&NameText, 1), Query).Index == 0;
+		}
+
+		FStageAIActionOutcome StartEffect(AModularPlayerController& Controller, const FStageAICommand& Command)
+		{
+			const EStageAILanguage Language = Command.Language;
+			TArray<FStageEffect> Effects = StageEffectRules::MakeQuickEffects();
+			Effects.Append(StageEffectRules::MakeAudioQuickEffects());
+			const TArray<FString> Names = EffectNames(Effects);
+			// "Chase" is the plain Dimmer Chase before the Beat Chase: the first of several wins, as on the panel.
+			const StageAICommandParser::FStageAINameMatch Match = StageAICommandParser::ResolveName(Names, Command.Effect, /*bFirstOfSeveral*/ true);
+			if (Match.Index == INDEX_NONE)
+			{
+				return Refused(FText::Format(Pick(Language, LOCTEXT("UnknownEffect", "I don't know the effect \"{0}\". I can start: {1}."),
+					INVTEXT("«{0}» էֆեկտը չգիտեմ։ Կարող եմ սկսել՝ {1}։")), FText::FromString(Command.Effect), FText::FromString(FString::Join(Names, TEXT(", ")))));
+			}
+			FStageEffect Effect = Effects[Match.Index];
+			ApplyEffectSettings(Command, Effect);
+			FText Error;
+			const TArray<ALightingFixtureActor*> Fixtures = SelectToolTargets(Controller, Command, Error);
+			if (Fixtures.IsEmpty())
+			{
+				return Refused(Error);
+			}
+			FGuid EffectId;
+			const TArray<FStageEconomyResultInfo> Refusals = Controller.RunCapturingRejections([&]() { EffectId = Controller.RequestStartEffect(Effect); });
+			if (!EffectId.IsValid())
+			{
+				return Refused(RefusalOf(Refusals, FText::Format(Pick(Language, LOCTEXT("EffectNotStarted", "\"{0}\" could not start on them."),
+					INVTEXT("«{0}»-ը չկարողացավ սկսել դրանց վրա։")), Effect.Name)));
+			}
+			return WithFixtures(Done(FText::Format(Pick(Language, LOCTEXT("EffectStarted", "{0}: effect \"{1}\" running. Say \"stop effects\" to stop it."),
+				INVTEXT("{0}՝ «{1}» էֆեկտը աշխատում է։ Կանգնեցնելու համար գրեք «կանգնեցրու էֆեկտները»։")), DescribeItems(TArray<AModularBaseActor*>(Fixtures)), Effect.Name)), Fixtures);
+		}
+
+		FStageAIActionOutcome UpdateEffect(AModularPlayerController& Controller, const FStageAICommand& Command)
+		{
+			const EStageAILanguage Language = Command.Language;
+			const UStageProgrammerSubsystem* Programmer = UWorld::GetSubsystem<UStageProgrammerSubsystem>(Controller.GetWorld());
+			// A copy: each update replaces the programmer's list.
+			const TArray<FStageEffectEntry> Running = Programmer ? Programmer->GetEffects() : TArray<FStageEffectEntry>();
+			TArray<int32> FixtureIds;
+			int32 Changed = 0;
+			bool bAnyNamed = false;
+			for (const FStageEffectEntry& Entry : Running)
+			{
+				if (!EffectMatches(Entry.Effect.Name, Command.Effect))
+				{
+					continue;
+				}
+				bAnyNamed = true;
+				FStageEffect Effect = Entry.Effect;
+				ApplyEffectSettings(Command, Effect);
+				bool bUpdated = false;
+				Controller.RunCapturingRejections([&]() { bUpdated = Controller.RequestUpdateEffect(Entry.Id, Effect); });
+				if (bUpdated)
+				{
+					++Changed;
+					for (const int32 Id : Entry.FixtureIds)
+					{
+						FixtureIds.AddUnique(Id);
+					}
+				}
+			}
+			if (!bAnyNamed)
+			{
+				return Refused(Command.Effect.IsEmpty()
+					? Pick(Language, LOCTEXT("NoProgrammerEffect", "No effect of the programmer is running. One a cue runs is changed after EDIT in the Effects panel."),
+						INVTEXT("Ծրագրավորողի ոչ մի էֆեկտ չի աշխատում։ Կյուի էֆեկտը փոխվում է Effects վահանակի EDIT-ից հետո։"))
+					: FText::Format(Pick(Language, LOCTEXT("NoNamedEffect", "No running effect of the programmer is called \"{0}\"."),
+						INVTEXT("Ծրագրավորողի աշխատող էֆեկտներից ոչ մեկը «{0}» չի կոչվում։")), FText::FromString(Command.Effect)));
+			}
+			if (Changed == 0)
+			{
+				return Refused(Pick(Language, LOCTEXT("EffectsNotChanged", "The effects could not be changed right now."), INVTEXT("Էֆեկտներն այս պահին հնարավոր չեղավ փոխել։")));
+			}
+			FStageAIActionOutcome Outcome = Done(FText::Format(Pick(Language, LOCTEXT("EffectsChanged", "Changed {0} {0}|plural(one=effect,other=effects)."),
+				INVTEXT("Փոխվեց {0} էֆեկտ։")), FText::AsNumber(Changed)));
+			Outcome.AffectedFixtureIds = MoveTemp(FixtureIds);
+			return Outcome;
+		}
+
+		FStageAIActionOutcome StopEffect(AModularPlayerController& Controller, const FStageAICommand& Command)
+		{
+			const EStageAILanguage Language = Command.Language;
+			const UShowControlSubsystem* Show = UWorld::GetSubsystem<UShowControlSubsystem>(Controller.GetWorld());
+			TArray<FStageRunningEffect> Running;
+			if (Show)
+			{
+				Show->GetRunningEffects(Running);
+			}
+			Running.RemoveAll([&Command](const FStageRunningEffect& Effect) { return Effect.bStopping || !EffectMatches(Effect.Entry.Effect.Name, Command.Effect); });
+			if (Running.IsEmpty())
+			{
+				return Refused(Command.Effect.IsEmpty()
+					? Pick(Language, LOCTEXT("NoEffects", "No effect is running."), INVTEXT("Ոչ մի էֆեկտ չի աշխատում։"))
+					: FText::Format(Pick(Language, LOCTEXT("NoRunningNamed", "No running effect is called \"{0}\"."), INVTEXT("Աշխատող էֆեկտներից ոչ մեկը «{0}» չի կոչվում։")),
+						FText::FromString(Command.Effect)));
+			}
+			int32 Stopped = 0;
+			TArray<FStageEconomyResultInfo> Refusals;
+			if (Command.Effect.IsEmpty())
+			{
+				// STOP ALL: one undo step, as the panel's button.
+				bool bStopped = false;
+				Refusals = Controller.RunCapturingRejections([&]() { bStopped = Controller.RequestStopEffect(FGuid()); });
+				Stopped = bStopped ? Running.Num() : 0;
+			}
+			else
+			{
+				for (const FStageRunningEffect& Effect : Running)
+				{
+					bool bStopped = false;
+					Refusals.Append(Controller.RunCapturingRejections([&]() { bStopped = Controller.RequestStopEffect(Effect.Entry.Id); }));
+					Stopped += bStopped ? 1 : 0;
+				}
+			}
+			if (Stopped == 0)
+			{
+				return Refused(RefusalOf(Refusals, Pick(Language, LOCTEXT("EffectsNotStopped", "The effects could not be stopped right now."), INVTEXT("Էֆեկտներն այս պահին հնարավոր չեղավ կանգնեցնել։"))));
+			}
+			return Done(FText::Format(Pick(Language, LOCTEXT("EffectsStopped", "Stopped {0} {0}|plural(one=effect,other=effects). Ctrl+Z starts them again."),
+				INVTEXT("Կանգնեցվեց {0} էֆեկտ։ Ctrl+Z-ը դրանք նորից կմիացնի։")), FText::AsNumber(Stopped)));
 		}
 
 		FStageAIActionOutcome StepHistory(AModularPlayerController& Controller, bool bUndo, EStageAILanguage Language)
@@ -1175,6 +1694,15 @@ namespace StageAICommandRunner
 		case EStageAIIntent::ReplaceItems:	return ReplaceItems(Controller, Command);
 		case EStageAIIntent::BuildShape:	return BuildShape(Controller, Command);
 		case EStageAIIntent::SetFixture:	return SetFixtures(Controller, Command);
+		case EStageAIIntent::SelectFixtures:	return SelectFixtures(Controller, Command);
+		case EStageAIIntent::ApplyPalette:	return ApplyPalette(Controller, Command);
+		case EStageAIIntent::RecordPalette:	return RecordPalette(Controller, Command);
+		case EStageAIIntent::DeletePalette:	return DeletePalette(Controller, Command);
+		case EStageAIIntent::RecordGroup:	return RecordGroup(Controller, Command);
+		case EStageAIIntent::DeleteGroup:	return DeleteGroup(Controller, Command);
+		case EStageAIIntent::StartEffect:	return StartEffect(Controller, Command);
+		case EStageAIIntent::UpdateEffect:	return UpdateEffect(Controller, Command);
+		case EStageAIIntent::StopEffect:	return StopEffect(Controller, Command);
 		case EStageAIIntent::SearchMarketplace:
 		case EStageAIIntent::PreviewListing:
 		case EStageAIIntent::AcquireListing:	return StageAIMarketplaceRunner::Run(Controller, Command);

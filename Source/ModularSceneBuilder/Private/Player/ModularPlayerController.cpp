@@ -2166,6 +2166,21 @@ namespace ModularPlayerControllerAssistant
 		{
 			return Controller.EndAssistantPlan(bKeep);
 		});
+		Host.SelectedFixtures = FStageAISelectedFixtures::CreateWeakLambda(&Controller, [&Controller]()
+		{
+			TArray<int32> Ids;
+			if (const USelectionComponent* Selection = Controller.GetSelection())
+			{
+				for (AActor* Actor : Selection->GetSelectedActors())
+				{
+					if (const ALightingFixtureActor* Fixture = Cast<ALightingFixtureActor>(Actor))
+					{
+						Ids.Add(Fixture->GetFixtureId());
+					}
+				}
+			}
+			return Ids;
+		});
 		Host.bAskBeforeChanges = Controller.IsAssistantAskingBeforeChanges();
 		return Host;
 	}

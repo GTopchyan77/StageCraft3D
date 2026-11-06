@@ -143,6 +143,19 @@ namespace StageAIArmenian
 			{ TEXT("վեր"), TEXT("up"), Exact }, { TEXT("վերև"), TEXT("up") }, { TEXT("ներքև"), TEXT("down") }, { TEXT("ցած"), TEXT("down"), Exact },
 			{ TEXT("դեպի"), TEXT(""), Exact }, { TEXT("ուղղությ"), TEXT("") }, { TEXT("չափով"), TEXT(""), Exact },
 
+			// Selection, palettes, groups, effects, repeats and "them" (Docs/ADR/0030 §6).
+			{ TEXT("ընտրիր"), TEXT("select"), Exact }, { TEXT("ընտրեք"), TEXT("select"), Exact }, { TEXT("ընտրել"), TEXT("select"), Exact },
+			{ TEXT("պալիտր"), TEXT("palette") }, { TEXT("պալետ"), TEXT("palette") }, { TEXT("պրեսետ"), TEXT("palette") },
+			{ TEXT("խումբ"), TEXT("group") }, { TEXT("խմբ"), TEXT("group") },
+			{ TEXT("էֆեկտ"), TEXT("effect") }, { TEXT("կիրառ"), TEXT("apply") }, { TEXT("սկս"), TEXT("start") },
+			{ TEXT("նորից"), TEXT("again") }, { TEXT("կրկին"), TEXT("again"), Exact }, { TEXT("նույն"), TEXT("same") },
+			{ TEXT("արա"), TEXT("do"), Exact }, { TEXT("արեք"), TEXT("do"), Exact },
+			{ TEXT("դրանք"), TEXT("them"), Exact }, { TEXT("դրանց"), TEXT("them"), Exact }, { TEXT("նրանք"), TEXT("them"), Exact }, { TEXT("նրանց"), TEXT("them"), Exact },
+			{ TEXT("արագությ"), TEXT("speed") }, { TEXT("չափ"), TEXT("size") },
+			{ TEXT("ծիածան"), TEXT("rainbow") }, { TEXT("չեյզ"), TEXT("chase") }, { TEXT("կայծ"), TEXT("sparkle") }, { TEXT("ալիք"), TEXT("wave") },
+			{ TEXT("զարկ"), TEXT("pulse") }, { TEXT("բաս"), TEXT("bass") }, { TEXT("բիթ"), TEXT("beat") },
+			{ TEXT("դիրք"), TEXT("position") }, { TEXT("ճառագայթ"), TEXT("beam") },
+
 			// Fixture controls (Docs/ADR/0020 §7).
 			{ TEXT("կարմիր"), TEXT("red") }, { TEXT("կանաչ"), TEXT("green") }, { TEXT("կապույտ"), TEXT("blue") }, { TEXT("երկնագույն"), TEXT("light blue") },
 			{ TEXT("սպիտակ"), TEXT("white") }, { TEXT("դեղին"), TEXT("yellow") }, { TEXT("նարնջագույն"), TEXT("orange") }, { TEXT("նարնջ"), TEXT("orange") },

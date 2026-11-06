@@ -19,6 +19,9 @@ namespace StageAIToolCatalogue
 		constexpr bool NotUndoable = false;
 		constexpr bool Plannable = true;
 		constexpr bool Alone = false;
+		constexpr bool Fixtures = true;
+		constexpr bool NoTarget = false;
+		constexpr bool LocalOnly = true;
 
 		/** In EStageAIIntent order; GetTool indexes it. The wire names are the online model's contract: never rename one. */
 		const FStageAITool Tools[] = {
@@ -51,7 +54,17 @@ namespace StageAIToolCatalogue
 			{ EStageAIIntent::MoveItems, TEXT("move_items"), EEffect::Stage, Undoable, Plannable },
 			{ EStageAIIntent::ReplaceItems, TEXT("replace_items"), EEffect::Stage, Undoable, Plannable },
 			{ EStageAIIntent::BuildShape, TEXT("build_shape"), EEffect::Stage, Undoable, Plannable },
-			{ EStageAIIntent::SetFixture, TEXT("set_fixture"), EEffect::Fixtures, Undoable, Plannable },
+			{ EStageAIIntent::SetFixture, TEXT("set_fixture"), EEffect::Fixtures, Undoable, Plannable, Fixtures },
+			{ EStageAIIntent::SelectFixtures, TEXT("select_fixtures"), EEffect::Selection, NotUndoable, Plannable, Fixtures },
+			{ EStageAIIntent::ApplyPalette, TEXT("apply_palette"), EEffect::Fixtures, Undoable, Plannable, Fixtures },
+			{ EStageAIIntent::RecordPalette, TEXT("record_palette"), EEffect::Library, Undoable, Plannable, Fixtures },
+			{ EStageAIIntent::DeletePalette, TEXT("delete_palette"), EEffect::Library, Undoable, Plannable },
+			{ EStageAIIntent::RecordGroup, TEXT("record_group"), EEffect::Library, Undoable, Plannable, Fixtures },
+			{ EStageAIIntent::DeleteGroup, TEXT("delete_group"), EEffect::Library, Undoable, Plannable },
+			{ EStageAIIntent::StartEffect, TEXT("start_effect"), EEffect::Fixtures, Undoable, Plannable, Fixtures },
+			{ EStageAIIntent::UpdateEffect, TEXT("update_effect"), EEffect::Fixtures, Undoable, Plannable },
+			{ EStageAIIntent::StopEffect, TEXT("stop_effect"), EEffect::Fixtures, Undoable, Plannable },
+			{ EStageAIIntent::Repeat, TEXT("repeat"), EEffect::None, NotUndoable, Alone, NoTarget, LocalOnly },
 			{ EStageAIIntent::SearchMarketplace, TEXT("search_marketplace"), EEffect::Marketplace, NotUndoable, Alone },
 			{ EStageAIIntent::ListingDetails, TEXT("listing_details"), EEffect::None, NotUndoable, Alone },
 			{ EStageAIIntent::PreviewListing, TEXT("preview_listing"), EEffect::Marketplace, NotUndoable, Alone },
@@ -74,13 +87,59 @@ namespace StageAIToolCatalogue
 			return FText::AsNumber(Value, &Format);
 		}
 
-		/** "the selected items", or "\"spot\" items" (at most N). */
+		FText DescribeFixtureIds(TConstArrayView<int32> Ids, EStageAILanguage Language);
+
+		/** "a colour", "a position", ..., "an". */
+		FText DescribePaletteKind(EStagePaletteKind Kind, EStageAILanguage Language)
+		{
+			switch (Kind)
+			{
+			case EStagePaletteKind::Intensity:	return Pick(Language, LOCTEXT("KindIntensity", "an intensity"), INVTEXT("ինտենսիվության"));
+			case EStagePaletteKind::Position:	return Pick(Language, LOCTEXT("KindPosition", "a position"), INVTEXT("դիրքի"));
+			case EStagePaletteKind::Color:		return Pick(Language, LOCTEXT("KindColor", "a colour"), INVTEXT("գույնի"));
+			case EStagePaletteKind::Beam:		return Pick(Language, LOCTEXT("KindBeam", "a beam"), INVTEXT("ճառագայթի"));
+			case EStagePaletteKind::Focus:		return Pick(Language, LOCTEXT("KindFocus", "a focus"), INVTEXT("ֆոկուսի"));
+			default:							return Pick(Language, LOCTEXT("KindAll", "an all-attribute"), INVTEXT("բոլոր հատկությունների"));
+			}
+		}
+
+		/** " \"Name\"", or nothing for an unnamed record (the pool names it). */
+		FText DescribeName(const FString& Name)
+		{
+			return Name.IsEmpty() ? FText::GetEmpty() : FText::Format(INVTEXT(" \"{0}\""), FText::FromString(Name));
+		}
+
+		/** " at 2 Hz, size 30" for what a start or change of an effect sets; empty when it sets neither. */
+		FText DescribeEffectSettings(const FStageAICommand& Command, EStageAILanguage Language)
+		{
+			TArray<FText> Parts;
+			if (Command.RateHz.IsSet())
+			{
+				Parts.Add(FText::Format(Pick(Language, LOCTEXT("EffectRate", "rate {0} Hz"), INVTEXT("արագություն {0} Հց")), FormatNumber(*Command.RateHz, 2)));
+			}
+			if (Command.EffectSize.IsSet())
+			{
+				Parts.Add(FText::Format(Pick(Language, LOCTEXT("EffectSize", "size {0}"), INVTEXT("չափ {0}")), FormatNumber(*Command.EffectSize, 2)));
+			}
+			return Parts.IsEmpty() ? FText::GetEmpty() : FText::Format(INVTEXT(" ({0})"), FText::Join(INVTEXT(", "), Parts));
+		}
+
+		/** "the selected items", "\"spot\" items" (at most N), "fixtures 1-4", "group 2", "the same fixtures". */
 		FText DescribeTarget(const FStageAICommand& Command, EStageAILanguage Language, bool bFixtures)
 		{
-			if (Command.Target == EStageAITarget::Selection)
+			switch (Command.Target)
 			{
+			case EStageAITarget::Selection:
 				return bFixtures ? Pick(Language, LOCTEXT("SelectedFixtures", "the selected fixtures"), INVTEXT("ընտրված սարքերը"))
 					: Pick(Language, LOCTEXT("SelectedItems", "the selected items"), INVTEXT("ընտրված իրերը"));
+			case EStageAITarget::Fixtures:
+				return DescribeFixtureIds(Command.FixtureIds, Language);
+			case EStageAITarget::Group:
+				return FText::Format(Pick(Language, LOCTEXT("TargetGroup", "group \"{0}\""), INVTEXT("«{0}» խումբը")), FText::FromString(Command.Group));
+			case EStageAITarget::Recent:
+				return Pick(Language, LOCTEXT("TargetRecent", "the same fixtures"), INVTEXT("նույն սարքերը"));
+			default:
+				break;
 			}
 			const FText Query = FText::FromString(Command.ItemQuery);
 			return Command.Count.IsSet()
@@ -233,8 +292,9 @@ namespace StageAIToolCatalogue
 			return false;
 		}
 		const FStageAITool& Tool = GetTool(Command.Intent);
-		return Tool.Effect == EStageAIToolEffect::Playback
-			|| (Tool.Effect == EStageAIToolEffect::Fixtures && Command.Target == EStageAITarget::Selection);
+		const bool bOwnFixtures = Command.Target == EStageAITarget::Selection || Command.Target == EStageAITarget::Recent;
+		return Tool.Effect == EStageAIToolEffect::Playback || Tool.Effect == EStageAIToolEffect::Selection
+			|| (Tool.Effect == EStageAIToolEffect::Fixtures && bOwnFixtures);
 	}
 
 	bool CheckPlan(TConstArrayView<FStageAICommand> Steps, EStageAILanguage Language, FText& OutError)
@@ -271,7 +331,9 @@ namespace StageAIToolCatalogue
 	{
 		return Algo::AnyOf(Steps, [](const FStageAICommand& Step)
 		{
-			return uint8(Step.Intent) < uint8(EStageAIIntent::Count) && GetTool(Step.Intent).IsChange() && !GetTool(Step.Intent).bUndoable;
+			// A selection is tool state, not a change to the show: nothing to warn about.
+			return uint8(Step.Intent) < uint8(EStageAIIntent::Count) && GetTool(Step.Intent).IsChange() && !GetTool(Step.Intent).bUndoable
+				&& GetTool(Step.Intent).Effect != EStageAIToolEffect::Selection;
 		});
 	}
 
@@ -357,6 +419,32 @@ namespace StageAIToolCatalogue
 			return FText::Format(Pick(Language, LOCTEXT("SetFixture", "Set {0} on {1}"), INVTEXT("Դնել {0}՝ {1}")), FText::Join(INVTEXT(", "), Settings),
 				DescribeTarget(Command, Language, true));
 		}
+		case EStageAIIntent::SelectFixtures:
+			return FText::Format(Pick(Language, LOCTEXT("Select", "Select {0}"), INVTEXT("Ընտրել {0}")), DescribeTarget(Command, Language, true));
+		case EStageAIIntent::ApplyPalette:
+			return FText::Format(Pick(Language, LOCTEXT("ApplyPalette", "Apply palette \"{0}\" to {1}"), INVTEXT("Կիրառել «{0}» պալիտրան {1}")),
+				FText::FromString(Command.Palette), DescribeTarget(Command, Language, true));
+		case EStageAIIntent::RecordPalette:
+			return FText::Format(Pick(Language, LOCTEXT("RecordPalette", "Record {0} palette{1} from {2}"), INVTEXT("Գրանցել {0} պալիտրա{1} {2}-ից")),
+				DescribePaletteKind(Command.PaletteKind, Language), DescribeName(Command.Label), DescribeTarget(Command, Language, true));
+		case EStageAIIntent::DeletePalette:
+			return FText::Format(Pick(Language, LOCTEXT("DeletePalette", "Delete palette \"{0}\""), INVTEXT("Ջնջել «{0}» պալիտրան")), FText::FromString(Command.Palette));
+		case EStageAIIntent::RecordGroup:
+			return FText::Format(Pick(Language, LOCTEXT("RecordGroup", "Record group{0} from {1}"), INVTEXT("Գրանցել խումբ{0} {1}-ից")),
+				DescribeName(Command.Label), DescribeTarget(Command, Language, true));
+		case EStageAIIntent::DeleteGroup:
+			return FText::Format(Pick(Language, LOCTEXT("DeleteGroup", "Delete group \"{0}\""), INVTEXT("Ջնջել «{0}» խումբը")), FText::FromString(Command.Group));
+		case EStageAIIntent::StartEffect:
+			return FText::Format(Pick(Language, LOCTEXT("StartEffect", "Start effect \"{0}\"{1} on {2}"), INVTEXT("Սկսել «{0}» էֆեկտը{1}՝ {2}")),
+				FText::FromString(Command.Effect), DescribeEffectSettings(Command, Language), DescribeTarget(Command, Language, true));
+		case EStageAIIntent::UpdateEffect:
+			return FText::Format(Pick(Language, LOCTEXT("UpdateEffect", "Change {0}{1}"), INVTEXT("Փոխել {0}{1}")), Command.Effect.IsEmpty()
+				? Pick(Language, LOCTEXT("EveryEffect", "every running effect"), INVTEXT("բոլոր աշխատող էֆեկտները"))
+				: FText::Format(Pick(Language, LOCTEXT("NamedEffect", "effect \"{0}\""), INVTEXT("«{0}» էֆեկտը")), FText::FromString(Command.Effect)),
+				DescribeEffectSettings(Command, Language));
+		case EStageAIIntent::StopEffect:
+			return Command.Effect.IsEmpty() ? Pick(Language, LOCTEXT("StopEffects", "Stop every effect"), INVTEXT("Կանգնեցնել բոլոր էֆեկտները"))
+				: FText::Format(Pick(Language, LOCTEXT("StopEffect", "Stop effect \"{0}\""), INVTEXT("Կանգնեցնել «{0}» էֆեկտը")), FText::FromString(Command.Effect));
 		case EStageAIIntent::SearchMarketplace:
 			return Pick(Language, LOCTEXT("Search", "Search the marketplace"), INVTEXT("Որոնել շուկայում"));
 		case EStageAIIntent::PreviewListing:

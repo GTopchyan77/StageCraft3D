@@ -62,6 +62,35 @@ namespace StageAICommandParser
 	/** The command Text asks for, or unset when the grammar does not understand it. */
 	MODULARSCENEBUILDER_API TOptional<FStageAICommand> Parse(const FString& Text);
 
+	/** Most clauses one prompt is split into (a plan holds at most StageAIToolCatalogue::MaxPlanSteps). */
+	constexpr int32 MaxPlanClauses = 48;
+
+	/**
+	 * Several changes in one prompt ("add 4 pars and store cue 1", «ավելացրու 4 փար և պահիր կյու 1»; Docs/ADR/0030 §6), as the steps
+	 * of one plan in order, each in the prompt's language. The prompt is split at "and", "then", commas, semicolons and full stops
+	 * (Armenian և, ու, հետո, ապա, իսկ, ։), never inside quotes; a part that is not a change on its own joins its neighbour, and a
+	 * fixture control without a target of its own joins the control before it ("set the spots to red and zoom wide" is one step). A
+	 * later step that acts on fixtures without naming any continues on the fixtures of the step before it (EStageAITarget::Recent).
+	 * Empty unless at least two changes that may share a plan (StageAIToolCatalogue plannable) were found; Parse reads the rest.
+	 */
+	MODULARSCENEBUILDER_API TArray<FStageAICommand> ParsePlan(const FString& Text);
+
+	/** What a name or number found in a pool (palettes, groups, effects). */
+	struct FStageAINameMatch
+	{
+		/** Index into the names, or INDEX_NONE. */
+		int32 Index = INDEX_NONE;
+		/** Several names matched (their indices); Index is then INDEX_NONE. */
+		TArray<int32> Ambiguous;
+	};
+
+	/**
+	 * The entry of Names that Query means: the whole name (any case), else the one name holding every word of Query (singular, number
+	 * words as digits, "color" as "colour"), else a number as its 1-based place in Names ("palette 3"). bFirstOfSeveral takes the
+	 * first of several word matches instead of reporting them ("chase" is the Dimmer Chase before the Beat Chase).
+	 */
+	MODULARSCENEBUILDER_API FStageAINameMatch ResolveName(TConstArrayView<FString> Names, const FString& Query, bool bFirstOfSeveral = false);
+
 	/**
 	 * The candidate Query names: the one whose name or fixture type shares the most words with it (plurals and generic words such as
 	 * "lights" and "fixtures" ignored). A query of only generic words picks the first candidate. INDEX_NONE when none match.

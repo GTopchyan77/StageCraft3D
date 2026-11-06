@@ -444,9 +444,9 @@ Decisions (Gevor, 2026-10-30): the free offline engine is the full default; Clau
 Gevor's fixture-suite request took #49 (Phase 27) and the marketplace took #50 / ADR 0021 (Phase 28); this phase follows them unchanged.
 - [ ] Feature knowledge base (DataTable + CSV, English and Armenian), `StageAIFeatureSearch`, `how_to` / `where_is` / `open_panel`
 - [ ] Reply action buttons; open and flash panels
-- [ ] Multi-step prompts (splitter, queued plan, stop on first refusal)
-- [ ] Conversation memory (last affected items, repeat with replaced slots)
-- [ ] New actions: selection, cue update/delete, BOM answers, export completion in chat (fixture parameters: done in #49 as set_fixture)
+- [x] Multi-step prompts (splitter, queued plan, stop on first refusal) — Phase H4, STATE.md #75
+- [x] Conversation memory (last affected items, repeat with replaced slots) — Phase H4, STATE.md #75
+- [ ] New actions: selection, cue update/delete, BOM answers, export completion in chat (fixture parameters: done in #49 as set_fixture; cue update/delete in #74, selection in #75; BOM answers and export completion in chat still open)
 - [ ] Claude schema: new intents + steps; knowledge base in the system prompt
 - [ ] Tests (corpus EN/HY); builds 0 warnings; scripted runs
 - [ ] Manual verification (Gevor)
@@ -623,7 +623,14 @@ Gevor's choices: automation tests on a harness game instance (not AFunctionalTes
   - [x] H3f tests (Assistant.ToolCatalogue, Assistant.PlanGrammar, History.Group, Assistant.Plan, Assistant.OnlinePlan), builds, Shipping scan, scripted run H3
 - [ ] H3 manual verification (Gevor): with ASK FIRST on, ask "store cue 5" and press APPLY, then Ctrl+Z; StageCraft.Assistant.Plan "store cue 2 | patch fixtures 1 to 4 at 2.001" then APPLY and one Ctrl+Z
 - [ ] H3b bounded online loop (read tools, 8 turns / 24 calls), append-only history replay with thinking blocks, cached prefix in the live backend, key in the credential vault, cancel from the panel
-- [ ] H4 offline multi-step, conversation memory, new actions (rest of Phase 26)
+- [x] H4 offline multi-step, conversation memory, palette / group / effect tools (STATE.md #75, ADR 0030 section 17)
+  - [x] H4a StageAICommandParser::ParsePlan: split at and / then / , ; . (Armenian և ու հետո ապա իսկ ։), never inside quotes; parts that are no change join a neighbour, untargeted controls join the control before; plans of the local grammar shown as H3 cards
+  - [x] H4b fixture targets by ID ("fixtures 1 to 4", «1-4 սարքերը») and by group, "them" (Recent) resolved when the step runs, ResolveName for pools
+  - [x] H4c conversation memory (fixtures the last change acted on, selection after it, the last change; restored on rollback, emptied with the conversation), "again" / "do it again on group 2" (local only)
+  - [x] H4d tools select_fixtures, apply_palette, record_palette, delete_palette, record_group, delete_group, start_effect, update_effect, stop_effect (catalogue, schema, runner through the panels' requests, grammar EN/HY, help)
+  - [x] H4e tests (Assistant.MultiStep, Assistant.ToolGrammar, Assistant.ToolSchema, Assistant.Memory), builds, Shipping scan, scripted run H4
+- [ ] H4 manual verification (Gevor): type "add 4 pars and make them blue", APPLY, one Ctrl+Z; "select fixtures 1 to 2 and record a group called Front"; "start a circle effect on group front", "effect speed 1 hz", "stop all effects"; "do it again on group front" after a colour; the same in Armenian
+- [ ] H4 follow-ups: add or remove fixtures of an existing group, rename palettes and groups, per-fixture palettes, effect settings beyond rate and size, BOM answers and export completion in chat (Phase 26)
 - [ ] I0 ADR 0031: asset source, VAT crowd technique (AnimToTexture bake, instanced meshes), crowd GPU budget measured at 1k / 5k / 20k; OverCrowd evaluated
 - [ ] I1 Audience area item (outline, density, capacity in reports, crowd energy from audio), Bench.Crowd
 - [ ] I2 band members and backline items

@@ -28,6 +28,10 @@ enum class EStageAIToolEffect : uint8
 	History,
 	/** The community marketplace. A paid listing is bought only after a local yes (Docs/ADR/0021 §13.3). */
 	Marketplace,
+	/** Which fixtures are selected: tool state, never recorded in the history, so a rollback leaves it as it is. */
+	Selection,
+	/** The palette and group pools (record, delete). */
+	Library,
 };
 
 /** One tool of the assistant: an intent, its wire name and what it may do. */
@@ -45,6 +49,12 @@ struct FStageAITool
 
 	/** May be one step of a plan of several steps. Tools that are not (undo, export, the marketplace) only ever run alone. */
 	bool bPlannable = false;
+
+	/** Acts on fixtures picked by any target: the selection, by name, by ID, a group, or "them" (EStageAITarget). */
+	bool bTargetsFixtures = false;
+
+	/** Read by the local grammar only and resolved before validation (Repeat); never offered to, or accepted from, the online model. */
+	bool bLocalOnly = false;
 
 	bool IsChange() const { return Effect != EStageAIToolEffect::None; }
 };
@@ -73,9 +83,10 @@ namespace StageAIToolCatalogue
 	MODULARSCENEBUILDER_API const FStageAITool* FindTool(FStringView Name);
 
 	/**
-	 * Whether Command may apply without the user's APPLY (ADR §6): cue playback, and fixture controls of the selected fixtures.
-	 * Everything else (cues, patch, placed items, environment, controls of fixtures picked by name) waits for APPLY when a plan
-	 * comes from the online model or holds several steps.
+	 * Whether Command may apply without the user's APPLY (ADR §6): cue playback, a selection, and fixture controls, palettes and
+	 * effects on the selected fixtures or on "them" (the ones the conversation just changed). Everything else (cues, patch, placed
+	 * items, environment, the palette and group pools, fixtures picked by name, ID or group) waits for APPLY when a plan comes
+	 * from the online model or holds several steps.
 	 */
 	MODULARSCENEBUILDER_API bool CanApplyWithoutAsking(const FStageAICommand& Command);
 

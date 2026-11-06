@@ -48,6 +48,15 @@ bool FStageAICommand::IsAction() const
 	case EStageAIIntent::ReplaceItems:
 	case EStageAIIntent::BuildShape:
 	case EStageAIIntent::SetFixture:
+	case EStageAIIntent::SelectFixtures:
+	case EStageAIIntent::ApplyPalette:
+	case EStageAIIntent::RecordPalette:
+	case EStageAIIntent::DeletePalette:
+	case EStageAIIntent::RecordGroup:
+	case EStageAIIntent::DeleteGroup:
+	case EStageAIIntent::StartEffect:
+	case EStageAIIntent::UpdateEffect:
+	case EStageAIIntent::StopEffect:
 	// Marketplace requests change no stage, but they run through the player's executor like every request that changes state.
 	case EStageAIIntent::SearchMarketplace:
 	case EStageAIIntent::PreviewListing:
