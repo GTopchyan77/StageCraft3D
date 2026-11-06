@@ -60,6 +60,8 @@ namespace StageAIArmenian
 			// Reports.
 			{ TEXT("արտահան"), TEXT("export") }, { TEXT("էքսպորտ"), TEXT("export") },
 			{ TEXT("նյութ"), TEXT("materials") }, { TEXT("գույքագր"), TEXT("inventory") }, { TEXT("պատչ"), TEXT("patch") }, { TEXT("փաթչ"), TEXT("patch") },
+			{ TEXT("յունիվերս"), TEXT("universe") }, { TEXT("ունիվերս"), TEXT("universe") }, { TEXT("հասցե"), TEXT("address") },
+			{ TEXT("վերանվան"), TEXT("rename") },
 			{ TEXT("մալուխ"), TEXT("cable") }, { TEXT("կաբել"), TEXT("cable") }, { TEXT("հաշվետվությ"), TEXT("") },
 
 			// Totals.
@@ -378,8 +380,16 @@ namespace StageAIArmenian
 			return Prompt;
 		}
 
+		// "1-4" is a range ("fixtures 1 to 4"); the tokenizer would split it into two numbers.
+		FString Ranged;
+		for (int32 Index = 0; Index < Prompt.Len(); ++Index)
+		{
+			const bool bRange = Prompt[Index] == TEXT('-') && Index > 0 && FChar::IsDigit(Prompt[Index - 1]) && Index + 1 < Prompt.Len() && FChar::IsDigit(Prompt[Index + 1]);
+			Ranged += bRange ? FString(TEXT(" to ")) : FString::Chr(Prompt[Index]);
+		}
+
 		bool bQuestion = false;
-		const TArray<FToken> Tokens = Tokenize(Prompt, bQuestion);
+		const TArray<FToken> Tokens = Tokenize(Ranged, bQuestion);
 		TArray<FString> Words;
 		// Where the first equipment word in the instrumental case (-ով, "with ...") went: the replacement of a replace request.
 		int32 InstrumentalAt = INDEX_NONE;

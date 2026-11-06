@@ -19,7 +19,7 @@ struct FStageAIModelResponse
 {
 	enum class EStatus : uint8
 	{
-		/** One stage_command tool call, already validated. */
+		/** One or more stage_command tool calls, each already validated (Commands; Command is the first). */
 		Command,
 		/** A plain-text answer. */
 		Text,
@@ -31,6 +31,8 @@ struct FStageAIModelResponse
 
 	EStatus Status = EStatus::Failed;
 	FStageAICommand Command;
+	/** Status Command: every call of the answer, in order (several make one plan, Docs/ADR/0030 §6). */
+	TArray<FStageAICommand> Commands;
 	FString Text;
 	FText Error;
 

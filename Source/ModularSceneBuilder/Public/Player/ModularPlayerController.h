@@ -330,6 +330,33 @@ public:
 	bool RequestAssistantPrompt(const FString& Prompt);
 
 	/**
+	 * APPLY (bApply) or CANCEL on the assistant's open proposal card (Docs/ADR/0030 §6). APPLY runs the plan through this
+	 * controller's requests as ONE undo step, rolled back when a step is refused. False, reported on OnRequestRejected, when there
+	 * is no assistant, no open proposal, or the assistant is busy.
+	 */
+	UFUNCTION(BlueprintCallable, Category = "StageCraft|Requests")
+	bool RequestAssistantProposal(bool bApply);
+
+#if !UE_BUILD_SHIPPING
+	/** Development and tests only: Plan for this player through UStageAICommandSubsystem::SubmitPlanForTesting (shown as a card). */
+	bool RequestAssistantPlanForTesting(const struct FStageAIPlan& Plan);
+#endif
+
+	/**
+	 * Opens the undo step an assistant plan's requests are collected into, named Description (UStageEditHistoryComponent::
+	 * BeginGroup); Ctrl+Z is refused until it ends. False when one is already open. Only the assistant calls it, through the host
+	 * RequestAssistantPrompt hands over; every request inside is still judged on its own.
+	 */
+	bool BeginAssistantPlan(const FText& Description);
+
+	/** Ends the plan's undo step: bKeep records it as one step; otherwise everything it collected is rolled back (AbortGroup). */
+	EStageCommandResult EndAssistantPlan(bool bKeep);
+
+	/** This player's "ask before every change" preference for the assistant (UStageCraftUserSettings, saved at once). */
+	bool IsAssistantAskingBeforeChanges() const;
+	void SetAssistantAskingBeforeChanges(bool bAsk);
+
+	/**
 	 * Runs Work and returns every refusal it reported, in order (they are still broadcast on OnRequestRejected). Lets the assistant
 	 * quote the reason a request it made was refused. Not re-entrant: a nested call returns its own refusals only.
 	 */

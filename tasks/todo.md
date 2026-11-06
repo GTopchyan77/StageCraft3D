@@ -614,7 +614,15 @@ Gevor's choices: automation tests on a harness game instance (not AFunctionalTes
   - [x] H2e assistant intents explain_fixture / list_problems (grammar EN/HY, online tool), SHOW ME at the cause; help articles why-dark and problems
   - [x] H2f tests (Show.Explain, Show.Diagnostics, Assistant.Diagnostics), builds, Shipping scan, scripted run H2
 - [ ] H2 manual verification (Gevor): open Window > Problems, click a problem (fixtures selected, the fixing control shown); ask "why is fixture N dark?" and "any problems?" in English and Armenian and click SHOW ME
-- [ ] H3 tool catalogue, proposal cards, one-undo-step plans with rollback, bounded online loop with append-only history and cached prefix, key in the vault
+- [x] H3 tool catalogue, proposal cards, one-undo-step plans with rollback (STATE.md #74, ADR 0030 section 16)
+  - [x] H3a StageAIToolCatalogue (one entry per intent: wire name, effect, undoable, plannable; never-exposed list); schema names from it
+  - [x] H3b new tools patch_fixtures, update_cue, delete_cue (runner, schema, grammar EN/HY)
+  - [x] H3c history groups (BeginGroup / EndGroup / AbortGroup), undo refused while a plan applies
+  - [x] H3d FStageAIPlan, proposal cards with APPLY / CANCEL and typed yes / no, ASK FIRST per PC, rollback on the first refused step, pending steps
+  - [x] H3e several online tool calls as one plan; fixed the online path losing the player's executor
+  - [x] H3f tests (Assistant.ToolCatalogue, Assistant.PlanGrammar, History.Group, Assistant.Plan, Assistant.OnlinePlan), builds, Shipping scan, scripted run H3
+- [ ] H3 manual verification (Gevor): with ASK FIRST on, ask "store cue 5" and press APPLY, then Ctrl+Z; StageCraft.Assistant.Plan "store cue 2 | patch fixtures 1 to 4 at 2.001" then APPLY and one Ctrl+Z
+- [ ] H3b bounded online loop (read tools, 8 turns / 24 calls), append-only history replay with thinking blocks, cached prefix in the live backend, key in the credential vault, cancel from the panel
 - [ ] H4 offline multi-step, conversation memory, new actions (rest of Phase 26)
 - [ ] I0 ADR 0031: asset source, VAT crowd technique (AnimToTexture bake, instanced meshes), crowd GPU budget measured at 1k / 5k / 20k; OverCrowd evaluated
 - [ ] I1 Audience area item (outline, density, capacity in reports, crowd energy from audio), Bench.Crowd

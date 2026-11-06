@@ -44,6 +44,9 @@ namespace StageAICommandParser
 	/** A SetFixture command sets at most this many controls. */
 	constexpr int32 MaxFixtureSettings = 12;
 
+	/** A PatchFixtures command names at most this many fixtures ("patch fixtures 1 to 96"). */
+	constexpr int32 MaxPatchFixtures = 256;
+
 	/** Strobe without a rate ("strobe the blinders") flashes this many times a second. */
 	constexpr double DefaultStrobeHz = 10.0;
 

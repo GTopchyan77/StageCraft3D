@@ -319,7 +319,7 @@ bool FStageAISchemaTest::RunTest(const FString& Parameters)
 			TestEqual(TEXT("Fallbacks"), Body->GetStringField(TEXT("fallbacks")), FString(TEXT("default")));
 			TestFalse(TEXT("No thinking field (adaptive by default)"), Body->HasField(TEXT("thinking")));
 			TestEqual(TEXT("Auto tool choice"), Body->GetObjectField(TEXT("tool_choice"))->GetStringField(TEXT("type")), FString(TEXT("auto")));
-			TestTrue(TEXT("One call at most"), Body->GetObjectField(TEXT("tool_choice"))->GetBoolField(TEXT("disable_parallel_tool_use")));
+			TestFalse(TEXT("Several calls allowed: they make one plan (Docs/ADR/0030 section 6)"), Body->GetObjectField(TEXT("tool_choice"))->HasField(TEXT("disable_parallel_tool_use")));
 			TestEqual(TEXT("One tool"), Body->GetArrayField(TEXT("tools")).Num(), 1);
 			const TArray<TSharedPtr<FJsonValue>> Messages = Body->GetArrayField(TEXT("messages"));
 			TestEqual(TEXT("Turns: user, assistant, new user"), Messages.Num(), 3);

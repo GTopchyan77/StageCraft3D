@@ -8,6 +8,7 @@
 #include "AI/StageAICommandRunner.h"
 #include "AI/StageAICommandSubsystem.h"
 #include "AI/StageVoiceInputComponent.h"
+#include "Settings/StageCraftUserSettings.h"
 #include "Algo/AllOf.h"
 #include "Audio/StageAudioSubsystem.h"
 #include "Audio/StageEditorAudioFeedbackComponent.h"
@@ -2144,6 +2145,32 @@ bool AModularPlayerController::RequestApplyAtmosphere(const FPrimaryAssetId& Atm
 	return RequestSetEnvironment(Preset->Settings, FText::Format(LOCTEXT("AtmosphereStep", "Atmosphere: {0}"), Preset->DisplayName), EStageEnvironmentTransition::Blend);
 }
 
+namespace ModularPlayerControllerAssistant
+{
+	/**
+	 * How the assistant acts for Controller (Docs/ADR/0030 §6): commands through its requests, plans as one undo step, and its
+	 * player's "ask first" preference. Bound weakly: nothing runs for a controller that has gone.
+	 */
+	FStageAIActionHost MakeHost(AModularPlayerController& Controller)
+	{
+		FStageAIActionHost Host;
+		Host.Execute = FStageAICommandExecutor::CreateWeakLambda(&Controller, [&Controller](const FStageAICommand& Command)
+		{
+			return StageAICommandRunner::Run(Controller, Command);
+		});
+		Host.BeginPlan = FStageAIPlanBegin::CreateWeakLambda(&Controller, [&Controller](const FText& Description)
+		{
+			return Controller.BeginAssistantPlan(Description);
+		});
+		Host.EndPlan = FStageAIPlanEnd::CreateWeakLambda(&Controller, [&Controller](bool bKeep)
+		{
+			return Controller.EndAssistantPlan(bKeep);
+		});
+		Host.bAskBeforeChanges = Controller.IsAssistantAskingBeforeChanges();
+		return Host;
+	}
+}
+
 bool AModularPlayerController::RequestAssistantPrompt(const FString& Prompt)
 {
 	UStageAICommandSubsystem* Assistant = UWorld::GetSubsystem<UStageAICommandSubsystem>(GetWorld());
@@ -2160,17 +2187,82 @@ bool AModularPlayerController::RequestAssistantPrompt(const FString& Prompt)
 	{
 		Reason = LOCTEXT("AssistantEmpty", "Type a request or a question first.");
 	}
-	// The executor is bound weakly: an action never runs for a controller that has gone.
-	else if (Assistant->SubmitPrompt(Prompt, FStageAICommandExecutor::CreateWeakLambda(this, [this](const FStageAICommand& Command)
-		{
-			return StageAICommandRunner::Run(*this, Command);
-		}), DescribeSelectionForAssistant()))
+	else if (Assistant->SubmitPrompt(Prompt, ModularPlayerControllerAssistant::MakeHost(*this), DescribeSelectionForAssistant()))
 	{
 		return true;
 	}
 	ReportRejection(FStageEconomyResultInfo::Fail(EStageEconomyResult::InvalidRequest,
 		Reason.IsEmpty() ? LOCTEXT("AssistantNotStarted", "The assistant could not take the request.") : Reason));
 	return false;
+}
+
+bool AModularPlayerController::RequestAssistantProposal(bool bApply)
+{
+	UStageAICommandSubsystem* Assistant = UWorld::GetSubsystem<UStageAICommandSubsystem>(GetWorld());
+	FText Reason;
+	if (!Assistant || Assistant->GetOpenProposalId() == 0)
+	{
+		Reason = LOCTEXT("NoProposal", "There is no proposed change to apply or cancel.");
+	}
+	else if (Assistant->IsBusy())
+	{
+		Reason = LOCTEXT("ProposalBusy", "The assistant is still answering the last request.");
+	}
+	else if (bApply ? Assistant->ApplyProposal(ModularPlayerControllerAssistant::MakeHost(*this)) : Assistant->CancelProposal())
+	{
+		return true;
+	}
+	ReportRejection(FStageEconomyResultInfo::Fail(EStageEconomyResult::InvalidRequest,
+		Reason.IsEmpty() ? LOCTEXT("ProposalNotTaken", "The assistant could not take that answer.") : Reason));
+	return false;
+}
+
+#if !UE_BUILD_SHIPPING
+bool AModularPlayerController::RequestAssistantPlanForTesting(const FStageAIPlan& Plan)
+{
+	UStageAICommandSubsystem* Assistant = UWorld::GetSubsystem<UStageAICommandSubsystem>(GetWorld());
+	return Assistant && Assistant->SubmitPlanForTesting(Plan, ModularPlayerControllerAssistant::MakeHost(*this));
+}
+#endif
+
+bool AModularPlayerController::BeginAssistantPlan(const FText& Description)
+{
+	return EditHistory && EditHistory->BeginGroup(Description);
+}
+
+EStageCommandResult AModularPlayerController::EndAssistantPlan(bool bKeep)
+{
+	if (!EditHistory || !EditHistory->IsGroupOpen())
+	{
+		return EStageCommandResult::NothingToDo;
+	}
+	if (bKeep)
+	{
+		EditHistory->EndGroup();
+		return EStageCommandResult::Succeeded;
+	}
+	return EditHistory->AbortGroup();
+}
+
+bool AModularPlayerController::IsAssistantAskingBeforeChanges() const
+{
+	const UStageCraftUserSettings* Settings = UStageCraftUserSettings::Get();
+	return Settings && Settings->IsAssistantAskingBeforeChanges();
+}
+
+void AModularPlayerController::SetAssistantAskingBeforeChanges(bool bAsk)
+{
+	UStageCraftUserSettings* Settings = UStageCraftUserSettings::Get();
+	if (!Settings)
+	{
+		UE_LOG(LogStageCraft, Warning, TEXT("%s: GameUserSettingsClassName is not StageCraftUserSettings; the assistant preference cannot be stored."), *GetName());
+		return;
+	}
+	if (Settings->SetAssistantAskingBeforeChanges(bAsk))
+	{
+		Settings->SaveSettings();
+		UE_LOG(LogStageCraft, Log, TEXT("AI assistant: ask before every change %s."), bAsk ? TEXT("on") : TEXT("off"));
+	}
 }
 
 TArray<FStageEconomyResultInfo> AModularPlayerController::RunCapturingRejections(TFunctionRef<void()> Work)
@@ -2834,6 +2926,14 @@ EStageCommandResult AModularPlayerController::RequestHistoryStep(bool bUndo)
 	if (IsBusyWithPointer())
 	{
 		return EStageCommandResult::NothingToDo;
+	}
+
+	// An assistant plan is being applied (Docs/ADR/0030 §6): its steps become one undo step when it ends.
+	if (EditHistory->IsGroupOpen())
+	{
+		ReportRejection(FStageEconomyResultInfo::Fail(EStageEconomyResult::InvalidRequest,
+			LOCTEXT("UndoDuringPlan", "The assistant is still applying its changes; undo when it has finished.")));
+		return EStageCommandResult::Refused;
 	}
 
 	const EStageCommandResult Result = bUndo ? EditHistory->Undo() : EditHistory->Redo();

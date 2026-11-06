@@ -32,6 +32,7 @@ void UStageCraftUserSettings::SetToDefaults()
 	bViewportGridVisible = true;
 	bViewportToolbarCollapsed = false;
 	bShowWelcomeAtStartup = true;
+	bAssistantAsksBeforeChanges = false;
 	DMXInput = FStageDMXInputSettings();
 	const FGuid Cid = DMXOutput.Cid;
 	DMXOutput = FStageDMXOutputSettings();
@@ -212,6 +213,13 @@ bool UStageCraftUserSettings::SetWelcomeShownAtStartup(bool bShow)
 {
 	const bool bChanged = bShowWelcomeAtStartup != bShow;
 	bShowWelcomeAtStartup = bShow;
+	return bChanged;
+}
+
+bool UStageCraftUserSettings::SetAssistantAskingBeforeChanges(bool bAsk)
+{
+	const bool bChanged = bAssistantAsksBeforeChanges != bAsk;
+	bAssistantAsksBeforeChanges = bAsk;
 	return bChanged;
 }
 

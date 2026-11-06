@@ -120,6 +120,13 @@ public:
 	/** Returns true if the stored value changed. Does not save. */
 	bool SetWelcomeShownAtStartup(bool bShow);
 
+	/** Whether the AI assistant shows every change it would make as a proposal card first, even a one-step request typed to the local
+	 * grammar (Docs/ADR/0030 §6). Off by default: a typed request runs like pressing its button, and only online and multi-step plans ask. */
+	bool IsAssistantAskingBeforeChanges() const { return bAssistantAsksBeforeChanges; }
+
+	/** Returns true if the stored value changed. Does not save. */
+	bool SetAssistantAskingBeforeChanges(bool bAsk);
+
 	/** Art-Net / sACN input of this PC (UStageDMXNetworkSubsystem is the only writer), always sanitized. */
 	const FStageDMXInputSettings& GetDMXInputSettings() const { return DMXInput; }
 
@@ -192,6 +199,9 @@ private:
 
 	UPROPERTY(Config)
 	bool bShowWelcomeAtStartup = true;
+
+	UPROPERTY(Config)
+	bool bAssistantAsksBeforeChanges = false;
 
 	UPROPERTY(Config)
 	FStageDMXInputSettings DMXInput;

@@ -7249,7 +7249,7 @@ All times in ms.
 - **Implemented, awaiting manual verification (Gevor):** click rows of Window › Problems; ask the questions in both languages and click SHOW ME.
 - **Benchmark not run:** the show tick is unchanged. `ResolveFixture` builds the same layers through `BuildLayers`, and nothing is added per frame.
 
-**Commit:** uncommitted (working tree).
+**Commit:** `597704b`.
 
 **Known issues / follow-ups**
 - The music's signal (AudioNoSignal) is not pushed. The list catches it on the next change, on REFRESH, or when the assistant is asked.
@@ -7258,3 +7258,186 @@ All times in ms.
 - Problems rows are in English (the UI language); the assistant answers in the asker's language.
 - Layouts saved before this change do not get the Problems tab; Window › Problems opens it.
 - Still open from #72: the paid H0 run, the H1 mouse checks, and a packaged build reading the help articles.
+
+## #74 — Phase H3: tool catalogue, proposal cards, plans as one undo step with rollback (2026-11-06)
+
+**Housekeeping first.** #73 said "uncommitted"; it now carries `597704b` (Gevor committed H2).
+
+**What & why**
+- Gevor's brief (2026-11-06) asks for Phase H3 in auto mode:
+  - a bounded, safe tool catalogue for the assistant (patching, fixture parameter overrides, cue modifications, DMX routing);
+  - every plan or fix shown as a proposal card for review, never run silently;
+  - an approved plan applied as one transaction (one Ctrl+Z);
+  - 0-warning builds, all tests, benchmarks, todo.md and STATE.md.
+- **Scope against ADR 0030 and todo.md:**
+  - todo.md's H3 line also listed the bounded online read/act loop (read tools), append-only history replay, the cached prefix in the live backend and the API key in the credential vault. The brief does not ask for them, and they are a separate piece of work. They are now **H3b** in todo.md. Nothing in them was started.
+  - The brief's "DMX channel routing" is `patch_fixtures`, which sets universe and address. Per-channel output routing does not exist in StageCraft, and none was invented.
+  - ADR §6 shows a card for every plan that is not playback, selected-fixture controls or the camera. As built, **a single change typed to the local grammar still runs at once**, like pressing its button: that is today's behaviour, which 200+ tests and Gevor's offline-first decision rely on. Anyone who wants every change reviewed turns on **ASK FIRST**. Online plans and plans of several steps always show a card.
+
+**Design (ADR 0030 §16)**
+- **Tool catalogue** (`Public/AI/StageAIToolCatalogue.h`, `Private/AI/StageAIToolCatalogue.cpp`, pure):
+  - one `FStageAITool` per `EStageAIIntent`, in enum order (static_assert), each with:
+    - the wire name;
+    - `EStageAIToolEffect` (none, fixtures, playback, cues, patch, stage, environment, files, history, marketplace);
+    - `bUndoable` (the history records it);
+    - `bPlannable` (it may be one step of several);
+  - functions:
+    - `GetTool`, `FindTool`;
+    - `CanApplyWithoutAsking` (cue playback; fixture controls with the selection as target);
+    - `CheckPlan` (1–32 changes; undo, redo, export and the marketplace only alone);
+    - `HasStepsNotUndone`;
+    - `DescribeStep` (one line per step, English and Armenian);
+    - `GetNeverExposed` (ADR §2's list).
+  - `StageAICommandSchema` lost its own intent-name table and reads the catalogue, so there is one table.
+- **New tools** (`StageAITypes`, `StageAICommandSchema`, `StageAICommandRunner`, `StageAICommandParser`, `StageAIArmenian`):
+  - `PatchFixtures {FixtureIds | selection, Universe, Address}`:
+    - packed one after another by `UStageDMXPatchSubsystem::PlanConsecutive` and applied through `RequestPatchFixtures` (one step, all or nothing);
+    - fixtures already patched there count as done, not as a refusal;
+    - the online tool gained `fixture_ids`, `universe` and `address` (strict: whole numbers, at most 256 IDs, universe 1–63999, address 1–512).
+  - `UpdateCue {CueNumber, Label?, Fade?}` through `RequestUpdateCue`; whatever the request leaves out keeps its value.
+  - `DeleteCue {CueNumber}` through `RequestDeleteCue`.
+  - **Grammar** (English and Armenian):
+    - "patch fixture 3 to universe 2 address 101", "patch fixtures 1 to 4 at 2.001", "1-4", "1, 4 and 9", "patch the selected fixtures to universe 2";
+    - "delete cue 3", "rename cue 2 to Finale", "set cue 4 fade to 2.5 seconds", "change the fade of cue 4 to 3";
+    - «պատչիր 1-4 սարքերը 2 յունիվերսում», «ջնջիր կյու 3».
+    - "delete a cue" without a number is still explained. "export the patch sheet", "make cue 5" and "cue 3" keep their meaning.
+    - The Armenian rewrite now reads a digit-dash-digit as a range.
+  - **Confirmations:** "apply" / «կիրառ…» count as yes.
+- **History groups** (`UStageEditHistorySubsystem::BeginGroup / EndGroup / AbortGroup / IsGroupOpen / GetGroupCount`; `UStageEditHistoryComponent::BeginGroup / EndGroup / AbortGroup / IsGroupOpen`):
+  - While a group is open, `Record` collects every step from any request. Undo and redo are refused, and `RequestHistoryStep` reports "The assistant is still applying its changes".
+  - **End:** the steps are recorded as one batch named after the group, or as the single step itself, under its own name.
+  - **Abort:** reverts the steps through the live item editor, newest first, all or nothing, and records nothing. If the rules refuse the revert, the steps are recorded as one step instead.
+  - Component group calls end the edit transaction first. A group still open at EndPlay is recorded; a scene load (`ClearHistory`) drops it.
+- **Plans** (`FStageAIPlan`, `UStageAICommandSubsystem`):
+  - **Every action becomes a plan.** `HandlePlan`:
+    - `CheckPlan`;
+    - one non-plannable step (undo, redo, export, marketplace) → `RunAction` as before;
+    - `NeedsApproval` → `ProposePlan`; otherwise `RunPlan`.
+  - **`NeedsApproval`:** ASK FIRST, or (from the online model or several steps) and not every step `CanApplyWithoutAsking`.
+  - **The proposal card** is an assistant line with `FStageAIMessage::ProposalId`. One proposal is open at a time.
+    - `ApplyProposal(Host)` / `CancelProposal()`, or a typed yes / no (`AnswerProposal`, before the purchase offer).
+    - Any other prompt drops it unapplied; ClearConversation drops it.
+  - **`RunPlan`:**
+    - opens the group through the host, named "Assistant: <first step> (+N more)" (English, as the Edit menu shows it);
+    - runs the steps in order (`AdvancePlan`);
+    - a Pending step waits for `FinishPendingAction`, which carries on the plan, and a step that finishes inside its own Execute call is caught (`EarlyOutcome`);
+    - the first refused step ends the plan (`FinishPlan`): rollback through `EndPlan(false)`, and a reply naming the step, the reason, what was undone, and that cue playback stays;
+    - success keeps the group and lists each step's result.
+  - **`FStageAIActionHost`** (Execute, BeginPlan, EndPlan, bAskBeforeChanges) replaces the bare executor; the old `SubmitPrompt(Prompt, Executor)` overload wraps it.
+  - **Online:**
+    - `ParseResponseBody` keeps every `stage_command` call in `Commands`, in order;
+    - one invalid call, or `max_tokens` while writing calls, fails the whole answer;
+    - `disable_parallel_tool_use` is no longer sent;
+    - the tool description and the system prompt explain plans and the new tools;
+    - `Respond` answers questions among several calls and plans the changes.
+  - **Bug fixed:** `HandleBackendFinished` called `SetState(Idle)` before `Respond`, which cleared the asking player's executor. Every online action was therefore answered "There is no player to make that change for". It now sets the state without clearing. The online path had never run with a key, so nobody saw it.
+- **Controller** (`AModularPlayerController`):
+  - `RequestAssistantProposal(bApply)` (BlueprintCallable);
+  - `BeginAssistantPlan` / `EndAssistantPlan` (the host's group calls);
+  - `Is/SetAssistantAskingBeforeChanges` (saved at once);
+  - the host is built in one place (`ModularPlayerControllerAssistant::MakeHost`, weak bindings);
+  - `RequestAssistantPlanForTesting` (non-Shipping).
+- **Per-PC setting:** `UStageCraftUserSettings::bAssistantAsksBeforeChanges` (off).
+- **UI** (`UStageAIAssistantWidget`):
+  - an ASK FIRST toggle in the header (accent when on, with a tooltip explaining both modes);
+  - the open card is captioned "PROPOSED CHANGES" and has APPLY (primary) and CANCEL, both disabled while busy;
+  - an answered card reads "PROPOSAL (ANSWERED)";
+  - a stale card's buttons do nothing (`AnswerProposal` checks the id).
+- **Dev commands** (`#if !UE_BUILD_SHIPPING`, `StageAIConsoleCommands.cpp`):
+  - `StageCraft.Assistant.Plan <request> | <request> ...` reads each part with the local grammar and proposes them as the online model would. The local grammar makes one change per prompt; several are H4.
+  - `StageCraft.Assistant.Apply`, `StageCraft.Assistant.Cancel`.
+  - Test hooks: `UStageAICommandSubsystem::SubmitPlanForTesting`, `SetBackendForTesting`, and `UStageAITestBackend` (Private/AI/Tests, a scripted interpreter that answers inside `Interpret`).
+
+**Files changed**
+- New:
+  - `Source/ModularSceneBuilder/Public/AI/StageAIToolCatalogue.h`, `Private/AI/StageAIToolCatalogue.cpp`;
+  - `Private/AI/Tests/StageAIPlanTests.cpp`, `Private/AI/Tests/StageAITestBackend.h`.
+- Changed (under `Source/ModularSceneBuilder`):
+  - `Public/AI/StageAITypes.h`, `Private/AI/StageAITypes.cpp`;
+  - `Public/AI/StageAICommandSchema.h`, `Private/AI/StageAICommandSchema.cpp`;
+  - `Public/AI/StageAICommandParser.h`, `Private/AI/StageAICommandParser.cpp`, `Private/AI/StageAIArmenian.cpp`;
+  - `Private/AI/StageAICommandRunner.cpp`, `Public/AI/StageAICommandSubsystem.h`, `Private/AI/StageAICommandSubsystem.cpp`, `Private/AI/StageAIConsoleCommands.cpp`;
+  - `Public/History/StageEditHistorySubsystem.h`, `Private/History/StageEditHistorySubsystem.cpp`, `Public/History/StageEditHistoryComponent.h`, `Private/History/StageEditHistoryComponent.cpp`;
+  - `Public/Player/ModularPlayerController.h`, `Private/Player/ModularPlayerController.cpp`;
+  - `Public/Settings/StageCraftUserSettings.h`, `Private/Settings/StageCraftUserSettings.cpp`;
+  - `Public/UI/StageAIAssistantWidget.h`, `Private/UI/StageAIAssistantWidget.cpp`;
+  - `Private/AI/Tests/StageAITests.cpp` (several calls are allowed now), `Private/AI/Tests/StageAIEditTests.cpp` ("delete cue 3" is DeleteCue now).
+- Docs: `Docs/ADR/0030-...` (status line, §16), `Docs/CURRENT_SYSTEMS.md`, `tasks/todo.md`, `STATE.md` (#73 commit, #74).
+- No maps, Blueprints, content assets or input actions changed.
+
+**Verification**
+- **Builds:** Editor, Game Development and Game Shipping, 0 warnings.
+- **Tests:** 217/217 with no renderer and 217/217 with the offscreen renderer (`RunAutomation.ps1 -ExpectedCount 217`); user data unchanged (108 files).
+  - The first run flagged `GameUserSettings.ini` as changed: the engine wrote the new `bAssistantAsksBeforeChanges=False` key once, a known pattern. Every run after it is clean.
+  - New tests:
+    - `StageCraft.Assistant.ToolCatalogue`:
+      - every intent's entry, unique names and lookup by name, the schema's names equal to the catalogue's;
+      - questions change nothing, actions are changes, and only changes are undoable or plannable;
+      - no tool matches a never-exposed operation, and every change has English and Armenian lines;
+      - the online tool definition carries the new fields;
+      - the auto-apply rules, `CheckPlan` (empty, 33, 32, undo with a store, undo alone, a question) and `HasStepsNotUndone`.
+    - `StageCraft.Assistant.PlanGrammar`:
+      - the patch phrasings (one fixture, a range at U.AAA, a dashed range, a list, the selection);
+      - validation refusing a 1000-fixture range and address 600;
+      - the export still an export, and the cue edit phrasings;
+      - store, "make cue 5" and "cue 3" unchanged, and "set cue 4" not an update;
+      - Armenian delete and patch, and the new confirmations.
+    - `StageCraft.History.Group`:
+      - three steps become one named step: undo refused while open, then Ctrl+Z and redo take all three;
+      - a group of one keeps its name, and an empty group records nothing;
+      - abort reverts and records nothing; abort with nothing open; abort of an empty group;
+      - a refused rollback is kept as one step;
+      - `ClearHistory` drops an open group.
+    - `StageCraft.Assistant.Plan`, against the real history subsystem with a scripted player:
+      - a typed store runs at once as one step;
+      - ASK FIRST shows a card, and "no" cancels it;
+      - APPLY runs, and APPLY twice is refused;
+      - a question drops the card;
+      - a 3-step plan is one step named "Assistant: Store cue 8 (+2 more)", and one undo reverts it;
+      - a refused third of four steps rolls back two, records nothing and says so;
+      - GO plus controls of the selected fixtures apply without a card, and undo inside a plan is refused;
+      - a pending step holds the plan (group open, other prompts refused) and then finishes as one step;
+      - a step that finishes inside its own call works;
+      - a refused pending step rolls back;
+      - an Armenian card and its cancellation.
+    - `StageCraft.Assistant.OnlinePlan`:
+      - two tool calls parse in order; a field like "wallet", max_tokens, or a non-number ID fails the whole answer; no parallel limit on the wire;
+      - with the scripted backend: an online GO runs for the player (the bug above); an online delete waits for APPLY; two calls make one card and one step; a question among changes is answered and the changes are carded; undo with a store is refused.
+- **Shipping UTF-16 scan:**
+  - absent: `StageCraft.Assistant.Plan`, `.Apply`, `.Cancel`, `.Ask`;
+  - present: ASK FIRST, APPLY, patch_fixtures, update_cue, delete_cue, "Assistant: {0} (+{1} more)", and the undo-refused sentence.
+- **Scripted run H3** (Lighting Desk layout, `RunGameScripted`, user data restored), through the real controller:
+  - 4 moving heads added and cue 1 "Opening" stored (each a step of its own, run at once).
+  - `Assistant.Plan` with four steps (store cue 2 "Finale", cue 1 fade 4 s, patch fixtures 1-4 from 2.001, rain) showed the card with APPLY / CANCEL in the docked assistant.
+  - `Assistant.Apply` ran all four:
+    - the fixtures were patched 2.001 to 2.055 (18-channel heads);
+    - the history gained one step, "Assistant: Store cue 2 "Finale" (+3 more)";
+    - list cues: Q1 Opening (4 s), Q2 Finale.
+  - One `Edit.Undo` reverted the whole plan: cues back to Q1 Opening (2 s), and the history back to 2 steps.
+  - The plan "store cue 3 | delete cue 9 | go" answered "yes" stopped at step 2 ("There is no cue 9"). Cue 3 was rolled back and no step was recorded.
+  - An Armenian plan's card was cancelled («Լավ, ոչինչ չփոխեցի։»).
+- **Benchmark A/B** against `597704b` (worktree `E:/SC_Baseline`, workspace copied, imports set aside and restored): no regression.
+  - No show-path code changed (the only per-frame-reachable change is one `IsSet` check in `UStageEditHistorySubsystem::Record`, which runs per recorded edit, not per frame).
+  - E0 (no effects), runs back to back: show tick at 200 fixtures crossfading 4.63 ms (H3) against 4.71 ms (H2), and at 500 fixtures 10.19 ms against 10.40 ms. Idle frames 11.7 / 11.9 ms and 16.9 / 16.5 ms.
+  - E1 (circle and dimmer sine on every fixture), alternated H3, H2, H2, H3, after copying the main tree's `GameUserSettings.ini` into the baseline. The first E1 pairs ran on default settings in the fresh worktree and differed by up to 14 %; that was the settings, not the code.
+    - 500 idle: 11.89 / 11.86 ms against 11.59 / 11.68 ms.
+    - 500 crossfade: 13.51 / 14.44 ms against 13.87 / 13.68 ms.
+    - 200 crossfade: 5.68 / 5.62 ms against 5.54 / 5.39 ms.
+    - All within 4 % and inside the run-to-run spread.
+  - Base E0 r1 timed out: the first launch of a fresh worktree compiles shaders. The worktree was removed afterwards.
+
+- **Implemented, awaiting manual verification (Gevor):**
+  - with ASK FIRST on, ask "store cue 5", press APPLY, then Ctrl+Z;
+  - `StageCraft.Assistant.Plan store cue 2 | patch fixtures 1 to 4 at 2.001`, then APPLY, then one Ctrl+Z;
+  - turn ASK FIRST off again (it is saved per PC).
+
+**Commit:** uncommitted (working tree).
+
+**Known issues / follow-ups**
+- **H3b (not started):** the bounded online read loop (read tools, 8 turns / 24 calls), append-only history replay with thinking blocks, the cached prefix in the live backend, the key in the credential vault, and cancelling a running plan from the panel.
+- **Not undone:** cue playback a plan started (GO, BACK, go to cue), and a selection change. The card and the reply say so.
+- **Active cue after undo:** undoing or rolling back a cue store restores the cue list, but the "cue on stage" stays the removed number ("Cue 3 is on stage" with only cue 1). This predates H3: an ordinary Ctrl+Z of a store does the same. To fix in the cue history step.
+- **Edits during a waiting step:** while a plan waits for fixtures to stream, the player's own edits are collected into the plan's step. Undo is refused during it, so nothing is lost.
+- **Remaining tools:** apply_palette, start/stop_effect, select, record_group and the offline multi-step grammar are H4.
+- **Proposal card:** an online plan that is entirely cue playback or controls of the selected fixtures runs without one, by design (ADR §6).
+- **Still open from #72 / #73:** the paid H0 run, the H1 and H2 mouse checks, and a packaged build reading the help articles.

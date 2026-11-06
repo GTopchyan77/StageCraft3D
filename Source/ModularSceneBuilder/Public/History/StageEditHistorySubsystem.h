@@ -30,11 +30,40 @@ public:
 	virtual void Deinitialize() override;
 	//~ End USubsystem Interface
 
-	/** Adds an action that has already been applied. Clears the redo stack. */
+	/** Adds an action that has already been applied. Clears the redo stack. While a group is open it is collected instead. */
 	void Record(TSharedRef<IStageEditCommand> Command);
 
+	/**
+	 * Undoes / redoes the latest step. Refused, and nothing changes, while a group is open: the group's steps are not on the
+	 * stack yet, so an undo would revert an older step underneath a plan that is still running.
+	 */
 	EStageCommandResult Undo(IStageItemEditor& Editor);
 	EStageCommandResult Redo(IStageItemEditor& Editor);
+
+	/**
+	 * Opens a group (Docs/ADR/0030 §6, an assistant plan is one undo step): until EndGroup or AbortGroup, every recorded step is
+	 * collected, whichever request recorded it (cues, patch, programmer, placements, environment). False, and nothing changes,
+	 * when a group is already open. Only one is open at a time; ClearHistory drops it.
+	 */
+	bool BeginGroup(const FText& Description);
+
+	/**
+	 * Closes the open group and records what it collected as ONE step: the command itself when it holds one (keeping its own
+	 * name), a batch named by the group otherwise. Nothing is recorded for an empty group. No-op when none is open.
+	 */
+	void EndGroup();
+
+	/**
+	 * Closes the open group and reverts what it collected through Editor, newest first, all or nothing (FStageBatchCommand), and
+	 * records nothing. If the revert is refused or fails, what was collected is recorded as one step after all, so the user can
+	 * still undo it, and that result is returned. Succeeded for an empty group; NothingToDo when none is open.
+	 */
+	EStageCommandResult AbortGroup(IStageItemEditor& Editor);
+
+	bool IsGroupOpen() const { return Group.IsSet(); }
+
+	/** How many steps the open group has collected (0 when none is open). */
+	int32 GetGroupCount() const { return Group.IsSet() ? Group->Commands.Num() : 0; }
 
 	/**
 	 * Forgets every step. Called when the whole stage is replaced (a scene file was loaded): the recorded steps name
@@ -72,5 +101,16 @@ protected:
 private:
 	EStageCommandResult ApplyStep(bool bUndo, IStageItemEditor& Editor);
 
+	/** The open group's collected steps, oldest first, and its name. */
+	struct FGroup
+	{
+		FText Description;
+		TArray<TSharedRef<IStageEditCommand>> Commands;
+	};
+
+	/** The collected steps as the one command a step records: the only one itself, or a batch named by the group. */
+	static TSharedRef<IStageEditCommand> MakeGroupCommand(FGroup&& Closed);
+
 	FStageCommandHistory History;
+	TOptional<FGroup> Group;
 };

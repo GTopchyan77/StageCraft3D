@@ -31,6 +31,9 @@ bool FStageAICommand::IsAction() const
 	{
 	case EStageAIIntent::AddFixtures:
 	case EStageAIIntent::StoreCue:
+	case EStageAIIntent::UpdateCue:
+	case EStageAIIntent::DeleteCue:
+	case EStageAIIntent::PatchFixtures:
 	case EStageAIIntent::GoToCue:
 	case EStageAIIntent::CueGo:
 	case EStageAIIntent::CueBack:

@@ -64,7 +64,8 @@ bool FStageAIEditGrammarTest::RunTest(const FString& Parameters)
 		TestEqual(TEXT("clear everything is explained"), IntentOf(TEXT("clear everything")), Name(EStageAIIntent::Unsupported));
 		TestEqual(TEXT("delete the whole scene is explained"), IntentOf(TEXT("delete the whole scene")), Name(EStageAIIntent::Unsupported));
 		TestNotEqual(TEXT("clear the selection never deletes"), IntentOf(TEXT("clear the selection")), Name(EStageAIIntent::DeleteItems));
-		TestEqual(TEXT("delete cue 3 is explained"), IntentOf(TEXT("delete cue 3")), Name(EStageAIIntent::Unsupported));
+		TestEqual(TEXT("delete cue 3 deletes that cue (Docs/ADR/0030 section 6), never placed items"), IntentOf(TEXT("delete cue 3")), Name(EStageAIIntent::DeleteCue));
+		TestEqual(TEXT("delete a cue without its number is explained"), IntentOf(TEXT("delete a cue")), Name(EStageAIIntent::Unsupported));
 		TestNotEqual(TEXT("a question is not an edit"), IntentOf(TEXT("how many spots can I delete?")), Name(EStageAIIntent::DeleteItems));
 		TestEqual(TEXT("a polite question is"), IntentOf(TEXT("can you delete the spots?")), Name(EStageAIIntent::DeleteItems));
 	}

@@ -136,6 +136,14 @@ UWidget* UStageAIAssistantWidget::BuildHeader()
 		TitleSlot->SetSize(FSlateChildSize(ESlateSizeRule::Fill));
 		TitleSlot->SetVerticalAlignment(VAlign_Center);
 	}
+	AskFirstButton = MakeButton(LOCTEXT("AskFirst", "ASK FIRST"), LOCTEXT("AskFirstTip",
+		"On: every change the assistant would make is shown as a proposal with APPLY and CANCEL first. Off: a single request you type runs at once, like its button; changes the online model plans, and several changes at once, are still proposed first."),
+		0, &ThisClass::HandleAskFirstPicked, false);
+	if (UHorizontalBoxSlot* AskSlot = Row->AddChildToHorizontalBox(AskFirstButton))
+	{
+		AskSlot->SetVerticalAlignment(VAlign_Center);
+		AskSlot->SetPadding(FMargin(0.f, 0.f, 6.f, 0.f));
+	}
 	ClearButton = MakeButton(LOCTEXT("Clear", "CLEAR"), LOCTEXT("ClearTip", "Clear the conversation (the stage is not changed)."), 0, &ThisClass::HandleClearPicked, false);
 	Row->AddChildToHorizontalBox(ClearButton)->SetVerticalAlignment(VAlign_Center);
 	Header->SetContent(Row);
@@ -291,6 +299,13 @@ UWidget* UStageAIAssistantWidget::BuildMessage(const FStageAIMessage& Message, i
 	{
 		Caption = LOCTEXT("CaptionPending", "ASSISTANT · WORKING");
 	}
+	const UStageAICommandSubsystem* Assistant = GetAssistant();
+	const bool bOpenProposal = !bUser && Message.ProposalId != 0 && Assistant && Message.ProposalId == Assistant->GetOpenProposalId();
+	if (!bUser && Message.ProposalId != 0)
+	{
+		Caption = bOpenProposal ? LOCTEXT("CaptionProposal", "ASSISTANT · PROPOSED CHANGES") : LOCTEXT("CaptionProposalClosed", "ASSISTANT · PROPOSAL (ANSWERED)");
+		CaptionColor = bOpenProposal ? Palette.AccentColor : Palette.TextSecondary;
+	}
 
 	UVerticalBox* Content = WidgetTree->ConstructWidget<UVerticalBox>(UVerticalBox::StaticClass());
 	Content->AddChildToVerticalBox(MakeText(Caption, 7, TEXT("Bold"), CaptionColor));
@@ -299,6 +314,26 @@ UWidget* UStageAIAssistantWidget::BuildMessage(const FStageAIMessage& Message, i
 	if (UVerticalBoxSlot* BodySlot = Content->AddChildToVerticalBox(Body))
 	{
 		BodySlot->SetPadding(FMargin(0.f, 2.f, 0.f, 0.f));
+	}
+	// The open proposal card (Docs/ADR/0030 §6): nothing changes until APPLY; CANCEL leaves the stage as it is.
+	if (bOpenProposal)
+	{
+		UHorizontalBox* Actions = WidgetTree->ConstructWidget<UHorizontalBox>(UHorizontalBox::StaticClass());
+		UStageChoiceButton* Apply = MakeButton(LOCTEXT("Apply", "APPLY"), LOCTEXT("ApplyTip", "Make these changes now, as one undo step (Ctrl+Z reverts them all)."),
+			Message.ProposalId, &ThisClass::HandleApplyPicked, true);
+		StyleButton(*Apply, true, !Assistant->IsBusy());
+		if (UHorizontalBoxSlot* ApplySlot = Actions->AddChildToHorizontalBox(Apply))
+		{
+			ApplySlot->SetPadding(FMargin(0.f, 0.f, 6.f, 0.f));
+		}
+		UStageChoiceButton* Cancel = MakeButton(LOCTEXT("Cancel", "CANCEL"), LOCTEXT("CancelTip", "Leave the stage as it is."), Message.ProposalId,
+			&ThisClass::HandleCancelPicked, false);
+		StyleButton(*Cancel, false, !Assistant->IsBusy());
+		Actions->AddChildToHorizontalBox(Cancel);
+		if (UVerticalBoxSlot* ActionsSlot = Content->AddChildToVerticalBox(Actions))
+		{
+			ActionsSlot->SetPadding(FMargin(0.f, 6.f, 0.f, 0.f));
+		}
 	}
 	// A knowledge reply (Docs/ADR/0030 §7): where it came from, and SHOW ME (the control) or OPEN PANEL (the panel).
 	if (!bUser && Message.Reference.HasPanel())
@@ -469,6 +504,11 @@ void UStageAIAssistantWidget::Rebuild()
 	{
 		StyleButton(*ClearButton, false, !bBusy && Assistant && !Assistant->GetMessages().IsEmpty());
 	}
+	if (AskFirstButton)
+	{
+		const AModularPlayerController* Controller = Cast<AModularPlayerController>(GetOwningPlayer());
+		StyleButton(*AskFirstButton, Controller && Controller->IsAssistantAskingBeforeChanges(), Controller != nullptr);
+	}
 	for (UStageChoiceButton* Chip : ChipButtons)
 	{
 		StyleButton(*Chip, false, !bBusy && Assistant);
@@ -571,6 +611,36 @@ bool UStageAIAssistantWidget::SendPrompt(const FString& Prompt)
 {
 	AModularPlayerController* Controller = Cast<AModularPlayerController>(GetOwningPlayer());
 	return Controller && Controller->RequestAssistantPrompt(Prompt.Left(StageAICommandParser::MaxPromptLength));
+}
+
+void UStageAIAssistantWidget::HandleApplyPicked(int32 ProposalId)
+{
+	AnswerProposal(ProposalId, /*bApply*/ true);
+}
+
+void UStageAIAssistantWidget::HandleCancelPicked(int32 ProposalId)
+{
+	AnswerProposal(ProposalId, /*bApply*/ false);
+}
+
+bool UStageAIAssistantWidget::AnswerProposal(int32 ProposalId, bool bApply)
+{
+	// A card left over from before a rebuild answers nothing: only the open proposal is applied or cancelled.
+	const UStageAICommandSubsystem* Assistant = GetAssistant();
+	AModularPlayerController* Controller = Cast<AModularPlayerController>(GetOwningPlayer());
+	return Assistant && Controller && ProposalId != 0 && ProposalId == Assistant->GetOpenProposalId() && Controller->RequestAssistantProposal(bApply);
+}
+
+void UStageAIAssistantWidget::HandleAskFirstPicked(int32 Unused)
+{
+	if (AModularPlayerController* Controller = Cast<AModularPlayerController>(GetOwningPlayer()))
+	{
+		Controller->SetAssistantAskingBeforeChanges(!Controller->IsAssistantAskingBeforeChanges());
+		if (AskFirstButton)
+		{
+			StyleButton(*AskFirstButton, Controller->IsAssistantAskingBeforeChanges(), true);
+		}
+	}
 }
 
 void UStageAIAssistantWidget::HandleChipPicked(int32 Index)

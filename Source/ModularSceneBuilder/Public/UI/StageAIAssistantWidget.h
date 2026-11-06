@@ -29,6 +29,12 @@ public:
 	/** Sends Prompt as if typed (quick-prompt chips, development commands). False when the controller refused it. */
 	bool SendPrompt(const FString& Prompt);
 
+	/**
+	 * APPLY (bApply) or CANCEL on the proposal card ProposalId, through AModularPlayerController::RequestAssistantProposal. False
+	 * when that card is no longer the open proposal or the controller refused.
+	 */
+	bool AnswerProposal(int32 ProposalId, bool bApply);
+
 protected:
 	//~ Begin UUserWidget Interface
 	virtual void NativeOnInitialized() override;
@@ -61,6 +67,13 @@ private:
 	void HandleChipPicked(int32 Index);
 	void HandleSendPicked(int32 Unused);
 	void HandleClearPicked(int32 Unused);
+
+	/** APPLY / CANCEL under the open proposal card (Docs/ADR/0030 §6); the index is the card's proposal id. */
+	void HandleApplyPicked(int32 ProposalId);
+	void HandleCancelPicked(int32 ProposalId);
+
+	/** ASK FIRST: the player's "propose every change first" preference, saved at once. */
+	void HandleAskFirstPicked(int32 Unused);
 
 	/** SHOW ME or OPEN PANEL under a knowledge reply: the workspace opens the panel and pulses the control (Docs/ADR/0030 §7). */
 	void HandleShowMePicked(int32 MessageIndex);
@@ -101,6 +114,9 @@ private:
 
 	UPROPERTY(Transient)
 	TObjectPtr<class UStageChoiceButton> ClearButton = nullptr;
+
+	UPROPERTY(Transient)
+	TObjectPtr<class UStageChoiceButton> AskFirstButton = nullptr;
 
 	UPROPERTY(Transient)
 	TArray<TObjectPtr<class UStageChoiceButton>> ChipButtons;

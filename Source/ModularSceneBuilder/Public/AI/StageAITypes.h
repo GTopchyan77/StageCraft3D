@@ -36,6 +36,12 @@ enum class EStageAIIntent : uint8
 	// Actions (through the controller's requests).
 	AddFixtures,
 	StoreCue,
+	/** A stored cue's label and / or fade (CueNumber, Label, FadeSeconds). */
+	UpdateCue,
+	/** Deletes the stored cue CueNumber. */
+	DeleteCue,
+	/** Patches fixtures (FixtureIds, or the selected fixtures) one after another from Universe.Address (Docs/ADR/0030 §6). */
+	PatchFixtures,
 	GoToCue,
 	CueGo,
 	CueBack,
@@ -221,10 +227,17 @@ struct MODULARSCENEBUILDER_API FStageAICommand
 	/** ExplainFixture: the fixture ID (unset: the asking player's selected fixture). */
 	TOptional<int32> FixtureId;
 
-	/** StoreCue. */
+	/** PatchFixtures: the fixture IDs, in the order to patch them (empty: the asking player's selected fixtures, by ID). */
+	TArray<int32> FixtureIds;
+
+	/** PatchFixtures: the DMX universe (unset: 1) and the first address (unset: 1). */
+	TOptional<int32> Universe;
+	TOptional<int32> Address;
+
+	/** StoreCue, UpdateCue (unset or empty there: unchanged). */
 	FString Label;
 
-	/** StoreCue, in seconds. */
+	/** StoreCue, UpdateCue (unset there: unchanged), in seconds. */
 	TOptional<float> FadeSeconds;
 
 	/** SetWeather. Never Custom. */
@@ -316,6 +329,26 @@ struct MODULARSCENEBUILDER_API FStageAIMessage
 	/** A reply from the knowledge (Docs/ADR/0030 §3, §7): what it points at and cites. Empty on every other line. */
 	UPROPERTY(BlueprintReadOnly, Category = "StageCraft|Assistant")
 	FStageAIReference Reference;
+
+	/**
+	 * A proposal card (Docs/ADR/0030 §6): the id of the plan this line proposes, 0 on every other line. APPLY and CANCEL show while
+	 * it is UStageAICommandSubsystem::GetOpenProposalId().
+	 */
+	UPROPERTY(BlueprintReadOnly, Category = "StageCraft|Assistant")
+	int32 ProposalId = 0;
+};
+
+/**
+ * Changes the assistant makes for one prompt (Docs/ADR/0030 §6): validated action commands run in order, through the controller's
+ * requests, as ONE undo step. A refused step stops the plan and the steps before it are rolled back. At most
+ * StageAIToolCatalogue::MaxPlanSteps steps; a plan of several steps holds only tools the catalogue marks plannable.
+ */
+struct FStageAIPlan
+{
+	TArray<FStageAICommand> Steps;
+	EStageAILanguage Language = EStageAILanguage::English;
+	/** The online model proposed it (it waits for APPLY unless every step may apply without asking). */
+	bool bFromOnlineModel = false;
 };
 
 /** What a prompt was understood as: a command to run, or a reply to show as it is. */
@@ -329,6 +362,12 @@ struct FStageAIInterpretation
 
 	EKind Kind = EKind::Reply;
 	FStageAICommand Command;
+
+	/** Kind == Command: further commands of the same answer (the online model may call the tool several times), in order. */
+	TArray<FStageAICommand> MoreCommands;
+
+	/** The online model produced it. */
+	bool bFromOnlineModel = false;
 
 	/** Kind == Reply: the answer. */
 	FText Reply;

@@ -7,6 +7,8 @@
 #include "AI/StageAIAssistantSettings.h"
 #include "AI/StageAICommandParser.h"
 #include "AI/StageAICommandSchema.h"
+#include "AI/StageAIToolCatalogue.h"
+#include "Algo/AllOf.h"
 #include "AI/StageKnowledgeSearch.h"
 #include "AI/StageKnowledgeSubsystem.h"
 #include "Engine/LocalPlayer.h"
@@ -61,19 +63,23 @@ void UStageAICommandSubsystem::Deinitialize()
 	PendingAssetsCallback.Unbind();
 	StopMarketplaceWait();
 	PurchaseOffer.Reset();
-	PendingExecutor.Unbind();
+	Proposal.Reset();
+	// A plan still being applied keeps what it did: the player's history component records its group when play ends.
+	RunningPlan.Reset();
+	PendingHost = FStageAIActionHost();
 	State = EStageAIAssistantState::Idle;
 	OnConversationChanged.Clear();
 	Super::Deinitialize();
 }
 
-void UStageAICommandSubsystem::AddMessage(EStageAISpeaker Speaker, EStageAIOutcome Outcome, const FText& Text, const FStageAIReference& Reference)
+void UStageAICommandSubsystem::AddMessage(EStageAISpeaker Speaker, EStageAIOutcome Outcome, const FText& Text, const FStageAIReference& Reference, int32 ProposalId)
 {
 	FStageAIMessage& Message = Messages.AddDefaulted_GetRef();
 	Message.Speaker = Speaker;
 	Message.Outcome = Outcome;
 	Message.Text = Text;
 	Message.Reference = Reference;
+	Message.ProposalId = ProposalId;
 	if (Messages.Num() > MaxMessages)
 	{
 		Messages.RemoveAt(0, Messages.Num() - MaxMessages);
@@ -90,7 +96,7 @@ void UStageAICommandSubsystem::SetState(EStageAIAssistantState NewState)
 	State = NewState;
 	if (State == EStageAIAssistantState::Idle)
 	{
-		PendingExecutor.Unbind();
+		PendingHost = FStageAIActionHost();
 		PromptSelection.Reset();
 	}
 	OnConversationChanged.Broadcast();
@@ -108,12 +114,19 @@ FText UStageAICommandSubsystem::DescribeOffline(const FText& Reason, EStageAILan
 
 bool UStageAICommandSubsystem::SubmitPrompt(const FString& Prompt, FStageAICommandExecutor Executor, TArray<FString> SelectedItemNames)
 {
+	FStageAIActionHost Host;
+	Host.Execute = MoveTemp(Executor);
+	return SubmitPrompt(Prompt, MoveTemp(Host), MoveTemp(SelectedItemNames));
+}
+
+bool UStageAICommandSubsystem::SubmitPrompt(const FString& Prompt, FStageAIActionHost Host, TArray<FString> SelectedItemNames)
+{
 	const FString Trimmed = Prompt.TrimStartAndEnd().Left(StageAICommandParser::MaxPromptLength);
 	if (Trimmed.IsEmpty() || IsBusy())
 	{
 		return false;
 	}
-	if (AnswerPurchaseOffer(Trimmed, Executor, SelectedItemNames))
+	if (AnswerProposal(Trimmed, Host, SelectedItemNames) || AnswerPurchaseOffer(Trimmed, Host, SelectedItemNames))
 	{
 		return true;
 	}
@@ -127,7 +140,7 @@ bool UStageAICommandSubsystem::SubmitPrompt(const FString& Prompt, FStageAIComma
 	}
 
 	AddMessage(EStageAISpeaker::User, EStageAIOutcome::Info, FText::FromString(Trimmed));
-	PendingExecutor = MoveTemp(Executor);
+	PendingHost = MoveTemp(Host);
 	PromptSelection = MoveTemp(SelectedItemNames);
 
 	// "How do I ..." and "where is ..." are answered offline when the knowledge knows (Docs/ADR/0030 §3), even with the online
@@ -314,6 +327,11 @@ void UStageAICommandSubsystem::HandleBackendFinished(const FStageAIModelResponse
 	{
 	case FStageAIModelResponse::EStatus::Command:
 		Interpretation = FStageAIInterpretation::MakeCommand(Response.Command);
+		for (int32 Index = 1; Index < Response.Commands.Num(); ++Index)
+		{
+			Interpretation.MoreCommands.Add(Response.Commands[Index]);
+		}
+		Interpretation.bFromOnlineModel = true;
 		break;
 	case FStageAIModelResponse::EStatus::Text:
 		Interpretation = FStageAIInterpretation::MakeReply(FText::FromString(Response.Text));
@@ -334,16 +352,66 @@ void UStageAICommandSubsystem::HandleBackendFinished(const FStageAIModelResponse
 		Interpretation.Note = DescribeOffline(Response.Error, StageAILanguage::Detect(Prompt));
 		break;
 	}
-	SetState(EStageAIAssistantState::Idle);
+	// Not SetState: going idle forgets the asking player's host, and Respond still has to run the answer for them.
+	State = EStageAIAssistantState::Idle;
 	Respond(Interpretation);
 }
 
 void UStageAICommandSubsystem::Respond(const FStageAIInterpretation& Interpretation)
 {
+	const auto EndPrompt = [this]()
+	{
+		PendingHost = FStageAIActionHost();
+		PromptSelection.Reset();
+		SetState(EStageAIAssistantState::Idle);
+	};
 	if (Interpretation.Kind == FStageAIInterpretation::EKind::Reply)
 	{
 		AddMessage(EStageAISpeaker::Assistant, Interpretation.ReplyOutcome, WithNote(Interpretation.Reply, Interpretation.Note), Interpretation.Reference);
-		PendingExecutor.Unbind();
+		EndPrompt();
+		return;
+	}
+
+	// Several commands in one answer (the online model, Docs/ADR/0030 §6): every one is checked first; questions among them are
+	// answered, and the changes become one plan.
+	if (!Interpretation.MoreCommands.IsEmpty())
+	{
+		FStageAIPlan Plan;
+		Plan.Language = Interpretation.Command.Language;
+		Plan.bFromOnlineModel = Interpretation.bFromOnlineModel;
+		TArray<FStageAICommand> All;
+		All.Add(Interpretation.Command);
+		All.Append(Interpretation.MoreCommands);
+		for (FStageAICommand& Command : All)
+		{
+			FText Error;
+			if (!StageAICommandSchema::Validate(Command, Error))
+			{
+				AddMessage(EStageAISpeaker::Assistant, EStageAIOutcome::Refused, WithNote(Error, Interpretation.Note));
+				EndPrompt();
+				return;
+			}
+		}
+		for (const FStageAICommand& Command : All)
+		{
+			if (Command.IsQuestion() && Command.Intent != EStageAIIntent::ListingDetails)
+			{
+				FStageAIReference Reference;
+				const FText Answer = Command.Intent == EStageAIIntent::ExplainFixture || Command.Intent == EStageAIIntent::ListProblems
+					? AnswerDiagnostics(Command, Reference) : StageAIAnswers::AnswerQuestion(Command, CaptureScene());
+				AddMessage(EStageAISpeaker::Assistant, EStageAIOutcome::Info, Answer, Reference);
+			}
+			else if (StageAIToolCatalogue::GetTool(Command.Intent).IsChange())
+			{
+				Plan.Steps.Add(Command);
+			}
+		}
+		if (Plan.Steps.IsEmpty())
+		{
+			EndPrompt();
+			return;
+		}
+		HandlePlan(MoveTemp(Plan), Interpretation.Note);
 		return;
 	}
 
@@ -352,10 +420,10 @@ void UStageAICommandSubsystem::Respond(const FStageAIInterpretation& Interpretat
 	if (!StageAICommandSchema::Validate(Command, Error))
 	{
 		AddMessage(EStageAISpeaker::Assistant, EStageAIOutcome::Refused, WithNote(Error, Interpretation.Note));
-		PendingExecutor.Unbind();
+		EndPrompt();
 		return;
 	}
-	UE_LOG(LogStageCraft, Log, TEXT("AI assistant: running %s."), *StageAICommandSchema::GetIntentName(Command.Intent));
+	UE_LOG(LogStageCraft, Log, TEXT("AI assistant: interpreted %s."), *StageAICommandSchema::GetIntentName(Command.Intent));
 
 	// Listings are named against the marketplace's current results, here and only here (Docs/ADR/0021 §13.2).
 	if (Command.Intent == EStageAIIntent::ListingDetails || Command.Intent == EStageAIIntent::PreviewListing || Command.Intent == EStageAIIntent::AcquireListing)
@@ -364,7 +432,7 @@ void UStageAICommandSubsystem::Respond(const FStageAIInterpretation& Interpretat
 		if (!ResolveListing(Command, NotFound))
 		{
 			AddMessage(EStageAISpeaker::Assistant, EStageAIOutcome::Refused, WithNote(NotFound, Interpretation.Note));
-			PendingExecutor.Unbind();
+			EndPrompt();
 			return;
 		}
 	}
@@ -394,15 +462,314 @@ void UStageAICommandSubsystem::Respond(const FStageAIInterpretation& Interpretat
 	}
 	else
 	{
-		RunAction(Command, Interpretation.Note);
+		FStageAIPlan Plan;
+		Plan.Language = Command.Language;
+		Plan.bFromOnlineModel = Interpretation.bFromOnlineModel;
+		Plan.Steps.Add(MoveTemp(Command));
+		HandlePlan(MoveTemp(Plan), Interpretation.Note);
 		return;
 	}
-	SetState(EStageAIAssistantState::Idle);
+	EndPrompt();
+}
+
+void UStageAICommandSubsystem::HandlePlan(FStageAIPlan Plan, const FText& Note)
+{
+	// Every step was validated by Respond (StageAICommandSchema::Validate); this checks the plan as a whole.
+	FText Error;
+	if (!StageAIToolCatalogue::CheckPlan(Plan.Steps, Plan.Language, Error))
+	{
+		AddMessage(EStageAISpeaker::Assistant, EStageAIOutcome::Refused, WithNote(Error, Note));
+		PendingHost = FStageAIActionHost();
+		PromptSelection.Reset();
+		SetState(EStageAIAssistantState::Idle);
+		return;
+	}
+	// Undo, export and the marketplace run alone and as they always have: not grouped (an undo inside a group is refused), and
+	// a paid listing has its own confirmation turn.
+	if (Plan.Steps.Num() == 1 && !StageAIToolCatalogue::GetTool(Plan.Steps[0].Intent).bPlannable)
+	{
+		RunAction(Plan.Steps[0], Note);
+		return;
+	}
+	if (NeedsApproval(Plan))
+	{
+		ProposePlan(MoveTemp(Plan), Note);
+		return;
+	}
+	RunPlan(MoveTemp(Plan), Note);
+}
+
+bool UStageAICommandSubsystem::NeedsApproval(const FStageAIPlan& Plan) const
+{
+	if (PendingHost.bAskBeforeChanges)
+	{
+		return true;
+	}
+	if (!Plan.bFromOnlineModel && Plan.Steps.Num() == 1)
+	{
+		// One change the user typed, read by the local grammar: like pressing the button.
+		return false;
+	}
+	return !Algo::AllOf(Plan.Steps, [](const FStageAICommand& Step) { return StageAIToolCatalogue::CanApplyWithoutAsking(Step); });
+}
+
+void UStageAICommandSubsystem::ProposePlan(FStageAIPlan Plan, const FText& Note)
+{
+	using StageAILanguage::Pick;
+	const EStageAILanguage Language = Plan.Language;
+	TArray<FString> Lines;
+	Lines.Add((Plan.Steps.Num() == 1
+		? Pick(Language, LOCTEXT("ProposeOne", "I would make this change:"), INVTEXT("Կկատարեմ այս փոփոխությունը՝"))
+		: FText::Format(Pick(Language, LOCTEXT("ProposeMany", "I would make these {0} changes, as one undo step:"), INVTEXT("Կկատարեմ այս {0} փոփոխությունները՝ որպես մեկ հետարկման քայլ՝")),
+			FText::AsNumber(Plan.Steps.Num()))).ToString());
+	for (int32 Index = 0; Index < Plan.Steps.Num(); ++Index)
+	{
+		Lines.Add(FString::Printf(TEXT("%d. %s"), Index + 1, *StageAIToolCatalogue::DescribeStep(Plan.Steps[Index], Language).ToString()));
+	}
+	if (StageAIToolCatalogue::HasStepsNotUndone(Plan.Steps))
+	{
+		Lines.Add(Pick(Language, LOCTEXT("ProposeNotUndone", "(Cue playback is not undone by Ctrl+Z.)"), INVTEXT("(Կյուների նվագարկումը Ctrl+Z-ով չի հետարկվում։)")).ToString());
+	}
+	Lines.Add(Pick(Language, LOCTEXT("ProposeAsk", "APPLY to make it, CANCEL to leave the stage as it is (or answer yes / no)."),
+		INVTEXT("APPLY՝ կատարելու համար, CANCEL՝ բեմը անփոփոխ թողնելու համար (կամ պատասխանեք այո / ոչ)։")).ToString());
+
+	Proposal.Emplace();
+	Proposal->Id = ++LastProposalId;
+	Proposal->Plan = MoveTemp(Plan);
+	UE_LOG(LogStageCraft, Log, TEXT("AI assistant: proposed plan %d (%d step(s))."), Proposal->Id, Proposal->Plan.Steps.Num());
+	PendingHost = FStageAIActionHost();
+	PromptSelection.Reset();
+	State = EStageAIAssistantState::Idle;
+	AddMessage(EStageAISpeaker::Assistant, EStageAIOutcome::Info, WithNote(FText::FromString(FString::Join(Lines, TEXT("\n"))), Note), FStageAIReference(), Proposal->Id);
+}
+
+#if !UE_BUILD_SHIPPING
+bool UStageAICommandSubsystem::SubmitPlanForTesting(FStageAIPlan Plan, FStageAIActionHost Host)
+{
+	if (IsBusy())
+	{
+		return false;
+	}
+	Proposal.Reset();
+	PendingHost = MoveTemp(Host);
+	Plan.bFromOnlineModel = true;
+	for (FStageAICommand& Step : Plan.Steps)
+	{
+		FText Error;
+		if (!StageAICommandSchema::Validate(Step, Error))
+		{
+			AddMessage(EStageAISpeaker::Assistant, EStageAIOutcome::Refused, Error);
+			PendingHost = FStageAIActionHost();
+			return true;
+		}
+	}
+	HandlePlan(MoveTemp(Plan), FText::GetEmpty());
+	return true;
+}
+
+void UStageAICommandSubsystem::SetBackendForTesting(UStageAIAssistantBackend* InBackend)
+{
+	if (Backend)
+	{
+		Backend->Cancel();
+	}
+	Backend = InBackend;
+}
+#endif
+
+bool UStageAICommandSubsystem::ApplyProposal(FStageAIActionHost Host)
+{
+	if (!Proposal.IsSet() || IsBusy())
+	{
+		return false;
+	}
+	FStageAIPlan Plan = MoveTemp(Proposal->Plan);
+	Proposal.Reset();
+	PendingHost = MoveTemp(Host);
+	RunPlan(MoveTemp(Plan), FText::GetEmpty());
+	return true;
+}
+
+bool UStageAICommandSubsystem::CancelProposal()
+{
+	if (!Proposal.IsSet() || IsBusy())
+	{
+		return false;
+	}
+	const EStageAILanguage Language = Proposal->Plan.Language;
+	Proposal.Reset();
+	AddMessage(EStageAISpeaker::Assistant, EStageAIOutcome::Info,
+		StageAILanguage::Pick(Language, LOCTEXT("ProposalCancelled", "OK, I changed nothing."), INVTEXT("Լավ, ոչինչ չփոխեցի։")));
+	return true;
+}
+
+bool UStageAICommandSubsystem::AnswerProposal(const FString& Prompt, FStageAIActionHost& Host, TArray<FString>& SelectedItemNames)
+{
+	if (!Proposal.IsSet())
+	{
+		return false;
+	}
+	// The proposal stands for exactly one prompt: a yes, a no, or anything else, which drops it unapplied.
+	const StageAICommandParser::EStageAIConfirmation Answer = StageAICommandParser::ParseConfirmation(Prompt);
+	if (Answer == StageAICommandParser::EStageAIConfirmation::None)
+	{
+		Proposal.Reset();
+		return false;
+	}
+	AddMessage(EStageAISpeaker::User, EStageAIOutcome::Info, FText::FromString(Prompt));
+	if (Answer == StageAICommandParser::EStageAIConfirmation::No)
+	{
+		return CancelProposal();
+	}
+	PromptSelection = MoveTemp(SelectedItemNames);
+	return ApplyProposal(MoveTemp(Host));
+}
+
+void UStageAICommandSubsystem::RunPlan(FStageAIPlan Plan, const FText& Note)
+{
+	check(!RunningPlan.IsSet());
+	// The history step's name is in the UI language (the Edit menu shows it); the conversation speaks the plan's.
+	const FText First = StageAIToolCatalogue::DescribeStep(Plan.Steps[0], EStageAILanguage::English);
+	const FText Description = Plan.Steps.Num() == 1
+		? FText::Format(LOCTEXT("PlanStepOne", "Assistant: {0}"), First)
+		: FText::Format(LOCTEXT("PlanStepMany", "Assistant: {0} (+{1} more)"), First, FText::AsNumber(Plan.Steps.Num() - 1));
+	State = EStageAIAssistantState::Acting;
+	RunningPlan.Emplace();
+	RunningPlan->Plan = MoveTemp(Plan);
+	RunningPlan->Note = Note;
+	RunningPlan->bGrouped = PendingHost.BeginPlan.IsBound() && PendingHost.BeginPlan.Execute(Description);
+	UE_LOG(LogStageCraft, Log, TEXT("AI assistant: applying %d step(s)%s."), RunningPlan->Plan.Steps.Num(), RunningPlan->bGrouped ? TEXT(" as one undo step") : TEXT(""));
+	OnConversationChanged.Broadcast();
+	AdvancePlan();
+}
+
+void UStageAICommandSubsystem::AdvancePlan()
+{
+	while (RunningPlan.IsSet() && RunningPlan->NextStep < RunningPlan->Plan.Steps.Num())
+	{
+		if (!PendingHost.Execute.IsBound())
+		{
+			FinishPlan(FStageAIActionOutcome::Make(EStageAIOutcome::Refused, StageAILanguage::Pick(RunningPlan->Plan.Language,
+				LOCTEXT("PlanNoPlayer", "There is no player to make that change for."), INVTEXT("Չկա խաղացող, որի համար կատարեմ այդ փոփոխությունը։"))));
+			return;
+		}
+		const FStageAICommand Step = RunningPlan->Plan.Steps[RunningPlan->NextStep];
+		UE_LOG(LogStageCraft, Log, TEXT("AI assistant: step %d of %d, %s."), RunningPlan->NextStep + 1, RunningPlan->Plan.Steps.Num(),
+			*StageAICommandSchema::GetIntentName(Step.Intent));
+		RunningPlan->bExecuting = true;
+		FStageAIActionOutcome Outcome = PendingHost.Execute.Execute(Step);
+		if (!RunningPlan.IsSet())
+		{
+			return;
+		}
+		RunningPlan->bExecuting = false;
+		if (Outcome.Outcome == EStageAIOutcome::Pending)
+		{
+			if (!RunningPlan->EarlyOutcome.IsSet())
+			{
+				// Streaming assets or waiting for an answer: FinishPendingAction brings the step's result.
+				AddMessage(EStageAISpeaker::Assistant, EStageAIOutcome::Pending, Outcome.Message);
+				return;
+			}
+			Outcome = *RunningPlan->EarlyOutcome;
+			RunningPlan->EarlyOutcome.Reset();
+		}
+		if (Outcome.Outcome == EStageAIOutcome::Refused)
+		{
+			FinishPlan(Outcome);
+			return;
+		}
+		RunningPlan->StepLines.Add(Outcome.Message);
+		++RunningPlan->NextStep;
+	}
+	if (RunningPlan.IsSet())
+	{
+		FinishPlan({});
+	}
+}
+
+void UStageAICommandSubsystem::HandleStepOutcome(const FStageAIActionOutcome& Outcome)
+{
+	if (Outcome.Outcome == EStageAIOutcome::Refused)
+	{
+		FinishPlan(Outcome);
+		return;
+	}
+	RunningPlan->StepLines.Add(Outcome.Message);
+	++RunningPlan->NextStep;
+	AdvancePlan();
+}
+
+void UStageAICommandSubsystem::FinishPlan(TOptional<FStageAIActionOutcome> Refusal)
+{
+	using StageAILanguage::Pick;
+	FRunningPlan Finished = MoveTemp(*RunningPlan);
+	RunningPlan.Reset();
+	const FStageAIPlan& Plan = Finished.Plan;
+	const EStageAILanguage Language = Plan.Language;
+	const int32 StepCount = Plan.Steps.Num();
+	FStageAIActionHost Host = MoveTemp(PendingHost);
+	PendingHost = FStageAIActionHost();
+	PromptSelection.Reset();
+	State = EStageAIAssistantState::Idle;
+
+	if (!Refusal.IsSet())
+	{
+		if (Finished.bGrouped && Host.EndPlan.IsBound())
+		{
+			Host.EndPlan.Execute(/*bKeep*/ true);
+		}
+		FText Text = Finished.StepLines.IsEmpty() ? FText::GetEmpty() : Finished.StepLines[0];
+		if (StepCount > 1)
+		{
+			TArray<FString> Lines;
+			Lines.Add(FText::Format(Pick(Language, LOCTEXT("PlanDone", "Done: {0} changes, one undo step (Ctrl+Z reverts them all)."),
+				INVTEXT("Կատարված է՝ {0} փոփոխություն, մեկ հետարկման քայլ (Ctrl+Z-ը կհետարկի բոլորը)։")), FText::AsNumber(StepCount)).ToString());
+			for (int32 Index = 0; Index < Finished.StepLines.Num(); ++Index)
+			{
+				Lines.Add(FString::Printf(TEXT("%d. %s"), Index + 1, *Finished.StepLines[Index].ToString()));
+			}
+			Text = FText::FromString(FString::Join(Lines, TEXT("\n")));
+		}
+		UE_LOG(LogStageCraft, Log, TEXT("AI assistant: plan of %d step(s) applied."), StepCount);
+		AddMessage(EStageAISpeaker::Assistant, EStageAIOutcome::Succeeded, WithNote(Text, Finished.Note));
+		return;
+	}
+
+	EStageCommandResult Rollback = EStageCommandResult::Succeeded;
+	if (Finished.bGrouped && Host.EndPlan.IsBound())
+	{
+		Rollback = Host.EndPlan.Execute(/*bKeep*/ false);
+	}
+	const int32 Failed = Finished.NextStep;
+	UE_LOG(LogStageCraft, Log, TEXT("AI assistant: step %d of %d refused; rollback %s."), Failed + 1, StepCount, *UEnum::GetValueAsString(Rollback));
+	if (StepCount == 1)
+	{
+		AddMessage(EStageAISpeaker::Assistant, EStageAIOutcome::Refused, WithNote(Refusal->Message, Finished.Note));
+		return;
+	}
+	TArray<FString> Lines;
+	Lines.Add(FText::Format(Pick(Language, LOCTEXT("PlanStepRefused", "Step {0} of {1} was not done ({2}): {3}"), INVTEXT("{1} քայլից {0}-րդը չկատարվեց ({2})՝ {3}")),
+		FText::AsNumber(Failed + 1), FText::AsNumber(StepCount), StageAIToolCatalogue::DescribeStep(Plan.Steps[Failed], Language), Refusal->Message).ToString());
+	if (Failed > 0)
+	{
+		const bool bRolledBack = Rollback == EStageCommandResult::Succeeded || Rollback == EStageCommandResult::NothingToDo;
+		Lines.Add((bRolledBack
+			? FText::Format(Pick(Language, LOCTEXT("PlanRolledBack", "The {0} {0}|plural(one=step,other=steps) before it {0}|plural(one=was,other=were) undone, so nothing changed."),
+				INVTEXT("Դրանից առաջ կատարված {0} քայլը հետարկվեց, ուստի ոչինչ չփոխվեց։")), FText::AsNumber(Failed))
+			: Pick(Language, LOCTEXT("PlanNotRolledBack", "The steps before it could not be undone; Ctrl+Z reverts them as one step."),
+				INVTEXT("Դրանից առաջ կատարված քայլերը հնարավոր չեղավ հետարկել. Ctrl+Z-ը դրանք կհետարկի որպես մեկ քայլ։"))).ToString());
+		if (StageAIToolCatalogue::HasStepsNotUndone(MakeArrayView(Plan.Steps.GetData(), Failed)))
+		{
+			Lines.Add(Pick(Language, LOCTEXT("PlanPlaybackStays", "Cue playback it started stays as it is."), INVTEXT("Սկսված կյուների նվագարկումը մնում է ինչպես կա։")).ToString());
+		}
+	}
+	AddMessage(EStageAISpeaker::Assistant, EStageAIOutcome::Refused, WithNote(FText::FromString(FString::Join(Lines, TEXT("\n"))), Finished.Note));
 }
 
 void UStageAICommandSubsystem::RunAction(const FStageAICommand& Command, const FText& Note)
 {
-	if (!PendingExecutor.IsBound())
+	if (!PendingHost.Execute.IsBound())
 	{
 		AddMessage(EStageAISpeaker::Assistant, EStageAIOutcome::Refused, StageAILanguage::Pick(Command.Language,
 			LOCTEXT("NoPlayer", "There is no player to make that change for."), INVTEXT("Չկա խաղացող, որի համար կատարեմ այդ փոփոխությունը։")));
@@ -412,7 +779,7 @@ void UStageAICommandSubsystem::RunAction(const FStageAICommand& Command, const F
 
 	// Acting while the executor runs, so a pending action may stream assets (RequestItemAssets) or wait for the marketplace.
 	State = EStageAIAssistantState::Acting;
-	const FStageAIActionOutcome Outcome = PendingExecutor.Execute(Command);
+	const FStageAIActionOutcome Outcome = PendingHost.Execute.Execute(Command);
 	if (Outcome.Outcome == EStageAIOutcome::Pending && State == EStageAIAssistantState::Acting)
 	{
 		AddMessage(EStageAISpeaker::Assistant, EStageAIOutcome::Pending, WithNote(Outcome.Message, Note));
@@ -425,10 +792,12 @@ void UStageAICommandSubsystem::RunAction(const FStageAICommand& Command, const F
 		PurchaseOffer = Outcome.PurchaseOffer;
 		AddMessage(EStageAISpeaker::Assistant, Outcome.Outcome, WithNote(Outcome.Message, Note));
 	}
+	PendingHost = FStageAIActionHost();
+	PromptSelection.Reset();
 	SetState(EStageAIAssistantState::Idle);
 }
 
-bool UStageAICommandSubsystem::AnswerPurchaseOffer(const FString& Prompt, FStageAICommandExecutor& Executor, TArray<FString>& SelectedItemNames)
+bool UStageAICommandSubsystem::AnswerPurchaseOffer(const FString& Prompt, FStageAIActionHost& Host, TArray<FString>& SelectedItemNames)
 {
 	if (!PurchaseOffer.IsSet())
 	{
@@ -467,7 +836,7 @@ bool UStageAICommandSubsystem::AnswerPurchaseOffer(const FString& Prompt, FStage
 	LastListing = Offer.ListingId;
 	UE_LOG(LogStageCraft, Log, TEXT("AI assistant: purchase of listing %s for %lld credits confirmed by the user."), *Offer.ListingId.ToString(), Offer.Credits);
 
-	PendingExecutor = MoveTemp(Executor);
+	PendingHost = MoveTemp(Host);
 	PromptSelection = MoveTemp(SelectedItemNames);
 	RunAction(Command, FText::GetEmpty());
 	return true;
@@ -571,9 +940,20 @@ void UStageAICommandSubsystem::FinishPendingAction(const FStageAIActionOutcome& 
 	{
 		return;
 	}
-	State = EStageAIAssistantState::Idle;
 	StopMarketplaceWait();
-	PendingExecutor.Unbind();
+	if (RunningPlan.IsSet())
+	{
+		// A step of a plan: its result decides whether the plan goes on.
+		if (RunningPlan->bExecuting)
+		{
+			RunningPlan->EarlyOutcome = Outcome;
+			return;
+		}
+		HandleStepOutcome(Outcome);
+		return;
+	}
+	State = EStageAIAssistantState::Idle;
+	PendingHost = FStageAIActionHost();
 	PromptSelection.Reset();
 	AddMessage(EStageAISpeaker::Assistant, Outcome.Outcome, Outcome.Message);
 }
@@ -632,6 +1012,7 @@ void UStageAICommandSubsystem::ClearConversation()
 	}
 	Messages.Reset();
 	PurchaseOffer.Reset();
+	Proposal.Reset();
 	LastListing.Invalidate();
 	OnConversationChanged.Broadcast();
 }

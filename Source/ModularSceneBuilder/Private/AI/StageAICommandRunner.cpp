@@ -23,6 +23,7 @@
 #include "Show/StageGelLibrary.h"
 #include "Sketch/StageSketchGenerator.h"
 #include "Subsystems/ShowControlSubsystem.h"
+#include "Subsystems/StageDMXPatchSubsystem.h"
 #include "Subsystems/StageItemSubsystem.h"
 #include "Subsystems/StageSessionSubsystem.h"
 
@@ -206,6 +207,117 @@ namespace StageAICommandRunner
 					: Pick(Language, LOCTEXT("CueStored", "Stored cue {0}{1} with a {2} s fade from every fixture's current look. Ctrl+Z removes it."),
 						INVTEXT("Պահվեց կյու {0}{1}՝ {2} վ անցումով, բոլոր սարքերի ընթացիկ վիճակից։ Ctrl+Z-ը կհեռացնի այն։")),
 				FormatCue(Number), Label, FText::AsNumber(Fade)));
+		}
+
+		FStageAIActionOutcome EditCue(AModularPlayerController& Controller, const FStageAICommand& Command)
+		{
+			const EStageAILanguage Language = Command.Language;
+			const UShowControlSubsystem* Show = UWorld::GetSubsystem<UShowControlSubsystem>(Controller.GetWorld());
+			const float Number = *Command.CueNumber;
+			const FShowCue* Cue = Show ? Show->FindCue(Number) : nullptr;
+			if (!Cue)
+			{
+				return Refused(FText::Format(Pick(Language, LOCTEXT("NoSuchCue", "There is no cue {0}."), INVTEXT("Կյու {0} չկա։")), FormatCue(Number)));
+			}
+			bool bDone = false;
+			const bool bDelete = Command.Intent == EStageAIIntent::DeleteCue;
+			// What the update leaves out keeps its value.
+			const FText Label = Command.Label.IsEmpty() ? Cue->Label : FText::FromString(Command.Label);
+			const float Fade = Command.FadeSeconds.Get(Cue->FadeTime);
+			const TArray<FStageEconomyResultInfo> Refusals = Controller.RunCapturingRejections([&]()
+			{
+				bDone = bDelete ? Controller.RequestDeleteCue(Number) : Controller.RequestUpdateCue(Number, Label, Fade);
+			});
+			if (!bDone)
+			{
+				return Refused(RefusalOf(Refusals, FText::Format(bDelete
+					? Pick(Language, LOCTEXT("DeleteCueFailed", "Cue {0} could not be deleted."), INVTEXT("Կյու {0}-ը հնարավոր չեղավ ջնջել։"))
+					: Pick(Language, LOCTEXT("UpdateCueFailed", "Cue {0} could not be changed."), INVTEXT("Կյու {0}-ը հնարավոր չեղավ փոխել։")), FormatCue(Number))));
+			}
+			return Done(bDelete
+				? FText::Format(Pick(Language, LOCTEXT("CueDeleted", "Deleted cue {0}. Ctrl+Z brings it back."), INVTEXT("Կյու {0}-ը ջնջվեց։ Ctrl+Z-ը այն հետ կբերի։")), FormatCue(Number))
+				: FText::Format(Pick(Language, LOCTEXT("CueUpdated", "Cue {0} is now \"{1}\" with a {2} s fade."), INVTEXT("Կյու {0}-ն այժմ «{1}» է՝ {2} վ անցումով։")),
+					FormatCue(Number), Label, FText::AsNumber(Fade)));
+		}
+
+		FStageAIActionOutcome PatchFixtures(AModularPlayerController& Controller, const FStageAICommand& Command)
+		{
+			const EStageAILanguage Language = Command.Language;
+			UWorld* World = Controller.GetWorld();
+			const UShowControlSubsystem* Show = UWorld::GetSubsystem<UShowControlSubsystem>(World);
+			const UStageDMXPatchSubsystem* Patch = UWorld::GetSubsystem<UStageDMXPatchSubsystem>(World);
+			if (!Show || !Patch)
+			{
+				return Refused(Pick(Language, LOCTEXT("NoPatch", "The DMX patch is not available in this level."), INVTEXT("DMX պատչը հասանելի չէ այս մակարդակում։")));
+			}
+			TArray<ALightingFixtureActor*> Fixtures;
+			if (Command.FixtureIds.IsEmpty())
+			{
+				const USelectionComponent* Selection = Controller.GetSelection();
+				for (AActor* Selected : Selection ? Selection->GetSelectedActors() : TArray<AActor*>())
+				{
+					if (ALightingFixtureActor* Fixture = Cast<ALightingFixtureActor>(Selected))
+					{
+						Fixtures.AddUnique(Fixture);
+					}
+				}
+				if (Fixtures.IsEmpty())
+				{
+					return Refused(Pick(Language, LOCTEXT("PatchWhich", "Which fixtures? Select them, or name them: \"patch fixtures 1 to 4 to universe 2\"."),
+						INVTEXT("Ո՞ր սարքերը։ Ընտրեք դրանք կամ նշեք՝ «պատչիր 1-ից 4 սարքերը 2 յունիվերսում»։")));
+				}
+			}
+			else
+			{
+				TArray<FString> Missing;
+				for (const int32 Id : Command.FixtureIds)
+				{
+					if (ALightingFixtureActor* Fixture = Show->FindFixture(Id))
+					{
+						Fixtures.AddUnique(Fixture);
+					}
+					else
+					{
+						Missing.Add(FString::FromInt(Id));
+					}
+				}
+				if (!Missing.IsEmpty())
+				{
+					return Refused(FText::Format(Pick(Language, LOCTEXT("PatchMissing", "There is no fixture {0} on the stage."), INVTEXT("Բեմում {0} սարք չկա։")),
+						FText::FromString(FString::Join(Missing, TEXT(", ")))));
+				}
+			}
+
+			FStageDMXPatch Start;
+			Start.Universe = Command.Universe.Get(1);
+			Start.Address = Command.Address.Get(1);
+			const TArray<FStageDMXPatchAssignment> Plan = Patch->PlanConsecutive(Fixtures, Start);
+			const FText StartText = FText::FromString(FString::Printf(TEXT("%d.%03d"), Start.Universe, Start.Address));
+			if (Plan.IsEmpty())
+			{
+				return Refused(FText::Format(Pick(Language, LOCTEXT("PatchNoRoom", "Those fixtures do not fit from {0}: there is no free room for all of them."),
+					INVTEXT("Այդ սարքերը {0}-ից չեն տեղավորվում. բոլորի համար ազատ տեղ չկա։")), StartText));
+			}
+			// Already there is what was asked for, not a refusal (a plan carries on).
+			if (Algo::AllOf(Plan, [](const FStageDMXPatchAssignment& Entry) { return Entry.Fixture.IsValid() && Entry.Fixture->GetPatch() == Entry.Patch; }))
+			{
+				return Done(FText::Format(Pick(Language, LOCTEXT("PatchAlready", "Those fixtures are already patched from {0}; nothing changed."),
+					INVTEXT("Այդ սարքերն արդեն պատչված են {0}-ից. ոչինչ չփոխվեց։")), StartText));
+			}
+			FStageEconomyResultInfo Result;
+			const TArray<FStageEconomyResultInfo> Refusals = Controller.RunCapturingRejections([&]()
+			{
+				Result = Controller.RequestPatchFixtures(Plan, FText::GetEmpty());
+			});
+			if (!Result.IsSuccess())
+			{
+				return Refused(RefusalOf(Refusals, Result.Message));
+			}
+			const FStageDMXPatch& Last = Plan.Last().Patch;
+			return Done(FText::Format(Pick(Language, LOCTEXT("Patched", "Patched {0} {0}|plural(one=fixture,other=fixtures) from {1} to {2}. Ctrl+Z restores the old patch."),
+				INVTEXT("Պատչվեց {0} սարք՝ {1}-ից մինչև {2}։ Ctrl+Z-ը կվերադարձնի նախորդ պատչը։")), FText::AsNumber(Plan.Num()),
+				FText::FromString(FString::Printf(TEXT("%d.%03d"), Plan[0].Patch.Universe, Plan[0].Patch.Address)),
+				FText::FromString(FString::Printf(TEXT("%d.%03d"), Last.Universe, Last.Address))));
 		}
 
 		FStageAIActionOutcome PlayCue(AModularPlayerController& Controller, const FStageAICommand& Command)
@@ -1046,6 +1158,9 @@ namespace StageAICommandRunner
 		{
 		case EStageAIIntent::AddFixtures:	return AddFixtures(Controller, Command);
 		case EStageAIIntent::StoreCue:		return StoreCue(Controller, Command);
+		case EStageAIIntent::UpdateCue:
+		case EStageAIIntent::DeleteCue:		return EditCue(Controller, Command);
+		case EStageAIIntent::PatchFixtures:	return PatchFixtures(Controller, Command);
 		case EStageAIIntent::GoToCue:
 		case EStageAIIntent::CueGo:
 		case EStageAIIntent::CueBack:		return PlayCue(Controller, Command);

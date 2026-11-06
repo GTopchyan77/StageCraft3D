@@ -257,8 +257,12 @@ void UStageEditHistoryComponent::EndPlay(const EEndPlayReason::Type EndPlayReaso
 		SpanTool->OnItemPlaced.RemoveDynamic(this, &ThisClass::HandleItemPlaced);
 		SpanTool = nullptr;
 	}
-	// An edit still being dragged when play ends is recorded, not lost.
+	// An edit still being dragged when play ends is recorded, not lost; so is an assistant plan still being applied.
 	EndTransaction();
+	if (IsGroupOpen())
+	{
+		EndGroup();
+	}
 	ParameterApplier.Unbind();
 	TransformValidator.Unbind();
 	Super::EndPlay(EndPlayReason);
@@ -628,6 +632,52 @@ EStageCommandResult UStageEditHistoryComponent::Undo()
 EStageCommandResult UStageEditHistoryComponent::Redo()
 {
 	return Step(/*bUndo*/ false);
+}
+
+bool UStageEditHistoryComponent::BeginGroup(const FText& Description)
+{
+	UStageEditHistorySubsystem* History = GetHistory();
+	if (!History || History->IsGroupOpen())
+	{
+		return false;
+	}
+	// Edits collected before the group are not part of it.
+	EndTransaction();
+	return History->BeginGroup(Description);
+}
+
+void UStageEditHistoryComponent::EndGroup()
+{
+	EndTransaction();
+	if (UStageEditHistorySubsystem* History = GetHistory())
+	{
+		History->EndGroup();
+	}
+}
+
+EStageCommandResult UStageEditHistoryComponent::AbortGroup()
+{
+	EndTransaction();
+	UStageEditHistorySubsystem* History = GetHistory();
+	UStageSessionSubsystem* Session = UWorld::GetSubsystem<UStageSessionSubsystem>(GetWorld());
+	if (!History || !History->IsGroupOpen())
+	{
+		return EStageCommandResult::NothingToDo;
+	}
+	if (!Session || !SpawnSystem || !Selection)
+	{
+		// Nothing to revert with: keep what was done undoable.
+		History->EndGroup();
+		return EStageCommandResult::Refused;
+	}
+	StageEditHistory::FLiveItemEditor Editor(*Session, *SpawnSystem, *Selection, ParameterApplier, TransformValidator);
+	return History->AbortGroup(Editor);
+}
+
+bool UStageEditHistoryComponent::IsGroupOpen() const
+{
+	const UStageEditHistorySubsystem* History = GetHistory();
+	return History && History->IsGroupOpen();
 }
 
 EStageCommandResult UStageEditHistoryComponent::Step(bool bUndo)

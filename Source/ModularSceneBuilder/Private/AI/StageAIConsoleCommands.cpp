@@ -8,6 +8,7 @@
 
 #if !UE_BUILD_SHIPPING
 
+#include "AI/StageAICommandParser.h"
 #include "AI/StageAICommandSubsystem.h"
 #include "AI/StageVoiceInputComponent.h"
 #include "AudioCaptureCore.h"
@@ -159,6 +160,75 @@ namespace StageAICommands
 		UE_LOG(LogStageCraft, Display, TEXT("StageCraft.Assistant.Voice %s: state %s, %s. Status: %s"), *Action, *UEnum::GetValueAsString(VoiceInput->GetState()),
 			bAvailable ? TEXT("available") : *FString::Printf(TEXT("unavailable (%s)"), *Reason.ToString()), *VoiceInput->GetStatus().ToString());
 	}
+
+	void PrintSince(const UStageAICommandSubsystem& Assistant, int32 Before)
+	{
+		for (int32 Index = FMath::Max(Before, 0); Index < Assistant.GetMessages().Num(); ++Index)
+		{
+			const FStageAIMessage& Message = Assistant.GetMessages()[Index];
+			UE_LOG(LogStageCraft, Display, TEXT("  %s%s: %s"), SpeakerName(Message), Message.ProposalId != 0 ? TEXT(" (proposal)") : TEXT(""),
+				*Message.Text.ToString().Replace(TEXT("\n"), TEXT(" / ")));
+		}
+	}
+
+	/**
+	 * "StageCraft.Assistant.Plan store cue 5 | patch fixtures 1 to 4 at 2.001": each part read by the local grammar, the parts
+	 * proposed together as the online model would (Docs/ADR/0030 §6), so the card shows.
+	 */
+	void Plan(const TArray<FString>& Args, UWorld* World)
+	{
+		AModularPlayerController* Controller = World ? Cast<AModularPlayerController>(World->GetFirstPlayerController()) : nullptr;
+		const UStageAICommandSubsystem* Assistant = UWorld::GetSubsystem<UStageAICommandSubsystem>(World);
+		TArray<FString> Parts;
+		static const TCHAR* const Separators[] = { TEXT(";"), TEXT("|") };
+		FString::Join(Args, TEXT(" ")).ParseIntoArray(Parts, Separators, UE_ARRAY_COUNT(Separators));
+		if (!Controller || !Assistant || Parts.IsEmpty())
+		{
+			UE_LOG(LogStageCraft, Display, TEXT("Usage: StageCraft.Assistant.Plan <request> | <request> ...   (each part one change; a semicolon also separates them)"));
+			return;
+		}
+		FStageAIPlan NewPlan;
+		for (const FString& Part : Parts)
+		{
+			const TOptional<FStageAICommand> Command = StageAICommandParser::Parse(Part.TrimStartAndEnd());
+			if (!Command.IsSet())
+			{
+				UE_LOG(LogStageCraft, Display, TEXT("StageCraft.Assistant.Plan: \"%s\" is not understood; nothing proposed."), *Part.TrimStartAndEnd());
+				return;
+			}
+			NewPlan.Language = Command->Language;
+			NewPlan.Steps.Add(*Command);
+		}
+		const int32 Before = Assistant->GetMessages().Num();
+		const bool bAccepted = Controller->RequestAssistantPlanForTesting(NewPlan);
+		UE_LOG(LogStageCraft, Display, TEXT("StageCraft.Assistant.Plan: %d steps %s; open proposal %d."), NewPlan.Steps.Num(), bAccepted ? TEXT("submitted") : TEXT("refused (busy)"),
+			Assistant->GetOpenProposalId());
+		PrintSince(*Assistant, Before);
+	}
+
+	/** APPLY (bApply) or CANCEL on the open proposal card, through the controller like the buttons. */
+	void AnswerProposal(UWorld* World, bool bApply)
+	{
+		AModularPlayerController* Controller = World ? Cast<AModularPlayerController>(World->GetFirstPlayerController()) : nullptr;
+		const UStageAICommandSubsystem* Assistant = UWorld::GetSubsystem<UStageAICommandSubsystem>(World);
+		if (!Controller || !Assistant)
+		{
+			UE_LOG(LogStageCraft, Display, TEXT("StageCraft.Assistant: no stage controller or assistant."));
+			return;
+		}
+		const int32 Before = Assistant->GetMessages().Num();
+		const bool bTaken = Controller->RequestAssistantProposal(bApply);
+		UE_LOG(LogStageCraft, Display, TEXT("StageCraft.Assistant.%s: %s."), bApply ? TEXT("Apply") : TEXT("Cancel"), bTaken ? TEXT("taken") : TEXT("refused"));
+		PrintSince(*Assistant, Before);
+	}
+
+	FAutoConsoleCommandWithWorldAndArgs PlanCommand(TEXT("StageCraft.Assistant.Plan"),
+		TEXT("<request> | <request> ...  Proposes the requests as one plan, as the online model would (a card with APPLY and CANCEL)."),
+		FConsoleCommandWithWorldAndArgsDelegate::CreateStatic(&Plan));
+	FAutoConsoleCommandWithWorld ApplyCommand(TEXT("StageCraft.Assistant.Apply"),
+		TEXT("APPLY on the open proposal card: its plan runs as one undo step."), FConsoleCommandWithWorldDelegate::CreateLambda([](UWorld* World) { AnswerProposal(World, true); }));
+	FAutoConsoleCommandWithWorld CancelCommand(TEXT("StageCraft.Assistant.Cancel"),
+		TEXT("CANCEL on the open proposal card."), FConsoleCommandWithWorldDelegate::CreateLambda([](UWorld* World) { AnswerProposal(World, false); }));
 
 	FAutoConsoleCommandWithWorldAndArgs AskCommand(TEXT("StageCraft.Assistant.Ask"),
 		TEXT("<request>  Sends a request to the AI assistant through the controller (rules and undo as in the panel)."), FConsoleCommandWithWorldAndArgsDelegate::CreateStatic(&Ask));

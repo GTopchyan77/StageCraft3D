@@ -1800,6 +1800,194 @@ namespace StageAICommandParser
 		 * wrong", "check the show" (ListProblems), Docs/ADR/0030 §5. A why-question about no fixture in particular ("why is a fixture
 		 * dark") is left to the help articles. Questions about how to fix something ("how do I fix ...") are too.
 		 */
+		bool IsWholeNumberWord(const FString& Word)
+		{
+			return !Word.IsEmpty() && Word.Len() <= 9 && Algo::AllOf(Word, [](TCHAR Char) { return FChar::IsDigit(Char); });
+		}
+
+		/**
+		 * "delete cue 3", "rename cue 2 to Intro", "set cue 4 fade to 2.5 seconds" (Docs/ADR/0030 §6). Storing a cue is ParseStoreCue's
+		 * ("make cue 5" without a fade or label stores it).
+		 */
+		TOptional<FStageAICommand> ParseCueEdit(const FPrompt& Prompt)
+		{
+			const TOptional<double> Number = NumberAfter(Prompt, TEXT("cue"));
+			if (!Number.IsSet() || IsQuestionNotRequest(Prompt)
+				|| Prompt.HasAny({ TEXT("store"), TEXT("record"), TEXT("save"), TEXT("add"), TEXT("create"), TEXT("new"), TEXT("program") }))
+			{
+				return {};
+			}
+			FStageAICommand Command;
+			Command.CueNumber = float(*Number);
+			if (Prompt.HasAny({ TEXT("delete"), TEXT("remove"), TEXT("erase") }))
+			{
+				Command.Intent = EStageAIIntent::DeleteCue;
+				return Command;
+			}
+			const bool bRename = Prompt.HasAny({ TEXT("rename"), TEXT("relabel"), TEXT("label"), TEXT("name"), TEXT("call"), TEXT("title") });
+			const bool bFade = Prompt.HasAny({ TEXT("fade"), TEXT("crossfade"), TEXT("xfade") });
+			if (!bRename && !(bFade && Prompt.HasAny({ TEXT("set"), TEXT("change"), TEXT("make"), TEXT("update"), TEXT("edit"), TEXT("give") })))
+			{
+				return {};
+			}
+			Command.Intent = EStageAIIntent::UpdateCue;
+
+			TArray<FString> RawWords;
+			Prompt.Raw.ParseIntoArrayWS(RawWords);
+			const auto IsStop = [](const FString& Word)
+			{
+				return IsOneOf(Word.ToLower(), { TEXT("fade"), TEXT("with"), TEXT("and"), TEXT("crossfade") });
+			};
+			if (bRename)
+			{
+				Command.Label = FindLabel(Prompt);
+				// "rename cue 2 to Intro", "call cue 2 Intro": the original words after "to" / "as", else after the cue number.
+				for (int32 Index = 0; Command.Label.IsEmpty() && Index < RawWords.Num(); ++Index)
+				{
+					const FString Lower = RawWords[Index].ToLower();
+					const bool bTo = IsOneOf(Lower, { TEXT("to"), TEXT("as") });
+					const bool bAfterNumber = Index > 0 && RawWords[Index - 1].ToLower() == TEXT("cue") && ParseNumber(Lower).IsSet();
+					if (!bTo && !bAfterNumber)
+					{
+						continue;
+					}
+					TArray<FString> LabelWords;
+					for (int32 Next = Index + 1; Next < RawWords.Num() && !IsStop(RawWords[Next]); ++Next)
+					{
+						if (!bTo && LabelWords.IsEmpty() && IsOneOf(RawWords[Next].ToLower(), { TEXT("to"), TEXT("as") }))
+						{
+							continue;
+						}
+						LabelWords.Add(RawWords[Next]);
+					}
+					Command.Label = FString::Join(LabelWords, TEXT(" ")).TrimStartAndEnd();
+				}
+			}
+			if (bFade)
+			{
+				TOptional<double> Fade = NumberAfter(Prompt, TEXT("fade"));
+				for (int32 Index = 0; !Fade.IsSet() && Index < Prompt.Words.Num(); ++Index)
+				{
+					// "... to 3 seconds", "... 2.5 s", or "change the fade of cue 4 to 2" (the number after "to").
+					const TOptional<double> Seconds = ParseNumber(Prompt.Words[Index]);
+					const bool bUnit = Index + 1 < Prompt.Words.Num()
+						&& IsOneOf(Prompt.Words[Index + 1], { TEXT("s"), TEXT("sec"), TEXT("secs"), TEXT("second"), TEXT("seconds") });
+					const bool bAfterTo = Index > 0 && Prompt.Words[Index - 1] == TEXT("to");
+					if (Seconds.IsSet() && (bUnit || bAfterTo))
+					{
+						Fade = Seconds;
+					}
+				}
+				if (Fade.IsSet())
+				{
+					Command.FadeSeconds = float(*Fade);
+				}
+			}
+			return Command;
+		}
+
+		/**
+		 * "patch fixture 3 to universe 2 address 101", "patch fixtures 1 to 4 at 2.001", "patch the selected fixtures to universe 2"
+		 * (Docs/ADR/0030 §6). Numbers next to "universe" and "address", or a U.AAA pair, set where the patch starts; the remaining
+		 * whole numbers are fixture IDs ("1 to 4" and "1-4" are ranges). No IDs means the selected fixtures.
+		 */
+		TOptional<FStageAICommand> ParsePatch(const FPrompt& Original)
+		{
+			if (!Original.HasAny({ TEXT("patch"), TEXT("repatch") }) || IsQuestionNotRequest(Original)
+				|| Original.HasAny({ TEXT("sheet"), TEXT("export"), TEXT("report"), TEXT("conflict"), TEXT("conflicts"), TEXT("unpatch") }))
+			{
+				return {};
+			}
+			// "1-4" is a range: read it as "1 to 4".
+			FString Raw;
+			for (int32 Index = 0; Index < Original.Raw.Len(); ++Index)
+			{
+				const TCHAR Char = Original.Raw[Index];
+				const bool bRange = Char == TEXT('-') && Index > 0 && FChar::IsDigit(Original.Raw[Index - 1]) && Index + 1 < Original.Raw.Len()
+					&& FChar::IsDigit(Original.Raw[Index + 1]);
+				Raw += bRange ? FString(TEXT(" to ")) : FString::Chr(Char);
+			}
+			const FPrompt Prompt(Raw);
+			const TArray<FString>& Words = Prompt.Words;
+			TArray<bool> Used;
+			Used.Init(false, Words.Num());
+
+			FStageAICommand Command;
+			Command.Intent = EStageAIIntent::PatchFixtures;
+			for (int32 Index = 0; Index < Words.Num(); ++Index)
+			{
+				FString Left, Right;
+				if (Words[Index].Split(TEXT("."), &Left, &Right) && IsWholeNumberWord(Left) && IsWholeNumberWord(Right))
+				{
+					Command.Universe = FCString::Atoi(*Left);
+					Command.Address = FCString::Atoi(*Right);
+					Used[Index] = true;
+					break;
+				}
+			}
+			// The whole number after an anchor word (skipping "to", "at", "is"), else the one before it ("2 universe", as Armenian says it).
+			const auto NumberBeside = [&Words, &Used](std::initializer_list<const TCHAR*> Anchors) -> TOptional<int32>
+			{
+				for (int32 Index = 0; Index < Words.Num(); ++Index)
+				{
+					if (!IsOneOf(Words[Index], Anchors))
+					{
+						continue;
+					}
+					for (int32 Next = Index + 1; Next < Words.Num() && Next <= Index + 3; ++Next)
+					{
+						if (!Used[Next] && IsWholeNumberWord(Words[Next]))
+						{
+							Used[Next] = true;
+							return FCString::Atoi(*Words[Next]);
+						}
+						if (!IsOneOf(Words[Next], { TEXT("to"), TEXT("at"), TEXT("is"), TEXT("number"), TEXT("no"), TEXT("dmx") }))
+						{
+							break;
+						}
+					}
+					if (Index > 0 && !Used[Index - 1] && IsWholeNumberWord(Words[Index - 1]))
+					{
+						Used[Index - 1] = true;
+						return FCString::Atoi(*Words[Index - 1]);
+					}
+				}
+				return {};
+			};
+			if (!Command.Universe.IsSet())
+			{
+				Command.Universe = NumberBeside({ TEXT("universe"), TEXT("universes"), TEXT("uni") });
+			}
+			if (!Command.Address.IsSet())
+			{
+				Command.Address = NumberBeside({ TEXT("address"), TEXT("addr"), TEXT("channel") });
+			}
+			for (int32 Index = 0; Index < Words.Num() && Command.FixtureIds.Num() <= MaxPatchFixtures; ++Index)
+			{
+				if (Used[Index] || !IsWholeNumberWord(Words[Index]))
+				{
+					continue;
+				}
+				const int32 First = FCString::Atoi(*Words[Index]);
+				if (Index + 2 < Words.Num() && !Used[Index + 2] && IsOneOf(Words[Index + 1], { TEXT("to"), TEXT("thru"), TEXT("through"), TEXT("till"), TEXT("until") })
+					&& IsWholeNumberWord(Words[Index + 2]))
+				{
+					const int32 Last = FCString::Atoi(*Words[Index + 2]);
+					const int32 Low = FMath::Min(First, Last);
+					const int32 High = FMath::Max(First, Last);
+					// One beyond the cap at most, so validation refuses a huge range instead of this building it.
+					for (int32 Id = Low; Id <= High && Command.FixtureIds.Num() <= MaxPatchFixtures; ++Id)
+					{
+						Command.FixtureIds.AddUnique(Id);
+					}
+					Index += 2;
+					continue;
+				}
+				Command.FixtureIds.AddUnique(First);
+			}
+			return Command;
+		}
+
 		TOptional<FStageAICommand> ParseDiagnostics(const FPrompt& Prompt)
 		{
 			if (Prompt.Has(TEXT("how")))
@@ -1881,6 +2069,15 @@ namespace StageAICommandParser
 			{
 				return Export;
 			}
+			if (TOptional<FStageAICommand> Patch = ParsePatch(Prompt))
+			{
+				return Patch;
+			}
+			// Before storing: "make cue 4 fade 3 seconds" changes cue 4, it does not record it again.
+			if (TOptional<FStageAICommand> CueEdit = ParseCueEdit(Prompt))
+			{
+				return CueEdit;
+			}
 			if (TOptional<FStageAICommand> StoreCue = ParseStoreCue(Prompt))
 			{
 				return StoreCue;
@@ -1924,7 +2121,7 @@ namespace StageAICommandParser
 				}
 			}
 
-			// Cues are deleted in the Cues panel; ParseUnsupported explains where.
+			// Cue words never reach the item edits: a cue is deleted by number (ParseCueEdit), and ParseUnsupported answers the rest.
 			const bool bCueWords = Prompt.HasAny({ TEXT("cue"), TEXT("cues") });
 			if (!bCueWords)
 			{
@@ -2094,9 +2291,9 @@ namespace StageAICommandParser
 			}
 			// Armenian: այո / հա (yes), իհարկե (of course), գնիր / գնել (buy), հաստատ- (confirm), համաձայն- (agree).
 			else if (IsOneOf(Word, { TEXT("yes"), TEXT("yeah"), TEXT("yep"), TEXT("yup"), TEXT("sure"), TEXT("ok"), TEXT("okay"), TEXT("confirm"),
-					TEXT("confirmed"), TEXT("proceed"), TEXT("absolutely"), TEXT("definitely"), TEXT("buy"), TEXT("այո"), TEXT("հա"), TEXT("իհարկե"),
+					TEXT("confirmed"), TEXT("proceed"), TEXT("absolutely"), TEXT("definitely"), TEXT("buy"), TEXT("apply"), TEXT("այո"), TEXT("հա"), TEXT("իհարկե"),
 					TEXT("գնիր"), TEXT("գնեք"), TEXT("գնել") })
-				|| StartsWithAny(Word, { TEXT("հաստատ"), TEXT("համաձայն") }))
+				|| StartsWithAny(Word, { TEXT("հաստատ"), TEXT("համաձայն"), TEXT("կիրառ") }))
 			{
 				bYes = true;
 			}
@@ -2316,8 +2513,8 @@ namespace StageAIAnswers
 			return Pick(Language, LOCTEXT("UnsupportedFile", "I don't open, save or replace scenes from the chat, so nothing is lost by accident. Use the File menu (Save, Save As, Open); it asks before discarding changes."),
 				INVTEXT("Զրույցից չեմ բացում, չեմ պահպանում և չեմ փոխարինում տեսարաններ, որպեսզի ոչինչ պատահաբար չկորչի։ Օգտագործեք File ընտրացանկը (Save, Save As, Open). այն հարցնում է նախքան փոփոխությունները կորցնելը։"));
 		}
-		return Pick(Language, LOCTEXT("UnsupportedDelete", "I don't clear the whole stage from the chat, so nothing is lost by accident: use Edit › Clear Stage, which asks first. I can delete the selected items (\"delete the selected\") or items by name (\"remove the spots\"), and Ctrl+Z brings them back. Cues are deleted in the Cues panel."),
-			INVTEXT("Զրույցից չեմ մաքրում ամբողջ բեմը, որպեսզի ոչինչ պատահաբար չկորչի. օգտագործեք Edit › Clear Stage, որը նախ հարցնում է։ Կարող եմ ջնջել ընտրված իրերը («ջնջիր ընտրվածը») կամ իրերն ըստ անվան («հեռացրու սփոթերը»), և Ctrl+Z-ը դրանք հետ է բերում։ Կյուները ջնջվում են Cues վահանակում։"));
+		return Pick(Language, LOCTEXT("UnsupportedDelete", "I don't clear the whole stage from the chat, so nothing is lost by accident: use Edit › Clear Stage, which asks first. I can delete the selected items (\"delete the selected\") or items by name (\"remove the spots\"), and Ctrl+Z brings them back. A cue is deleted by its number: \"delete cue 3\"."),
+			INVTEXT("Զրույցից չեմ մաքրում ամբողջ բեմը, որպեսզի ոչինչ պատահաբար չկորչի. օգտագործեք Edit › Clear Stage, որը նախ հարցնում է։ Կարող եմ ջնջել ընտրված իրերը («ջնջիր ընտրվածը») կամ իրերն ըստ անվան («հեռացրու սփոթերը»), և Ctrl+Z-ը դրանք հետ է բերում։ Կյուն ջնջվում է իր համարով՝ «ջնջիր կյու 3»։"));
 	}
 
 	FText AnswerQuestion(const FStageAICommand& Command, const FStageAISceneView& Scene)

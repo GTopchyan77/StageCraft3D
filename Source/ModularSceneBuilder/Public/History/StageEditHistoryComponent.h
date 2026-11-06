@@ -175,6 +175,24 @@ public:
 
 	bool IsTransactionOpen() const { return Transaction.IsSet(); }
 
+	/**
+	 * Opens a history group (UStageEditHistorySubsystem::BeginGroup): every step recorded until EndGroup or AbortGroup, by any
+	 * request, becomes part of ONE step named Description. An open transaction is ended first. False when there is no history or
+	 * a group is already open.
+	 */
+	bool BeginGroup(const FText& Description);
+
+	/** Ends an open transaction, then records the group as one step. */
+	void EndGroup();
+
+	/**
+	 * Ends an open transaction, then reverts everything the group collected against the live world and records nothing
+	 * (UStageEditHistorySubsystem::AbortGroup). What a step changed without recording it (a GO, a selection) stays as it is.
+	 */
+	EStageCommandResult AbortGroup();
+
+	bool IsGroupOpen() const;
+
 	/** Ends an open transaction, then undoes / redoes the latest step. */
 	EStageCommandResult Undo();
 	EStageCommandResult Redo();
