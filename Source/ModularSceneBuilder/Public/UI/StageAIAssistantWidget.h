@@ -44,7 +44,8 @@ private:
 	class UWidget* BuildHeader();
 	class UWidget* BuildChips();
 	class UWidget* BuildInputRow();
-	class UWidget* BuildMessage(const struct FStageAIMessage& Message) const;
+	/** One conversation line; MessageIndex is its index in the conversation, for its SHOW ME button. */
+	class UWidget* BuildMessage(const struct FStageAIMessage& Message, int32 MessageIndex);
 	class UStageChoiceButton* MakeButton(const FText& Label, const FText& Tip, int32 Index, void (UStageAIAssistantWidget::*Handler)(int32), bool bPrimary);
 	class UTextBlock* MakeText(const FText& Text, int32 Size, FName Typeface, const FLinearColor& Color) const;
 	const class UStageCraftUITheme& GetTheme() const;
@@ -60,6 +61,9 @@ private:
 	void HandleChipPicked(int32 Index);
 	void HandleSendPicked(int32 Unused);
 	void HandleClearPicked(int32 Unused);
+
+	/** SHOW ME or OPEN PANEL under a knowledge reply: the workspace opens the panel and pulses the control (Docs/ADR/0030 §7). */
+	void HandleShowMePicked(int32 MessageIndex);
 
 	/** MIC: starts recording, or stops it (STOP) and sends it for transcription. */
 	void HandleMicPicked(int32 Unused);

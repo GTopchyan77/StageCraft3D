@@ -39,6 +39,32 @@ namespace StagePlaybackPanel
 	}
 }
 
+TConstArrayView<FStageUIAnchor> UStagePlaybackPanel::GetAnchors()
+{
+	// The per-playback controls point at playback 1's strip.
+	static const FStageUIAnchor Anchors[] = {
+		{ TEXT("Fader"), LOCTEXT("FaderAnchor", "Playback fader"), LOCTEXT("FaderTip", "This playback's level. Raising it from 0 starts the playback at its first cue.") },
+		{ TEXT("Go"), LOCTEXT("Go", "GO"), LOCTEXT("GoTip", "Step this playback to its next cue (its first when released).") },
+		{ TEXT("Flash"), LOCTEXT("Flash", "FLASH"), LOCTEXT("FlashTip", "Hold to bring this playback to full; let go to return to its fader.") },
+		{ TEXT("Record"), LOCTEXT("Record", "REC"), LOCTEXT("RecordTip", "Record what the programmer holds as this playback's next cue, then clear the programmer (undoable).") },
+		{ TEXT("Release"), LOCTEXT("Release", "REL"), LOCTEXT("ReleaseTip", "Release this playback: fader to 0, back before its first cue.") },
+		{ TEXT("Clear"), LOCTEXT("Clear", "CLR"), LOCTEXT("ClearTip", "Delete this playback's cues (undoable).") },
+		{ TEXT("GrandMaster"), LOCTEXT("GrandMasterAnchor", "Grand Master (GM)"), LOCTEXT("GrandMasterTitleTip", "Grand Master: scales every light's intensity last, whatever plays or is held.") },
+		{ TEXT("Blackout"), LOCTEXT("Blackout", "BLACKOUT"), LOCTEXT("BlackoutTip", "Take every light to zero at once (Ctrl+Shift+B). Click again to bring them back.") },
+		{ TEXT("AudioMaster"), LOCTEXT("AudioMasterAnchor", "AUDIO master"), LOCTEXT("AudioMasterTitleTip", "AUDIO master: how much effects that follow the music follow it. Down, a pulse breathes less; at 0 they run as without music.") },
+		{ TEXT("AudioKill"), LOCTEXT("AudioKill", "KILL"), LOCTEXT("AudioKillTip", "Stop every effect from following the music at once: pulses stay open, chases hold, synced effects keep their last tempo. Click again to follow the music.") },
+	};
+	return Anchors;
+}
+
+namespace StagePlaybackPanel
+{
+	const FStageUIAnchor& Anchor(FName ControlId)
+	{
+		return StageUIAnchors::Get(UStagePlaybackPanel::GetAnchors(), ControlId);
+	}
+}
+
 const UStageCraftUITheme& UStagePlaybackPanel::GetTheme() const
 {
 	return StageCraftWidgetStyle::ResolveTheme(Theme);
@@ -113,6 +139,7 @@ void UStagePlaybackPanel::BuildTree()
 	using namespace StageCraftWidgetStyle;
 	const UStageCraftUITheme& UITheme = GetTheme();
 
+	AnchorWidgets.Reset();
 	UBorder* Root = WidgetTree->ConstructWidget<UBorder>(UBorder::StaticClass(), TEXT("Root"));
 	Root->SetBrush(MakeBox(UITheme.PanelBackground));
 	Root->SetPadding(FMargin(0.f));
@@ -196,7 +223,8 @@ UWidget* UStagePlaybackPanel::BuildStrip(int32 Index)
 
 	USizeBox* FaderBox = WidgetTree->ConstructWidget<USizeBox>(USizeBox::StaticClass());
 	FaderBox->SetHeightOverride(FaderHeight);
-	UStageValueSlider* Fader = MakeFader(Index, LOCTEXT("FaderTip", "This playback's level. Raising it from 0 starts the playback at its first cue."));
+	const bool bAnchored = Index == 0;
+	UStageValueSlider* Fader = MakeFader(Index, StagePlaybackPanel::Anchor(TEXT("Fader")).Tooltip);
 	FaderBox->SetContent(Fader);
 	if (UVerticalBoxSlot* FaderSlot = Column->AddChildToVerticalBox(FaderBox))
 	{
@@ -206,32 +234,41 @@ UWidget* UStagePlaybackPanel::BuildStrip(int32 Index)
 	UTextBlock* Level = MakeText(FText::GetEmpty(), 7, TEXT("Bold"), UITheme.TextSecondary);
 	Add(Level, 0.f);
 
-	UStageChoiceButton* Go = MakeButton(LOCTEXT("Go", "GO"), LOCTEXT("GoTip", "Step this playback to its next cue (its first when released)."), Index, false);
+	UStageChoiceButton* Go = MakeButton(StagePlaybackPanel::Anchor(TEXT("Go")).Label, StagePlaybackPanel::Anchor(TEXT("Go")).Tooltip, Index, false);
 	Go->OnPicked.BindUObject(this, &ThisClass::HandleGoPicked);
 	Add(Go, 4.f);
 
 	UStageFlashButton* Flash = WidgetTree->ConstructWidget<UStageFlashButton>(UStageFlashButton::StaticClass());
 	Flash->SetStyle(MakeButtonStyle(false, UITheme.AccentColor));
-	Flash->SetToolTipText(LOCTEXT("FlashTip", "Hold to bring this playback to full; let go to return to its fader."));
+	Flash->SetToolTipText(StagePlaybackPanel::Anchor(TEXT("Flash")).Tooltip);
 	Flash->SetFlashIndex(Index);
 	Flash->OnFlash.BindUObject(this, &ThisClass::HandleFlash);
-	if (UButtonSlot* LabelSlot = Cast<UButtonSlot>(Flash->AddChild(MakeText(LOCTEXT("Flash", "FLASH"), 7, TEXT("Bold"), UITheme.TextSecondary))))
+	if (UButtonSlot* LabelSlot = Cast<UButtonSlot>(Flash->AddChild(MakeText(StagePlaybackPanel::Anchor(TEXT("Flash")).Label, 7, TEXT("Bold"), UITheme.TextSecondary))))
 	{
 		LabelSlot->SetPadding(FMargin(2.f, 3.f));
 		LabelSlot->SetHorizontalAlignment(HAlign_Center);
 	}
 	Add(Flash, 2.f);
 
-	UStageChoiceButton* Record = MakeButton(LOCTEXT("Record", "REC"), LOCTEXT("RecordTip", "Record what the programmer holds as this playback's next cue, then clear the programmer (undoable)."), Index, false);
+	UStageChoiceButton* Record = MakeButton(StagePlaybackPanel::Anchor(TEXT("Record")).Label, StagePlaybackPanel::Anchor(TEXT("Record")).Tooltip, Index, false);
 	Record->OnPicked.BindUObject(this, &ThisClass::HandleRecordPicked);
 	Add(Record, 6.f);
-	UStageChoiceButton* Release = MakeButton(LOCTEXT("Release", "REL"), LOCTEXT("ReleaseTip", "Release this playback: fader to 0, back before its first cue."), Index, false);
+	UStageChoiceButton* Release = MakeButton(StagePlaybackPanel::Anchor(TEXT("Release")).Label, StagePlaybackPanel::Anchor(TEXT("Release")).Tooltip, Index, false);
 	Release->OnPicked.BindUObject(this, &ThisClass::HandleReleasePicked);
 	Add(Release, 2.f);
-	UStageChoiceButton* Clear = MakeButton(LOCTEXT("Clear", "CLR"), LOCTEXT("ClearTip", "Delete this playback's cues (undoable)."), Index, false);
+	UStageChoiceButton* Clear = MakeButton(StagePlaybackPanel::Anchor(TEXT("Clear")).Label, StagePlaybackPanel::Anchor(TEXT("Clear")).Tooltip, Index, false);
 	Clear->OnPicked.BindUObject(this, &ThisClass::HandleClearPicked);
 	Add(Clear, 2.f);
 
+	if (bAnchored)
+	{
+		AnchorWidgets.Add(TEXT("Fader"), Fader);
+		AnchorWidgets.Add(TEXT("Go"), Go);
+		AnchorWidgets.Add(TEXT("Flash"), Flash);
+		AnchorWidgets.Add(TEXT("Record"), Record);
+		AnchorWidgets.Add(TEXT("Release"), Release);
+		AnchorWidgets.Add(TEXT("Clear"), Clear);
+	}
 	Strip.Frame = Frame;
 	Strip.Name = Name;
 	Strip.Cue = Cue;
@@ -245,19 +282,22 @@ UWidget* UStagePlaybackPanel::BuildStrip(int32 Index)
 UWidget* UStagePlaybackPanel::BuildMasters()
 {
 	UHorizontalBox* Masters = WidgetTree->ConstructWidget<UHorizontalBox>(UHorizontalBox::StaticClass());
-	Masters->AddChildToHorizontalBox(BuildMasterColumn(LOCTEXT("GrandMaster", "GM"),
-		LOCTEXT("GrandMasterTitleTip", "Grand Master: scales every light's intensity last, whatever plays or is held."),
+	using StagePlaybackPanel::Anchor;
+	Masters->AddChildToHorizontalBox(BuildMasterColumn(LOCTEXT("GrandMaster", "GM"), Anchor(TEXT("GrandMaster")).Tooltip,
 		StagePlaybackPanel::GrandMasterIndex, LOCTEXT("GrandMasterTip", "Grand Master. A stage always opens at full."),
-		LOCTEXT("Blackout", "BLACKOUT"), LOCTEXT("BlackoutTip", "Take every light to zero at once (Ctrl+Shift+B). Click again to bring them back."),
+		Anchor(TEXT("Blackout")).Label, Anchor(TEXT("Blackout")).Tooltip,
 		GrandMasterFader, GrandMasterText, BlackoutButton));
 	BlackoutButton->OnPicked.BindUObject(this, &ThisClass::HandleBlackoutPicked);
 	// Effects that follow the music (Docs/ADR/0029 §7): down scales them towards how they run without music; KILL is 0 at once.
-	UWidget* Audio = BuildMasterColumn(LOCTEXT("AudioMaster", "AUDIO"),
-		LOCTEXT("AudioMasterTitleTip", "AUDIO master: how much effects that follow the music follow it. Down, a pulse breathes less; at 0 they run as without music."),
+	UWidget* Audio = BuildMasterColumn(LOCTEXT("AudioMaster", "AUDIO"), Anchor(TEXT("AudioMaster")).Tooltip,
 		StagePlaybackPanel::AudioMasterIndex, LOCTEXT("AudioMasterTip", "AUDIO master. A stage always opens at full."),
-		LOCTEXT("AudioKill", "KILL"), LOCTEXT("AudioKillTip", "Stop every effect from following the music at once: pulses stay open, chases hold, synced effects keep their last tempo. Click again to follow the music."),
+		Anchor(TEXT("AudioKill")).Label, Anchor(TEXT("AudioKill")).Tooltip,
 		AudioMasterFader, AudioMasterText, AudioKillButton);
 	AudioKillButton->OnPicked.BindUObject(this, &ThisClass::HandleAudioKillPicked);
+	AnchorWidgets.Add(TEXT("GrandMaster"), GrandMasterFader);
+	AnchorWidgets.Add(TEXT("Blackout"), BlackoutButton);
+	AnchorWidgets.Add(TEXT("AudioMaster"), AudioMasterFader);
+	AnchorWidgets.Add(TEXT("AudioKill"), AudioKillButton);
 	if (UHorizontalBoxSlot* AudioSlot = Masters->AddChildToHorizontalBox(Audio))
 	{
 		AudioSlot->SetPadding(FMargin(4.f, 0.f, 0.f, 0.f));

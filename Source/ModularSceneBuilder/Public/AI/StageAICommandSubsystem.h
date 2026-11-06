@@ -128,7 +128,13 @@ protected:
 	//~ End UWorldSubsystem Interface
 
 private:
-	void AddMessage(EStageAISpeaker Speaker, EStageAIOutcome Outcome, const FText& Text);
+	void AddMessage(EStageAISpeaker Speaker, EStageAIOutcome Outcome, const FText& Text, const FStageAIReference& Reference = FStageAIReference());
+
+	/**
+	 * The reply to Prompt from the offline knowledge (UStageKnowledgeSubsystem, Docs/ADR/0030 §3), with what it points at; false
+	 * when the knowledge has no confident answer. Commands are described with the asking player's current key bindings.
+	 */
+	bool AnswerFromKnowledge(const FString& Prompt, FStageAIInterpretation& OutReply) const;
 	void SetState(EStageAIAssistantState NewState);
 
 	/** The online model's answer, or a fallback to the local parser when it failed. */

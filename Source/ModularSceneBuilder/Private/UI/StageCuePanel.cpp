@@ -25,8 +25,31 @@
 
 #define LOCTEXT_NAMESPACE "StageCuePanel"
 
+TConstArrayView<FStageUIAnchor> UStageCuePanel::GetAnchors()
+{
+	static const FStageUIAnchor Anchors[] = {
+		{ TEXT("CueList"), LOCTEXT("CueListAnchor", "Cue list"), LOCTEXT("TitleTip", "The show's cue list. Cues track: each holds what it changes, earlier cues give the rest. GO plays the next cue with its timing.") },
+		{ TEXT("Go"), LOCTEXT("Go", "GO"), LOCTEXT("GoTip", "Play the next cue.") },
+		{ TEXT("Back"), LOCTEXT("Back", "BACK"), LOCTEXT("BackTip", "Play the previous cue with its own fade time.") },
+		{ TEXT("Internal"), LOCTEXT("Internal", "INTERNAL"), LOCTEXT("InternalTip", "The cue list drives the fixtures (StageCraft is the console).") },
+		{ TEXT("External"), LOCTEXT("External", "EXTERNAL DMX"), LOCTEXT("ExternalTip", "Incoming DMX drives the fixtures (StageCraft visualises an external console). Cues cannot play; STORE records the incoming look.") },
+		{ TEXT("RecordNumber"), LOCTEXT("RecordCueAnchor", "Cue number to record"), LOCTEXT("RecordNumberTip", "Number of the cue to record. Decimals insert a cue between two others (2.5).") },
+		{ TEXT("RecordFade"), LOCTEXT("RecordFadeAnchor", "IN time of the new cue"), LOCTEXT("RecordFadeTip", "The cue's In time: seconds its values take to arrive when it plays (a new cue only).") },
+		{ TEXT("ModeLook"), LOCTEXT("ModeLook", "LOOK"), LOCTEXT("ModeLookTip", "Store every fixture's whole look as a blocked cue that inherits nothing.") },
+		{ TEXT("ModeTrack"), LOCTEXT("ModeTrack", "TRACK"), LOCTEXT("ModeTrackTip", "Store what the programmer holds. It tracks: later cues keep it until they change it.") },
+		{ TEXT("ModeCueOnly"), LOCTEXT("ModeCueOnly", "CUE ONLY"), LOCTEXT("ModeCueOnlyTip", "Store what the programmer holds in this cue only: the next cue keeps its old values.") },
+		{ TEXT("Store"), LOCTEXT("Store", "STORE"), LOCTEXT("StoreTip", "Record the cue as the store mode says.") },
+	};
+	return Anchors;
+}
+
 namespace StageCuePanel
 {
+	const FStageUIAnchor& Anchor(FName ControlId)
+	{
+		return StageUIAnchors::Get(UStageCuePanel::GetAnchors(), ControlId);
+	}
+
 	constexpr float ActiveMarkerWidth = 14.f;
 	constexpr float NumberWidth = 64.f;
 	constexpr float FadeWidth = 58.f;
@@ -70,11 +93,11 @@ namespace StageCuePanel
 		switch (Mode)
 		{
 		case EStageCueStoreMode::Track:
-			return LOCTEXT("ModeTrack", "TRACK");
+			return Anchor(TEXT("ModeTrack")).Label;
 		case EStageCueStoreMode::CueOnly:
-			return LOCTEXT("ModeCueOnly", "CUE ONLY");
+			return Anchor(TEXT("ModeCueOnly")).Label;
 		default:
-			return LOCTEXT("ModeLook", "LOOK");
+			return Anchor(TEXT("ModeLook")).Label;
 		}
 	}
 
@@ -83,11 +106,11 @@ namespace StageCuePanel
 		switch (Mode)
 		{
 		case EStageCueStoreMode::Track:
-			return LOCTEXT("ModeTrackTip", "Store what the programmer holds. It tracks: later cues keep it until they change it.");
+			return Anchor(TEXT("ModeTrack")).Tooltip;
 		case EStageCueStoreMode::CueOnly:
-			return LOCTEXT("ModeCueOnlyTip", "Store what the programmer holds in this cue only: the next cue keeps its old values.");
+			return Anchor(TEXT("ModeCueOnly")).Tooltip;
 		default:
-			return LOCTEXT("ModeLookTip", "Store every fixture's whole look as a blocked cue that inherits nothing.");
+			return Anchor(TEXT("ModeLook")).Tooltip;
 		}
 	}
 
@@ -232,6 +255,7 @@ void UStageCuePanel::NativeOnInitialized()
 
 void UStageCuePanel::BuildTree()
 {
+	AnchorWidgets.Reset();
 	using namespace StageCraftWidgetStyle;
 	const UStageCraftUITheme& Palette = GetTheme();
 
@@ -291,13 +315,16 @@ UWidget* UStageCuePanel::BuildTransport()
 	};
 
 	UTextBlock* Title = MakeText(LOCTEXT("Title", "CUES"), 9, TEXT("Bold"), Palette.TextPrimary);
-	Title->SetToolTipText(LOCTEXT("TitleTip", "The show's cue list. Cues track: each holds what it changes, earlier cues give the rest. GO plays the next cue with its timing."));
+	Title->SetToolTipText(StageCuePanel::Anchor(TEXT("CueList")).Tooltip);
+	AnchorWidgets.Add(TEXT("CueList"), Title);
 	Add(Title, 0.f, false);
 
-	GoButton = MakeButton(LOCTEXT("Go", "GO"), LOCTEXT("GoTip", "Play the next cue."), ChoiceGo, true);
+	GoButton = MakeButton(StageCuePanel::Anchor(TEXT("Go")).Label, StageCuePanel::Anchor(TEXT("Go")).Tooltip, ChoiceGo, true);
+	AnchorWidgets.Add(TEXT("Go"), GoButton);
 	GoButton->OnPicked.BindUObject(this, &ThisClass::HandleTransportPicked);
 	Add(GoButton, 12.f, false);
-	BackButton = MakeButton(LOCTEXT("Back", "BACK"), LOCTEXT("BackTip", "Play the previous cue with its own fade time."), ChoiceBack, false);
+	BackButton = MakeButton(StageCuePanel::Anchor(TEXT("Back")).Label, StageCuePanel::Anchor(TEXT("Back")).Tooltip, ChoiceBack, false);
+	AnchorWidgets.Add(TEXT("Back"), BackButton);
 	BackButton->OnPicked.BindUObject(this, &ThisClass::HandleTransportPicked);
 	Add(BackButton, 4.f, false);
 
@@ -308,10 +335,12 @@ UWidget* UStageCuePanel::BuildTransport()
 	SubtitleText = MakeText(FText::GetEmpty(), 7, TEXT("Regular"), Palette.TextSecondary);
 	Add(SubtitleText, 10.f, false);
 
-	InternalButton = MakeButton(LOCTEXT("Internal", "INTERNAL"), LOCTEXT("InternalTip", "The cue list drives the fixtures (StageCraft is the console)."), ChoiceInternal, false);
+	InternalButton = MakeButton(StageCuePanel::Anchor(TEXT("Internal")).Label, StageCuePanel::Anchor(TEXT("Internal")).Tooltip, ChoiceInternal, false);
+	AnchorWidgets.Add(TEXT("Internal"), InternalButton);
 	InternalButton->OnPicked.BindUObject(this, &ThisClass::HandleSourcePicked);
 	Add(InternalButton, 10.f, false);
-	ExternalButton = MakeButton(LOCTEXT("External", "EXTERNAL DMX"), LOCTEXT("ExternalTip", "Incoming DMX drives the fixtures (StageCraft visualises an external console). Cues cannot play; STORE records the incoming look."), ChoiceExternal, false);
+	ExternalButton = MakeButton(StageCuePanel::Anchor(TEXT("External")).Label, StageCuePanel::Anchor(TEXT("External")).Tooltip, ChoiceExternal, false);
+	AnchorWidgets.Add(TEXT("External"), ExternalButton);
 	ExternalButton->OnPicked.BindUObject(this, &ThisClass::HandleSourcePicked);
 	Add(ExternalButton, 2.f, false);
 	return Header;
@@ -352,7 +381,8 @@ UWidget* UStageCuePanel::BuildRecordRow()
 
 	Add(MakeText(LOCTEXT("RecordCue", "CUE"), 7, TEXT("Bold"), Palette.TextSecondary), 0.f, false);
 	RecordNumberField = MakeNumberField(1.f, StageCueRules::MinCueNumber, StageCueRules::MaxCueNumber, 1.f, 3,
-		LOCTEXT("RecordNumberTip", "Number of the cue to record. Decimals insert a cue between two others (2.5)."));
+		Anchor(TEXT("RecordNumber")).Tooltip);
+	AnchorWidgets.Add(TEXT("RecordNumber"), RecordNumberField);
 	RecordNumberField->OnValueChanged.AddUniqueDynamic(this, &ThisClass::HandleRecordNumberChanged);
 	Add(Sized(*RecordNumberField, NumberWidth), 6.f, false);
 
@@ -369,7 +399,8 @@ UWidget* UStageCuePanel::BuildRecordRow()
 
 	Add(MakeText(LOCTEXT("RecordFade", "IN"), 7, TEXT("Bold"), Palette.TextSecondary), 8.f, false);
 	RecordFadeField = MakeNumberField(DefaultFadeTime, 0.f, StageCueRules::MaxFadeTime, 0.1f, 2,
-		LOCTEXT("RecordFadeTip", "The cue's In time: seconds its values take to arrive when it plays (a new cue only)."));
+		Anchor(TEXT("RecordFade")).Tooltip);
+	AnchorWidgets.Add(TEXT("RecordFade"), RecordFadeField);
 	Add(Sized(*RecordFadeField, FadeWidth), 6.f, false);
 
 	StoreModeButtons.Reset();
@@ -379,9 +410,11 @@ UWidget* UStageCuePanel::BuildRecordRow()
 		ModeButton->OnPicked.BindUObject(this, &ThisClass::HandleStoreModePicked);
 		Add(ModeButton, StoreModeButtons.IsEmpty() ? 8.f : 2.f, false);
 		StoreModeButtons.Add(ModeButton);
+		AnchorWidgets.Add(Mode == EStageCueStoreMode::Look ? FName(TEXT("ModeLook")) : Mode == EStageCueStoreMode::Track ? FName(TEXT("ModeTrack")) : FName(TEXT("ModeCueOnly")), ModeButton);
 	}
 
-	StoreButton = MakeButton(LOCTEXT("Store", "STORE"), LOCTEXT("StoreTip", "Record the cue as the store mode says."), 0, true);
+	StoreButton = MakeButton(Anchor(TEXT("Store")).Label, Anchor(TEXT("Store")).Tooltip, 0, true);
+	AnchorWidgets.Add(TEXT("Store"), StoreButton);
 	StoreButton->OnPicked.BindUObject(this, &ThisClass::HandleStorePicked);
 	StoreButtonText = Cast<UTextBlock>(StoreButton->GetChildAt(0));
 	Add(StoreButton, 8.f, false);

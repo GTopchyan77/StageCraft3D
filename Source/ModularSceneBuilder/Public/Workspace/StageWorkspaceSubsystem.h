@@ -7,6 +7,7 @@
 #include "Subsystems/GameInstanceSubsystem.h"
 #include "Scene/StageSceneTypes.h"
 #include "Startup/StageStartupTypes.h"
+#include "Containers/Ticker.h"
 #include "Engine/TimerHandle.h"
 #include "Tasks/Task.h"
 #include "Workspace/StageWorkspaceTypes.h"
@@ -127,6 +128,17 @@ public:
 	/** Closes a panel. Returns false for the viewport (it cannot close), a panel that is not open, or an inactive workspace. */
 	UFUNCTION(BlueprintCallable, Category = "StageCraft|Workspace")
 	bool ClosePanel(FGameplayTag PanelTag);
+
+	/**
+	 * SHOW ME (Docs/ADR/0030 §7): opens PanelTag and pulses its anchored control ControlId (IStageAnchoredPanel), scrolled into
+	 * view. A panel builds its widgets as it opens, so the control is looked for over the next half second; one request at a time,
+	 * a newer one replaces it. False when the workspace is not active or the panel cannot open. The panel still opens when the
+	 * control is not shown now (a collapsed section); that is logged.
+	 */
+	bool ShowControl(FGameplayTag PanelTag, FName ControlId);
+
+	/** The widget PanelTag was last built with, while it lives; null for a panel never opened or the viewport. */
+	class UUserWidget* FindPanelWidget(FGameplayTag PanelTag) const;
 
 	UFUNCTION(BlueprintCallable, Category = "StageCraft|Workspace")
 	EStagePanelHost GetPanelHost(FGameplayTag PanelTag) const;
@@ -290,6 +302,15 @@ private:
 
 	/** Panels known from the Asset Manager scan (primary asset names are panel tags), sorted. Available before loading. */
 	TArray<FGameplayTag> ScannedPanels;
+
+	/** The widget each panel was last built with, for SHOW ME. Weak: its dock tab owns it. */
+	TMap<FGameplayTag, TWeakObjectPtr<class UUserWidget>> LivePanelWidgets;
+
+	/** Looks for the control of the pending SHOW ME; removed when it is found, times out or the subsystem goes. */
+	FTSTicker::FDelegateHandle ShowControlTicker;
+
+	/** Pulses ControlId of the open PanelTag; false while the panel has not built a visible widget for it. */
+	bool PulseAnchor(const FGameplayTag& PanelTag, FName ControlId) const;
 
 	/** Keeps the definitions and their UI bundle loaded for the run. */
 	TSharedPtr<struct FStreamableHandle> PanelCatalogHandle;

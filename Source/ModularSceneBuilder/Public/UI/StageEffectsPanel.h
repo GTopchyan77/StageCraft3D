@@ -8,6 +8,7 @@
 #include "Show/ShowControlTypes.h"
 #include "Show/StageEffectRunner.h"
 #include "Styling/SlateTypes.h"
+#include "UI/StageUIAnchors.h"
 #include "StageEffectsPanel.generated.h"
 
 /**
@@ -26,9 +27,17 @@
  * commits one undo step (RequestUpdateEffect); buttons commit at once. Bindings are made in NativeConstruct, removed in NativeDestruct.
  */
 UCLASS()
-class MODULARSCENEBUILDER_API UStageEffectsPanel : public UUserWidget
+class MODULARSCENEBUILDER_API UStageEffectsPanel : public UUserWidget, public IStageAnchoredPanel
 {
 	GENERATED_BODY()
+
+public:
+	/** The controls the assistant can name and point at (Docs/ADR/0030 section 3); their labels and tooltips are read from here. */
+	static TConstArrayView<FStageUIAnchor> GetAnchors();
+
+	//~ Begin IStageAnchoredPanel Interface
+	virtual class UWidget* FindAnchorWidget(FName ControlId) const override { return AnchorWidgets.Find(ControlId); }
+	//~ End IStageAnchoredPanel Interface
 
 protected:
 	//~ Begin UUserWidget Interface
@@ -41,6 +50,9 @@ protected:
 	TObjectPtr<class UStageCraftUITheme> Theme = nullptr;
 
 private:
+	/** The live widgets of GetAnchors, refilled when the tree is built. */
+	FStageAnchorWidgets AnchorWidgets;
+
 	/** The editor's sliders; the value is the slider's index. */
 	enum class ESetting : int32
 	{

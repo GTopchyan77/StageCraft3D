@@ -8,6 +8,7 @@
 #include "Show/ShowControlTypes.h"
 #include "Styling/SlateTypes.h"
 #include "Types/SlateEnums.h"
+#include "UI/StageUIAnchors.h"
 #include "StagePalettesPanel.generated.h"
 
 /**
@@ -23,9 +24,17 @@
  * NativeDestruct. No tick.
  */
 UCLASS()
-class MODULARSCENEBUILDER_API UStagePalettesPanel : public UUserWidget
+class MODULARSCENEBUILDER_API UStagePalettesPanel : public UUserWidget, public IStageAnchoredPanel
 {
 	GENERATED_BODY()
+
+public:
+	/** The controls the assistant can name and point at (Docs/ADR/0030 section 3); their labels and tooltips are read from here. */
+	static TConstArrayView<FStageUIAnchor> GetAnchors();
+
+	//~ Begin IStageAnchoredPanel Interface
+	virtual class UWidget* FindAnchorWidget(FName ControlId) const override { return AnchorWidgets.Find(ControlId); }
+	//~ End IStageAnchoredPanel Interface
 
 protected:
 	//~ Begin UUserWidget Interface
@@ -38,6 +47,9 @@ protected:
 	TObjectPtr<class UStageCraftUITheme> Theme = nullptr;
 
 private:
+	/** The live widgets of GetAnchors, refilled when the tree is built. */
+	FStageAnchorWidgets AnchorWidgets;
+
 	void BuildTree();
 	class UWidget* BuildHeader();
 	class UWidget* BuildCurrentPaletteRow();

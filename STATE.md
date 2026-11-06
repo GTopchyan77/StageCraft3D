@@ -7023,10 +7023,132 @@ All times in ms.
   - real music on each source, with a strobe-like audio effect on DMX OUT watched on a visualiser (3 a second);
   - a packaged Shipping run through the Audio panel.
 
-**Commit:** uncommitted (working tree).
+**Commit:** `18f3639` (committed by Gevor).
 
 **Known issues / follow-ups**
 - Colour effects that follow the music are not flash-limited (ADR §7 scope is intensity and strobe). An RGB fixture can still flash through a music-driven colour change.
 - A limited attribute that also has a programmed effect on it is limited as a whole.
 - Still awaiting Gevor: removing `E:/SC_G0`, `E:/SC_G0_Package` and branch `spike/g0-audio`; ADR 0030 decisions.
 - **Phase G is complete in code.** H0 (assistant spike) is next on the roadmap.
+
+## #72 — Phase H0 and H1: assistant streaming spike, offline knowledge index, SHOW ME, assistant docked right (2026-11-06)
+
+**Housekeeping first.** #71 said "uncommitted"; it now carries `18f3639` (Gevor committed G3).
+
+**What & why**
+- Gevor's brief (2026-11-06) asks for Phase H (H0–H4) "fully aligned with ADR 0030", in auto mode, starting with the H0 spike and the H1 knowledge base. It asks for:
+  - an assistant panel docked on the right of the workspace and the Lighting Desk;
+  - offline knowledge (BM25, English and Armenian) indexed from the code: widgets, buttons, DMX parameters, shortcuts;
+  - diagnostics (H2), proposal cards with one undo step (H3/H4);
+  - 0-warning builds, all tests, todo.md and STATE.md.
+- This entry is H0 and H1. H2–H4 follow.
+- **ADR 0030 was "proposed".** The brief is taken as approval of its design. Still Gevor's: the default online model (§8) and the key policy for a shipped product (§9).
+- **Where the brief and the ADR differ, the ADR wins:**
+  - Console commands are not indexed. Development commands are compiled out of Shipping and the assistant never runs them (ADR §2, §3).
+  - Live show state is H3's read tools; H2 adds diagnostics. H1 indexes what is static: the key map, panel controls, fixture attributes and help articles.
+- No plan-mode stop: the brief said auto mode. The plan is in `tasks/todo.md` (H1a–H1f).
+
+**H0 (ADR 0030 §13)**
+- **Streaming:** UE 5.8 delivers a response body as it arrives through `IHttpRequest::SetResponseBodyReceiveStreamDelegateV2`, called on the HTTP thread.
+  - Checked against `Scripts/Assistant/MockSseServer.ps1`, a local TcpListener that answers with a Messages-API-shaped SSE stream, one event every 150 ms.
+  - Result: 9 chunks over 1.32 s and 1.29 s, one per event.
+- **`FStageSseParser`** (`Private/AI/StageSseParser`): a pure splitter for H3's streamed replies. It handles LF, CRLF and CR line ends, comments, multi-line data, an event closed without a blank line, and UTF-8 cut anywhere. Over-long lines are capped.
+- **`StageCraft.Assistant.Spike [Model=…|all] [Runs=2] [Url=…] [NoFallbacks]`** (development only):
+  - It sends the v2 request shape: the stage_command tool, one system block (prompt and knowledge digest) with `cache_control`, and a question.
+  - It logs time to the first byte, block and text; the chunks; cache write and read tokens; and the cost.
+  - It appends a row per request to `Saved/Profiling/AssistantSpike.csv`.
+- **Against the mock:** the parser read the usage (cache write 1800, then cache read 1800), the deltas and the stop reason.
+- **Not done:** the paid measurement per model. There is no `ANTHROPIC_API_KEY` on this PC, and it spends money. That run is Gevor's (see todo.md).
+
+**H1 design (ADR 0030 §14)**
+- **Index** (`Public/AI/StageKnowledge.h`, `Private/AI/StageKnowledge.cpp`): `FStageKnowledgeEntry` / `FStageKnowledgeIndex`.
+  - `StageKnowledge::Build` (pure) covers commands (`StageKeyBindings`), panels, anchored controls, 16 fixture attributes (models from the catalog with ranges, e.g. "Beam 280 4 to 60°") and help articles.
+  - BM25 statistics are computed once.
+  - `ParseArticle` (title, keywords/panel/control header, body; 16 K cap).
+  - `BuildDigest`: names only, byte-stable, for the cached system prompt.
+  - `Answer` puts the user's current chords into command answers.
+- **Subsystem** (`UStageKnowledgeSubsystem`, a game-instance subsystem):
+  - The index is built lazily: 175 entries in about 7 ms.
+  - It is marked stale by the item catalog and panel catalog delegates.
+  - `GatherStaticSources` builds without a game instance (tests).
+- **Search** (`Public/AI/StageKnowledgeSearch.h`):
+  - BM25 (k1 1.2, b 0.75), names weighted 3 to the body's 1.
+  - English: stop words, then a light stem.
+  - Armenian: question and emphasis marks removed; endings stripped until none is left; `-ության/-ությամբ` folded into `-ություն`; lone Armenian letters dropped. An Armenian prompt is also read through `StageAIArmenian`.
+  - One hit per id, in the asker's language when there is a translation. Nothing is answered below a score of 2.
+  - `IsHowToQuestion` (EN/HY) and `Route` (Command, Knowledge, KnowledgeOnly).
+- **Assistant** (`UStageAICommandSubsystem`):
+  - `InterpretLocally` asks the knowledge for prompts the grammar does not understand and for "help" with a topic.
+  - An action asked as a how-to question ("how do I store cue 5") is answered from the knowledge, or with "I have no help on that yet, so I changed nothing", and **never runs**.
+  - How-to questions the knowledge answers are answered offline even with the online model on.
+  - Replies carry `FStageAIReference` (panel, control, source title), a new USTRUCT in `StageAITypes.h`.
+- **Anchors** (`Public/UI/StageUIAnchors.h`):
+  - `FStageUIAnchor` and the `IStageAnchoredPanel` UINTERFACE (`FindAnchorWidget`).
+  - `FStageAnchorWidgets`, refilled when a panel builds.
+  - `GetTables`/`Find`/`Get`, plus `IsShown` (every container visible), `BringIntoView` (scroll boxes) and `Pulse` (three opacity blinks over 1.5 s, compact controls swell 12 %, a core ticker only while a pulse runs, restored after).
+  - Static tables, from which the build code takes the labels and tooltips: Playback 10, Cues 11, Effects 10, Audio 16, Patch 13, Groups 5, Palettes 3 (68 anchors).
+- **Workspace** (`UStageWorkspaceSubsystem`):
+  - `ShowControl` opens the panel, looks for a shown control for up to 0.5 s, scrolls and pulses it, and logs "SHOW ME: …". A hidden control (TAP with no effect selected) is not pulsed; that is logged.
+  - `FindPanelWidget`, and `LivePanelWidgets` (weak) filled in `CreatePanelContent`.
+- **Chat** (`UStageAIAssistantWidget`):
+  - SHOW ME or OPEN PANEL and "From: <title>" under knowledge replies. `BuildMessage` now takes the message index.
+  - The welcome line mentions how-to questions.
+- **Layouts** (`StageWorkspaceShell.cpp`): the assistant is docked on the right.
+  - Default: the right column is now Inspector/Render/Environment/BOM (0.6) over AI Assistant (0.4).
+  - Lighting Desk: Groups/Palettes (0.32), AI Assistant (0.36), Inspector/Outliner (0.32).
+  - Saved user layouts are unchanged.
+- **Help articles** (`Content/StageCraft/Help/en|hy/*.md`), 18 in each language: tracking, cue-timing, playbacks, masters, programmer, groups, palettes, patch, dmx-in, dmx-out, effects, audio, flash-safety, undo, layouts, assistant, why-dark, scenes.
+  - The facts were checked against the code: fan modes, Ctrl+S, layout names, and that faders and masters are live and not undoable.
+  - Staged as UFS (`DefaultGame.ini`).
+- **Dev console** (`#if !UE_BUILD_SHIPPING`): `StageCraft.Assistant.Search <question>`, `.Knowledge`, `.ShowMe <PanelTag> [Control]`, `.CheckAnchors`, `.Spike`.
+
+**Files changed** (under `Source/ModularSceneBuilder` unless noted)
+- New:
+  - `Public/AI/StageKnowledge.h`, `Public/AI/StageKnowledgeSearch.h`, `Public/AI/StageKnowledgeSubsystem.h`, `Public/UI/StageUIAnchors.h`;
+  - `Private/AI/StageKnowledge.cpp`, `Private/AI/StageKnowledgeSearch.cpp`, `Private/AI/StageKnowledgeSubsystem.cpp`, `Private/AI/StageKnowledgeConsoleCommands.cpp`, `Private/AI/StageSseParser.h`, `Private/AI/StageSseParser.cpp`, `Private/AI/StageClaudeSpikeCommands.cpp`, `Private/UI/StageUIAnchors.cpp`;
+  - `Private/AI/Tests/StageKnowledgeTests.cpp`;
+  - `Content/StageCraft/Help/en/*.md` and `Content/StageCraft/Help/hy/*.md` (36 files);
+  - `Scripts/Assistant/MockSseServer.ps1`.
+- Changed:
+  - `Public/AI/StageAITypes.h`, `Public/AI/StageAICommandSubsystem.h`, `Private/AI/StageAICommandSubsystem.cpp`;
+  - `Public/UI/StageAIAssistantWidget.h`, `Private/UI/StageAIAssistantWidget.cpp`;
+  - the anchored panels: `Public/UI/` and `Private/UI/` `StagePlaybackPanel`, `StageCuePanel`, `StageEffectsPanel`, `StageAudioPanel`, `StagePatchPanel`, `StageGroupsPanel`, `StagePalettesPanel`;
+  - `Public/Workspace/StageWorkspaceSubsystem.h`, `Private/Workspace/StageWorkspaceSubsystem.cpp`, `Private/Workspace/StageWorkspaceShell.cpp`;
+  - `Config/DefaultGame.ini`, `Docs/ADR/0030-…` (status, §13, §14), `Docs/CURRENT_SYSTEMS.md`, `tasks/todo.md`, `STATE.md` (#71 commit, #72).
+- No content assets, maps or Blueprints changed.
+
+**Verification**
+- **Tests:** 209/209 with no renderer and 209/209 with the offscreen renderer (`RunAutomation.ps1 -ExpectedCount 209`); user data unchanged. The five new tests:
+  - `StageCraft.Assistant.Sse`: every split point of a stream gives the same five events; CR, CRLF, comments, unnamed and data-less events, Finish, the over-long line cap.
+  - `StageCraft.Assistant.Knowledge`: 36 articles read with no errors, each in both languages; their anchors are real; 68 anchors with label, tooltip and a unique id; one entry per command (34), anchor and attribute (16). The digest has names, no console command and no article text, and is the same when built twice. Article parsing refuses bad input. A rebound Blackout (Ctrl+F9) is answered with Ctrl+F9.
+  - `StageCraft.Assistant.Search`: 93 questions (65 EN, 28 HY) find their answer in the top three. The first run found 91; the two Armenian misses were fixed in the stemmer, not in the test. Armenian questions get the Armenian article; nonsense gets nothing; ranking is stable.
+  - `StageCraft.Assistant.Routing`: stems; 22 how-to cases; routes (an action asked how never runs, stage questions keep their answers, bare "help" keeps the list).
+  - `StageCraft.Assistant.HowTo` (world): "how do I store cue 5" (EN and HY) never reaches the executor; "store cue 5" runs once; "how many fixtures?" is answered live.
+- **Builds:** Editor, Game Development and Game Shipping with 0 warnings and 0 errors.
+- **Shipping scan (UTF-16):**
+  - absent: `StageCraft.Assistant.Spike/Search/CheckAnchors/ShowMe/Knowledge`, `AssistantSpike.csv`, `StageCraft.Music.Master`;
+  - present: "SHOW ME", "OPEN PANEL", "Open the panel and point at the control.", "I have no help on that yet".
+- **Scripted run H1a** (Lighting Desk, mock server):
+  - knowledge 175 entries and 0 article problems; the anchor check twice, 68 of 68 live;
+  - "where is the blackout button", "how do I store a cue", "ինչպե՞ս պատչել սարքերը" (the Armenian patch article) and "what is zoom" (catalog ranges) answered from the knowledge; "how many fixtures" answered by the grammar; no cue was stored;
+  - the H0 mock results above;
+  - user data restored.
+- **Scripted run H1b:** the docked assistant shows "TAP is in the Effects panel…", SHOW ME and "From: Effects › TAP".
+  - A Slate window capture 0.25 s after SHOW ME shows BLACKOUT mid-blink. The engine's screenshot does not show render opacity, so it cannot be used for this.
+  - SHOW ME on TAP opened the Effects panel. TAP was hidden (no effect selected), which led to the `IsShown` check.
+  - Screenshots: `%TEMP%\StageCraftRuns\H1a`, `H1b`.
+- **Benchmark:** not run. Nothing in the show tick or the effect runner changed. Anchors are recorded once when a panel builds; the index is built once on the first question.
+- **Awaiting Gevor:**
+  - the paid H0 run;
+  - by mouse: how-to questions in both languages, SHOW ME and OPEN PANEL, floating and re-docking the assistant;
+  - a packaged build answering from the help articles (UFS staging not yet exercised).
+
+**Commit:** uncommitted (working tree).
+
+**Known issues / follow-ups**
+- **The pulse is a dimmed blink, not ADR §7's Slate overlay.** It is visible but modest on the dark theme. An overlay outline could follow if Gevor wants it stronger.
+- **Anchors cover the seven Lighting Desk panels.** Inspector, Environment, Preferences, the viewport toolbar and the status bar are not anchored yet. The knowledge still names them through panels, commands and articles.
+- **Answers to how-to questions are English text inside an Armenian frame** when the hit is a control or command: labels and tooltips are English UI. Armenian articles answer in Armenian.
+- **93 questions, not the ADR's ~120.** The corpus grows with H2–H4.
+- **ADR 0030 decisions still open (Gevor):** the default online model (after the paid H0 run) and the key policy for a shipped product.
+- **Next:** H2 (`StageShowDiagnostics`, `StageFixtureExplain`, Problems list).

@@ -27,6 +27,24 @@
 
 #define LOCTEXT_NAMESPACE "StagePalettesPanel"
 
+TConstArrayView<FStageUIAnchor> UStagePalettesPanel::GetAnchors()
+{
+	static const FStageUIAnchor Anchors[] = {
+		{ TEXT("PaletteList"), LOCTEXT("PaletteListAnchor", "Palettes"), LOCTEXT("TitleTip", "Named looks for one feature. Click a palette to apply it to the selected fixtures; cues stored with it follow it when it changes.") },
+		{ TEXT("RecordPalette"), LOCTEXT("Record", "RECORD"), LOCTEXT("RecordTip", "Record what the selected fixtures show as a new palette of this kind, for any fixture: a colour palette keeps the primary fixture's colour, which every fixture mixes its own way.") },
+		{ TEXT("RecordPerFixture"), LOCTEXT("RecordPerFixture", "RECORD PER FIXTURE"), LOCTEXT("RecordPerFixtureTip", "Record each selected fixture's own values exactly, as a new palette of this kind (positions aimed one by one, for example).") },
+	};
+	return Anchors;
+}
+
+namespace StagePalettesPanelAnchors
+{
+	const FStageUIAnchor& Get(FName ControlId)
+	{
+		return StageUIAnchors::Get(UStagePalettesPanel::GetAnchors(), ControlId);
+	}
+}
+
 namespace StagePalettesPanel
 {
 	constexpr float TileWidth = 104.f;
@@ -155,6 +173,7 @@ void UStagePalettesPanel::NativeOnInitialized()
 
 void UStagePalettesPanel::BuildTree()
 {
+	AnchorWidgets.Reset();
 	using namespace StageCraftWidgetStyle;
 	const UStageCraftUITheme& UITheme = GetTheme();
 
@@ -204,7 +223,8 @@ UWidget* UStagePalettesPanel::BuildHeader()
 	Header->SetContent(Line);
 
 	UTextBlock* Title = MakeText(LOCTEXT("Title", "PALETTES"), 9, TEXT("Bold"), UITheme.TextPrimary);
-	Title->SetToolTipText(LOCTEXT("TitleTip", "Named looks for one feature. Click a palette to apply it to the selected fixtures; cues stored with it follow it when it changes."));
+	Title->SetToolTipText(StagePalettesPanelAnchors::Get(TEXT("PaletteList")).Tooltip);
+	AnchorWidgets.Add(TEXT("PaletteList"), Title);
 	Line->AddChildToWrapBox(Title);
 
 	KindTabs.Reset();
@@ -217,14 +237,16 @@ UWidget* UStagePalettesPanel::BuildHeader()
 		KindTabs.Add(Tab);
 	}
 
-	UStageChoiceButton* Record = MakeButton(LOCTEXT("Record", "RECORD"),
-		LOCTEXT("RecordTip", "Record what the selected fixtures show as a new palette of this kind, for any fixture: a colour palette keeps the primary fixture's colour, which every fixture mixes its own way."),
+	UStageChoiceButton* Record = MakeButton(StagePalettesPanelAnchors::Get(TEXT("RecordPalette")).Label,
+		StagePalettesPanelAnchors::Get(TEXT("RecordPalette")).Tooltip,
 		ChoiceRecord, true);
+	AnchorWidgets.Add(TEXT("RecordPalette"), Record);
 	Record->OnPicked.BindUObject(this, &ThisClass::HandleHeaderPicked);
 	Line->AddChildToWrapBox(Record);
-	UStageChoiceButton* RecordPerFixture = MakeButton(LOCTEXT("RecordPerFixture", "RECORD PER FIXTURE"),
-		LOCTEXT("RecordPerFixtureTip", "Record each selected fixture's own values exactly, as a new palette of this kind (positions aimed one by one, for example)."),
+	UStageChoiceButton* RecordPerFixture = MakeButton(StagePalettesPanelAnchors::Get(TEXT("RecordPerFixture")).Label,
+		StagePalettesPanelAnchors::Get(TEXT("RecordPerFixture")).Tooltip,
 		ChoiceRecordPerFixture, false);
+	AnchorWidgets.Add(TEXT("RecordPerFixture"), RecordPerFixture);
 	RecordPerFixture->OnPicked.BindUObject(this, &ThisClass::HandleHeaderPicked);
 	Line->AddChildToWrapBox(RecordPerFixture);
 	return Header;

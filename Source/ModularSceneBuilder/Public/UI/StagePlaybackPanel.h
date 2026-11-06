@@ -7,6 +7,7 @@
 #include "Engine/TimerHandle.h"
 #include "Show/ShowControlTypes.h"
 #include "Styling/SlateTypes.h"
+#include "UI/StageUIAnchors.h"
 #include "StagePlaybackPanel.generated.h"
 
 /**
@@ -23,9 +24,17 @@
  * in NativeConstruct and removed in NativeDestruct. No tick.
  */
 UCLASS()
-class MODULARSCENEBUILDER_API UStagePlaybackPanel : public UUserWidget
+class MODULARSCENEBUILDER_API UStagePlaybackPanel : public UUserWidget, public IStageAnchoredPanel
 {
 	GENERATED_BODY()
+
+public:
+	/** The controls the assistant can name and point at (Docs/ADR/0030 section 3); their labels and tooltips are read from here. */
+	static TConstArrayView<FStageUIAnchor> GetAnchors();
+
+	//~ Begin IStageAnchoredPanel Interface
+	virtual class UWidget* FindAnchorWidget(FName ControlId) const override { return AnchorWidgets.Find(ControlId); }
+	//~ End IStageAnchoredPanel Interface
 
 protected:
 	//~ Begin UUserWidget Interface
@@ -38,6 +47,9 @@ protected:
 	TObjectPtr<class UStageCraftUITheme> Theme = nullptr;
 
 private:
+	/** The live widgets of GetAnchors, refilled when the tree is built. */
+	FStageAnchorWidgets AnchorWidgets;
+
 	/** The widgets of one playback strip, refreshed in place. */
 	struct FStrip
 	{

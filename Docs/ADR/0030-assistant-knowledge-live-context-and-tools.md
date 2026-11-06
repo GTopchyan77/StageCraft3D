@@ -1,6 +1,8 @@
 # ADR 0030: Assistant v2: knowledge, live context, diagnostics and tools
 
-- **Status:** proposed (draft 2026-11-05, STATE.md #67). Not approved, not implemented. Spike H0 must confirm the facts marked **(H0)**.
+- **Status:** drafted 2026-11-05 (STATE.md #67). Gevor's Phase H brief (2026-11-06) asks for H0–H4 "fully aligned with ADR 0030", which is taken as approval of this design. Still open and his to decide: the default online model (§8) and the key policy for a shipped product (§9).
+  - H0 spike (STATE.md #72, §13): streaming confirmed on the engine's HTTP module against a local mock; the paid measurement per model is a dev command for Gevor (no key on the build PC).
+  - H1 implemented (STATE.md #72, §14): knowledge index, anchors on seven panels, 18 help articles in English and Armenian, offline search, SHOW ME, assistant docked on the right.
 - **Amends:**
   - ADR 0016 §2.1 (one command per prompt → a bounded tool loop; the model still never acts);
   - ADR 0016 §2.5 (history replay);
@@ -200,3 +202,47 @@ The wire facts below were checked against the current API reference on 2026-11-0
 - New Private `AI/Knowledge`, `Show/Diagnostics` and `UI` anchor tables; help articles as content; a Problems list.
 - The Claude backend changes from one tool to a loop. The offline engine stays the default and grows with Phase 26.
 - **Rollback:** setting the online model off returns the panel to the local engine. Diagnostics and help search stand alone.
+
+## 13. H0 spike results (STATE.md #72)
+
+**Streaming works on the engine's HTTP module.** UE 5.8 has `IHttpRequest::SetResponseBodyReceiveStreamDelegateV2`, called on the HTTP thread as body bytes arrive (the body is then not kept in the response). Measured against `Scripts/Assistant/MockSseServer.ps1`, which sends one SSE event every 150 ms:
+- 9 chunks over 1.32 s and 1.29 s in two requests, one per event, so the body is handed over as it arrives and not at the end;
+- time to the first byte 255 ms and 165 ms, first text 737 ms and 650 ms (mostly the mock's own delays);
+- the parser read `message_start` usage (cache write 1800, then cache read 1800), the text deltas, `message_delta` (stop reason, output tokens) and skipped the keep-alive comment.
+
+**What H3 uses from it:**
+- `FStageSseParser` (Private/AI/StageSseParser): a pure SSE splitter (LF, CRLF, CR, comments, multi-line data, an event closed without a blank line, UTF-8 cut anywhere). The HTTP thread feeds it; events go to the game thread.
+- The request shape: tools, then one system block (the role and rules, then the digest of §3) with `cache_control` ephemeral, then the messages. The digest is 2.7 K characters and byte-stable (a test builds it twice).
+
+**Not measured here: latency, cache hits and cost per model.** The build PC has no `ANTHROPIC_API_KEY`, and the measurement spends money. `StageCraft.Assistant.Spike Model=all Runs=2` (development builds only) sends the real request twice to each of `claude-opus-5-5`, `claude-sonnet-5-5` and `claude-haiku-5-5`. It logs time to first byte, first block and first text, the chunks, cache write and read tokens and the cost, and appends a row per request to `Saved/Profiling/AssistantSpike.csv`.
+- Expected cost: well under $0.10 for all six requests (the request is 13 KB of JSON, roughly 3 K tokens of prefix).
+- Prices used: per million tokens, input / output / cache read. Opus 5.5 is 4 / 20 / 0.20, Sonnet 5.5 is 2 / 10 / 0.20, Haiku 5.5 is 0.10 / 0.50 / 0.01. A cache write is 1.25 × input. Haiku's cache-read price is the usual 0.1 × input, because the table used does not list it.
+- The minimum cacheable prefix on these models is 512 tokens, so the prefix should cache. The second request's `cache_read_input_tokens` shows it.
+- `NoFallbacks` drops `fallbacks: "default"`. Haiku 5.5 has no server-side fallback, so the first run will show whether the field is refused for it.
+
+## 14. H1 implementation notes (STATE.md #72)
+
+- **Index** (`AI/StageKnowledge`, `AI/StageKnowledgeSubsystem`, a game-instance subsystem):
+  - 175 entries: 34 commands, 68 controls, 21 panels, 16 fixture attributes (with the catalog models that offer each and their ranges), and 18 articles × 2 languages.
+  - Built in about 7 ms on the first question, and again after the item or panel catalog changes (delegates; nothing polls).
+  - A command entry's chord is filled in when it is shown, from the asking player's key map, so a rebound key is answered correctly.
+- **Anchors** (`UI/StageUIAnchors`):
+  - Playback, Cues, Effects, Audio, Patch, Groups and Palettes each declare a static anchor table, and their build code takes the label and tooltip of those controls from it.
+  - `IStageAnchoredPanel::FindAnchorWidget` resolves an id to the live widget. All 68 resolve in a running game (`StageCraft.Assistant.CheckAnchors`).
+  - Anchors per playback point at playback 1.
+- **Search** (`AI/StageKnowledgeSearch`):
+  - BM25 (k1 1.2, b 0.75); title and keywords weigh 3, the body 1.
+  - English: light stemming. Armenian: the endings are stripped until none is left, and `-ության` and `-ությամբ` fold into `-ություն`. An Armenian prompt is also read through the ADR 0017 lexicon.
+  - Each id is reported once, in the asker's language when an article has a translation. Below a score of 2 nothing is answered.
+  - 93 questions (65 English, 28 Armenian) find their answer in the top three.
+- **Routing** (`StageKnowledgeSearch::Route`):
+  - The knowledge answers what the grammar does not understand, and "help" with a topic.
+  - A how-to question the grammar reads as an action ("how do I store cue 5") is **KnowledgeOnly**: it is answered from the knowledge, or with "I changed nothing", and is never run. With the online model on, how-to questions the knowledge can answer are still answered offline.
+  - Stage questions ("how many fixtures", "what is the total weight") keep their live answers.
+- **UI:**
+  - A knowledge reply carries an `FStageAIReference` (panel, control, source title). The chat shows SHOW ME (or OPEN PANEL) and "From: <title>".
+  - `UStageWorkspaceSubsystem::ShowControl` opens the panel, looks for the control for up to 0.5 s, scrolls it into view, and pulses it. A control in a collapsed section (TAP without a selected effect) is not pulsed, and that is logged.
+  - The pulse blinks render opacity three times over 1.5 s, and swells compact controls by 12 %. It is not the Slate overlay §7 describes: a dimmed blink needs no change to the panels' trees. It shows in Slate window captures (the engine's screenshot does not show it).
+  - The Default and Lighting Desk layouts dock the assistant on the right: below the Inspector column, and between Groups/Palettes and the Inspector. It still floats when dragged out.
+- **Not indexed:** development console commands. Tests check that no entry or digest mentions one.
+- **Articles:** `Content/StageCraft/Help/en|hy/<id>.md`, staged as UFS in the pak (`DirectoriesToAlwaysStageAsUFS`). No packaged build has been made yet to confirm they load there.

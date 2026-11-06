@@ -38,6 +38,34 @@
 
 #define LOCTEXT_NAMESPACE "StagePatchPanel"
 
+TConstArrayView<FStageUIAnchor> UStagePatchPanel::GetAnchors()
+{
+	static const FStageUIAnchor Anchors[] = {
+		{ TEXT("PatchSheet"), LOCTEXT("PatchSheetAnchor", "Patch sheet"), LOCTEXT("TitleTip", "Every fixture with its fixture ID and DMX address. Overlapping addresses are marked in red.") },
+		{ TEXT("AutoPatch"), LOCTEXT("PatchUnpatched", "AUTO PATCH"), LOCTEXT("PatchUnpatchedTip", "Patch every unpatched fixture into the first free addresses that fit it, in fixture ID order. One undo step.") },
+		{ TEXT("Export"), LOCTEXT("Export", "EXPORT PDF"), LOCTEXT("ExportTip", "Export the patch sheet as a print-ready PDF and a CSV to the Reports folder (File > Production > Open Reports Folder).") },
+		{ TEXT("ImportCsv"), LOCTEXT("Import", "IMPORT CSV"), LOCTEXT("ImportTip", "Patch from a fixture schedule: a CSV with Fixture ID, Universe and Address columns (and optionally Invert Pan, Invert Tilt, Swap Pan/Tilt), such as the CSV EXPORT PDF writes. You see what would change before anything does; applying is one undo step.") },
+		{ TEXT("DMXIn"), LOCTEXT("DMXInAnchor", "DMX IN"), LOCTEXT("InputTip", "Receive Art-Net (port 6454) and sACN (port 5568) from a console or visualiser on the network, and let it drive the fixtures (the show switches to External). Remembered on this PC. Windows may ask to allow StageCraft through the firewall.") },
+		{ TEXT("FixConflicts"), LOCTEXT("FixConflicts", "FIX CONFLICTS"), LOCTEXT("FixConflictsTip", "Move every fixture that overlaps another (or runs past channel 512) to the first free addresses. In each overlap the fixture that starts first stays. One undo step.") },
+		{ TEXT("PatchSelection"), LOCTEXT("PatchSelection", "PATCH SELECTION AT"), LOCTEXT("PatchSelectionTip", "Patch the selected fixtures one after another, in fixture ID order, from the universe and address on the right, around the fixtures already there. One undo step.") },
+		{ TEXT("DMXOut"), LOCTEXT("DMXOutAnchor", "DMX OUT"), LOCTEXT("OutputTip", "Send the show as Art-Net and/or sACN to real fixtures, a DMX node or a visualiser. Only universes with patched fixtures are sent, and only while the cue list drives the show (it pauses while DMX IN follows a console). Remembered on this PC.") },
+		{ TEXT("ArtNet"), LOCTEXT("ArtNetAnchor", "Art-Net mode"), LOCTEXT("ArtNetModeTip", "Art-Net: off, broadcast to every node on the network (255.255.255.255 on port 6454), or unicast to the address on the right. Click to change.") },
+		{ TEXT("SACN"), LOCTEXT("SACNAnchor", "sACN mode"), LOCTEXT("SACNModeTip", "sACN (E1.31): off, multicast to each universe's group (239.255.x.y, which every sACN receiver listens to), or unicast to the address on the right. Click to change.") },
+		{ TEXT("Unicast"), LOCTEXT("UnicastAnchor", "Unicast IP address"), LOCTEXT("UnicastTip", "The IPv4 address the protocols set to UNICAST send to (a DMX node or a visualiser PC). Press Enter to apply.") },
+		{ TEXT("Priority"), LOCTEXT("PriorityAnchor", "PRI (sACN priority)"), LOCTEXT("PriorityTip", "sACN priority, 0-200 (default 100). A receiver shows the source with the highest priority.") },
+		{ TEXT("OutputRate"), LOCTEXT("OutputRateAnchor", "HZ (output rate)"), LOCTEXT("RateTip", "Frames per second while the look changes, 1-44. Unchanged universes are repeated once a second.") },
+	};
+	return Anchors;
+}
+
+namespace StagePatchPanelAnchors
+{
+	const FStageUIAnchor& Get(FName ControlId)
+	{
+		return StageUIAnchors::Get(UStagePatchPanel::GetAnchors(), ControlId);
+	}
+}
+
 namespace StagePatchPanel
 {
 	constexpr float FixtureIdWidth = 52.f;
@@ -207,6 +235,7 @@ void UStagePatchPanel::NativeOnInitialized()
 
 void UStagePatchPanel::BuildTree()
 {
+	AnchorWidgets.Reset();
 	using namespace StageCraftWidgetStyle;
 	const UStageCraftUITheme& Palette = GetTheme();
 
@@ -300,7 +329,8 @@ UWidget* UStagePatchPanel::BuildHeader()
 	UHorizontalBox* Line = WidgetTree->ConstructWidget<UHorizontalBox>(UHorizontalBox::StaticClass());
 	Header->SetContent(Line);
 	UTextBlock* Title = MakeText(LOCTEXT("Title", "DMX PATCH"), 9, TEXT("Bold"), Palette.TextPrimary);
-	Title->SetToolTipText(LOCTEXT("TitleTip", "Every fixture with its fixture ID and DMX address. Overlapping addresses are marked in red."));
+	Title->SetToolTipText(StagePatchPanelAnchors::Get(TEXT("PatchSheet")).Tooltip);
+	AnchorWidgets.Add(TEXT("PatchSheet"), Title);
 	if (UHorizontalBoxSlot* TitleSlot = Line->AddChildToHorizontalBox(Title))
 	{
 		TitleSlot->SetVerticalAlignment(VAlign_Center);
@@ -313,23 +343,26 @@ UWidget* UStagePatchPanel::BuildHeader()
 		SubtitleSlot->SetVerticalAlignment(VAlign_Center);
 		SubtitleSlot->SetPadding(FMargin(10.f, 0.f));
 	}
-	PatchUnpatchedButton = MakeHeaderButton(TEXT("PatchUnpatchedButton"), LOCTEXT("PatchUnpatched", "AUTO PATCH"),
-		LOCTEXT("PatchUnpatchedTip", "Patch every unpatched fixture into the first free addresses that fit it, in fixture ID order. One undo step."));
+	PatchUnpatchedButton = MakeHeaderButton(TEXT("PatchUnpatchedButton"), StagePatchPanelAnchors::Get(TEXT("AutoPatch")).Label,
+		StagePatchPanelAnchors::Get(TEXT("AutoPatch")).Tooltip);
+	AnchorWidgets.Add(TEXT("AutoPatch"), PatchUnpatchedButton);
 	if (UHorizontalBoxSlot* ButtonSlot = Line->AddChildToHorizontalBox(PatchUnpatchedButton))
 	{
 		ButtonSlot->SetVerticalAlignment(VAlign_Center);
 	}
 
-	ExportButton = MakeHeaderButton(TEXT("ExportButton"), LOCTEXT("Export", "EXPORT PDF"),
-		LOCTEXT("ExportTip", "Export the patch sheet as a print-ready PDF and a CSV to the Reports folder (File > Production > Open Reports Folder)."));
+	ExportButton = MakeHeaderButton(TEXT("ExportButton"), StagePatchPanelAnchors::Get(TEXT("Export")).Label,
+		StagePatchPanelAnchors::Get(TEXT("Export")).Tooltip);
+	AnchorWidgets.Add(TEXT("Export"), ExportButton);
 	if (UHorizontalBoxSlot* ExportSlot = Line->AddChildToHorizontalBox(ExportButton))
 	{
 		ExportSlot->SetVerticalAlignment(VAlign_Center);
 		ExportSlot->SetPadding(FMargin(4.f, 0.f, 0.f, 0.f));
 	}
 
-	ImportButton = MakeHeaderButton(TEXT("ImportButton"), LOCTEXT("Import", "IMPORT CSV"),
-		LOCTEXT("ImportTip", "Patch from a fixture schedule: a CSV with Fixture ID, Universe and Address columns (and optionally Invert Pan, Invert Tilt, Swap Pan/Tilt), such as the CSV EXPORT PDF writes. You see what would change before anything does; applying is one undo step."));
+	ImportButton = MakeHeaderButton(TEXT("ImportButton"), StagePatchPanelAnchors::Get(TEXT("ImportCsv")).Label,
+		StagePatchPanelAnchors::Get(TEXT("ImportCsv")).Tooltip);
+	AnchorWidgets.Add(TEXT("ImportCsv"), ImportButton);
 	if (UHorizontalBoxSlot* ImportSlot = Line->AddChildToHorizontalBox(ImportButton))
 	{
 		ImportSlot->SetVerticalAlignment(VAlign_Center);
@@ -604,8 +637,9 @@ UWidget* UStagePatchPanel::BuildToolsBar()
 	Lines->AddChildToVerticalBox(InputLine);
 	UTextBlock* InputLabel = nullptr;
 	InputButton = MakeHeaderButton(TEXT("InputButton"), LOCTEXT("InputOff", "DMX IN: OFF"),
-		LOCTEXT("InputTip", "Receive Art-Net (port 6454) and sACN (port 5568) from a console or visualiser on the network, and let it drive the fixtures (the show switches to External). Remembered on this PC. Windows may ask to allow StageCraft through the firewall."),
+		StagePatchPanelAnchors::Get(TEXT("DMXIn")).Tooltip,
 		&InputLabel);
+	AnchorWidgets.Add(TEXT("DMXIn"), InputButton);
 	InputButtonLabel = InputLabel;
 	AddToLine(InputLine, InputButton, 0.f, false);
 	InputStatusText = MakeText(FText::GetEmpty(), 7, TEXT("Regular"), Palette.TextSecondary);
@@ -624,11 +658,13 @@ UWidget* UStagePatchPanel::BuildToolsBar()
 	{
 		ToolsSlot->SetPadding(FMargin(0.f, 4.f, 0.f, 0.f));
 	}
-	FixConflictsButton = MakeHeaderButton(TEXT("FixConflictsButton"), LOCTEXT("FixConflicts", "FIX CONFLICTS"),
-		LOCTEXT("FixConflictsTip", "Move every fixture that overlaps another (or runs past channel 512) to the first free addresses. In each overlap the fixture that starts first stays. One undo step."));
+	FixConflictsButton = MakeHeaderButton(TEXT("FixConflictsButton"), StagePatchPanelAnchors::Get(TEXT("FixConflicts")).Label,
+		StagePatchPanelAnchors::Get(TEXT("FixConflicts")).Tooltip);
+	AnchorWidgets.Add(TEXT("FixConflicts"), FixConflictsButton);
 	AddToLine(ToolsLine, FixConflictsButton, 0.f, false);
-	PatchSelectionButton = MakeHeaderButton(TEXT("PatchSelectionButton"), LOCTEXT("PatchSelection", "PATCH SELECTION AT"),
-		LOCTEXT("PatchSelectionTip", "Patch the selected fixtures one after another, in fixture ID order, from the universe and address on the right, around the fixtures already there. One undo step."));
+	PatchSelectionButton = MakeHeaderButton(TEXT("PatchSelectionButton"), StagePatchPanelAnchors::Get(TEXT("PatchSelection")).Label,
+		StagePatchPanelAnchors::Get(TEXT("PatchSelection")).Tooltip);
+	AnchorWidgets.Add(TEXT("PatchSelection"), PatchSelectionButton);
 	AddToLine(ToolsLine, PatchSelectionButton, 4.f, false);
 
 	const auto AddField = [this, ToolsLine, &AddToLine](USpinBox* Field, float Width)
@@ -1110,22 +1146,25 @@ UWidget* UStagePatchPanel::BuildOutputLine()
 
 	UTextBlock* Label = nullptr;
 	OutputButton = MakeHeaderButton(TEXT("OutputButton"), LOCTEXT("OutputOff", "DMX OUT: OFF"),
-		LOCTEXT("OutputTip", "Send the show as Art-Net and/or sACN to real fixtures, a DMX node or a visualiser. Only universes with patched fixtures are sent, and only while the cue list drives the show (it pauses while DMX IN follows a console). Remembered on this PC."),
+		StagePatchPanelAnchors::Get(TEXT("DMXOut")).Tooltip,
 		&Label);
+	AnchorWidgets.Add(TEXT("DMXOut"), OutputButton);
 	OutputButtonLabel = Label;
 	AddToLine(OutputButton, 0.f, false);
 
 	Label = nullptr;
 	ArtNetModeButton = MakeHeaderButton(TEXT("ArtNetModeButton"), FText::GetEmpty(),
-		LOCTEXT("ArtNetModeTip", "Art-Net: off, broadcast to every node on the network (255.255.255.255 on port 6454), or unicast to the address on the right. Click to change."),
+		StagePatchPanelAnchors::Get(TEXT("ArtNet")).Tooltip,
 		&Label);
+	AnchorWidgets.Add(TEXT("ArtNet"), ArtNetModeButton);
 	ArtNetModeLabel = Label;
 	AddToLine(ArtNetModeButton, 4.f, false);
 
 	Label = nullptr;
 	SACNModeButton = MakeHeaderButton(TEXT("SACNModeButton"), FText::GetEmpty(),
-		LOCTEXT("SACNModeTip", "sACN (E1.31): off, multicast to each universe's group (239.255.x.y, which every sACN receiver listens to), or unicast to the address on the right. Click to change."),
+		StagePatchPanelAnchors::Get(TEXT("SACN")).Tooltip,
 		&Label);
+	AnchorWidgets.Add(TEXT("SACN"), SACNModeButton);
 	SACNModeLabel = Label;
 	AddToLine(SACNModeButton, 4.f, false);
 
@@ -1136,16 +1175,19 @@ UWidget* UStagePatchPanel::BuildOutputLine()
 	UnicastField->SetWidgetStyle(TextStyle);
 	UnicastField->SetRevertTextOnEscape(true);
 	UnicastField->SetHintText(LOCTEXT("UnicastHint", "unicast IP"));
-	UnicastField->SetToolTipText(LOCTEXT("UnicastTip", "The IPv4 address the protocols set to UNICAST send to (a DMX node or a visualiser PC). Press Enter to apply."));
+	UnicastField->SetToolTipText(StagePatchPanelAnchors::Get(TEXT("Unicast")).Tooltip);
+	AnchorWidgets.Add(TEXT("Unicast"), UnicastField);
 	AddToLine(Sized(UnicastField, 104.f), 4.f, false);
 
 	PriorityField = MakeNumberField(100, 0, StageDMXOutput::MaxSACNPriority, 34.f,
-		LOCTEXT("PriorityTip", "sACN priority, 0-200 (default 100). A receiver shows the source with the highest priority."));
+		StagePatchPanelAnchors::Get(TEXT("Priority")).Tooltip);
+	AnchorWidgets.Add(TEXT("Priority"), PriorityField);
 	AddToLine(MakeText(LOCTEXT("PriorityLabel", "PRI"), 6, TEXT("Bold"), Palette.TextSecondary), 6.f, false);
 	AddToLine(Sized(PriorityField, 40.f), 3.f, false);
 
 	RateField = MakeNumberField(StageDMXOutput::MaxRateHz, StageDMXOutput::MinRateHz, StageDMXOutput::MaxRateHz, 30.f,
-		LOCTEXT("RateTip", "Frames per second while the look changes, 1-44. Unchanged universes are repeated once a second."));
+		StagePatchPanelAnchors::Get(TEXT("OutputRate")).Tooltip);
+	AnchorWidgets.Add(TEXT("OutputRate"), RateField);
 	AddToLine(MakeText(LOCTEXT("RateLabel", "HZ"), 6, TEXT("Bold"), Palette.TextSecondary), 6.f, false);
 	AddToLine(Sized(RateField, 36.f), 3.f, false);
 

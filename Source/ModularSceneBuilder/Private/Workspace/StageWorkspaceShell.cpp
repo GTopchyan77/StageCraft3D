@@ -103,13 +103,23 @@ TSharedRef<FTabManager::FLayout> FStageWorkspaceShell::MakeDefaultLayout()
 			)
 			->Split
 			(
-				// Render, Environment and Bill of Materials share the Inspector's column as further tabs; the Inspector stays in front.
-				FTabManager::NewStack()->SetSizeCoefficient(0.22f)
-				->AddTab(ToTabId(StageCraftTags::Panel_Inspector), ETabState::OpenedTab)
-				->AddTab(ToTabId(StageCraftTags::Panel_Render), ETabState::OpenedTab)
-				->AddTab(ToTabId(StageCraftTags::Panel_Environment), ETabState::OpenedTab)
-				->AddTab(ToTabId(StageCraftTags::Panel_BillOfMaterials), ETabState::OpenedTab)
-				->SetForegroundTab(ToTabId(StageCraftTags::Panel_Inspector))
+				FTabManager::NewSplitter()->SetOrientation(Orient_Vertical)->SetSizeCoefficient(0.22f)
+				->Split
+				(
+					// Render, Environment and Bill of Materials share the Inspector's column as further tabs; the Inspector stays in front.
+					FTabManager::NewStack()->SetSizeCoefficient(0.6f)
+					->AddTab(ToTabId(StageCraftTags::Panel_Inspector), ETabState::OpenedTab)
+					->AddTab(ToTabId(StageCraftTags::Panel_Render), ETabState::OpenedTab)
+					->AddTab(ToTabId(StageCraftTags::Panel_Environment), ETabState::OpenedTab)
+					->AddTab(ToTabId(StageCraftTags::Panel_BillOfMaterials), ETabState::OpenedTab)
+					->SetForegroundTab(ToTabId(StageCraftTags::Panel_Inspector))
+				)
+				->Split
+				(
+					// The assistant docked on the right (Docs/ADR/0030 §7); drag its tab out to float it, or close it (Window menu).
+					FTabManager::NewStack()->SetSizeCoefficient(0.4f)
+					->AddTab(ToTabId(StageCraftTags::Panel_Assistant), ETabState::OpenedTab)
+				)
 			)
 		);
 }
@@ -145,14 +155,20 @@ TSharedRef<FTabManager::FLayout> FStageWorkspaceShell::MakeLightingDeskLayout()
 				FTabManager::NewSplitter()->SetOrientation(Orient_Vertical)->SetSizeCoefficient(0.28f)
 				->Split
 				(
-					FTabManager::NewStack()->SetSizeCoefficient(0.5f)
+					FTabManager::NewStack()->SetSizeCoefficient(0.32f)
 					->AddTab(ToTabId(StageCraftTags::Panel_Groups), ETabState::OpenedTab)
 					->AddTab(ToTabId(StageCraftTags::Panel_Palettes), ETabState::OpenedTab)
 					->SetForegroundTab(ToTabId(StageCraftTags::Panel_Groups))
 				)
 				->Split
 				(
-					FTabManager::NewStack()->SetSizeCoefficient(0.5f)
+					// The assistant docked on the right, between the programmer's tools and the Inspector (Docs/ADR/0030 §7).
+					FTabManager::NewStack()->SetSizeCoefficient(0.36f)
+					->AddTab(ToTabId(StageCraftTags::Panel_Assistant), ETabState::OpenedTab)
+				)
+				->Split
+				(
+					FTabManager::NewStack()->SetSizeCoefficient(0.32f)
 					->AddTab(ToTabId(StageCraftTags::Panel_Inspector), ETabState::OpenedTab)
 					->AddTab(ToTabId(StageCraftTags::Panel_Outliner), ETabState::OpenedTab)
 					->SetForegroundTab(ToTabId(StageCraftTags::Panel_Inspector))
@@ -538,8 +554,9 @@ void FStageWorkspaceShell::RegisterPanelSpawners()
 			.SetDisplayName(Callbacks.GetPanelLabel(PanelTag));
 	}
 
-	// Sketch to Stage and the AI Assistant open as their own pop-up windows, like floating Unreal Editor tool windows, rather than
-	// squeezing the main layout. Slate's fallback for a new floating tab is 1000 x 600 (ADR 0015 §2.7, ADR 0016 §2.6).
+	// Sketch to Stage opens as its own pop-up window, like a floating Unreal Editor tool window, rather than squeezing the main
+	// layout; the AI Assistant is docked in the built-in layouts and takes this size when it is floated or opened from a layout
+	// without it. Slate's fallback for a new floating tab is 1000 x 600 (ADR 0015 §2.7, ADR 0016 §2.6).
 	FTabManager::RegisterDefaultTabWindowSize(FGameplayTag(StageCraftTags::Panel_Sketch).GetTagName(), FVector2D(1100.0, 820.0));
 	FTabManager::RegisterDefaultTabWindowSize(FGameplayTag(StageCraftTags::Panel_Assistant).GetTagName(), FVector2D(560.0, 720.0));
 	FTabManager::RegisterDefaultTabWindowSize(FGameplayTag(StageCraftTags::Panel_Marketplace).GetTagName(), FVector2D(1180.0, 760.0));

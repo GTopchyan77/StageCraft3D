@@ -6,6 +6,7 @@
 #include "AI/StageAILanguage.h"
 #include "Economy/StageEconomyTypes.h"
 #include "Environment/StageEnvironmentTypes.h"
+#include "GameplayTagContainer.h"
 #include "Marketplace/StageMarketplaceTypes.h"
 #include "StageAITypes.generated.h"
 
@@ -269,6 +270,27 @@ enum class EStageAIOutcome : uint8
 	Pending,
 };
 
+/**
+ * What a knowledge reply points at (Docs/ADR/0030 §7): the panel OPEN PANEL opens, the anchored control SHOW ME pulses in it
+ * (None: the panel only), and the title of the entry or help article the answer came from.
+ */
+USTRUCT(BlueprintType)
+struct MODULARSCENEBUILDER_API FStageAIReference
+{
+	GENERATED_BODY()
+
+	UPROPERTY(BlueprintReadOnly, Category = "StageCraft|Assistant")
+	FGameplayTag Panel;
+
+	UPROPERTY(BlueprintReadOnly, Category = "StageCraft|Assistant")
+	FName Control;
+
+	UPROPERTY(BlueprintReadOnly, Category = "StageCraft|Assistant")
+	FString SourceTitle;
+
+	bool HasPanel() const { return Panel.IsValid(); }
+};
+
 /** One line of the conversation. */
 USTRUCT(BlueprintType)
 struct MODULARSCENEBUILDER_API FStageAIMessage
@@ -283,6 +305,10 @@ struct MODULARSCENEBUILDER_API FStageAIMessage
 
 	UPROPERTY(BlueprintReadOnly, Category = "StageCraft|Assistant")
 	FText Text;
+
+	/** A reply from the knowledge (Docs/ADR/0030 §3, §7): what it points at and cites. Empty on every other line. */
+	UPROPERTY(BlueprintReadOnly, Category = "StageCraft|Assistant")
+	FStageAIReference Reference;
 };
 
 /** What a prompt was understood as: a command to run, or a reply to show as it is. */
@@ -303,6 +329,9 @@ struct FStageAIInterpretation
 
 	/** Shown after the result, e.g. that the online model was unavailable and the local parser was used. May be empty. */
 	FText Note;
+
+	/** Kind == Reply from the knowledge: what it points at. */
+	FStageAIReference Reference;
 
 	static FStageAIInterpretation MakeCommand(const FStageAICommand& InCommand);
 	static FStageAIInterpretation MakeReply(const FText& InReply, EStageAIOutcome InOutcome = EStageAIOutcome::Info);

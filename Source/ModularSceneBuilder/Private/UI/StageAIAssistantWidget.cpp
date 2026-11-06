@@ -18,12 +18,14 @@
 #include "Components/TextBlock.h"
 #include "Components/VerticalBox.h"
 #include "Components/VerticalBoxSlot.h"
+#include "Engine/GameInstance.h"
 #include "Engine/World.h"
 #include "Player/ModularPlayerController.h"
 #include "TimerManager.h"
 #include "UI/StageCraftUITheme.h"
 #include "UI/StageCraftWidgetStyle.h"
 #include "UI/StageToolButton.h"
+#include "Workspace/StageWorkspaceSubsystem.h"
 
 #include UE_INLINE_GENERATED_CPP_BY_NAME(StageAIAssistantWidget)
 
@@ -262,7 +264,7 @@ void UStageAIAssistantWidget::BuildTree()
 	Add(FooterText);
 }
 
-UWidget* UStageAIAssistantWidget::BuildMessage(const FStageAIMessage& Message) const
+UWidget* UStageAIAssistantWidget::BuildMessage(const FStageAIMessage& Message, int32 MessageIndex)
 {
 	using namespace StageCraftWidgetStyle;
 	using namespace StageAIAssistantWidget;
@@ -297,6 +299,29 @@ UWidget* UStageAIAssistantWidget::BuildMessage(const FStageAIMessage& Message) c
 	if (UVerticalBoxSlot* BodySlot = Content->AddChildToVerticalBox(Body))
 	{
 		BodySlot->SetPadding(FMargin(0.f, 2.f, 0.f, 0.f));
+	}
+	// A knowledge reply (Docs/ADR/0030 §7): where it came from, and SHOW ME (the control) or OPEN PANEL (the panel).
+	if (!bUser && Message.Reference.HasPanel())
+	{
+		UHorizontalBox* Actions = WidgetTree->ConstructWidget<UHorizontalBox>(UHorizontalBox::StaticClass());
+		const bool bControl = !Message.Reference.Control.IsNone();
+		UStageChoiceButton* Show = MakeButton(bControl ? LOCTEXT("ShowMe", "SHOW ME") : LOCTEXT("OpenPanel", "OPEN PANEL"),
+			bControl ? LOCTEXT("ShowMeTip", "Open the panel and point at the control.") : LOCTEXT("OpenPanelTip", "Open the panel."),
+			MessageIndex, &ThisClass::HandleShowMePicked, false);
+		Actions->AddChildToHorizontalBox(Show);
+		if (UVerticalBoxSlot* ActionsSlot = Content->AddChildToVerticalBox(Actions))
+		{
+			ActionsSlot->SetPadding(FMargin(0.f, 5.f, 0.f, 0.f));
+		}
+	}
+	if (!bUser && !Message.Reference.SourceTitle.IsEmpty())
+	{
+		UTextBlock* Source = MakeText(FText::Format(LOCTEXT("Source", "From: {0}"), FText::FromString(Message.Reference.SourceTitle)), 7, TEXT("Italic"), Palette.TextDisabled);
+		Source->SetAutoWrapText(true);
+		if (UVerticalBoxSlot* SourceSlot = Content->AddChildToVerticalBox(Source))
+		{
+			SourceSlot->SetPadding(FMargin(0.f, 3.f, 0.f, 0.f));
+		}
 	}
 
 	UBorder* Bubble = WidgetTree->ConstructWidget<UBorder>(UBorder::StaticClass());
@@ -406,7 +431,7 @@ void UStageAIAssistantWidget::Rebuild()
 		{
 			UTextBlock* Welcome = MakeText(Assistant
 				? FText::Format(INVTEXT("{0}\n{1}"),
-					LOCTEXT("Welcome", "Ask me about the stage (\"how heavy is the stage?\", \"power draw\", \"list cues\") or tell me what to do (\"add 6 moving heads\", \"make it rain\", \"store cue 1 called Intro\"). Type \"help\" for everything I understand."),
+					LOCTEXT("Welcome", "Ask me about the stage (\"how heavy is the stage?\", \"list cues\"), how to do something (\"how do I store a cue?\", \"where is blackout?\") or tell me what to do (\"add 6 moving heads\", \"make it rain\", \"store cue 1 called Intro\"). Type \"help\" for everything I understand."),
 					// The same invitation in Armenian, which the panel always shows: it tells Armenian speakers they can write in their language.
 					INVTEXT("Կարող եք գրել նաև հայերեն՝ «քանի՞ սարք կա», «ավելացրու 4 շարժական գլուխ», «թող անձրև գա»։"))
 				: LOCTEXT("NoAssistant", "The AI assistant is not available in this level."), 9, TEXT("Italic"), Palette.TextSecondary);
@@ -415,9 +440,10 @@ void UStageAIAssistantWidget::Rebuild()
 		}
 		else
 		{
-			for (const FStageAIMessage& Message : Assistant->GetMessages())
+			const TArray<FStageAIMessage>& Messages = Assistant->GetMessages();
+			for (int32 Index = 0; Index < Messages.Num(); ++Index)
 			{
-				AddRow(BuildMessage(Message));
+				AddRow(BuildMessage(Messages[Index], Index));
 			}
 		}
 		if (Assistant && Assistant->GetState() == EStageAIAssistantState::Interpreting)
@@ -569,6 +595,22 @@ void UStageAIAssistantWidget::HandleClearPicked(int32 Unused)
 	if (UStageAICommandSubsystem* Assistant = GetAssistant())
 	{
 		Assistant->ClearConversation();
+	}
+}
+
+void UStageAIAssistantWidget::HandleShowMePicked(int32 MessageIndex)
+{
+	const UStageAICommandSubsystem* Assistant = GetAssistant();
+	if (!Assistant || !Assistant->GetMessages().IsValidIndex(MessageIndex))
+	{
+		return;
+	}
+	// Opening a panel and pointing at a control is navigation, not a stage change: no request bridge is involved.
+	const FStageAIReference& Reference = Assistant->GetMessages()[MessageIndex].Reference;
+	UGameInstance* GameInstance = GetGameInstance();
+	if (UStageWorkspaceSubsystem* Workspace = GameInstance ? GameInstance->GetSubsystem<UStageWorkspaceSubsystem>() : nullptr)
+	{
+		Workspace->ShowControl(Reference.Panel, Reference.Control);
 	}
 }
 

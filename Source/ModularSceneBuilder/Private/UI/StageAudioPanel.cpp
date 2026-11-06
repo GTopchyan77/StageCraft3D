@@ -200,8 +200,40 @@ void UStageAudioPanel::NativeOnInitialized()
 	}
 }
 
+TConstArrayView<FStageUIAnchor> UStageAudioPanel::GetAnchors()
+{
+	static const FStageUIAnchor Anchors[] = {
+		{ TEXT("SourceOff"), LOCTEXT("SourceOff", "OFF"), LOCTEXT("SourceOffTip", "No music: effects that follow it hold their pattern, or stay fully lit.") },
+		{ TEXT("SourceFile"), LOCTEXT("SourceFile", "FILE..."), LOCTEXT("SourceFileTip", "Play a song from this PC (WAV, FLAC, MP3, M4A, AAC or WMA) and follow it.") },
+		{ TEXT("SourceInput"), LOCTEXT("SourceInput", "INPUT"), LOCTEXT("SourceInputTip", "Follow a line input or microphone. It is only listened to, never played back or recorded.") },
+		{ TEXT("SourceSystem"), LOCTEXT("SourceSystem", "SYSTEM"), LOCTEXT("SourceSystemTip", "Follow whatever this PC plays: YouTube in a browser, a music app. Listened to in memory only, never recorded.") },
+		{ TEXT("SourceTest"), LOCTEXT("SourceTest", "TEST"), LOCTEXT("SourceTestTip", "A built-in beat at a steady tempo, to try effects without music.") },
+		{ TEXT("Play"), LOCTEXT("Play", "PLAY"), LOCTEXT("PlayTip", "Play or pause the song.") },
+		{ TEXT("Stop"), LOCTEXT("Stop", "STOP"), LOCTEXT("StopTip", "Stop and go back to the start.") },
+		{ TEXT("Loop"), LOCTEXT("Loop", "LOOP"), LOCTEXT("LoopTip", "Start again at the end.") },
+		{ TEXT("Seek"), LOCTEXT("SeekAnchor", "Song position"), LOCTEXT("SeekTip", "Drag to a point in the song; it plays on from there when you let go.") },
+		{ TEXT("Device"), LOCTEXT("DeviceAnchor", "Input device"), LOCTEXT("DeviceTip", "The recording device INPUT listens to.") },
+		{ TEXT("Gain"), LOCTEXT("Gain", "GAIN"), LOCTEXT("GainTip", "Boost a quiet input or cut a loud one before it is analysed (-24 .. +24 dB).") },
+		{ TEXT("Tempo"), LOCTEXT("TempoAnchor", "BPM and beat lamp"), LOCTEXT("TempoTip", "The tempo found in the music, how sure the analyser is of it, and a lamp on every beat (as the audience hears it).") },
+		{ TEXT("Latency"), LOCTEXT("Latency", "LATENCY"), LOCTEXT("LatencyTip", "Moves the lights against the sound for this source, if they land before or after the beat you hear: positive makes them later, negative earlier (-500 .. +500 ms). Remembered per source on this PC.") },
+		{ TEXT("FlashLimit"), LOCTEXT("Flash", "FLASH"), LOCTEXT("FlashTip", "Flash limit for effects that follow the music, on screen and on DMX OUT: a light may flash from dark to bright at most this often, and a strobe may run no faster. Effects programmed without music are not limited. Remembered on this PC.") },
+		{ TEXT("Background"), LOCTEXT("Background", "KEEP PLAYING IN THE BACKGROUND"), LOCTEXT("BackgroundTip", "Keep the music playing, and the lights following it, while another window has focus (a browser playing YouTube, say).") },
+		{ TEXT("Listening"), LOCTEXT("Listening", "● LISTENING"), LOCTEXT("ListeningTip", "A microphone, line input or this PC's own output is being listened to. It is analysed in memory only: nothing is recorded, saved or sent. OFF stops it.") },
+	};
+	return Anchors;
+}
+
+namespace StageAudioPanel
+{
+	const FStageUIAnchor& Anchor(FName ControlId)
+	{
+		return StageUIAnchors::Get(UStageAudioPanel::GetAnchors(), ControlId);
+	}
+}
+
 void UStageAudioPanel::BuildTree()
 {
+	AnchorWidgets.Reset();
 	using namespace StageCraftWidgetStyle;
 	const UStageCraftUITheme& UITheme = GetTheme();
 
@@ -219,8 +251,9 @@ void UStageAudioPanel::BuildTree()
 	Header->SetContent(HeaderLine);
 	HeaderLine->AddChildToHorizontalBox(MakeText(LOCTEXT("Title", "AUDIO"), 9, TEXT("Bold"), UITheme.TextPrimary));
 	// Privacy (ADR 0029 §6): whoever is near this PC can see when its microphone, line input or output is being listened to.
-	UTextBlock* Listening = MakeText(LOCTEXT("Listening", "● LISTENING"), 8, TEXT("Bold"), UITheme.WarningColor);
-	Listening->SetToolTipText(LOCTEXT("ListeningTip", "A microphone, line input or this PC's own output is being listened to. It is analysed in memory only: nothing is recorded, saved or sent. OFF stops it."));
+	UTextBlock* Listening = MakeText(StageAudioPanel::Anchor(TEXT("Listening")).Label, 8, TEXT("Bold"), UITheme.WarningColor);
+	Listening->SetToolTipText(StageAudioPanel::Anchor(TEXT("Listening")).Tooltip);
+	AnchorWidgets.Add(TEXT("Listening"), Listening);
 	Listening->SetVisibility(ESlateVisibility::Collapsed);
 	ListeningText = Listening;
 	if (UHorizontalBoxSlot* ListeningSlot = HeaderLine->AddChildToHorizontalBox(Listening))
@@ -261,11 +294,11 @@ UWidget* UStageAudioPanel::BuildSourceRow()
 	UHorizontalBox* Buttons = WidgetTree->ConstructWidget<UHorizontalBox>(UHorizontalBox::StaticClass());
 	const TPair<FText, FText> Sources[] =
 	{
-		{ LOCTEXT("SourceOff", "OFF"), LOCTEXT("SourceOffTip", "No music: effects that follow it hold their pattern, or stay fully lit.") },
-		{ LOCTEXT("SourceFile", "FILE..."), LOCTEXT("SourceFileTip", "Play a song from this PC (WAV, FLAC, MP3, M4A, AAC or WMA) and follow it.") },
-		{ LOCTEXT("SourceInput", "INPUT"), LOCTEXT("SourceInputTip", "Follow a line input or microphone. It is only listened to, never played back or recorded.") },
-		{ LOCTEXT("SourceSystem", "SYSTEM"), LOCTEXT("SourceSystemTip", "Follow whatever this PC plays: YouTube in a browser, a music app. Listened to in memory only, never recorded.") },
-		{ LOCTEXT("SourceTest", "TEST"), LOCTEXT("SourceTestTip", "A built-in beat at a steady tempo, to try effects without music.") },
+		{ StageAudioPanel::Anchor(TEXT("SourceOff")).Label, StageAudioPanel::Anchor(TEXT("SourceOff")).Tooltip },
+		{ StageAudioPanel::Anchor(TEXT("SourceFile")).Label, StageAudioPanel::Anchor(TEXT("SourceFile")).Tooltip },
+		{ StageAudioPanel::Anchor(TEXT("SourceInput")).Label, StageAudioPanel::Anchor(TEXT("SourceInput")).Tooltip },
+		{ StageAudioPanel::Anchor(TEXT("SourceSystem")).Label, StageAudioPanel::Anchor(TEXT("SourceSystem")).Tooltip },
+		{ StageAudioPanel::Anchor(TEXT("SourceTest")).Label, StageAudioPanel::Anchor(TEXT("SourceTest")).Tooltip },
 	};
 	static_assert(UE_ARRAY_COUNT(Sources) == static_cast<int32>(EStageAudioSource::TestSignal) + 1, "One button per source.");
 	for (int32 Index = 0; Index < UE_ARRAY_COUNT(Sources); ++Index)
@@ -277,6 +310,8 @@ UWidget* UStageAudioPanel::BuildSourceRow()
 			ButtonSlot->SetPadding(FMargin(0.f, 0.f, 3.f, 0.f));
 		}
 		SourceButtons.Add(Button);
+		static const FName SourceAnchors[] = { TEXT("SourceOff"), TEXT("SourceFile"), TEXT("SourceInput"), TEXT("SourceSystem"), TEXT("SourceTest") };
+		AnchorWidgets.Add(SourceAnchors[Index], Button);
 	}
 	return MakeLabeledRow(LOCTEXT("Source", "SOURCE"), Buttons);
 }
@@ -292,9 +327,9 @@ UWidget* UStageAudioPanel::BuildFileRow()
 	UHorizontalBox* Line = WidgetTree->ConstructWidget<UHorizontalBox>(UHorizontalBox::StaticClass());
 	const TPair<FText, FText> Commands[] =
 	{
-		{ LOCTEXT("Play", "PLAY"), LOCTEXT("PlayTip", "Play or pause the song.") },
-		{ LOCTEXT("Stop", "STOP"), LOCTEXT("StopTip", "Stop and go back to the start.") },
-		{ LOCTEXT("Loop", "LOOP"), LOCTEXT("LoopTip", "Start again at the end.") },
+		{ StageAudioPanel::Anchor(TEXT("Play")).Label, StageAudioPanel::Anchor(TEXT("Play")).Tooltip },
+		{ StageAudioPanel::Anchor(TEXT("Stop")).Label, StageAudioPanel::Anchor(TEXT("Stop")).Tooltip },
+		{ StageAudioPanel::Anchor(TEXT("Loop")).Label, StageAudioPanel::Anchor(TEXT("Loop")).Tooltip },
 	};
 	for (int32 Index = 0; Index < UE_ARRAY_COUNT(Commands); ++Index)
 	{
@@ -305,6 +340,8 @@ UWidget* UStageAudioPanel::BuildFileRow()
 			ButtonSlot->SetPadding(FMargin(0.f, 0.f, 3.f, 0.f));
 			ButtonSlot->SetVerticalAlignment(VAlign_Center);
 		}
+		static const FName TransportAnchors[] = { TEXT("Play"), TEXT("Stop"), TEXT("Loop") };
+		AnchorWidgets.Add(TransportAnchors[Index], Button);
 		if (Index == StageAudioPanel::PlayPause)
 		{
 			PlayButton = Button;
@@ -319,7 +356,8 @@ UWidget* UStageAudioPanel::BuildFileRow()
 	Seek->SetSliderHandleColor(FLinearColor::White);
 	Seek->SetStepSize(0.001f);
 	Seek->SetSliderIndex(StageAudioPanel::Seek);
-	Seek->SetToolTipText(LOCTEXT("SeekTip", "Drag to a point in the song; it plays on from there when you let go."));
+	Seek->SetToolTipText(StageAudioPanel::Anchor(TEXT("Seek")).Tooltip);
+	AnchorWidgets.Add(TEXT("Seek"), Seek);
 	Seek->OnMoved.BindUObject(this, &ThisClass::HandleSliderMoved);
 	Seek->OnMouseCaptureEnd.AddUniqueDynamic(this, &ThisClass::HandleSliderReleased);
 	SeekSlider = Seek;
@@ -351,13 +389,15 @@ UWidget* UStageAudioPanel::BuildInputRow()
 	UVerticalBox* Block = WidgetTree->ConstructWidget<UVerticalBox>(UVerticalBox::StaticClass());
 	UStageThemedComboBox* Combo = WidgetTree->ConstructWidget<UStageThemedComboBox>(UStageThemedComboBox::StaticClass(), TEXT("DeviceCombo"));
 	Combo->ApplyTheme(UITheme);
-	Combo->SetToolTipText(LOCTEXT("DeviceTip", "The recording device INPUT listens to."));
+	Combo->SetToolTipText(StageAudioPanel::Anchor(TEXT("Device")).Tooltip);
+	AnchorWidgets.Add(TEXT("Device"), Combo);
 	DeviceCombo = Combo;
 	Block->AddChildToVerticalBox(Combo);
 
 	UHorizontalBox* GainLine = WidgetTree->ConstructWidget<UHorizontalBox>(UHorizontalBox::StaticClass());
-	GainLine->SetToolTipText(LOCTEXT("GainTip", "Boost a quiet input or cut a loud one before it is analysed (-24 .. +24 dB)."));
-	GainLine->AddChildToHorizontalBox(MakeText(LOCTEXT("Gain", "GAIN"), 7, TEXT("Bold"), UITheme.TextSecondary));
+	GainLine->SetToolTipText(StageAudioPanel::Anchor(TEXT("Gain")).Tooltip);
+	AnchorWidgets.Add(TEXT("Gain"), GainLine);
+	GainLine->AddChildToHorizontalBox(MakeText(StageAudioPanel::Anchor(TEXT("Gain")).Label, 7, TEXT("Bold"), UITheme.TextSecondary));
 	UStageValueSlider* Gain = WidgetTree->ConstructWidget<UStageValueSlider>(UStageValueSlider::StaticClass());
 	Gain->SetWidgetStyle(StageCraftWidgetStyle::MakeSlider(UITheme));
 	Gain->SetSliderHandleColor(FLinearColor::White);
@@ -395,7 +435,8 @@ UWidget* UStageAudioPanel::BuildMeters()
 	UVerticalBox* Block = WidgetTree->ConstructWidget<UVerticalBox>(UVerticalBox::StaticClass());
 
 	UHorizontalBox* TempoLine = WidgetTree->ConstructWidget<UHorizontalBox>(UHorizontalBox::StaticClass());
-	TempoLine->SetToolTipText(LOCTEXT("TempoTip", "The tempo found in the music, how sure the analyser is of it, and a lamp on every beat (as the audience hears it)."));
+	TempoLine->SetToolTipText(StageAudioPanel::Anchor(TEXT("Tempo")).Tooltip);
+	AnchorWidgets.Add(TEXT("Tempo"), TempoLine);
 	UBorder* Lamp = WidgetTree->ConstructWidget<UBorder>(UBorder::StaticClass());
 	Lamp->SetBrush(MakeBox(UITheme.RowBackground, StageAudioPanel::LampSize * 0.5f, UITheme.Divider, 1.f));
 	USizeBox* LampBox = WidgetTree->ConstructWidget<USizeBox>(USizeBox::StaticClass());
@@ -475,8 +516,9 @@ UWidget* UStageAudioPanel::BuildSafetyRows()
 	UVerticalBox* Block = WidgetTree->ConstructWidget<UVerticalBox>(UVerticalBox::StaticClass());
 
 	const float LatencySteps = (StageAudioReactive::MaxLatencyOffsetMs - StageAudioReactive::MinLatencyOffsetMs) / StageAudioPanel::LatencyStepMs;
-	UWidget* Latency = MakeLabeledRow(LOCTEXT("Latency", "LATENCY"), MakeSliderLine(StageAudioPanel::Latency, 1.f / LatencySteps, LatencySlider, LatencyText));
-	Latency->SetToolTipText(LOCTEXT("LatencyTip", "Moves the lights against the sound for this source, if they land before or after the beat you hear: positive makes them later, negative earlier (-500 .. +500 ms). Remembered per source on this PC."));
+	UWidget* Latency = MakeLabeledRow(StageAudioPanel::Anchor(TEXT("Latency")).Label, MakeSliderLine(StageAudioPanel::Latency, 1.f / LatencySteps, LatencySlider, LatencyText));
+	Latency->SetToolTipText(StageAudioPanel::Anchor(TEXT("Latency")).Tooltip);
+	AnchorWidgets.Add(TEXT("Latency"), Latency);
 	LatencyRow = Latency;
 	Block->AddChildToVerticalBox(Latency);
 
@@ -492,8 +534,9 @@ UWidget* UStageAudioPanel::BuildSafetyRows()
 	{
 		WarningSlot->SetPadding(FMargin(0.f, 2.f, 0.f, 0.f));
 	}
-	UWidget* Flash = MakeLabeledRow(LOCTEXT("Flash", "FLASH"), FlashBlock);
-	Flash->SetToolTipText(LOCTEXT("FlashTip", "Flash limit for effects that follow the music, on screen and on DMX OUT: a light may flash from dark to bright at most this often, and a strobe may run no faster. Effects programmed without music are not limited. Remembered on this PC."));
+	UWidget* Flash = MakeLabeledRow(StageAudioPanel::Anchor(TEXT("FlashLimit")).Label, FlashBlock);
+	Flash->SetToolTipText(StageAudioPanel::Anchor(TEXT("FlashLimit")).Tooltip);
+	AnchorWidgets.Add(TEXT("FlashLimit"), Flash);
 	if (UVerticalBoxSlot* FlashSlot = Block->AddChildToVerticalBox(Flash))
 	{
 		FlashSlot->SetPadding(FMargin(0.f, 6.f, 0.f, 0.f));
@@ -505,8 +548,8 @@ UWidget* UStageAudioPanel::BuildFooter()
 {
 	const UStageCraftUITheme& UITheme = GetTheme();
 	UVerticalBox* Block = WidgetTree->ConstructWidget<UVerticalBox>(UVerticalBox::StaticClass());
-	UStageChoiceButton* Background = MakeButton(LOCTEXT("Background", "KEEP PLAYING IN THE BACKGROUND"),
-		LOCTEXT("BackgroundTip", "Keep the music playing, and the lights following it, while another window has focus (a browser playing YouTube, say)."), 0);
+	UStageChoiceButton* Background = MakeButton(StageAudioPanel::Anchor(TEXT("Background")).Label, StageAudioPanel::Anchor(TEXT("Background")).Tooltip, 0);
+	AnchorWidgets.Add(TEXT("Background"), Background);
 	Background->OnPicked.BindUObject(this, &ThisClass::HandleBackgroundPicked);
 	BackgroundButton = Background;
 	if (UVerticalBoxSlot* ButtonSlot = Block->AddChildToVerticalBox(Background))

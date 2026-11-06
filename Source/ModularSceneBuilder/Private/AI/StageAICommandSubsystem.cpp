@@ -7,6 +7,10 @@
 #include "AI/StageAIAssistantSettings.h"
 #include "AI/StageAICommandParser.h"
 #include "AI/StageAICommandSchema.h"
+#include "AI/StageKnowledgeSearch.h"
+#include "AI/StageKnowledgeSubsystem.h"
+#include "Engine/LocalPlayer.h"
+#include "Input/StageInputPreferencesSubsystem.h"
 #include "Data/BaseItemData.h"
 #include "Engine/AssetManager.h"
 #include "Engine/StreamableManager.h"
@@ -58,12 +62,13 @@ void UStageAICommandSubsystem::Deinitialize()
 	Super::Deinitialize();
 }
 
-void UStageAICommandSubsystem::AddMessage(EStageAISpeaker Speaker, EStageAIOutcome Outcome, const FText& Text)
+void UStageAICommandSubsystem::AddMessage(EStageAISpeaker Speaker, EStageAIOutcome Outcome, const FText& Text, const FStageAIReference& Reference)
 {
 	FStageAIMessage& Message = Messages.AddDefaulted_GetRef();
 	Message.Speaker = Speaker;
 	Message.Outcome = Outcome;
 	Message.Text = Text;
+	Message.Reference = Reference;
 	if (Messages.Num() > MaxMessages)
 	{
 		Messages.RemoveAt(0, Messages.Num() - MaxMessages);
@@ -120,6 +125,23 @@ bool UStageAICommandSubsystem::SubmitPrompt(const FString& Prompt, FStageAIComma
 	PendingExecutor = MoveTemp(Executor);
 	PromptSelection = MoveTemp(SelectedItemNames);
 
+	// "How do I ..." and "where is ..." are answered offline when the knowledge knows (Docs/ADR/0030 §3), even with the online
+	// model on: the answer is the same, free, and can point at the control. An action asked that way is never sent to be run.
+	if (StageKnowledgeSearch::IsHowToQuestion(Trimmed))
+	{
+		const TOptional<FStageAICommand> Parsed = StageAICommandParser::Parse(Trimmed);
+		const StageKnowledgeSearch::ERoute Route = StageKnowledgeSearch::Route(Trimmed, Parsed.GetPtrOrNull());
+		if (Route != StageKnowledgeSearch::ERoute::Command)
+		{
+			FStageAIInterpretation Knowledge;
+			if (AnswerFromKnowledge(Trimmed, Knowledge) || Route == StageKnowledgeSearch::ERoute::KnowledgeOnly)
+			{
+				Respond(Route == StageKnowledgeSearch::ERoute::KnowledgeOnly && Knowledge.Reply.IsEmpty() ? InterpretLocally(Trimmed) : Knowledge);
+				return true;
+			}
+		}
+	}
+
 	FText Unavailable;
 	if (Backend && Backend->IsAvailable(Unavailable))
 	{
@@ -147,9 +169,53 @@ bool UStageAICommandSubsystem::SubmitPrompt(const FString& Prompt, FStageAIComma
 FStageAIInterpretation UStageAICommandSubsystem::InterpretLocally(const FString& Prompt) const
 {
 	const TOptional<FStageAICommand> Command = StageAICommandParser::Parse(Prompt);
+	const StageKnowledgeSearch::ERoute Route = StageKnowledgeSearch::Route(Prompt, Command.GetPtrOrNull());
+	if (Route != StageKnowledgeSearch::ERoute::Command)
+	{
+		FStageAIInterpretation Knowledge;
+		if (AnswerFromKnowledge(Prompt, Knowledge))
+		{
+			return Knowledge;
+		}
+		if (Route == StageKnowledgeSearch::ERoute::KnowledgeOnly)
+		{
+			// Asked how, not asked to: nothing runs.
+			return FStageAIInterpretation::MakeReply(StageAILanguage::Pick(StageAILanguage::Detect(Prompt),
+				LOCTEXT("NoHelpTopic", "I have no help on that yet, so I changed nothing. To have it done, say it as a request, for example \"store cue 5\"."),
+				INVTEXT("Այդ մասին դեռ օգնություն չունեմ, ուստի ոչինչ չփոխեցի։ Որպեսզի դա արվի, ասեք որպես խնդրանք, օրինակ՝ «պահիր կյու 5»։")));
+		}
+	}
 	return Command.IsSet()
 		? FStageAIInterpretation::MakeCommand(*Command)
 		: FStageAIInterpretation::MakeReply(StageAIAnswers::DescribeNotUnderstood(Prompt));
+}
+
+bool UStageAICommandSubsystem::AnswerFromKnowledge(const FString& Prompt, FStageAIInterpretation& OutReply) const
+{
+	const UWorld* World = GetWorld();
+	UGameInstance* GameInstance = World ? World->GetGameInstance() : nullptr;
+	UStageKnowledgeSubsystem* Knowledge = GameInstance ? GameInstance->GetSubsystem<UStageKnowledgeSubsystem>() : nullptr;
+	if (!Knowledge)
+	{
+		return false;
+	}
+	const UStageInputPreferencesSubsystem* Preferences = nullptr;
+	if (const ULocalPlayer* Player = World->GetFirstLocalPlayerFromController())
+	{
+		Preferences = Player->GetSubsystem<UStageInputPreferencesSubsystem>();
+	}
+	const FStageKnowledgeAnswer Answer = StageKnowledge::Answer(Knowledge->GetIndex(), Prompt, StageAILanguage::Detect(Prompt),
+		Preferences ? Preferences->GetKeyBindings() : FStageKeyBindings::MakeDefaults());
+	if (!Answer.bFound)
+	{
+		return false;
+	}
+	OutReply = FStageAIInterpretation::MakeReply(Answer.Text);
+	OutReply.Reference.Panel = Answer.Panel;
+	OutReply.Reference.Control = Answer.Control;
+	OutReply.Reference.SourceTitle = Answer.SourceTitle;
+	UE_LOG(LogStageCraft, Log, TEXT("AI assistant: answered from the knowledge (%s)."), *Answer.SourceTitle);
+	return true;
 }
 
 void UStageAICommandSubsystem::HandleBackendFinished(const FStageAIModelResponse& Response, FString Prompt)
@@ -191,7 +257,7 @@ void UStageAICommandSubsystem::Respond(const FStageAIInterpretation& Interpretat
 {
 	if (Interpretation.Kind == FStageAIInterpretation::EKind::Reply)
 	{
-		AddMessage(EStageAISpeaker::Assistant, Interpretation.ReplyOutcome, WithNote(Interpretation.Reply, Interpretation.Note));
+		AddMessage(EStageAISpeaker::Assistant, Interpretation.ReplyOutcome, WithNote(Interpretation.Reply, Interpretation.Note), Interpretation.Reference);
 		PendingExecutor.Unbind();
 		return;
 	}

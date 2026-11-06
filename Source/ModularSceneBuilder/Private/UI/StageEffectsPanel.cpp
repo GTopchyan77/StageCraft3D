@@ -87,6 +87,31 @@ namespace StageEffectsPanel
 	}
 }
 
+TConstArrayView<FStageUIAnchor> UStageEffectsPanel::GetAnchors()
+{
+	static const FStageUIAnchor Anchors[] = {
+		{ TEXT("AudioQuick"), LOCTEXT("QuickAudioAnchor", "Audio quick effects"), LOCTEXT("QuickAudioTip", "Effects that follow the music of the Audio panel's source: on the beat, or with a band's level. Without music they hold, or stay fully lit.") },
+		{ TEXT("AudioMaster"), LOCTEXT("AudioMasterAnchor", "AUDIO master"), LOCTEXT("AudioMasterTip", "AUDIO master: how much effects that follow the music follow it. Down, a pulse breathes less; at 0 they run as without music. A stage always opens at full.") },
+		{ TEXT("AudioKill"), LOCTEXT("AudioKill", "KILL"), LOCTEXT("AudioKillTip", "Stop every effect from following the music at once: pulses stay open, chases hold, synced effects keep their last tempo. Click again to follow the music.") },
+		{ TEXT("Wave"), LOCTEXT("Wave", "WAVE"), LOCTEXT("WaveTip", "The shape repeated every cycle. Circle and Figure 8 move pan and tilt together.") },
+		{ TEXT("Audio"), LOCTEXT("Audio", "AUDIO"), LOCTEXT("AudioTip", "Follow the music of the Audio panel's source. SYNC runs the wave at the tempo, on the beat. MODULATE lets a band's level scale it. TRIGGER steps the pattern on each beat. OFF: its own rate.") },
+		{ TEXT("Rate"), LOCTEXT("Rate", "RATE"), LOCTEXT("RateTip", "Cycles per second (and beats per minute). 0 holds the pattern still.") },
+		{ TEXT("Tap"), LOCTEXT("Tap", "TAP"), LOCTEXT("TapTip", "Tap in time: the rate follows your beat (one cycle per tap).") },
+		{ TEXT("Size"), LOCTEXT("Size", "SIZE"), LOCTEXT("SizeTip", "How far pan and tilt swing either side of their position.") },
+		{ TEXT("Spread"), LOCTEXT("Spread", "SPREAD"), LOCTEXT("SpreadTip", "How far apart in the cycle the fixtures are: 0 in step, 360 one wave across them all (a chase).") },
+		{ TEXT("StopAll"), LOCTEXT("StopAll", "STOP ALL"), LOCTEXT("StopAllTip", "Stop every running effect, the programmer's and the cues' (one undo step). Clear brings the cues' effects back.") },
+	};
+	return Anchors;
+}
+
+namespace StageEffectsPanel
+{
+	const FStageUIAnchor& Anchor(FName ControlId)
+	{
+		return StageUIAnchors::Get(UStageEffectsPanel::GetAnchors(), ControlId);
+	}
+}
+
 const UStageCraftUITheme& UStageEffectsPanel::GetTheme() const
 {
 	return StageCraftWidgetStyle::ResolveTheme(Theme);
@@ -147,6 +172,7 @@ void UStageEffectsPanel::NativeOnInitialized()
 
 void UStageEffectsPanel::BuildTree()
 {
+	AnchorWidgets.Reset();
 	using namespace StageCraftWidgetStyle;
 	const UStageCraftUITheme& UITheme = GetTheme();
 
@@ -216,7 +242,8 @@ UWidget* UStageEffectsPanel::BuildQuickColumn()
 	Groups->AddChildToVerticalBox(BuildQuickGrid(0, AudioQuickStart));
 	// The audio quick effects follow the music (Docs/ADR/0029 §5): they move only while the Audio panel has a source playing.
 	UTextBlock* AudioTitle = MakeText(LOCTEXT("QuickAudioTitle", "AUDIO"), 7, TEXT("Bold"), UITheme.TextSecondary);
-	AudioTitle->SetToolTipText(LOCTEXT("QuickAudioTip", "Effects that follow the music of the Audio panel's source: on the beat, or with a band's level. Without music they hold, or stay fully lit."));
+	AudioTitle->SetToolTipText(StageEffectsPanel::Anchor(TEXT("AudioQuick")).Tooltip);
+	AnchorWidgets.Add(TEXT("AudioQuick"), AudioTitle);
 	if (UVerticalBoxSlot* TitleSlot = Groups->AddChildToVerticalBox(AudioTitle))
 	{
 		TitleSlot->SetPadding(FMargin(0.f, 8.f, 0.f, 3.f));
@@ -233,7 +260,8 @@ UWidget* UStageEffectsPanel::BuildAudioMasterRow()
 {
 	const UStageCraftUITheme& UITheme = GetTheme();
 	UHorizontalBox* Row = WidgetTree->ConstructWidget<UHorizontalBox>(UHorizontalBox::StaticClass());
-	Row->SetToolTipText(LOCTEXT("AudioMasterTip", "AUDIO master: how much effects that follow the music follow it. Down, a pulse breathes less; at 0 they run as without music. A stage always opens at full."));
+	Row->SetToolTipText(StageEffectsPanel::Anchor(TEXT("AudioMaster")).Tooltip);
+	AnchorWidgets.Add(TEXT("AudioMaster"), Row);
 	UStageValueSlider* Slider = WidgetTree->ConstructWidget<UStageValueSlider>(UStageValueSlider::StaticClass());
 	Slider->SetWidgetStyle(StageCraftWidgetStyle::MakeSlider(UITheme));
 	Slider->SetSliderHandleColor(FLinearColor::White);
@@ -258,7 +286,8 @@ UWidget* UStageEffectsPanel::BuildAudioMasterRow()
 		ValueSlot->SetVerticalAlignment(VAlign_Center);
 		ValueSlot->SetPadding(FMargin(4.f, 0.f));
 	}
-	UStageChoiceButton* Kill = MakeButton(LOCTEXT("AudioKill", "KILL"), LOCTEXT("AudioKillTip", "Stop every effect from following the music at once: pulses stay open, chases hold, synced effects keep their last tempo. Click again to follow the music."), 0, false);
+	UStageChoiceButton* Kill = MakeButton(StageEffectsPanel::Anchor(TEXT("AudioKill")).Label, StageEffectsPanel::Anchor(TEXT("AudioKill")).Tooltip, 0, false);
+	AnchorWidgets.Add(TEXT("AudioKill"), Kill);
 	Kill->OnPicked.BindUObject(this, &ThisClass::HandleAudioKillPicked);
 	AudioKillButton = Kill;
 	if (UHorizontalBoxSlot* KillSlot = Row->AddChildToHorizontalBox(Kill))
@@ -328,7 +357,8 @@ UWidget* UStageEffectsPanel::BuildSettingRow(ESetting Setting, const FText& Labe
 	TapBox->SetWidthOverride(StageEffectsPanel::TapWidth);
 	if (Setting == ESetting::Rate)
 	{
-		UStageChoiceButton* Tap = MakeButton(LOCTEXT("Tap", "TAP"), LOCTEXT("TapTip", "Tap in time: the rate follows your beat (one cycle per tap)."), 0, false);
+		UStageChoiceButton* Tap = MakeButton(StageEffectsPanel::Anchor(TEXT("Tap")).Label, StageEffectsPanel::Anchor(TEXT("Tap")).Tooltip, 0, false);
+		AnchorWidgets.Add(TEXT("Tap"), Tap);
 		Tap->OnPicked.BindUObject(this, &ThisClass::HandleTapPicked);
 		TapBox->SetContent(Tap);
 	}
@@ -397,6 +427,11 @@ UWidget* UStageEffectsPanel::BuildEditor()
 	}
 	UVerticalBox* Rows = WidgetTree->ConstructWidget<UVerticalBox>(UVerticalBox::StaticClass());
 	Scroll->AddChild(Rows);
+	const auto Anchored = [this](FName ControlId, UWidget* Widget)
+	{
+		AnchorWidgets.Add(ControlId, Widget);
+		return Widget;
+	};
 	const auto Add = [Rows](UWidget* Widget)
 	{
 		if (UVerticalBoxSlot* RowSlot = Rows->AddChildToVerticalBox(Widget))
@@ -424,7 +459,7 @@ UWidget* UStageEffectsPanel::BuildEditor()
 	ChoiceRows.SetNum(static_cast<int32>(EChoiceRow::Count));
 	const FText Waveforms[] = { LOCTEXT("Sine", "SINE"), LOCTEXT("Cosine", "COS"), LOCTEXT("Square", "SQUARE"), LOCTEXT("RampUp", "RAMP UP"), LOCTEXT("RampDown", "RAMP DN"),
 		LOCTEXT("Triangle", "TRI"), LOCTEXT("Random", "RANDOM"), LOCTEXT("Circle", "CIRCLE"), LOCTEXT("Figure8", "FIG 8") };
-	Add(BuildChoiceRow(EChoiceRow::Waveform, LOCTEXT("Wave", "WAVE"), Waveforms, LOCTEXT("WaveTip", "The shape repeated every cycle. Circle and Figure 8 move pan and tilt together.")));
+	Add(Anchored(TEXT("Wave"), BuildChoiceRow(EChoiceRow::Waveform, StageEffectsPanel::Anchor(TEXT("Wave")).Label, Waveforms, StageEffectsPanel::Anchor(TEXT("Wave")).Tooltip)));
 	const FText Directions[] = { LOCTEXT("Forward", "FWD"), LOCTEXT("Reverse", "REV"), LOCTEXT("Bounce", "BOUNCE") };
 	Add(BuildChoiceRow(EChoiceRow::Direction, LOCTEXT("Direction", "DIR"), Directions, LOCTEXT("DirectionTip", "Which way the pattern runs along the fixtures: first to last, last to first, or out and back.")));
 	const FText Fans[] = { LOCTEXT("FanOff", "OFF"), LOCTEXT("FanLinear", "LINEAR"), LOCTEXT("FanV", "V"), LOCTEXT("FanInvertedV", "INV V") };
@@ -443,8 +478,7 @@ UWidget* UStageEffectsPanel::BuildEditor()
 
 	// How the effect follows the music (Docs/ADR/0029 §4).
 	const FText AudioModes[] = { LOCTEXT("AudioOff", "OFF"), LOCTEXT("AudioSync", "SYNC"), LOCTEXT("AudioModulate", "MODULATE"), LOCTEXT("AudioTrigger", "TRIGGER") };
-	Add(BuildChoiceRow(EChoiceRow::AudioMode, LOCTEXT("Audio", "AUDIO"), AudioModes,
-		LOCTEXT("AudioTip", "Follow the music of the Audio panel's source. SYNC runs the wave at the tempo, on the beat. MODULATE lets a band's level scale it. TRIGGER steps the pattern on each beat. OFF: its own rate.")));
+	Add(Anchored(TEXT("Audio"), BuildChoiceRow(EChoiceRow::AudioMode, StageEffectsPanel::Anchor(TEXT("Audio")).Label, AudioModes, StageEffectsPanel::Anchor(TEXT("Audio")).Tooltip)));
 	const FText Bands[] = { LOCTEXT("SubBass", "SUB"), LOCTEXT("Bass", "BASS"), LOCTEXT("Mid", "MID"), LOCTEXT("High", "HIGH"), LOCTEXT("Level", "LEVEL") };
 	Add(BuildChoiceRow(EChoiceRow::AudioBand, LOCTEXT("Band", "BAND"), Bands,
 		LOCTEXT("BandTip", "MODULATE: the band whose level scales the effect. TRIGGER: LEVEL steps on every hit (onset) instead of every beat.")));
@@ -459,12 +493,12 @@ UWidget* UStageEffectsPanel::BuildEditor()
 		LOCTEXT("ResponseTip", "How fast the modulation falls back after a hit: FAST pumps with every kick, SLOW breathes.")));
 	Add(BuildSettingRow(ESetting::Amount, LOCTEXT("Amount", "AMOUNT"), LOCTEXT("AmountTip", "How much the band scales the effect: 0 not at all, 100 % the band alone.")));
 
-	Add(BuildSettingRow(ESetting::Rate, LOCTEXT("Rate", "RATE"), LOCTEXT("RateTip", "Cycles per second (and beats per minute). 0 holds the pattern still.")));
-	Add(BuildSettingRow(ESetting::Size, LOCTEXT("Size", "SIZE"), LOCTEXT("SizeTip", "How far pan and tilt swing either side of their position.")));
+	Add(Anchored(TEXT("Rate"), BuildSettingRow(ESetting::Rate, StageEffectsPanel::Anchor(TEXT("Rate")).Label, StageEffectsPanel::Anchor(TEXT("Rate")).Tooltip)));
+	Add(Anchored(TEXT("Size"), BuildSettingRow(ESetting::Size, StageEffectsPanel::Anchor(TEXT("Size")).Label, StageEffectsPanel::Anchor(TEXT("Size")).Tooltip)));
 	Add(BuildSettingRow(ESetting::Low, LOCTEXT("Low", "LOW"), LOCTEXT("LowTip", "The bottom of the wave, as a share of each fixture's range.")));
 	Add(BuildSettingRow(ESetting::High, LOCTEXT("High", "HIGH"), LOCTEXT("HighTip", "The top of the wave, as a share of each fixture's range.")));
 	Add(BuildSettingRow(ESetting::Phase, LOCTEXT("Phase", "PHASE"), LOCTEXT("PhaseTip", "Where in the cycle the first fixture starts.")));
-	Add(BuildSettingRow(ESetting::Spread, LOCTEXT("Spread", "SPREAD"), LOCTEXT("SpreadTip", "How far apart in the cycle the fixtures are: 0 in step, 360 one wave across them all (a chase).")));
+	Add(Anchored(TEXT("Spread"), BuildSettingRow(ESetting::Spread, StageEffectsPanel::Anchor(TEXT("Spread")).Label, StageEffectsPanel::Anchor(TEXT("Spread")).Tooltip)));
 	Add(BuildSettingRow(ESetting::Duty, LOCTEXT("Duty", "DUTY"), LOCTEXT("DutyTip", "Square: the share of each cycle that is on. Short for a chase or a strobe.")));
 	Add(BuildSettingRow(ESetting::Wings, LOCTEXT("Wings", "WINGS"), LOCTEXT("WingsTip", "Split the fixtures into mirrored parts, so the pattern runs symmetrically.")));
 	Add(BuildSettingRow(ESetting::Blocks, LOCTEXT("Blocks", "BLOCKS"), LOCTEXT("BlocksTip", "Fixtures that move together as one step of the pattern.")));
@@ -484,7 +518,8 @@ UWidget* UStageEffectsPanel::BuildRunningColumn()
 		TextSlot->SetSize(FSlateChildSize(ESlateSizeRule::Fill));
 		TextSlot->SetVerticalAlignment(VAlign_Center);
 	}
-	UStageChoiceButton* StopAll = MakeButton(LOCTEXT("StopAll", "STOP ALL"), LOCTEXT("StopAllTip", "Stop every running effect, the programmer's and the cues' (one undo step). Clear brings the cues' effects back."), 0, false);
+	UStageChoiceButton* StopAll = MakeButton(StageEffectsPanel::Anchor(TEXT("StopAll")).Label, StageEffectsPanel::Anchor(TEXT("StopAll")).Tooltip, 0, false);
+	AnchorWidgets.Add(TEXT("StopAll"), StopAll);
 	StopAll->OnPicked.BindUObject(this, &ThisClass::HandleStopAllPicked);
 	Title->AddChildToHorizontalBox(StopAll);
 	Column->AddChildToVerticalBox(Title);

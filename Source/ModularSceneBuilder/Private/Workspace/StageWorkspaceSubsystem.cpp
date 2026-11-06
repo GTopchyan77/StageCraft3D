@@ -20,6 +20,7 @@
 #include "Startup/StageStartupSubsystem.h"
 #include "Subsystems/StageSessionSubsystem.h"
 #include "UI/StageStatusBarWidget.h"
+#include "UI/StageUIAnchors.h"
 #include "UI/StageViewportToolbar.h"
 #include "TimerManager.h"
 #include "Widgets/SNullWidget.h"
@@ -96,6 +97,13 @@ void UStageWorkspaceSubsystem::Deinitialize()
 
 	// Quitting another way while the prompt is up (the 'exit' command): it has nothing left to ask.
 	CloseExitPrompt();
+
+	if (ShowControlTicker.IsValid())
+	{
+		FTSTicker::GetCoreTicker().RemoveTicker(ShowControlTicker);
+		ShowControlTicker.Reset();
+	}
+	LivePanelWidgets.Reset();
 
 	if (LoadingScreenFinishedHandle.IsValid())
 	{
@@ -610,6 +618,7 @@ TSharedRef<SWidget> UStageWorkspaceSubsystem::CreatePanelContent(const FGameplay
 	{
 		if (UUserWidget* Widget = CreateWidget<UUserWidget>(Controller, WidgetClass))
 		{
+			LivePanelWidgets.Add(PanelTag, Widget);
 			return Widget->TakeWidget();
 		}
 	}
@@ -657,6 +666,60 @@ bool UStageWorkspaceSubsystem::OpenPanel(FGameplayTag PanelTag)
 bool UStageWorkspaceSubsystem::ClosePanel(FGameplayTag PanelTag)
 {
 	return State == EStageWorkspaceState::Ready && Shell->ClosePanel(PanelTag);
+}
+
+bool UStageWorkspaceSubsystem::ShowControl(FGameplayTag PanelTag, FName ControlId)
+{
+	if (!OpenPanel(PanelTag))
+	{
+		return false;
+	}
+	if (ShowControlTicker.IsValid())
+	{
+		FTSTicker::GetCoreTicker().RemoveTicker(ShowControlTicker);
+		ShowControlTicker.Reset();
+	}
+	if (ControlId.IsNone() || PulseAnchor(PanelTag, ControlId))
+	{
+		return true;
+	}
+	// The tab may build or show the control a frame or two later.
+	const double Deadline = FPlatformTime::Seconds() + 0.5;
+	ShowControlTicker = FTSTicker::GetCoreTicker().AddTicker(FTickerDelegate::CreateWeakLambda(this, [this, PanelTag, ControlId, Deadline](float)
+	{
+		if (PulseAnchor(PanelTag, ControlId))
+		{
+			ShowControlTicker.Reset();
+			return false;
+		}
+		if (FPlatformTime::Seconds() > Deadline)
+		{
+			UE_LOG(LogStageWorkspace, Log, TEXT("SHOW ME: %s opened, but it does not show %s now."), *PanelTag.ToString(), *ControlId.ToString());
+			ShowControlTicker.Reset();
+			return false;
+		}
+		return true;
+	}));
+	return true;
+}
+
+UUserWidget* UStageWorkspaceSubsystem::FindPanelWidget(FGameplayTag PanelTag) const
+{
+	return LivePanelWidgets.FindRef(PanelTag).Get();
+}
+
+bool UStageWorkspaceSubsystem::PulseAnchor(const FGameplayTag& PanelTag, FName ControlId) const
+{
+	const IStageAnchoredPanel* Panel = Cast<IStageAnchoredPanel>(LivePanelWidgets.FindRef(PanelTag).Get());
+	UWidget* Control = Panel ? Panel->FindAnchorWidget(ControlId) : nullptr;
+	if (!Control || !StageUIAnchors::IsShown(*Control))
+	{
+		return false;
+	}
+	StageUIAnchors::BringIntoView(*Control);
+	StageUIAnchors::Pulse(*Control);
+	UE_LOG(LogStageWorkspace, Log, TEXT("SHOW ME: %s %s."), *PanelTag.ToString(), *ControlId.ToString());
+	return true;
 }
 
 EStagePanelHost UStageWorkspaceSubsystem::GetPanelHost(FGameplayTag PanelTag) const

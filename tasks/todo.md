@@ -596,8 +596,16 @@ Gevor's choices: automation tests on a harness game instance (not AFunctionalTes
   - [x] G3d analyser heard delay changeable live (no restart on a latency change); Audio panel latency offset per source, flash limit slider with a warning above 3, LISTENING indicator; status bar LISTENING
   - [x] G3e AUDIO fader and KILL in the Playback panel and the Effects panel
   - [x] G3f tests, Bench.Fixtures Audio=1 A/B against 9acfa3c, builds, Shipping scan, scripted run, ADR 0029 §15, STATE #71
-- [ ] H0 spike: HTTP streaming, prompt-cache hit, latency and cost per model
-- [ ] H1 knowledge index from code (UI anchors, key map, parameters, panels), help articles EN/HY, offline BM25 search, SHOW ME (Phase 26)
+- [x] H0 spike: HTTP streaming, prompt-cache hit, latency and cost per model (STATE.md #72: streaming confirmed on the engine's HTTP module against a local mock; SSE parser; the paid per-model run is StageCraft.Assistant.Spike Model=all for Gevor, no key on the build PC)
+- [ ] H0 paid measurement (Gevor): set ANTHROPIC_API_KEY, run StageCraft.Assistant.Spike Model=all Runs=2 in a development build (well under $0.10), send Saved/Profiling/AssistantSpike.csv; then pick the default model (ADR 0030 section 8)
+- [x] H1 knowledge index from code (UI anchors, key map, parameters, panels), help articles EN/HY, offline BM25 search, SHOW ME (Phase 26) (STATE.md #72)
+  - [x] H1a FStageKnowledgeIndex and StageKnowledge::Build (commands, panels, anchors, attributes with catalog ranges, articles), digest for the cached prompt
+  - [x] H1b UI anchor tables on Playback, Cues, Effects, Audio, Patch, Groups, Palettes (labels and tooltips from one table), IStageAnchoredPanel
+  - [x] H1c 18 help articles in English and Armenian, staged as UFS
+  - [x] H1d BM25 search EN/HY, how-to routing (an action asked how never runs), knowledge replies in the assistant
+  - [x] H1e SHOW ME / OPEN PANEL (open, scroll, pulse), assistant docked right in Default and Lighting Desk
+  - [x] H1f tests (Sse, Knowledge, Search, Routing, HowTo), builds, Shipping scan, scripted runs H1a/H1b, ADR 0030 sections 13-14, STATE #72
+- [ ] H1 manual verification (Gevor): ask how-to questions in English and Armenian in the docked assistant, click SHOW ME and OPEN PANEL, float and re-dock the assistant tab; a packaged build answers from the help articles
 - [ ] H2 StageShowDiagnostics, StageFixtureExplain, Problems list
 - [ ] H3 tool catalogue, proposal cards, one-undo-step plans with rollback, bounded online loop with append-only history and cached prefix, key in the vault
 - [ ] H4 offline multi-step, conversation memory, new actions (rest of Phase 26)

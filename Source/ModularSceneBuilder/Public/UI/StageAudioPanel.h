@@ -8,6 +8,7 @@
 #include "Engine/TimerHandle.h"
 #include "Styling/SlateTypes.h"
 #include "Types/SlateEnums.h"
+#include "UI/StageUIAnchors.h"
 #include "StageAudioPanel.generated.h"
 
 /**
@@ -28,9 +29,17 @@
  * requests (judged by the GameMode); a refused change snaps back on the next refresh. None is undoable: they are live device actions.
  */
 UCLASS()
-class MODULARSCENEBUILDER_API UStageAudioPanel : public UUserWidget
+class MODULARSCENEBUILDER_API UStageAudioPanel : public UUserWidget, public IStageAnchoredPanel
 {
 	GENERATED_BODY()
+
+public:
+	/** The controls the assistant can name and point at (Docs/ADR/0030 section 3); their labels and tooltips are read from here. */
+	static TConstArrayView<FStageUIAnchor> GetAnchors();
+
+	//~ Begin IStageAnchoredPanel Interface
+	virtual class UWidget* FindAnchorWidget(FName ControlId) const override { return AnchorWidgets.Find(ControlId); }
+	//~ End IStageAnchoredPanel Interface
 
 public:
 	/** The meters update this often while a source runs. */
@@ -47,6 +56,9 @@ protected:
 	TObjectPtr<class UStageCraftUITheme> Theme = nullptr;
 
 private:
+	/** The live widgets of GetAnchors, refilled when the tree is built. */
+	FStageAnchorWidgets AnchorWidgets;
+
 	/** The band meters, in EStageAudioBand order. */
 	static constexpr int32 MeterCount = 5;
 

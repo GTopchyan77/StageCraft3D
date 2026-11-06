@@ -28,6 +28,26 @@
 
 #define LOCTEXT_NAMESPACE "StageGroupsPanel"
 
+TConstArrayView<FStageUIAnchor> UStageGroupsPanel::GetAnchors()
+{
+	static const FStageUIAnchor Anchors[] = {
+		{ TEXT("GroupList"), LOCTEXT("GroupListAnchor", "Groups"), LOCTEXT("TitleTip", "Saved fixture selections. Click a group to select its fixtures, in the order they were recorded.") },
+		{ TEXT("RecordGroup"), LOCTEXT("Record", "RECORD"), LOCTEXT("RecordTip", "Record the selected fixtures as a new group.") },
+		{ TEXT("ClearProgrammer"), LOCTEXT("Clear", "CLEAR"), LOCTEXT("ClearTip", "Clear the programmer: fixtures go back to the playing cue and their home look. Undoable.") },
+		{ TEXT("Highlight"), LOCTEXT("Highlight", "HIGHLIGHT"), LOCTEXT("HighlightTip", "Show the selected fixtures at full, in open white, to find them on stage. Never stored in cues.") },
+		{ TEXT("Fan"), LOCTEXT("FanAnchor", "FAN"), LOCTEXT("FanTip", "How a fader or encoder change spreads over several selected fixtures, in selection order: off (all the same), linear, V or inverted V.") },
+	};
+	return Anchors;
+}
+
+namespace StageGroupsPanelAnchors
+{
+	const FStageUIAnchor& Get(FName ControlId)
+	{
+		return StageUIAnchors::Get(UStageGroupsPanel::GetAnchors(), ControlId);
+	}
+}
+
 namespace StageGroupsPanel
 {
 	constexpr float TileWidth = 104.f;
@@ -137,6 +157,7 @@ void UStageGroupsPanel::NativeOnInitialized()
 
 void UStageGroupsPanel::BuildTree()
 {
+	AnchorWidgets.Reset();
 	using namespace StageCraftWidgetStyle;
 	const UStageCraftUITheme& Palette = GetTheme();
 
@@ -197,10 +218,12 @@ UWidget* UStageGroupsPanel::BuildProgrammerBar()
 	};
 
 	UTextBlock* Title = MakeText(LOCTEXT("Title", "GROUPS"), 9, TEXT("Bold"), Palette.TextPrimary);
-	Title->SetToolTipText(LOCTEXT("TitleTip", "Saved fixture selections. Click a group to select its fixtures, in the order they were recorded."));
+	Title->SetToolTipText(StageGroupsPanelAnchors::Get(TEXT("GroupList")).Tooltip);
+	AnchorWidgets.Add(TEXT("GroupList"), Title);
 	Add(Title, 0.f, false);
 
-	UStageChoiceButton* Record = MakeButton(LOCTEXT("Record", "RECORD"), LOCTEXT("RecordTip", "Record the selected fixtures as a new group."), ChoiceRecord, true);
+	UStageChoiceButton* Record = MakeButton(StageGroupsPanelAnchors::Get(TEXT("RecordGroup")).Label, StageGroupsPanelAnchors::Get(TEXT("RecordGroup")).Tooltip, ChoiceRecord, true);
+	AnchorWidgets.Add(TEXT("RecordGroup"), Record);
 	Record->OnPicked.BindUObject(this, &ThisClass::HandleProgrammerPicked);
 	Add(Record, 12.f, false);
 
@@ -208,13 +231,16 @@ UWidget* UStageGroupsPanel::BuildProgrammerBar()
 	ProgrammerText->SetTextOverflowPolicy(ETextOverflowPolicy::Ellipsis);
 	Add(ProgrammerText, 12.f, true);
 
-	ClearButton = MakeButton(LOCTEXT("Clear", "CLEAR"), LOCTEXT("ClearTip", "Clear the programmer: fixtures go back to the playing cue and their home look. Undoable."), ChoiceClear, false);
+	ClearButton = MakeButton(StageGroupsPanelAnchors::Get(TEXT("ClearProgrammer")).Label, StageGroupsPanelAnchors::Get(TEXT("ClearProgrammer")).Tooltip, ChoiceClear, false);
+	AnchorWidgets.Add(TEXT("ClearProgrammer"), ClearButton);
 	ClearButton->OnPicked.BindUObject(this, &ThisClass::HandleProgrammerPicked);
 	Add(ClearButton, 8.f, false);
-	HighlightButton = MakeButton(LOCTEXT("Highlight", "HIGHLIGHT"), LOCTEXT("HighlightTip", "Show the selected fixtures at full, in open white, to find them on stage. Never stored in cues."), ChoiceHighlight, false);
+	HighlightButton = MakeButton(StageGroupsPanelAnchors::Get(TEXT("Highlight")).Label, StageGroupsPanelAnchors::Get(TEXT("Highlight")).Tooltip, ChoiceHighlight, false);
+	AnchorWidgets.Add(TEXT("Highlight"), HighlightButton);
 	HighlightButton->OnPicked.BindUObject(this, &ThisClass::HandleProgrammerPicked);
 	Add(HighlightButton, 2.f, false);
-	FanButton = MakeButton(FanLabel(EStageFanMode::Off), LOCTEXT("FanTip", "How a fader or encoder change spreads over several selected fixtures, in selection order: off (all the same), linear, V or inverted V."), ChoiceFan, false);
+	FanButton = MakeButton(FanLabel(EStageFanMode::Off), StageGroupsPanelAnchors::Get(TEXT("Fan")).Tooltip, ChoiceFan, false);
+	AnchorWidgets.Add(TEXT("Fan"), FanButton);
 	FanButton->OnPicked.BindUObject(this, &ThisClass::HandleProgrammerPicked);
 	Add(FanButton, 2.f, false);
 	return Header;
