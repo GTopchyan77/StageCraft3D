@@ -660,3 +660,15 @@ Gevor's choices: automation tests on a harness game instance (not AFunctionalTes
 - [ ] Fixture ID index (O(n^2) registration on load)
 - [ ] Decide: in-app graphics quality settings (scalability, screen percentage, frame cap)
 - [ ] Gevor: tick INCLUDE SCREENSHOT at 4K; Patch panel live channel values while a show plays
+
+## Phase 37 - GDTF fixture import and device library (requested by Gevor 2026-11-09; STATE.md #79; ADR 0033 accepted)
+- [x] ADR 0033 written and accepted (G1-G4 as recommended)
+- [ ] Gevor: G5, a local corpus of about 20 real GDTF files (spot, wash, beam, hybrid, LED par, bar, blinder, strobe, profile; several manufacturers)
+- [x] GD0 spike on self-authored files: ZIP/deflate via FCompression, own XML reader (engine parsers unfit), probe command (STATE.md #80)
+- [ ] GD0 on the real corpus: run StageCraft.Fixtures.GdtfProbe, confirm GeometryReference/Break and Position, fill in ADR §14 timings
+- [x] GD1 parser, mapping, units, import report, 5 tests on self-authored files (STATE.md #80); corpus run pending
+- [ ] GD2 runtime fixture types, UStageFixtureLibrarySubsystem, stable paths, scene v12, missing types, 64 cells (bench A/B)
+- [ ] GD3 DMX channel functions and default values in DMX OUT/IN (built-ins byte-identical; DMXOut bench; Gevor checks a visualiser)
+- [ ] GD4 UI: import and drop, report dialog, mode swap, Library cards, help article EN/HY
+- [ ] GD5 (optional) glTF meshes, gobo images
+- [ ] ADR 0034 MVR (after GD2)

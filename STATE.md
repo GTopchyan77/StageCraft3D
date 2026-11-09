@@ -7955,7 +7955,7 @@ All times in ms.
 - **Builds:** Editor, Game Development and Game Shipping, 0 warnings. No dev command was added or changed, so the Shipping string scan from #77 still holds.
 - **Not verified by hand:** ticking INCLUDE SCREENSHOT in the Support panel at 4K (the log line gives the encode time), and the Patch panel live channel values while a show plays.
 
-**Commit:** uncommitted (working tree).
+**Commit:** `355dcad` (committed by Gevor, 2026-11-09).
 
 **Known issues / follow-ups (measured, not changed)**
 - **The UI is now the largest game-thread cost.** In the same trace Slate tick and paint take about 6.5 ms a frame, and the layout prepass alone (`SlatePrepass`, exclusive) about 2.6 ms.
@@ -7964,3 +7964,102 @@ All times in ms.
 - **Fixture physics bodies:** `Phys SetBodyTransform` runs about twice per fixture per frame while heads move (about 1.5 ms per show tick at 500). Check whether moving parts need collision (picking may rely on it) before changing anything.
 - **O(n²) fixture registration on scene load** (`FindFixture` is a linear scan). It costs a few ms at about 500 fixtures; an ID index would fix it if larger rigs matter.
 - **No in-app graphics quality settings** (scalability, screen percentage, frame cap). This is the main lever for 60 FPS on weaker GPUs and would be a feature of its own.
+
+## #79 — ADR 0033 accepted: GDTF fixture import, fixture modes and the device library (2026-11-09)
+
+**What & why**
+- Gevor asked (2026-11-09) to start step 1 of the professional-features plan: GDTF / MVR import and device library expansion. The plan order was agreed in the conversation: GDTF, then MIDI/OSC, MVR, download manager, web remote, licence tiers.
+- StageCraft ships 13 fixture types, all editor assets. GDTF (DIN SPEC 15800, `DataVersion` 1.2) is the open standard every competitor reads.
+- **ADR 0033** (proposed) designs the import. The model facts behind it were checked in code:
+  - fixtures are `/Game/` data assets with one DMX mode (`DMXModeName`, `DMXChannels`);
+  - `NormalizeForDMX` is linear or equal-slot;
+  - `ALightingFixtureActor::WriteDMX` skips channels without a supported attribute, so they go out as 0;
+  - runtime catalog items exist only for imported models (`UStageItemSubsystem::AddRuntimeItem`);
+  - cell tags are native up to 32;
+  - scenes store item paths (`/Game/` or the import root), at format v11.
+- **What the ADR decides:**
+  - one transient `ULightingFixtureData` per GDTF mode under the stable path `/Temp/StageCraftFixtures/<FixtureTypeID>/<Mode>`, switched with the existing item swap;
+  - channel functions and `DefaultDMX` on DMX channels. Built-ins keep byte-identical output;
+  - an attribute mapping table;
+  - a body built from GDTF model sizes;
+  - a new `UStageFixtureLibrarySubsystem`, with files in `Saved/StageCraft/Fixtures`, parsed on workers at start-up and waited for by scene loads;
+  - scene format v12, naming missing fixture types;
+  - security caps for ZIP and XML input;
+  - the import report;
+  - UI;
+  - package manifest v3 (`FIXT` section), built with the step 4 download manager;
+  - phases GD0–GD5.
+- **Gevor's decisions (ADR §2), made 2026-11-09:** G1–G4 accepted as recommended. G5 (the corpus) is still needed.
+  - G1: where GDTF files come from (recommended: user import only until the GDTF Share terms are checked);
+  - G2: one catalog item per mode;
+  - G3: primitives in v1;
+  - G4: raise the cell limit to 64;
+  - G5: a local, uncommitted corpus of about 20 real GDTF files.
+- The GDTF facts were checked against the public spec (github.com/mvrdevelopment/spec, `gdtf-spec.md`): the container, Model `PrimitiveType`, the Beam defaults, DMXChannel, LogicalChannel, ChannelFunction and ChannelSet attributes, DMXValue `n/b` byte mirroring, wheel slots, emitters and the Annex attribute names. The GeometryReference and Break repetition rules, and raw deflate through `FCompression`, are left for the GD0 spike to verify.
+
+**Files changed**
+- `Docs/ADR/0033-gdtf-fixture-import-and-device-library.md` (new)
+- `tasks/todo.md`, STATE.md
+
+**Verification:** a design document only. No code was changed, so no build or test was run.
+
+**Commit:** uncommitted (working tree). This entry also carries #78's hash, `355dcad`.
+
+**Known issues / follow-ups**
+- GD0 needs Gevor's corpus files (G5): about 20 real .gdtf files from GDTF Share, in a local folder that is not committed.
+- MVR gets its own ADR 0034 after GD2.
+
+## #80 — GDTF GD0 spike and GD1 reader: ZIP, XML, parser, units, mapping, report (ADR 0033; 2026-11-09)
+
+**What & why**
+- Gevor asked (2026-11-09) to start GD0 and GD1 with self-authored GDTF files while the real-file corpus (G5) is pending. ADR 0033 §13 defines both phases.
+- **GD0 findings** (ADR 0033 §14):
+  - The engine's zlib decodes ZIP's raw deflate (`FCompression::UncompressMemory` with window −15, which goes straight to `inflateInit2`).
+  - Neither engine XML parser is fit for untrusted files:
+    - `FXmlFile` is line-based and reads double quotes only;
+    - `FFastXml` `check()`s on a malformed declaration or deep nesting, so a hostile file could crash a Development build.
+  - So the XML reader is our own. ADR §8 is updated.
+  - A real-file parse time and the cell and position rules still wait for the corpus. The probe command below measures them.
+- **GD1** is pure code (no UObjects; any thread) under `Private/Fixtures/`:
+  - **`StageZipReader`.** Central directory, stored and deflate entries, CRC-32 (own table). It refuses ZIP64, encryption, multi-disk archives, unsafe names (`..`, absolute, drive, empty segments), duplicates and a ratio over 100:1 above 1 MB. It also caps entries, entry size and total size.
+  - **`StageXmlReader`.** Elements and attributes, both quotes, the five entities and numeric references, comments, PIs and CDATA skipped. A DOCTYPE is refused. Caps on depth, nodes, attributes and value length; every error carries a line number.
+  - **`StageGdtfTypes` and `StageGdtfParser`.** The fixture type, attribute definitions, wheels and slots (CIE colour, media, prism facets), emitters, properties, models, the geometry tree (Position matrix, Beam, GeometryReference and Break), modes, channels, offsets, logical channels, channel functions and channel sets.
+    - DMX values (`n/b`, `s`) are parsed strictly, and mirrored or shifted to the channel's resolution.
+    - File-level errors name their XML path and line. Missing wheel images only warn.
+  - **`StageGdtfUnits`.** CIE xyY to linear Rec.709; metres to centimetres with Y mirrored; degrees per second to rpm.
+  - **`StageGdtfMapping`.**
+    - The GDTF-to-StageCraft attribute table (ADR §5.1). Amber is `ColorAdd_RY`, the GDTF 1.0 `ColorRGB_*` names are accepted, and blades are approximated.
+    - Per-mode layouts with value ranges:
+      - shutter open is 0 and closed is never selected;
+      - strobe Hz is scaled to 0.01..1;
+      - wheel slots come from channel sets, with open as slot 0;
+      - normalised values are scaled over the channel's physical span;
+      - functions sharing an owner channel are reported as approximated.
+    - Initial-function defaults are computed.
+    - Unmapped channels are kept at their default, and 24/32-bit and non-adjacent 16-bit channels are kept at default with a note.
+    - GeometryReference cells use the native cell tags, with the beam found on the referenced geometry.
+    - Mode-level problems leave only that mode out: a DMX break, overlaps, falling functions, too many cells.
+    - Capabilities: kind and category, colour system and emitters, wheels, prisms, shutter and strobe rates, pan and tilt limits, zoom, photometrics, body sizes, pivots and specs.
+    - The import report.
+  - **`StageCraft.Fixtures.GdtfProbe [folder]`** (Development only; default `Saved/GDTFCorpus`, which git ignores). For every `.gdtf` it logs the report and time, then the slowest file and the GDTF attributes most often kept at default or approximated.
+- Licensing: clean-room from the public spec. No third-party code or manufacturer files.
+
+**Files changed**
+- New, in `Source/ModularSceneBuilder/Private/Fixtures/`:
+  - `StageZipReader.h/.cpp`, `StageXmlReader.h/.cpp`;
+  - `StageGdtfTypes.h`, `StageGdtfParser.h/.cpp`, `StageGdtfUnits.h/.cpp`, `StageGdtfMapping.h/.cpp`, `StageGdtfConsoleCommands.cpp`;
+  - `Tests/StageGdtfTestFiles.h/.cpp`: a self-authored test spot with 3 modes, a pixel bar with N cells, and a ZIP writer;
+  - `Tests/StageGdtfTests.cpp`.
+- `Docs/ADR/0033-gdtf-fixture-import-and-device-library.md` (§8, §13, §14), `tasks/todo.md`, STATE.md.
+
+**Verification**
+- **Tests:** `RunAutomation.ps1 -ExpectedCount 246 -NullRHI` gives 246/246, user data unchanged (124 files). New tests: `StageCraft.Fixtures.Zip`, `.Xml`, `.GdtfParse`, `.GdtfUnits`, `.GdtfMapping`. The test log has no warnings.
+- **Builds:** Editor, Game Development and Game Shipping, 0 warnings.
+- **Shipping UTF-16 scan:** `StageCraft.Fixtures.GdtfProbe` is absent.
+- **Not verified:** real manufacturer files (G5 corpus), so the GeometryReference/Break and Position readings are implemented from the spec but not yet confirmed. The probe has not been run, since there is no corpus yet.
+
+**Commit:** uncommitted (working tree). #79 (ADR 0033) is also uncommitted.
+
+**Known issues / follow-ups**
+- Gevor: put about 20 real `.gdtf` files in `Saved/GDTFCorpus` and run `StageCraft.Fixtures.GdtfProbe` in a Development game or editor. I then confirm or fix the cell and position rules and fill in ADR §14's timings.
+- GD2 (runtime fixture types, the library subsystem, scene v12, 64 cells) is next. Nothing is reachable from the UI yet.
