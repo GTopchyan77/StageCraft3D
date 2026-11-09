@@ -8290,7 +8290,7 @@ All times in ms.
   - A real fixture or a visualiser receiving DMX OUT (ADR §13 asks Gevor to check one: Capture, or the grandMA3 onPC 3D view). **Implemented, awaiting manual verification.**
   - Real manufacturer files (G5 corpus still pending).
 
-**Commit:** uncommitted (working tree).
+**Commit:** `90e097e`.
 
 **Known issues / follow-ups**
 - Gevor: a visualiser or real-fixture check of an imported fixture's DMX OUT.
@@ -8390,10 +8390,78 @@ All times in ms.
   - The dialog, the cards, REMOVE and drag and drop in a running `-game` window. Widgets are covered through their pure text models and the request path only.
   - **Implemented, awaiting manual verification by Gevor.**
 
-**Commit:** uncommitted (working tree), together with #82.
+**Commit:** `06478bd` (GD4; GD3 itself is `90e097e`).
 
 **Known issues / follow-ups**
 - The Patch panel Mode column (ADR §10) is not built; the inspector's Type does the swap.
 - The Library card places the first mode, not the last one used.
 - Armenian UI tooltips need a localization target; Armenian is in the help article.
 - Replace is not an undo step; it is a confirmed library operation.
+
+## #84 — Step 0 (guiding decisions D1–D8) proposed; Step 1 audited against GD0–GD4 (2026-11-09)
+
+**What & why**
+- Gevor started a new roadmap (2026-11-09):
+  - Step 0: guiding decisions D1–D8, the Free/Pro boundary and the pricing structure;
+  - Step 1: GDTF import, multi-mode runtime device types and the device data model;
+  - Steps 2–6: MIDI/OSC, MVR, Download Manager and My Library, Web Remote, Stripe licensing tiers.
+- **Housekeeping first.** #82 and #83 said "uncommitted"; they now carry `90e097e` and `06478bd`.
+- **Step 1 is already built** as ADR 0033 GD0–GD4 (#80–#83). Still open from it:
+  - the Patch panel Mode column;
+  - the G5 real-file corpus check;
+  - GD5 glTF meshes (optional);
+  - the package `FIXT` section, which is roadmap Step 4;
+  - Gevor's manual DMX visualiser and `-game` UI checks.
+- **D1–D8 were proposed in chat and are not locked.** They cover tiers, the Pro boundary, pricing, licence enforcement and offline use, the payment provider and legal entity, online fixture sources, the scope and security of the control protocols, and the step order with MVR scope. They will be recorded as a new ADR once Gevor decides. They are separate from ADR 0032's marketplace D1–D8.
+
+**Files changed:** `STATE.md` only.
+
+**Verification:** none needed. No code changed.
+
+**Commit:** uncommitted (working tree).
+
+**Known issues / follow-ups**
+- Gevor locks D1–D8. Then: the ADR, then the Step 1 remainder or Step 2.
+
+## #85 — BuildAndRunStandalone: one command to package and start a real Win64 build for manual testing (2026-11-09)
+
+**What & why**
+- **Request.** Gevor asked (2026-11-09) for a script that builds and cooks the project into a temporary output folder and then starts the packaged executable. He will use it to test networking, Web Remote and file import manually in true binary conditions.
+- **Why a new script.** Until now, packaged builds were made by hand-typed `BuildCookRun` commands (#37, #70), and `Scripts/Tests/RunGameScripted.ps1` runs the uncooked `-game`.
+- **`BuildAndRunStandalone.ps1`** (project root):
+  - It runs RunUAT `BuildCookRun -platform=Win64 -clientconfig=<Config> -build -cook -stage -pak -prereqs -archive` into `Saved\StandaloneBuild\<Config>`. That folder is ignored by git.
+  - It then starts the real game binary, `Windows\ModularSceneBuilder\Binaries\Win64\ModularSceneBuilder[-Win64-Shipping].exe`, with `-windowed -ResX=1600 -ResY=900`, plus `-log` in Development.
+  - The `.exe` at the package root is only a launcher stub. Stopping the stub left the game running, so the script never uses it.
+  - **Switches:**
+    - `-Config Development|Shipping` (default Development);
+    - `-Clean`: empties the output folder and passes `-clean`, which rebuilds and re-cooks everything. Without it, the build and cook are incremental;
+    - `-NoLaunch`, `-SkipBuild`, `-GameArgs`, `-OutputDir`, `-EngineDir`.
+  - **Engine lookup:** `-EngineDir`, then `STAGECRAFT_ENGINE`, then the `.uproject` EngineAssociation from the registry, then `C:\Program Files\Epic Games\UE_5.8`.
+  - **Guards.**
+    - It refuses to package while the editor has this project open.
+    - It refuses to package or start while a packaged instance is still running from the output folder, because its files are locked.
+    - The full UAT output goes to `Saved\StandaloneBuild\Logs\BuildCookRun-<Config>.log`. The console shows only the phase lines, warnings and errors, followed by the warning and error counts and the duration.
+    - A failed build exits 1 and never starts the game.
+  - **User data:** the packaged game never touches the editor's user data. Development keeps its profile, scenes, fixture library and logs in a `Saved` folder next to the game. Shipping uses `%LOCALAPPDATA%ModularSceneBuilderSaved`, which earlier Shipping packages share. The launch message names the folder.
+- **`BuildAndRunStandalone.bat`:** a double-click wrapper. It passes its arguments through and pauses on failure.
+
+**Files changed**
+- New: `BuildAndRunStandalone.ps1`, `BuildAndRunStandalone.bat`.
+- Changed: `STATE.md`.
+
+**Verification** (Claude, 2026-11-09)
+- **Development, incremental:** BUILD SUCCESSFUL in 7.3 min, with 0 warning lines and 0 error lines (1172 packages: 1009 cooked, 163 skipped by platform). The game started on its own and loaded `L_StageTest`; its log has no warnings or errors.
+- **`-SkipBuild`:**
+  - With no package it exits 1 with the message.
+  - While a packaged game is running it exits 1 and names the PID.
+  - Otherwise it starts the real binary (the PID belongs to `Binaries\Win64\ModularSceneBuilder.exe`), which loads the map.
+- **Shipping:** BUILD SUCCESSFUL in 16 min, with 0 warning lines and 0 error lines. `-SkipBuild` started `ModularSceneBuilder-Win64-Shipping.exe` from `BinariesWin64`, and it was still responding after 20 s.
+- Test game windows were closed afterwards.
+- **Not verified:** the network and file-import checks themselves are Gevor's manual tests.
+
+**Commit:** uncommitted (working tree).
+
+**Known issues / follow-ups**
+- Web Remote does not exist yet; it is roadmap Step 5, waiting for #84's D1–D8.
+- On first use of Art-Net or sACN, Windows Firewall asks for the packaged executable separately from the editor.
+- Shipping has no console or log by design, so diagnose with Development.
