@@ -154,6 +154,19 @@ FStageEconomyResultInfo AStageCraftGameModeBase::EvaluateModelImport_Implementat
 	return FStageEconomyResultInfo::Ok();
 }
 
+FStageEconomyResultInfo AStageCraftGameModeBase::EvaluateFixtureImport_Implementation(const APlayerController* Player) const
+{
+	if (!Player)
+	{
+		return FStageEconomyResultInfo::Fail(EStageEconomyResult::InvalidRequest, LOCTEXT("CannotImportFixtures", "Fixture import is not available."));
+	}
+	if (!SessionRules.bAllowFixtureImport)
+	{
+		return FStageEconomyResultInfo::Fail(EStageEconomyResult::SessionRuleViolation, LOCTEXT("FixtureImportDisabled", "Importing fixture files is switched off for this session."));
+	}
+	return FStageEconomyResultInfo::Ok();
+}
+
 FStageEconomyResultInfo AStageCraftGameModeBase::EvaluateAudioRequest_Implementation(const APlayerController* Player, EStageAudioRequest Request) const
 {
 	if (!Player)

@@ -468,7 +468,7 @@ bool FStageSceneEffectAudioDataTest::RunTest(const FString& Parameters)
 	Document.ProgrammerEffects.Add(MakeSourced(FGuid::NewGuid(), Pulse, { 3 }).Entry);
 	Document.ProgrammerEffects.Add(MakeSourced(FGuid::NewGuid(), Plain, { 4 }).Entry);
 	const FString Saved = FStageSceneStore::Serialize(Document);
-	TestTrue(TEXT("Version 11"), Saved.Contains(TEXT("\"version\": 11")));
+	TestTrue(TEXT("The current version"), Saved.Contains(FString::Printf(TEXT("\"version\": %d"), FStageSceneStore::FormatVersion)));
 	int32 AudioObjects = 0;
 	for (int32 At = Saved.Find(TEXT("\"audio\""), ESearchCase::CaseSensitive); At != INDEX_NONE; At = Saved.Find(TEXT("\"audio\""), ESearchCase::CaseSensitive, ESearchDir::FromStart, At + 1))
 	{

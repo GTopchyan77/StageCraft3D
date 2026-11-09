@@ -8,7 +8,10 @@
 #include "Data/BaseItemData.h"
 #include "Engine/GameInstance.h"
 #include "Engine/World.h"
+#include "Data/LightingFixtureData.h"
 #include "Environment/StageEnvironmentSubsystem.h"
+#include "Fixtures/StageFixtureLibraryRules.h"
+#include "Fixtures/StageFixtureLibrarySubsystem.h"
 #include "History/StageEditHistorySubsystem.h"
 #include "Import/StageMeshImportSubsystem.h"
 #include "TimerManager.h"
@@ -111,7 +114,11 @@ FStageSceneDocument UStageSceneComponent::CaptureStage(const FString& Name) cons
 		// An item with no catalog entry could never be restored; it is not part of a scene.
 		if (Item && Item->GetItemData() && !Item->IsActorBeingDestroyed())
 		{
-			Document.Items.Add(Item->CaptureSnapshot());
+			FStageItemSnapshot& Snapshot = Document.Items.Add_GetRef(Item->CaptureSnapshot());
+			if (const ULightingFixtureData* Fixture = Cast<ULightingFixtureData>(Item->GetItemData()))
+			{
+				Snapshot.FixtureType = StageFixtureLibrary::MakeTypeRef(*Fixture);
+			}
 		}
 	}
 	// Items the last load could not place are still part of the scene; without them a save would delete them from the file.
@@ -288,7 +295,8 @@ EStageSceneResult UStageSceneComponent::StartLoad(ELoadSource Source, const FStr
 	}
 	// Imported models join the catalog when their import finishes; loading before that would skip their items as unknown.
 	const UStageMeshImportSubsystem* Imports = GameInstance->GetSubsystem<UStageMeshImportSubsystem>();
-	if (Imports && Imports->HasImportsInProgress())
+	const UStageFixtureLibrarySubsystem* Fixtures = GameInstance->GetSubsystem<UStageFixtureLibrarySubsystem>();
+	if ((Imports && Imports->HasImportsInProgress()) || (Fixtures && Fixtures->HasLoadsInProgress()))
 	{
 		return EStageSceneResult::ImportsPending;
 	}
@@ -415,6 +423,7 @@ FStageSceneOperationResult UStageSceneComponent::ApplyDocument(const FStageScene
 	int32 UnknownItems = 0;
 	int32 RefusedItems = 0;
 	TArray<FStageItemSnapshot> Unplaced;
+	TArray<FStageItemSnapshot> MissingLibraryItems;
 	for (const FStageItemSnapshot& Snapshot : Document.Items)
 	{
 		UBaseItemData* const* Item = Catalog.Find(Snapshot.Item.ToSoftObjectPath());
@@ -422,6 +431,10 @@ FStageSceneOperationResult UStageSceneComponent::ApplyDocument(const FStageScene
 		{
 			++UnknownItems;
 			Unplaced.Add(Snapshot);
+			if (Snapshot.FixtureType.IsSet())
+			{
+				MissingLibraryItems.Add(Snapshot);
+			}
 			continue;
 		}
 		// A pre-check of the item itself (ownership, item count). A span's full quantity is only known once its saved state is
@@ -444,6 +457,15 @@ FStageSceneOperationResult UStageSceneComponent::ApplyDocument(const FStageScene
 		}
 	}
 	UnplacedItems = MoveTemp(Unplaced);
+	const FText MissingTypes = StageFixtureLibrary::DescribeMissingTypes(MissingLibraryItems);
+	const auto WithMissingTypes = [&MissingTypes](const FText& Message)
+	{
+		return MissingTypes.IsEmpty() ? Message : FText::Format(LOCTEXT("WithMissingTypes", "{0} {1}"), Message, MissingTypes);
+	};
+	if (!MissingTypes.IsEmpty())
+	{
+		UE_LOG(LogStageCraft, Warning, TEXT("Scene \"%s\": %s"), *Document.Name, *MissingTypes.ToString());
+	}
 	Outcome.KeptCount = UnplacedItems.Num();
 	OriginListingId = Document.OriginListingId;
 	SceneWithDroppedEntries = Report.InvalidItems > 0 && Source == ELoadSource::SavedScene ? Document.Name : FString();
@@ -495,6 +517,7 @@ FStageSceneOperationResult UStageSceneComponent::ApplyDocument(const FStageScene
 		Outcome.Message = Outcome.SkippedCount == 0
 			? FText::Format(LOCTEXT("TemplateOpened", "Started a new stage from \"{0}\" ({1} items). Save it to keep your changes."), FText::FromString(Document.Name), FText::AsNumber(Outcome.ItemCount))
 			: FText::Format(LOCTEXT("TemplatePartial", "Started a new stage from \"{0}\": {1} items placed, {2} not available."), FText::FromString(Document.Name), FText::AsNumber(Outcome.ItemCount), FText::AsNumber(Outcome.SkippedCount));
+		Outcome.Message = WithMissingTypes(Outcome.Message);
 		UE_LOG(LogStageCraft, Log, TEXT("Starter stage \"%s\" opened: %d placed, %d refused, %d unknown, %d invalid."), *Document.Name, Outcome.ItemCount, RefusedItems, UnknownItems, Report.InvalidItems);
 		return Outcome;
 	}
@@ -509,6 +532,7 @@ FStageSceneOperationResult UStageSceneComponent::ApplyDocument(const FStageScene
 		Outcome.SkippedCount = Report.InvalidItems + UnknownItems + RefusedItems;
 		Outcome.Message = FText::Format(LOCTEXT("Recovered", "Recovered the autosave of \"{0}\" ({1} items, {2} skipped). Save it to keep the changes."),
 			bUntitled ? LOCTEXT("UntitledStage", "Untitled stage") : FText::FromString(Document.Name), FText::AsNumber(Outcome.ItemCount), FText::AsNumber(Outcome.SkippedCount));
+		Outcome.Message = WithMissingTypes(Outcome.Message);
 		UE_LOG(LogStageCraft, Log, TEXT("Autosave \"%s\" recovered: %d placed, %d refused, %d unknown, %d invalid."), *Document.Name,
 			Outcome.ItemCount, RefusedItems, UnknownItems, Report.InvalidItems);
 		return Outcome;
@@ -529,7 +553,7 @@ FStageSceneOperationResult UStageSceneComponent::ApplyDocument(const FStageScene
 	else
 	{
 		Session->MarkUnsaved();
-		Outcome.Message = MakePartialLoadMessage(Document.Name, Outcome, RefusedItems, UnknownItems, Report.InvalidItems);
+		Outcome.Message = WithMissingTypes(MakePartialLoadMessage(Document.Name, Outcome, RefusedItems, UnknownItems, Report.InvalidItems));
 	}
 
 	UE_LOG(LogStageCraft, Log, TEXT("Scene \"%s\" loaded: %d placed, %d refused, %d unknown, %d invalid, %d kept for saving, %d values repaired, %d ids repaired."), *Document.Name,
@@ -728,7 +752,7 @@ FText UStageSceneComponent::DescribeFailure(EStageSceneOperation Operation, ESta
 	case EStageSceneResult::CatalogNotReady:
 		return LOCTEXT("CatalogNotReady", "The Library is still loading. Try again in a moment.");
 	case EStageSceneResult::ImportsPending:
-		return LOCTEXT("ImportsPending", "Imported models are still loading. Try again in a moment.");
+		return LOCTEXT("ImportsPending", "Imported models or fixture types are still loading. Try again in a moment.");
 	case EStageSceneResult::Unavailable:
 		return LOCTEXT("Unavailable", "Scenes are not available in this level.");
 	case EStageSceneResult::Success:

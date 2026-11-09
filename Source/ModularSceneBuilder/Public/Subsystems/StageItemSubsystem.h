@@ -86,6 +86,8 @@ public:
 private:
 	// Imported models are added by the import subsystem only, after it has built and checked them.
 	friend class UStageMeshImportSubsystem;
+	// Device-library fixture types are added by the fixture library only, after it has parsed and built them (ADR 0033 §4.1).
+	friend class UStageFixtureLibrarySubsystem;
 
 	/**
 	 * Adds an item built at runtime. It stays in the catalog for the rest of the run, also when the catalog (re)loads.

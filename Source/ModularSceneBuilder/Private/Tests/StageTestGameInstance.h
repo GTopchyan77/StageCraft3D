@@ -48,6 +48,9 @@ struct FStageTestGameInstanceOptions
 	float OrderTimeoutSeconds = 300.f;
 	float ToolTimeoutSeconds = 120.f;
 	float SendTimeoutSeconds = 120.f;
+	/** Run against this existing folder instead of a fresh one, and leave it in place afterwards (the test deletes it). Lets a test start
+	 * a second game instance on the files the first one wrote, as the next run of the app would. Empty: a fresh folder. */
+	FString Root;
 };
 
 /**
@@ -105,6 +108,7 @@ private:
 
 	FString Root;
 	TUniquePtr<FStageScopedDataRoot> DataRoot;
+	bool bOwnsRoot = true;
 	TArray<TUniquePtr<FStageScopedDefault>> Defaults;
 	TStrongObjectPtr<class UGameInstance> GameInstance;
 	TWeakObjectPtr<class UWorld> World;

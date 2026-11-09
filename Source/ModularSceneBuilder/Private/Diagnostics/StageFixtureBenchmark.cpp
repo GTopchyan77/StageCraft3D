@@ -36,6 +36,7 @@
 #include "Engine/World.h"
 #include "HAL/FileManager.h"
 #include "HAL/IConsoleManager.h"
+#include "Fixtures/StageFixtureLibrarySubsystem.h"
 #include "Import/StageMeshImportSubsystem.h"
 #include "Misc/App.h"
 #include "Misc/FileHelper.h"
@@ -435,10 +436,11 @@ namespace StageFixtureBenchmark
 		{
 			const UGameInstance* GameInstance = World->GetGameInstance();
 			const UStageMeshImportSubsystem* Imports = GameInstance ? GameInstance->GetSubsystem<UStageMeshImportSubsystem>() : nullptr;
-			const int32 Pending = Imports ? Imports->GetPendingCount() : 0;
+			const UStageFixtureLibrarySubsystem* Fixtures = GameInstance ? GameInstance->GetSubsystem<UStageFixtureLibrarySubsystem>() : nullptr;
+			const int32 Pending = (Imports ? Imports->GetPendingCount() : 0) + (Fixtures && Fixtures->HasLoadsInProgress() ? 1 : 0);
 			if (Pending > 0 && !bLoggedImportWait)
 			{
-				UE_LOG(LogStageCraft, Display, TEXT("StageCraft.Bench: waiting for %d model import(s) to finish before measuring."), Pending);
+				UE_LOG(LogStageCraft, Display, TEXT("StageCraft.Bench: waiting for %d model or fixture import(s) to finish before measuring."), Pending);
 			}
 			bLoggedImportWait = Pending > 0;
 			return Pending > 0;

@@ -16,6 +16,7 @@
     powershell -ExecutionPolicy Bypass -File Scripts\Bench\RunFixtureBench.ps1 -Zoom 0
     powershell -ExecutionPolicy Bypass -File Scripts\Bench\RunFixtureBench.ps1 -Effects 1 -Audio
     powershell -ExecutionPolicy Bypass -File Scripts\Bench\RunFixtureBench.ps1 -Item DA_Fixture_Spot470
+    powershell -ExecutionPolicy Bypass -File Scripts\Bench\RunFixtureBench.ps1 -TestBarCells 64
 #>
 param(
     [int[]]$Counts = @(50, 200, 500),
@@ -36,6 +37,8 @@ param(
     [switch]$Audio,
     # Also stand an audience area of this many people under the fixtures (ADR 0031 section 6); 0 for none.
     [ValidateRange(0, 20000)][int]$Crowd = 0,
+    # Also add the self-authored test pixel bar with this many cells for the session (StageCraft.Fixtures.AddTestBar; ADR 0033 G4) and bench it; 0 for none.
+    [ValidateRange(0, 64)][int]$TestBarCells = 0,
     # Camera for the run as "X Y Z Pitch Yaw" (metres, degrees; StageCraft.View.Camera), so the crowd is in view; empty keeps the stage view.
     [string]$Camera = '',
     [int]$ResX = 1600,
@@ -61,11 +64,13 @@ if (Get-Process -Name 'UnrealEditor*' -ErrorAction SilentlyContinue) {
 
 $Log = Join-Path $ProjectRoot "Saved\Logs\$($Project.BaseName).log"
 $BenchCommand = "StageCraft.Bench.Fixtures $($Counts -join ' ') Seconds=$Seconds Fade=$Fade Zoom=$Zoom GM=$GM Effects=$Effects"
+if ($TestBarCells -gt 0) { $Item = 'Pixels' }
 if ($Item) { $BenchCommand += " Item=$Item" }
 if ($DMXOut) { $BenchCommand += " DMXOut=1" }
 if ($Audio) { $BenchCommand += " Audio=1" }
 if ($Crowd -gt 0) { $BenchCommand += " Crowd=$Crowd" }
 $ExecCmds = "StageCraft.Workspace.Delay $StartDelaySeconds $BenchCommand"
+if ($TestBarCells -gt 0) { $ExecCmds = "StageCraft.Workspace.Delay $($StartDelaySeconds - 2) StageCraft.Fixtures.AddTestBar $TestBarCells," + $ExecCmds }
 if ($Camera) { $ExecCmds = "StageCraft.Workspace.Delay $($StartDelaySeconds - 1) StageCraft.View.Camera $Camera," + $ExecCmds }
 
 Write-Host "Running: $BenchCommand"

@@ -324,3 +324,37 @@ GD0 and GD1 were done together on 2026-11-09, on self-authored files (STATE.md #
 - **Parse time and corpus quirks.** **Pending the corpus.**
   - Put the files in `Saved/GDTFCorpus` and run `StageCraft.Fixtures.GdtfProbe` (Development builds).
   - It logs every file's report and time, the slowest file, and the GDTF attributes most often kept at their default or approximated.
+
+## 15. GD2 implementation notes
+
+GD2 was built on 2026-11-09 (STATE.md #81). Where it settles a detail this ADR left open, or departs from it, it is recorded here.
+
+- **Classes.**
+  - `StageFixtureLibrary` (`Private/Fixtures/StageFixtureLibraryRules`) holds the pure rules: library paths, mode slugs, the stable item path, `IsFixtureItemPath`, the `Fixtures.json` reader and writer, and the missing-type sentence.
+  - `StageGdtfFixtureBuilder` fills a `ULightingFixtureData` from a parsed type, a capability set and one mode layout. It is a namespace, not a friend class, because the fixture properties are already public and `EditDefaultsOnly`.
+  - `UStageFixtureLibrarySubsystem` (`Public/Fixtures`) owns the types, restores them at start and imports files. It is a friend of `UStageItemSubsystem` for `AddRuntimeItem`.
+- **Paths.**
+  - The library folder is `Saved/StageCraft/Fixtures/`, and the index is `Fixtures/Fixtures.json`, in the same folder.
+  - Each mode's catalog path is `/Temp/StageCraftFixtures/<32 hex digits>/<Slug>.<Slug>`.
+  - Slugs are computed over **every** mode of the file, the unusable ones included, so a mode that cannot be imported never shifts the paths of the others.
+  - `IsFixtureItemPath` accepts only that exact shape.
+  - When the subsystem stops, it moves its objects out of these paths, so a later game instance in the same process (PIE, tests) can build them again.
+- **Unmapped channels now, encoding in GD3.**
+  - `FStageFixtureDMXChannel` gains `Label`. A channel StageCraft cannot drive is kept as a channel with no attribute and its GDTF attribute as the label, so `GetDMXFootprint`, the patch and the Patch panel show the mode's real footprint.
+  - Until GD3, such channels are sent as 0. GD3 adds `DefaultDMX` and the functions (§4.3).
+  - Fine bytes that do not follow their coarse byte, and third bytes, keep their slots the same way.
+- **Body.**
+  - Part sizes come from the file's models, with kind defaults where the file has none.
+  - Pivots and the beam origin follow the built-in fixtures' layout rule (`create_fixture_library_content.py`) from those sizes. The GDTF axis positions (§5.4) are parsed, but they are used only once the corpus confirms how they are read (§14).
+  - The base is the actor's root and cannot be scaled at runtime, so the library builds one transient box mesh per type, at its size. It has the basic-shape material and a simple collision box for picking.
+- **Replace and Remove** need the Library UI's confirmation (§7), so they move to GD4.
+  - Importing a `FixtureTypeID` the library already holds is refused with `AlreadyInLibrary`.
+  - Restricting `GetSwappableItems` to the modes of one type (§4.2) also moves to GD4, with the mode swap.
+- **64 cells (G4).** 32 more native cell tag sets. The per-fixture attribute limits of scenes, cues, palettes and the programmer go from 256 to 512, because a 64-cell RGBWA fixture with cell dimmers has 384 cell values plus its own.
+- **Development-only session types.**
+  - `StageCraft.Fixtures.AddTestBar <cells>` adds the self-authored test bar for one session and writes nothing.
+  - `RunFixtureBench.ps1 -TestBarCells 64` uses it for the 64-cell benchmark.
+- **Scene v12.**
+  - `fixtureType` is written for library items and read only for library paths. A bad reference is dropped, and the item still loads.
+  - Unknown library items are named in the load message by type and mode, and kept for the next save like any unknown item.
+  - Library fixtures make a scene `NotPortable` until step 4 (§9).

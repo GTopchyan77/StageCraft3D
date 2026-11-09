@@ -413,7 +413,8 @@ namespace StagePaletteRules
 {
 	inline constexpr int32 MaxPalettes = 999;
 	inline constexpr int32 MaxFixturesPerPalette = 4096;
-	inline constexpr int32 MaxAttributes = 256;
+	/** A 64-cell RGBWA fixture with dimmers has 384 cell values plus its own (ADR 0033 G4). */
+	inline constexpr int32 MaxAttributes = 512;
 	inline constexpr int32 MaxNameLength = 64;
 
 	/** The kind an attribute belongs to (never All). Unknown attributes count as Beam. */

@@ -242,8 +242,8 @@ bool FStageFixtureSuiteDataTest::RunTest(const FString& Parameters)
 			Mismatches += bRoundTrip ? 0 : 1;
 		}
 	}
-	TestEqual(TEXT("all 32 x 7 cell tags round-trip"), Mismatches, 0);
-	TestFalse(TEXT("cell 33 does not exist"), StageFixtureCells::GetCellAttribute(StageFixtureCells::MaxCells, EStageCellChannel::Dimmer).IsValid());
+	TestEqual(TEXT("all 64 x 7 cell tags round-trip"), Mismatches, 0);
+	TestFalse(TEXT("cell 65 does not exist"), StageFixtureCells::GetCellAttribute(StageFixtureCells::MaxCells, EStageCellChannel::Dimmer).IsValid());
 	TestFalse(TEXT("the master dimmer is not a cell"), StageFixtureCells::IsCellAttribute(StageCraftTags::Attribute_Dimmer));
 
 	// A 16-cell RGBW pixel bar: colour lives in the cells, one DMX block each after dimmer and shutter.

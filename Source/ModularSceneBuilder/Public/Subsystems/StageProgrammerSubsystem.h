@@ -32,7 +32,8 @@ class MODULARSCENEBUILDER_API UStageProgrammerSubsystem : public UWorldSubsystem
 public:
 	/** Bounds for values from untrusted sources (files, undo steps), the same as a cue's (FStageSceneStore). */
 	static constexpr int32 MaxFixtures = 4096;
-	static constexpr int32 MaxAttributesPerFixture = 256;
+	/** A 64-cell RGBWA fixture with dimmers has 384 cell values plus its own (ADR 0033 G4). */
+	static constexpr int32 MaxAttributesPerFixture = 512;
 
 	// --- Values ---
 

@@ -27,7 +27,7 @@ enum class EStageSceneResult : uint8
 	CatalogNotReady,
 	/** No stage session in this world (no session subsystem, spawn system or world). */
 	Unavailable,
-	/** Imported models are still being loaded, so the items made from them cannot be placed yet. */
+	/** Imported models or device-library fixture types are still being loaded, so the items made from them cannot be placed yet. */
 	ImportsPending,
 };
 

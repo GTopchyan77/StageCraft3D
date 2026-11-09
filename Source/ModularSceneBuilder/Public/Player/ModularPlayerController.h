@@ -629,6 +629,14 @@ public:
 	int32 RequestImportModelFiles(const TArray<FString>& Files);
 
 	/**
+	 * Imports GDTF fixture files into the device library (Docs/ADR/0033 §7): one Library fixture per DMX mode. The GameMode decides
+	 * whether imports are allowed; files that cannot be imported are reported on OnRequestRejected. Accepted files are read in the
+	 * background and report through UStageFixtureLibrarySubsystem::OnImportFinished. Returns how many files were accepted.
+	 */
+	UFUNCTION(BlueprintCallable, Category = "StageCraft|Requests")
+	int32 RequestImportFixtureFiles(const TArray<FString>& Files);
+
+	/**
 	 * Lets the user pick model files in the operating system's file dialog, then imports them as RequestImportModelFiles does.
 	 * The dialog is modal. Returns how many files were queued (0 when cancelled or when this build has no file dialog).
 	 */

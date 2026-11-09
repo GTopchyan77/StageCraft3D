@@ -72,6 +72,10 @@ public:
 	UFUNCTION(BlueprintNativeEvent, BlueprintCallable, Category = "StageCraft|Rules")
 	FStageEconomyResultInfo EvaluateModelImport(const APlayerController* Player) const;
 
+	/** May Player import GDTF fixture files into the device library? Off when SessionRules.bAllowFixtureImport is false. */
+	UFUNCTION(BlueprintNativeEvent, BlueprintCallable, Category = "StageCraft|Rules")
+	FStageEconomyResultInfo EvaluateFixtureImport(const APlayerController* Player) const;
+
 	/**
 	 * May Player change the audio-reactive source, file, transport or settings (Docs/ADR/0029 §5)? Allowed for any player by
 	 * default; a mode that must not listen to the PC's audio refuses here. Without a GameMode every audio request is refused.

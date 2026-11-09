@@ -190,6 +190,13 @@ struct MODULARSCENEBUILDER_API FStageFixtureDMXChannel
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "DMX")
 	bool b16Bit = false;
 
+	/**
+	 * The channel's name in its source file (a GDTF attribute such as "Focus1"), shown when no StageCraft attribute drives it.
+	 * Such a channel has an invalid Attribute: it keeps its slots in the footprint and is never written from an attribute.
+	 */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "DMX")
+	FName Label;
+
 	int32 GetWidth() const { return b16Bit ? 2 : 1; }
 };
 
@@ -215,6 +222,14 @@ public:
 	virtual EDataValidationResult IsDataValid(class FDataValidationContext& Context) const override;
 #endif
 	//~ End UObject Interface
+
+	//~ Begin UBaseItemData Interface
+	/** Library types are built in memory from their file and reference only loaded or engine objects. */
+	virtual bool RequiresAssetStreaming() const override { return !IsLibraryType(); }
+	//~ End UBaseItemData Interface
+
+	/** One mode of a fixture type from the user's device library (Docs/ADR/0033 §4.1), not a content asset. */
+	bool IsLibraryType() const { return FixtureTypeId.IsValid(); }
 
 	/** True if the fixture can be controlled on this attribute (derived from capabilities, not the DMX layout). */
 	UFUNCTION(BlueprintPure, Category = "Fixture")
@@ -437,7 +452,7 @@ public:
 	// --- Cells ---
 
 	/** Individually controlled cells (pixels, blinder lamps), laid along the cell strip. 1: a single-source fixture. */
-	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Cells", meta = (ClampMin = "1", ClampMax = "32"))
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Cells", meta = (ClampMin = "1", ClampMax = "64"))
 	int32 CellCount = 1;
 
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Cells", meta = (EditCondition = "CellCount > 1"))
@@ -486,6 +501,20 @@ public:
 
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "DMX", meta = (TitleProperty = "Attribute"))
 	TArray<FStageFixtureDMXChannel> DMXChannels;
+
+	// --- Source ---
+
+	/** The GDTF FixtureTypeID every mode of an imported type shares; invalid for built-in fixtures (Docs/ADR/0033 §4.2). */
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Source")
+	FGuid FixtureTypeId;
+
+	/** The format the type was built from: None for built-in fixtures, GDTF for the device library. */
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Source")
+	FName SourceFormat;
+
+	/** The fixture type's own name in its source file ("MegaSpot 470"), without the manufacturer; empty for built-in fixtures. */
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Source")
+	FString SourceTypeName;
 
 private:
 	const TArray<FStageGoboSlot>& GetWheel(EStageGoboWheel Wheel) const { return Wheel == EStageGoboWheel::Static ? StaticGoboWheel : GoboWheel; }

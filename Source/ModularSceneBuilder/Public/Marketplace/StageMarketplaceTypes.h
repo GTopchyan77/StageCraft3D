@@ -26,7 +26,7 @@ enum class EStageMarketplaceResult : uint8
 	HashMismatch,
 	/** A listing with this id is already published. */
 	AlreadyExists,
-	/** The scene contains items made from imported models, which exist only on the machine that imported them. */
+	/** The scene contains items made from imported models or GDTF fixture types, which exist only on the machine that imported them. */
 	NotPortable,
 	WriteFailed,
 	/** The same operation is still running for this listing (or another publish is running). */

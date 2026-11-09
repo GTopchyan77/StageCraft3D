@@ -32,8 +32,9 @@ DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FOnStageSceneOperationFinished, cons
  *  - Skipped unknown or refused items are kept here as snapshots and written back by every save and autosave, until another
  *    scene is loaded. Damaged entries cannot be kept; the first save over that scene's file backs the file up first (.bak).
  *  - A load that skipped, kept or repaired anything leaves the stage unsaved, so autosave and the exit prompt cover it.
- *  - A load waits for imported models: it is refused (ImportsPending) while UStageMeshImportSubsystem is still restoring or
- *    importing, because their items would otherwise count as unknown.
+ *  - A load waits for imported models and device-library fixture types: it is refused (ImportsPending) while
+ *    UStageMeshImportSubsystem or UStageFixtureLibrarySubsystem is still restoring or importing, because their items would
+ *    otherwise count as unknown. Unknown library fixtures are named in the message by type and mode (Docs/ADR/0033 §7.1).
  *
  * Autosave (Docs/ADR/0010-edit-rules-autosave-scene-v2.md §3): while the stage has unsaved changes, a looping timer writes it
  * every AutosaveIntervalSeconds to Saved/StageCraft/Scenes/Autosave/<scene name>.json ("(Untitled)" for a stage never saved),

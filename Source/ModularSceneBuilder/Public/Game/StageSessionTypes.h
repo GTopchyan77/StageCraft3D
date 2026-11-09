@@ -34,6 +34,10 @@ struct MODULARSCENEBUILDER_API FStageSessionRules
 	/** Users may import their own 3D models into the Library (drag and drop, Import Model...). Off for curated sessions. */
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Session")
 	bool bAllowModelImport = true;
+
+	/** Users may import GDTF fixture files into the device library (Docs/ADR/0033 §7). Off for curated sessions. */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Session")
+	bool bAllowFixtureImport = true;
 };
 
 /** Live totals of the stage, recomputed whenever an item is added, removed or changes type. */

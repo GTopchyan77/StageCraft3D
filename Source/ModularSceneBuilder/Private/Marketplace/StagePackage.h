@@ -85,7 +85,7 @@ namespace StagePackage
 	/** Success, or InvalidRequest when a field is out of its rules (§2.2). Call after NormalizeManifest. */
 	EStageMarketplaceResult ValidateManifest(const FStagePackageManifest& Manifest);
 
-	/** False when the scene contains items made from imported models (they exist only where they were imported). */
+	/** False when the scene contains items made from imported models or device-library fixtures (they exist only where they were imported; GDTF files travel with packages from step 4 of Docs/ADR/0033 §9). */
 	bool IsPortable(const FStageSceneDocument& Scene);
 
 	/** Distinct catalog paths of the scene's items, sorted. */

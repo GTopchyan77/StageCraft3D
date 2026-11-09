@@ -63,8 +63,11 @@ public:
 	 *    Older files load with no cue effects and no stops.
 	 *  - 11: an effect that follows the music holds "audio" {mode, band, amount, modulates, beatsPerCycle, response} (Docs/ADR/0029 §4),
 	 *    written only when its mode is not Off. Older files, and effects without it, load with audio Off.
+	 *  - 12: an item of a device-library fixture type (path under StageFixtureLibrary::PackageRoot) holds "fixtureType" {id,
+	 *    manufacturer, name, mode} (Docs/ADR/0033 §7.1), so a PC without that type can name the GDTF file to import. Older files
+	 *    have no such items and load unchanged; an unreadable reference is dropped and the item still loads.
 	 */
-	static constexpr int32 FormatVersion = 11;
+	static constexpr int32 FormatVersion = 12;
 	static constexpr int32 MaxGroups = StageFixtureGroupRules::MaxGroups;
 	/** The oldest version Parse still migrates. Older or newer files are refused as VersionMismatch and left untouched. */
 	static constexpr int32 MinReadableVersion = 1;
@@ -73,7 +76,8 @@ public:
 	static constexpr int32 MaxLabelLength = 256;
 	static constexpr int32 MaxCues = 2000;
 	static constexpr int32 MaxFixturesPerCue = 4096;
-	static constexpr int32 MaxAttributesPerFixture = 256;
+	/** A 64-cell RGBWA fixture with dimmers has 384 cell values plus its own (ADR 0033 G4). */
+	static constexpr int32 MaxAttributesPerFixture = 512;
 	/** The same limit every transform write uses (StageTransformRules::MaxCoordinate). */
 	static constexpr double MaxCoordinate = StageTransformRules::MaxCoordinate;
 

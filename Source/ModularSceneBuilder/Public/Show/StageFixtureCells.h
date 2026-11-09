@@ -21,13 +21,13 @@ enum class EStageCellChannel : uint8
 
 /**
  * Per-cell fixture attributes (Docs/ADR/0020-professional-fixture-suite.md §1). Each cell control is a registered gameplay tag
- * under StageCraft.Attribute (StageCraft.Attribute.Cell.01.ColorR ... Cell.32.ColorRGB), so cells are ordinary attributes:
+ * under StageCraft.Attribute (StageCraft.Attribute.Cell.01.ColorR ... Cell.64.ColorRGB), so cells are ordinary attributes:
  * cues record and fade them, scenes save them, DMX addresses them and the inspector lists them, with no path of their own.
  */
 namespace StageFixtureCells
 {
 	/** Cells a fixture can have. Every cell's tags exist, so the limit is fixed at compile time. */
-	constexpr int32 MaxCells = 32;
+	constexpr int32 MaxCells = 64;
 
 	/** Tag of a cell control; CellIndex is 0-based. Invalid tag for an out-of-range cell or channel. */
 	MODULARSCENEBUILDER_API FGameplayTag GetCellAttribute(int32 CellIndex, EStageCellChannel Channel);

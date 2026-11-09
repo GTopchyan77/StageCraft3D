@@ -5,6 +5,7 @@
 #include "Data/BaseItemData.h"
 #include "Dom/JsonObject.h"
 #include "Dom/JsonValue.h"
+#include "Fixtures/StageFixtureLibraryRules.h"
 #include "GameplayTagContainer.h"
 #include "HAL/FileManager.h"
 #include "Import/StageMeshImportTypes.h"
@@ -40,6 +41,10 @@ namespace StageSceneStore
 		const TCHAR* Rotation = TEXT("rotation");
 		const TCHAR* Scale = TEXT("scale");
 		const TCHAR* State = TEXT("state");
+
+		const TCHAR* FixtureType = TEXT("fixtureType");
+		const TCHAR* Manufacturer = TEXT("manufacturer");
+		const TCHAR* Mode = TEXT("mode");
 
 		// Version 2: the outdoor environment.
 		const TCHAR* Environment = TEXT("environment");
@@ -1148,15 +1153,32 @@ namespace StageSceneStore
 		{
 			return false;
 		}
-		// Only catalog paths: content items live under /Game, imported models under the import root. Membership in the catalog is
-		// checked when the scene is applied.
+		// Only catalog paths: content items live under /Game, imported models under the import root, device-library fixtures under
+		// the fixture root. Membership in the catalog is checked when the scene is applied.
 		const FSoftObjectPath Path(ItemPath);
 		const FString PackageName = Path.GetLongPackageName();
-		if (!Path.IsValid() || !(PackageName.StartsWith(TEXT("/Game/")) || StageMeshImport::IsImportedItemPath(PackageName)))
+		if (!Path.IsValid() || !(PackageName.StartsWith(TEXT("/Game/")) || StageMeshImport::IsImportedItemPath(PackageName) || StageFixtureLibrary::IsFixtureItemPath(PackageName)))
 		{
 			return false;
 		}
 		OutItem.Item = TSoftObjectPtr<UBaseItemData>(Path);
+
+		const TSharedPtr<FJsonObject>* TypeObject = nullptr;
+		FString TypeId;
+		if (StageFixtureLibrary::IsFixtureItemPath(PackageName) && Object.TryGetObjectField(Field::FixtureType, TypeObject)
+			&& (*TypeObject)->TryGetStringField(Field::Id, TypeId) && FGuid::Parse(TypeId, OutItem.FixtureType.Id) && OutItem.FixtureType.Id.IsValid())
+		{
+			(*TypeObject)->TryGetStringField(Field::Manufacturer, OutItem.FixtureType.Manufacturer);
+			(*TypeObject)->TryGetStringField(Field::Name, OutItem.FixtureType.Name);
+			(*TypeObject)->TryGetStringField(Field::Mode, OutItem.FixtureType.Mode);
+			OutItem.FixtureType.Manufacturer.LeftInline(StageFixtureLibrary::MaxRefTextLength);
+			OutItem.FixtureType.Name.LeftInline(StageFixtureLibrary::MaxRefTextLength);
+			OutItem.FixtureType.Mode.LeftInline(StageFixtureLibrary::MaxRefTextLength);
+		}
+		else
+		{
+			OutItem.FixtureType = FStageFixtureTypeRef();
+		}
 
 		double Location[3];
 		double Rotation[4];
@@ -1341,6 +1363,15 @@ FString FStageSceneStore::Serialize(const FStageSceneDocument& Document)
 		Object->SetArrayField(Field::Rotation, ToJsonArray({ Rotation.X, Rotation.Y, Rotation.Z, Rotation.W }));
 		Object->SetArrayField(Field::Scale, ToJsonArray({ Scale.X, Scale.Y, Scale.Z }));
 		Object->SetStringField(Field::State, FBase64::Encode(Item.SavedProperties));
+		if (Item.FixtureType.IsSet())
+		{
+			const TSharedRef<FJsonObject> Type = MakeShared<FJsonObject>();
+			Type->SetStringField(Field::Id, Item.FixtureType.Id.ToString(EGuidFormats::DigitsWithHyphens));
+			Type->SetStringField(Field::Manufacturer, Item.FixtureType.Manufacturer);
+			Type->SetStringField(Field::Name, Item.FixtureType.Name);
+			Type->SetStringField(Field::Mode, Item.FixtureType.Mode);
+			Object->SetObjectField(Field::FixtureType, Type);
+		}
 		Items.Add(MakeShared<FJsonValueObject>(Object));
 	}
 

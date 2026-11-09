@@ -4,6 +4,7 @@
 
 #include "Dom/JsonObject.h"
 #include "Dom/JsonValue.h"
+#include "Fixtures/StageFixtureLibraryRules.h"
 #include "Import/StageMeshImportTypes.h"
 #include "Memory/MemoryView.h"
 #include "Misc/Compression.h"
@@ -370,7 +371,8 @@ bool StagePackage::IsPortable(const FStageSceneDocument& Scene)
 {
 	return !Scene.Items.ContainsByPredicate([](const FStageItemSnapshot& Item)
 	{
-		return StageMeshImport::IsImportedItemPath(Item.Item.ToSoftObjectPath().GetLongPackageName());
+		const FString Package = Item.Item.ToSoftObjectPath().GetLongPackageName();
+		return StageMeshImport::IsImportedItemPath(Package) || StageFixtureLibrary::IsFixtureItemPath(Package);
 	});
 }
 

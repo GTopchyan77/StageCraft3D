@@ -43,7 +43,7 @@ namespace StageMarketplace
 		case EStageMarketplaceResult::TooLarge: return LOCTEXT("Result_TooLarge", "The package is too large.");
 		case EStageMarketplaceResult::HashMismatch: return LOCTEXT("Result_HashMismatch", "The package was damaged in transit or on disk.");
 		case EStageMarketplaceResult::AlreadyExists: return LOCTEXT("Result_AlreadyExists", "This package is already published.");
-		case EStageMarketplaceResult::NotPortable: return LOCTEXT("Result_NotPortable", "The stage contains imported models, which exist only on this computer.");
+		case EStageMarketplaceResult::NotPortable: return LOCTEXT("Result_NotPortable", "The stage contains imported models or GDTF fixture types, which exist only on this computer.");
 		case EStageMarketplaceResult::WriteFailed: return LOCTEXT("Result_WriteFailed", "The file could not be written.");
 		case EStageMarketplaceResult::Busy: return LOCTEXT("Result_Busy", "This is already in progress.");
 		case EStageMarketplaceResult::BackendUnavailable: return LOCTEXT("Result_BackendUnavailable", "The marketplace is not available.");

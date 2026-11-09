@@ -836,20 +836,26 @@ namespace StageGdtfMapping
 		{
 			Caps.Kind = EStageFixtureKind::LEDPar;
 		}
-		switch (Caps.Kind)
+		Caps.Category = CategoryForKind(Caps.Kind);
+		const bool bConventionalBeam = BeamType == EStageGdtfBeamType::Fresnel || BeamType == EStageGdtfBeamType::PC || BeamType == EStageGdtfBeamType::Spot;
+		Caps.bAcceptsGel = Caps.ColorSystem == EStageFixtureColorSystem::None && !Caps.bHasPanTilt && Caps.CellCount <= 1 && bConventionalBeam;
+		return Caps;
+	}
+
+	FGameplayTag CategoryForKind(EStageFixtureKind Kind)
+	{
+		using namespace StageCraftTags;
+		switch (Kind)
 		{
 		case EStageFixtureKind::MovingHeadSpot:
 		case EStageFixtureKind::MovingHeadBeam:
 		case EStageFixtureKind::MovingHeadWash:
-		case EStageFixtureKind::MovingHeadHybrid: Caps.Category = Category_Lighting_MovingHead; break;
-		case EStageFixtureKind::Strobe: Caps.Category = Category_Lighting_Strobe; break;
-		case EStageFixtureKind::PixelBar: Caps.Category = Category_Lighting_Pixel; break;
-		case EStageFixtureKind::LEDPar: Caps.Category = Category_Lighting_Par; break;
-		default: Caps.Category = Category_Lighting_Conventional; break;
+		case EStageFixtureKind::MovingHeadHybrid: return Category_Lighting_MovingHead;
+		case EStageFixtureKind::Strobe: return Category_Lighting_Strobe;
+		case EStageFixtureKind::PixelBar: return Category_Lighting_Pixel;
+		case EStageFixtureKind::LEDPar: return Category_Lighting_Par;
+		default: return Category_Lighting_Conventional;
 		}
-		const bool bConventionalBeam = BeamType == EStageGdtfBeamType::Fresnel || BeamType == EStageGdtfBeamType::PC || BeamType == EStageGdtfBeamType::Spot;
-		Caps.bAcceptsGel = Caps.ColorSystem == EStageFixtureColorSystem::None && !Caps.bHasPanTilt && Caps.CellCount <= 1 && bConventionalBeam;
-		return Caps;
 	}
 
 	FStageGdtfImportReport BuildReport(const FStageGdtfParseResult& Parsed, TConstArrayView<FStageGdtfModeLayout> Layouts, const FStageGdtfCapabilities& Capabilities)

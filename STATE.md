@@ -8003,7 +8003,7 @@ All times in ms.
 
 **Verification:** a design document only. No code was changed, so no build or test was run.
 
-**Commit:** uncommitted (working tree). This entry also carries #78's hash, `355dcad`.
+**Commit:** `f58e865` (together with #80). This entry also carries #78's hash, `355dcad`.
 
 **Known issues / follow-ups**
 - GD0 needs Gevor's corpus files (G5): about 20 real .gdtf files from GDTF Share, in a local folder that is not committed.
@@ -8058,8 +8058,143 @@ All times in ms.
 - **Shipping UTF-16 scan:** `StageCraft.Fixtures.GdtfProbe` is absent.
 - **Not verified:** real manufacturer files (G5 corpus), so the GeometryReference/Break and Position readings are implemented from the spec but not yet confirmed. The probe has not been run, since there is no corpus yet.
 
-**Commit:** uncommitted (working tree). #79 (ADR 0033) is also uncommitted.
+**Commit:** `f58e865` (together with #79).
 
 **Known issues / follow-ups**
 - Gevor: put about 20 real `.gdtf` files in `Saved/GDTFCorpus` and run `StageCraft.Fixtures.GdtfProbe` in a Development game or editor. I then confirm or fix the cell and position rules and fill in ADR §14's timings.
 - GD2 (runtime fixture types, the library subsystem, scene v12, 64 cells) is next. Nothing is reachable from the UI yet.
+
+## #81 — GDTF GD2: runtime fixture types, device library, scene v12, 64 cells (ADR 0033; 2026-11-09)
+
+**What & why**
+- Gevor asked (2026-11-09) for GD2 of ADR 0033:
+  - build runtime fixture types from parsed GDTF files;
+  - keep them in a device library with stable catalog paths;
+  - save them in scenes (v12), with v11 still loading and missing types reported;
+  - raise the cell limit to 64, with a benchmark;
+  - test all of it.
+- **Builder** (`Private/Fixtures/StageGdtfFixtureBuilder`):
+  - It fills one `ULightingFixtureData` per usable DMX mode from the GD1 parse, layout and capabilities. That covers:
+    - the name, "Manufacturer Name (Mode)";
+    - specs, kind and category. A kind correction moves the category; `StageGdtfMapping::CategoryForKind` was extracted for this;
+    - colour, wheels, prisms, optics, cells, pan and tilt, body and DMX channels.
+  - **Unmapped channels keep their slots,** as channels with no attribute and the GDTF attribute as their label (the new `FStageFixtureDMXChannel::Label`). So the footprint is the mode's real one. These channels send 0 until GD3.
+    - A fine byte that does not directly follow its coarse byte keeps its slot the same way, and so do third bytes.
+  - **Body.**
+    - Body sizes come from the file's models, with kind defaults otherwise.
+    - Pivots and the beam origin use the built-in layout rule until the corpus confirms how GDTF positions are read.
+    - The base is the actor's root and cannot be scaled at runtime, so each type gets a transient box mesh built at size. It has the basic-shape material and a simple collision box for picking.
+- **`UStageFixtureLibrarySubsystem`** (GameInstance; `Public/Fixtures`):
+  - **Import.**
+    - Refused at once: the wrong format, a missing file, a file over 50 MB, or a file already importing.
+    - The file is read and parsed on a worker, then registered on the game thread. The subsystem is a friend of `UStageItemSubsystem::AddRuntimeItem`.
+    - The file is copied to `Saved/StageCraft/Fixtures/<id>.gdtf`, and `Fixtures/Fixtures.json` is written (v1: source file name, import time, kind correction). Both writes go through an ordered pipe.
+  - **Start-up.** Every library file is restored on a worker. `HasLoadsInProgress()` makes a scene load wait (`ImportsPending`), as model imports do.
+  - **Duplicates.** A FixtureTypeID already in the library is refused (`AlreadyInLibrary`). Replace and Remove need the Library UI, so they move to GD4.
+  - **Shutdown.** Deinitialize moves its objects out of their paths, so a later game instance in the same process builds them again.
+  - **Request path:** `AModularPlayerController::RequestImportFixtureFiles` → `AStageCraftGameModeBase::EvaluateFixtureImport` (`SessionRules.bAllowFixtureImport`; denied without a GameMode) → the subsystem. There is no UI yet (GD4).
+- **Stable paths** (`Private/Fixtures/StageFixtureLibraryRules`):
+  - Each mode's path is `/Temp/StageCraftFixtures/<32 hex>/<Slug>.<Slug>`.
+  - Slugs are computed over every mode of the file, the unusable ones too, so the same file gives the same paths in every run.
+  - `IsFixtureItemPath` accepts only that shape.
+- **Scene v12** (`StageSceneStore`):
+  - Library items write `fixtureType` {id, manufacturer, name, mode}.
+  - It is read only on library paths. A bad reference is dropped while the item still loads, and texts are cut to 256 characters.
+  - v1–v11 files load unchanged.
+  - Unknown library items are named in the load message, for example "StageCraft Test Spot (Standard) is missing. Import its GDTF file to see these 3 fixtures." This applies to saved scenes, autosaves and starter stages. The message is also logged, and the items are kept with their reference for the next save.
+  - Library fixtures make a scene `NotPortable` until packages carry GDTF files (ADR §9).
+- **64 cells (G4):**
+  - `StageFixtureCells::MaxCells` is 64, with 32 more native tag sets, and `CellCount` ClampMax is 64.
+  - The per-fixture attribute caps (scene, cue and palette `StagePaletteRules::MaxAttributes`, programmer) go from 256 to 512, because a 64-cell RGBWA fixture with dimmers has 384 cell values.
+- **Patch panel** shows a channel's label when it has no attribute.
+- **Development only:**
+  - `StageCraft.Fixtures.AddTestBar <cells>` adds a test bar for the session only; nothing is written.
+  - `RunFixtureBench.ps1 -TestBarCells N` benches it.
+  - The bench also waits for the fixture library.
+- **Tests:**
+  - `FStageTestGameInstanceOptions::Root` runs a test game instance on an existing folder, which the test deletes. The two-run test uses it.
+  - `StageCraft.Scene.EffectAudioData` checked for `"version": 11` literally; it now checks the current version.
+- ADR 0033 §15 records these decisions.
+
+**Files changed**
+- **New:**
+  - `Private/Fixtures/`: `StageFixtureLibraryRules.h/.cpp`, `StageGdtfFixtureBuilder.h/.cpp`, `StageFixtureLibrarySubsystem.cpp`, `Tests/StageFixtureLibraryTests.cpp`;
+  - `Public/Fixtures/`: `StageFixtureLibraryTypes.h`, `StageFixtureLibrarySubsystem.h`.
+- **Changed, by area:**
+  - Fixture data and cells:
+    - `Public/Data/LightingFixtureData.h`: Label, FixtureTypeId, SourceFormat, SourceTypeName, IsLibraryType, RequiresAssetStreaming, CellCount 64;
+    - `Public/Show/StageFixtureCells.h`, `Private/Show/StageFixtureCells.cpp`.
+  - Limits and catalog:
+    - `Public/Show/ShowControlTypes.h`;
+    - `Public/Subsystems/StageProgrammerSubsystem.h`;
+    - `Public/Subsystems/StageItemSubsystem.h`.
+  - Scenes:
+    - `Public/History/StageItemSnapshot.h` (FStageFixtureTypeRef);
+    - `Private/Scene/StageSceneStore.h/.cpp`;
+    - `Private/Scene/StageSceneComponent.cpp`, `Public/Scene/StageSceneComponent.h`, `Public/Scene/StageSceneTypes.h`.
+  - Marketplace:
+    - `Private/Marketplace/StagePackage.h/.cpp`, `StageMarketplaceSubsystem.cpp`;
+    - `Public/Marketplace/StageMarketplaceTypes.h`.
+  - Rules and requests:
+    - `Public/Game/StageCraftGameModeBase.h`, `Private/Game/StageCraftGameModeBase.cpp`, `Public/Game/StageSessionTypes.h`;
+    - `Public/Player/ModularPlayerController.h`, `Private/Player/ModularPlayerController.cpp`.
+  - UI, GDTF and diagnostics:
+    - `Private/UI/StagePatchPanel.cpp`;
+    - `Private/Fixtures/StageGdtfMapping.h/.cpp`, `StageGdtfConsoleCommands.cpp`;
+    - `Private/Diagnostics/StageFixtureBenchmark.cpp`.
+  - Tests:
+    - `Private/Tests/StageTestGameInstance.h/.cpp`;
+    - `Private/Show/Tests/StageFixtureSuiteTests.cpp`, `StageAudioEffectTests.cpp`.
+  - Scripts and records:
+    - `Scripts/Bench/RunFixtureBench.ps1`;
+    - `Docs/ADR/0033-…md` (§15), `tasks/todo.md`;
+    - STATE.md: #79 and #80 now carry `f58e865`.
+
+**Verification**
+- **Tests.** `RunAutomation.ps1 -ExpectedCount 250 -NullRHI` gives 250/250, with user data unchanged (124 files).
+  - New tests:
+    - `StageCraft.Fixtures.LibraryRules`: slugs, paths, hostile paths, the index file, the missing-type wording.
+    - `.Builder`:
+      - spot modes, footprints, unmapped and wide channels, kind correction;
+      - the 64-cell bar with footprint 193;
+      - base mesh bounds and collision.
+    - `.Library`, on a real isolated game instance:
+      - refusals;
+      - importing the spot, the 64-cell bar and a damaged file;
+      - catalog registration, library copies and the index;
+      - a second game instance on the same folder restores the same paths.
+    - `StageCraft.Scene.FixtureTypes`:
+      - the v12 round trip, and kept items re-saved with their reference;
+      - v11 loads and v13 is refused;
+      - hostile references and forged paths;
+      - library fixtures are not portable.
+  - The test log shows only the expected refusal lines. Parsing takes 0.4–0.8 ms per self-written file on a worker.
+- **Builds:** Editor, Game Development and Game Shipping, 0 warnings.
+- **Shipping UTF-16 scan:** `StageCraft.Fixtures.AddTestBar`, `StageCraft.Fixtures.GdtfProbe` and `StageCraft.Bench.Fixtures` are absent. The missing-type text is present.
+- **Benchmark (ADR §13):** DA_Fixture_PixelBar16, Effects 1.
+  - **The main tree against a baseline worktree at `f58e865`** showed the main tree 5–8 % slower on show tick at 500 fixtures, over five runs.
+  - **The same code built in a second clean worktree matched the baseline** over three alternating runs: 500 crossfade 9.40 vs 9.47 ms, idle 4.57 vs 4.51 ms.
+  - So the gap comes from the main tree's environment (user imports and settings), not the GD2 code. Nothing per-frame changed in this phase.
+  - **64-cell test bar** (193 channels, `-TestBarCells 64`), two runs:
+
+    | Bars | Phase | Show tick | Game thread |
+    |---|---|---|---|
+    | 200 | idle | 3.7–4.2 ms | – |
+    | 200 | crossfade | 8.0–8.4 ms | 14.2–14.8 ms |
+    | 500 | idle | 9.3–9.4 ms | – |
+    | 500 | crossfade | 19.8–19.9 ms | 27.5–27.9 ms (about 36 fps) |
+
+    - The cost scales with the number of cell values.
+    - CuesStarted is 5 per crossfade phase, so the fades are real Gos.
+- **Not verified:**
+  - The missing-type message through a real scene load. It is wired in `UStageSceneComponent::ApplyDocument`, but only the pure function is tested.
+  - A placed library fixture's look in a `-game` run.
+  - Real manufacturer files: the G5 corpus is still pending.
+
+**Commit:** uncommitted (working tree).
+
+**Known issues / follow-ups**
+- **GD3:** DMX functions and `DefaultDMX`. Until then, unmapped channels send 0.
+- **GD4:** the UI, Replace and Remove, and the mode swap limited to one type's modes.
+- **Large 64-cell rigs** (500 bars = 32,000 pixels) cost about 20 ms of show tick in a crossfade. This is a target for the pixel-mapping phase.
+- **Gevor's G5 corpus** and the probe run are still the gate for confirming the cell and position rules.

@@ -8,6 +8,9 @@
 
 #if !UE_BUILD_SHIPPING
 
+#include "Engine/GameInstance.h"
+#include "Engine/World.h"
+#include "Fixtures/StageFixtureLibrarySubsystem.h"
 #include "Fixtures/StageGdtfMapping.h"
 #include "Fixtures/StageGdtfParser.h"
 #include "HAL/FileManager.h"
@@ -15,6 +18,10 @@
 #include "Misc/FileHelper.h"
 #include "Misc/Paths.h"
 #include "ModularSceneBuilder.h"
+#include "Show/StageFixtureCells.h"
+#if WITH_DEV_AUTOMATION_TESTS
+#include "Fixtures/Tests/StageGdtfTestFiles.h"
+#endif
 
 namespace StageGdtfConsoleCommands
 {
@@ -100,6 +107,28 @@ namespace StageGdtfConsoleCommands
 	FAutoConsoleCommand ProbeCommand(TEXT("StageCraft.Fixtures.GdtfProbe"),
 		TEXT("Reads every .gdtf in a folder (default Saved/GDTFCorpus) and logs the import report, timings and unmapped attributes. Development only."),
 		FConsoleCommandWithArgsDelegate::CreateStatic(&Probe));
+
+#if WITH_DEV_AUTOMATION_TESTS
+	void AddTestBar(const TArray<FString>& Args, UWorld* World)
+	{
+		const int32 Pixels = Args.IsEmpty() ? StageFixtureCells::MaxCells : FCString::Atoi(*Args[0]);
+		UGameInstance* GameInstance = World ? World->GetGameInstance() : nullptr;
+		UStageFixtureLibrarySubsystem* Library = GameInstance ? GameInstance->GetSubsystem<UStageFixtureLibrarySubsystem>() : nullptr;
+		if (!Library || Pixels < 1 || Pixels > StageFixtureCells::MaxCells)
+		{
+			UE_LOG(LogStageCraft, Display, TEXT("StageCraft.Fixtures.AddTestBar <1..%d>: needs a game world and a pixel count in range."), StageFixtureCells::MaxCells);
+			return;
+		}
+		const FStageFixtureImportOutcome Outcome = Library->AddSessionType(StageGdtfTestFiles::MakeGdtf(StageGdtfTestFiles::BarXml(Pixels)), FString::Printf(TEXT("Test Bar %d"), Pixels));
+		const ULightingFixtureData* Mode = Outcome.Modes.IsEmpty() ? nullptr : Outcome.Modes[0].Get();
+		UE_LOG(LogStageCraft, Display, TEXT("StageCraft.Fixtures.AddTestBar: %s %s"), *Outcome.Message.ToString(),
+			Mode ? *FString::Printf(TEXT("Bench it with Item=%s (%d cells, %d channels)."), *Mode->GetName(), Mode->CellCount, Mode->GetDMXFootprint()) : TEXT(""));
+	}
+
+	FAutoConsoleCommandWithWorldAndArgs AddTestBarCommand(TEXT("StageCraft.Fixtures.AddTestBar"),
+		TEXT("Adds the self-authored test pixel bar with N cells (default the maximum) to the Library for this session only; nothing is written. Development only."),
+		FConsoleCommandWithWorldAndArgsDelegate::CreateStatic(&AddTestBar));
+#endif
 }
 
 #endif

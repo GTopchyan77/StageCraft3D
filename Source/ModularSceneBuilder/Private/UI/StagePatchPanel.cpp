@@ -935,7 +935,9 @@ void UStagePatchPanel::RebuildChannelMap()
 			: FText::Format(LOCTEXT("ModeChannel", "ch {0}"), Channel.Channel);
 		AddCell(*MakeText(Address, 8, TEXT("Bold"), Palette.TextSecondary), ChannelAddressWidth, 0.f);
 
-		const FString AttributeName = Channel.Attribute.GetTagName().ToString().RightChop(FString(TEXT("StageCraft.Attribute.")).Len());
+		const FString AttributeName = Channel.Attribute.IsValid()
+			? Channel.Attribute.GetTagName().ToString().RightChop(FString(TEXT("StageCraft.Attribute.")).Len())
+			: Channel.Label.ToString();
 		UTextBlock* Name = MakeText(FText::FromString(AttributeName), 8, TEXT("Regular"),
 			Data->SupportsAttribute(Channel.Attribute) ? Palette.TextPrimary : Palette.TextDisabled);
 		Name->SetTextOverflowPolicy(ETextOverflowPolicy::Ellipsis);

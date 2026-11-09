@@ -41,6 +41,7 @@
 #include "History/StageShowCommands.h"
 #include "History/StageItemSnapshot.h"
 #include "Import/StageFileDialog.h"
+#include "Fixtures/StageFixtureLibrarySubsystem.h"
 #include "Import/StageMeshImportSubsystem.h"
 #include "Input/StageInputPreferencesSubsystem.h"
 #include "Input/StageShortcutRouting.h"
@@ -2574,6 +2575,30 @@ int32 AModularPlayerController::RequestImportModelFiles(const TArray<FString>& F
 		const FText Message = Refusals.Num() == 1
 			? Refusals[0].Message
 			: FText::Format(LOCTEXT("SeveralRefused", "{0} (and {1} more files were not imported)"), Refusals[0].Message, FText::AsNumber(Refusals.Num() - 1));
+		ReportRejection(FStageEconomyResultInfo::Fail(EStageEconomyResult::InvalidRequest, Message));
+	}
+	return Files.Num() - Refusals.Num();
+}
+
+int32 AModularPlayerController::RequestImportFixtureFiles(const TArray<FString>& Files)
+{
+	const AStageCraftGameModeBase* GameMode = GetStageGameMode();
+	UStageFixtureLibrarySubsystem* Library = GetGameInstance() ? GetGameInstance()->GetSubsystem<UStageFixtureLibrarySubsystem>() : nullptr;
+	const FStageEconomyResultInfo Verdict = GameMode && Library
+		? GameMode->EvaluateFixtureImport(this)
+		: FStageEconomyResultInfo::Fail(EStageEconomyResult::InvalidRequest, LOCTEXT("NoFixtureImport", "Fixture import needs the StageCraft game mode."));
+	if (!Verdict.IsSuccess())
+	{
+		ReportRejection(Verdict);
+		return 0;
+	}
+
+	const TArray<FStageFixtureImportOutcome> Refusals = Library->RequestImport(Files);
+	if (!Refusals.IsEmpty())
+	{
+		const FText Message = Refusals.Num() == 1
+			? Refusals[0].Message
+			: FText::Format(LOCTEXT("SeveralFixturesRefused", "{0} (and {1} more files were not imported)"), Refusals[0].Message, FText::AsNumber(Refusals.Num() - 1));
 		ReportRejection(FStageEconomyResultInfo::Fail(EStageEconomyResult::InvalidRequest, Message));
 	}
 	return Files.Num() - Refusals.Num();

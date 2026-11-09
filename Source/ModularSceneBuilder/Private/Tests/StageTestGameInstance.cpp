@@ -58,7 +58,8 @@ FStageScopedDefault::~FStageScopedDefault()
 // --- FStageTestGameInstance ---
 
 FStageTestGameInstance::FStageTestGameInstance(const FStageTestGameInstanceOptions& Options)
-	: Root(FPaths::ConvertRelativePathToFull(FPaths::Combine(FPaths::AutomationTransientDir(), TEXT("StageGameInstance"), FGuid::NewGuid().ToString())))
+	: Root(Options.Root.IsEmpty() ? FPaths::ConvertRelativePathToFull(FPaths::Combine(FPaths::AutomationTransientDir(), TEXT("StageGameInstance"), FGuid::NewGuid().ToString())) : Options.Root)
+	, bOwnsRoot(Options.Root.IsEmpty())
 {
 	IFileManager::Get().MakeDirectory(*Root, /*Tree*/ true);
 	DataRoot = MakeUnique<FStageScopedDataRoot>(Root);
@@ -104,7 +105,10 @@ FStageTestGameInstance::~FStageTestGameInstance()
 	Shutdown();
 	Defaults.Reset();
 	DataRoot.Reset();
-	IFileManager::Get().DeleteDirectory(*Root, /*RequireExists*/ false, /*Tree*/ true);
+	if (bOwnsRoot)
+	{
+		IFileManager::Get().DeleteDirectory(*Root, /*RequireExists*/ false, /*Tree*/ true);
+	}
 }
 
 void FStageTestGameInstance::Shutdown()

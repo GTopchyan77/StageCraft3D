@@ -213,6 +213,9 @@ namespace StageGdtfMapping
 	/** The fixture's capabilities from the usable layouts (and the geometry, beam, wheels and emitters they use). */
 	FStageGdtfCapabilities DeriveCapabilities(const FStageGdtfFixtureType& Type, TConstArrayView<FStageGdtfModeLayout> Layouts);
 
+	/** The Library category of a fixture kind (ADR 0033 §5.6). */
+	FGameplayTag CategoryForKind(EStageFixtureKind Kind);
+
 	/** The report for a parsed file and its layouts. */
 	FStageGdtfImportReport BuildReport(const FStageGdtfParseResult& Parsed, TConstArrayView<FStageGdtfModeLayout> Layouts, const FStageGdtfCapabilities& Capabilities);
 }
