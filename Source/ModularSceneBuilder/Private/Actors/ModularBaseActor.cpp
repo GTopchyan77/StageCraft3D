@@ -68,7 +68,7 @@ void AModularBaseActor::GetSwappableItems(TArray<UBaseItemData*>& OutItems) cons
 	// so a moving head can become another moving head but never a speaker.
 	for (UBaseItemData* Candidate : Catalog->GetCatalog())
 	{
-		if (Candidate && Candidate->GetClass() == ItemData->GetClass() && Candidate->ItemType == ItemData->ItemType)
+		if (Candidate && Candidate->GetClass() == ItemData->GetClass() && Candidate->ItemType == ItemData->ItemType && ItemData->CanSwapWith(*Candidate))
 		{
 			OutItems.Add(Candidate);
 		}
@@ -79,6 +79,23 @@ void AModularBaseActor::GetSwappableItems(TArray<UBaseItemData*>& OutItems) cons
 	{
 		OutItems.Insert(ItemData, 0);
 	}
+}
+
+UBaseItemData* AModularBaseActor::ResolveSwapTarget(const FStageParameterValue& Value) const
+{
+	TArray<UBaseItemData*> Swappable;
+	GetSwappableItems(Swappable);
+	if (Value.Type == EStageParameterType::Enum)
+	{
+		return Swappable.IsValidIndex(Value.Integer) ? Swappable[Value.Integer] : nullptr;
+	}
+	if (Value.Type == EStageParameterType::Text)
+	{
+		const FString Path = Value.Text.ToString();
+		UBaseItemData* const* Match = Swappable.FindByPredicate([&Path](const UBaseItemData* Item) { return Item->GetPathName().Equals(Path, ESearchCase::CaseSensitive); });
+		return Match ? *Match : nullptr;
+	}
+	return nullptr;
 }
 
 void AModularBaseActor::OnConstruction(const FTransform& Transform)
@@ -356,7 +373,7 @@ void AModularBaseActor::GatherParameterSections(TArray<FStageParameterSection>& 
 			Names.Reserve(Swappable.Num());
 			for (const UBaseItemData* Item : Swappable)
 			{
-				Names.Add(Item->DisplayName);
+				Names.Add(Item->GetSwapOptionName());
 			}
 			Info.Add(StageCraftTags::Param_Info_Type, LOCTEXT("Type", "Type"), FStageParameterValue::MakeEnum(Swappable.IndexOfByKey(ItemData)))
 				.WithOptions(MoveTemp(Names));
@@ -437,18 +454,17 @@ bool AModularBaseActor::WriteParameter(const FGameplayTag& ParameterId, const FS
 		NotifyParameterChanged(ParameterId);
 		return true;
 	}
-	if (ParameterId == StageCraftTags::Param_Info_Type && Value.Type == EStageParameterType::Enum)
+	if (ParameterId == StageCraftTags::Param_Info_Type)
 	{
-		TArray<UBaseItemData*> Swappable;
-		GetSwappableItems(Swappable);
-		if (!Swappable.IsValidIndex(Value.Integer))
+		UBaseItemData* Target = ResolveSwapTarget(Value);
+		if (!Target)
 		{
 			return false;
 		}
 		// Keeps transform, label, fixture ID and patch; ApplyItemData adapts the rest (meshes, attribute set).
-		if (Swappable[Value.Integer] != ItemData)
+		if (Target != ItemData)
 		{
-			InitializeFromItemData(Swappable[Value.Integer]);
+			InitializeFromItemData(Target);
 		}
 		return true;
 	}

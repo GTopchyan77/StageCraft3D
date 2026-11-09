@@ -6,6 +6,7 @@
 #include "Blueprint/UserWidget.h"
 #include "Economy/StageEconomyTypes.h"
 #include "History/StageEditCommand.h"
+#include "Fixtures/StageFixtureLibraryTypes.h"
 #include "Import/StageMeshImportTypes.h"
 #include "Input/StageKeyBindings.h"
 #include "Placement/StagePlacementTypes.h"
@@ -147,6 +148,10 @@ private:
 	UFUNCTION()
 	void HandleModelImportFinished(const FStageMeshImportOutcome& Outcome);
 
+	/** Library changes the user made (added, replaced, removed) and fixture files that could not be read; refusals of a request are reported by the controller. */
+	UFUNCTION()
+	void HandleFixtureImportFinished(const FStageFixtureImportOutcome& Outcome);
+
 	/** Shows LISTENING while a capture source (microphone, line input, this PC's output) is live (Docs/ADR/0029 §6). */
 	void HandleAudioStatusChanged();
 
@@ -185,6 +190,7 @@ private:
 	TWeakObjectPtr<class UStagePatchSheetSubsystem> PatchSheet;
 	TWeakObjectPtr<class UStageCableScheduleSubsystem> CableSchedule;
 	TWeakObjectPtr<class UStageMeshImportSubsystem> Importer;
+	TWeakObjectPtr<class UStageFixtureLibrarySubsystem> FixtureLibrary;
 	TWeakObjectPtr<class UStageInputPreferencesSubsystem> InputPreferences;
 	TWeakObjectPtr<class UStageAudioReactiveSubsystem> AudioReactive;
 	FDelegateHandle AudioStatusHandle;

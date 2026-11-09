@@ -9,6 +9,7 @@
 #include "Data/StageParameterTypes.h"
 #include "Economy/StageEconomyTypes.h"
 #include "Environment/StageEnvironmentTypes.h"
+#include "Fixtures/StageFixtureLibraryTypes.h"
 #include "History/StageEditCommand.h"
 #include "Input/StageKeyBindings.h"
 #include "Marketplace/StageDispatchTypes.h"
@@ -629,15 +630,50 @@ public:
 	int32 RequestImportModelFiles(const TArray<FString>& Files);
 
 	/**
-	 * Imports GDTF fixture files into the device library (Docs/ADR/0033 §7): one Library fixture per DMX mode. The GameMode decides
-	 * whether imports are allowed; files that cannot be imported are reported on OnRequestRejected. Accepted files are read in the
-	 * background and report through UStageFixtureLibrarySubsystem::OnImportFinished. Returns how many files were accepted.
+	 * Reads GDTF fixture files for the device library (Docs/ADR/0033 §7). The GameMode decides whether imports are allowed; files
+	 * that cannot be read are reported on OnRequestRejected. Accepted files are read in the background and wait for the user's
+	 * review (UStageFixtureLibrarySubsystem::GetReviews, OnReviewsChanged); nothing is added before RequestConfirmFixtureImport.
+	 * Returns how many files were accepted.
 	 */
 	UFUNCTION(BlueprintCallable, Category = "StageCraft|Requests")
 	int32 RequestImportFixtureFiles(const TArray<FString>& Files);
 
 	/**
-	 * Lets the user pick model files in the operating system's file dialog, then imports them as RequestImportModelFiles does.
+	 * Imports dropped or picked files by type: .gdtf files as fixtures (RequestImportFixtureFiles), the others as models
+	 * (RequestImportModelFiles). Returns how many files were accepted.
+	 */
+	UFUNCTION(BlueprintCallable, Category = "StageCraft|Requests")
+	int32 RequestImportFiles(const TArray<FString>& Files);
+
+	/**
+	 * Adds the reviewed fixture file to the Library, or replaces the type it updates (the import report's ADD or REPLACE). When
+	 * bCorrectKind, Kind replaces the inferred fixture kind. The GameMode decides again (EvaluateFixtureImport); refusals are
+	 * reported on OnRequestRejected and keep the review. Returns the outcome.
+	 */
+	UFUNCTION(BlueprintCallable, Category = "StageCraft|Requests")
+	FStageFixtureImportOutcome RequestConfirmFixtureImport(const FGuid& ReviewId, bool bCorrectKind, EStageFixtureKind Kind);
+
+	/** Drops a fixture file under review (the import report's CANCEL). Always allowed: it changes nothing. */
+	UFUNCTION(BlueprintCallable, Category = "StageCraft|Requests")
+	void RequestCancelFixtureImport(const FGuid& ReviewId);
+
+	/**
+	 * Removes a fixture type from the Library with its library file (the Library card's REMOVE). Refused while a placed fixture uses
+	 * one of its modes, or when the GameMode does not allow library changes; refusals are reported on OnRequestRejected. The catalog
+	 * drops its selected item when it is one of the type's modes, so the placement tool disarms.
+	 */
+	UFUNCTION(BlueprintCallable, Category = "StageCraft|Requests")
+	FStageFixtureImportOutcome RequestRemoveFixtureType(const FGuid& FixtureTypeId);
+
+	/**
+	 * Lets the user pick GDTF fixture files in the operating system's file dialog, then reads them as RequestImportFixtureFiles
+	 * does. Returns how many files were accepted (0 when cancelled or when this build has no file dialog).
+	 */
+	UFUNCTION(BlueprintCallable, Category = "StageCraft|Requests")
+	int32 RequestBrowseFixtureFiles();
+
+	/**
+	 * Lets the user pick model or GDTF fixture files in the operating system's file dialog, then imports them as RequestImportFiles does.
 	 * The dialog is modal. Returns how many files were queued (0 when cancelled or when this build has no file dialog).
 	 */
 	UFUNCTION(BlueprintCallable, Category = "StageCraft|Requests")

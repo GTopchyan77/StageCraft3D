@@ -333,6 +333,26 @@ private:
 	TSharedPtr<class SStageWelcomeDialog> WelcomeDialog;
 	FTimerHandle WelcomeTimer;
 
+	// --- GDTF import report (Docs/ADR/0033 §10) ---
+
+	/** The library's reviews changed: shows the oldest one on the next tick, never inside the library's broadcast. */
+	UFUNCTION()
+	void HandleFixtureReviewsChanged();
+	void RequestFixtureReviewRefresh();
+
+	/**
+	 * Shows the oldest waiting review in the import report dialog, or closes the dialog when none waits. Waits while the welcome
+	 * screen, the save prompt or the startup loader is up (they come back here when they close).
+	 */
+	void ShowNextFixtureReview();
+	void HandleFixtureDialogClosed();
+
+	/** The import report while it is shown (the dialog layer holds its Slate widget; this keeps the UObject). */
+	UPROPERTY(Transient)
+	TObjectPtr<class UStageFixtureImportDialog> FixtureDialog = nullptr;
+	TWeakObjectPtr<class UStageFixtureLibrarySubsystem> FixtureLibrary;
+	bool bFixtureReviewRefreshPending = false;
+
 	/** The local UI bridge the panels are built against. Owned by the world; null between levels. */
 	TWeakObjectPtr<class AModularPlayerController> LocalController;
 

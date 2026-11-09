@@ -390,3 +390,52 @@ GD3 was built on 2026-11-09 (STATE.md #82). Where it settles a detail of §4.3, 
   - A mapped channel whose fine byte lies elsewhere is now kept at its default, because its ranges are in 16-bit values. GD1 never marks such a channel as mapped.
   - A channel with more than 256 ranges (`StageDMXFunctions::MaxFunctions`), or with ranges `AreValid` refuses, is also kept at its default.
 - **Cost.** Built-in channels skip the function scan entirely. The `Bench.Fixtures DMXOut=1` A/B is in STATE.md #82.
+
+## 17. GD4 implementation notes
+
+GD4 was built on 2026-11-09 (STATE.md #83). Where it settles a detail of §7 and §10, or departs from them, it is recorded here.
+
+- **Import is reviewed.**
+  - `UStageFixtureLibrarySubsystem::RequestImport` no longer adds anything. A file read on a worker becomes an `FStageFixtureImportReview`, which holds the import report as data:
+    - manufacturer, name and source file;
+    - each mode with its footprint;
+    - how many channels are mapped, approximated and kept at their default, naming up to 12 of the approximated and default ones;
+    - unusable modes with their reason;
+    - warnings and errors, the inferred kind, and whether it replaces a type.
+  - A file the report refuses is still a review, so the user sees why. A file that cannot be read at all reports `IOError` as before.
+  - `ConfirmImport(ReviewId, Kind)` adds the type or replaces it; `CancelImport` drops the review.
+  - At most `MaxReviews` (8) files wait at once, reading or under review. Reviews do not hold up scene loads.
+- **Request path.** Every library change goes through `EvaluateFixtureImport`:
+  - `AModularPlayerController::RequestConfirmFixtureImport`;
+  - `RequestRemoveFixtureType`;
+  - `RequestBrowseFixtureFiles`;
+  - `RequestImportFiles`, which routes dropped or picked files by extension.
+  - `RequestCancelFixtureImport` needs no permission, because it changes nothing.
+- **Replace.**
+  - The old modes leave the catalog and are moved out of their paths. The new modes are built in the same paths.
+  - Placed fixtures are moved, with `InitializeFromItemData`, to the new mode with the same slug, keeping their patch and programming.
+  - A placed fixture whose mode is gone keeps the old object for the session and is missing at the next load (§7.1).
+  - Replace is a library operation, not an undo step.
+- **Remove.**
+  - Refused with `InUse` while a placed fixture of the current world uses one of the type's modes.
+  - Otherwise the modes leave the catalog, and the library file and index entry are deleted.
+  - The catalog drops its selected item if it was one of those modes, so the placement tool disarms.
+- **Catalog.** `UStageItemSubsystem` gains `AddRuntimeItems` and `RemoveRuntimeItems`, which broadcast one `OnCatalogChanged` per type instead of one per mode.
+- **Dialog.**
+  - `UStageFixtureImportDialog` is a Blueprintable `UUserWidget` built in code. `UStageWorkspaceSubsystem` hosts it over the workspace (`FStageWorkspaceShell::ShowDialog`) and shows the oldest review on the next tick after `OnReviewsChanged`.
+  - It waits while the welcome screen, the save prompt or the startup loader is up. The save prompt replaces it, and it comes back when the prompt closes.
+  - The words come from the pure `StageFixtureLibraryView::DescribeReview`.
+- **Library cards.**
+  - `StageFixtureLibraryView::MakeCards` folds a type's modes into one card ("Manufacturer Name", "GDTF · N modes") where its first mode appears in the catalog.
+  - Clicking the card places the **first mode**. "The last mode used" (§10) is deferred: it needs a per-type preference that nothing stores yet.
+  - REMOVE on the card asks for a second click instead of opening a dialog.
+  - The Library's IMPORT accepts models and `.gdtf` files. File > Import Fixtures (GDTF)... picks `.gdtf` only.
+- **Mode swap.**
+  - `UBaseItemData::CanSwapWith` and `GetSwapOptionName` let a library mode list only the modes of its type, as "Mode (N ch)". Built-in fixtures never list library modes, and library modes never list built-ins.
+  - A Type change is now **undoable**: `UStageEditHistoryComponent::RecordItemTypeChange` records both items by object path. `AModularBaseActor::ResolveSwapTarget` accepts a path as well as an index, so undo cannot pick the wrong item after the catalog changed order. The economy check uses the same resolution.
+- **Inspector.** Library fixtures show Manufacturer and Source rows in the Patch section (`Param_Patch_Manufacturer`, `Param_Patch_Source`).
+- **Help.** `Content/StageCraft/Help/en|hy/fixtures-gdtf.md`.
+  - UI text and tooltips are English `LOCTEXT`: the project has no UI localization target yet.
+  - Armenian is served through the help article and the assistant.
+- **Not in GD4.**
+  - The Patch panel's Mode column; the inspector's Type covers the swap, as one undo step.

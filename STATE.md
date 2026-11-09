@@ -8297,3 +8297,103 @@ All times in ms.
 - The slowest strobe rate shows 1 % of the span faster on stage (`StrobeFloor`); DMX is exact.
 - StageCraft has no closed shutter: DMX IN reads closed as open (the dimmer still closes the light).
 - GD4: UI, Replace and Remove, mode swap. G5 corpus run.
+
+## #83 — GDTF GD4: import UI, import report, Library cards, mode swap, Replace and Remove (ADR 0033; 2026-11-09)
+
+**What & why**
+- Gevor asked (2026-11-09) for GD4 of ADR 0033:
+  - import `.gdtf` files by drag and drop or the file dialog, through `RequestImportFixtureFiles` / `EvaluateFixtureImport`;
+  - show the import report before anything is added;
+  - Library cards, mode switching with undo, and Replace and Remove;
+  - an English and Armenian help article and tooltips;
+  - tests.
+- **Root problem.** GD2's import added a file straight to the catalog, with no report and no way to replace or remove a type. A GDTF fixture also showed one Library tile per mode, and its inspector Type listed every fixture in the catalog. That swap was not undoable for any item.
+- **Reviewed import** (`UStageFixtureLibrarySubsystem`):
+  - `RequestImport` now ends in an `FStageFixtureImportReview`, the report as data: manufacturer and name; per mode the footprint, mapped / approximated / default counts with names, and the reason for an unusable mode; warnings, errors, the inferred kind and whether it replaces a type. Refused files are reviews too, so the user sees why.
+  - `ConfirmImport(ReviewId, Kind)` adds the type, or replaces it. `CancelImport` drops the review.
+  - `RemoveType` is refused `InUse` while a placed fixture uses one of the type's modes; otherwise it deletes the library file and the index entry.
+  - `IsTypeInUse`, `FindTypeOfItem`, `GetReviews` and `FindReview` support the views.
+  - `OnReviewsChanged` is new. At most `MaxReviews` = 8 files wait at once.
+  - New results: `InUse`, `Unknown`, `Cancelled`.
+- **Replace.** The old modes leave the catalog and their paths, and the new ones are built in the same paths. Placed fixtures move to the new mode with the same slug, keeping their patch and programming. A vanished mode keeps the old object for the session.
+- **Catalog.** `UStageItemSubsystem::AddRuntimeItems` and `RemoveRuntimeItems` broadcast once per type. Removing the selected item clears the selection, so the placement tool disarms.
+- **Controller:**
+  - `RequestImportFiles` routes by extension, and is used by drops and the Library IMPORT;
+  - `RequestConfirmFixtureImport`, `RequestCancelFixtureImport`, `RequestRemoveFixtureType`, `RequestBrowseFixtureFiles`;
+  - the GameMode decides library changes (`EvaluateFixtureImport`).
+  - `RequestBrowseModelFiles` now picks models and `.gdtf` files together.
+- **Import report dialog** (new `UStageFixtureImportDialog`, `Public/UI`): a Blueprintable `UUserWidget` built in code with:
+  - the title and source;
+  - a summary;
+  - a KIND dropdown (the correction goes to `ConfirmImport`);
+  - mode rows with breakdowns;
+  - notes;
+  - ADD or REPLACE and CANCEL, with Enter and Esc.
+
+  `UStageWorkspaceSubsystem` hosts it over the workspace and shows the oldest review on the next tick. It waits for the welcome screen, the save prompt and the startup loader. Its words come from the pure `StageFixtureLibraryView::DescribeReview`.
+- **Library panel.**
+  - `StageFixtureLibraryView::MakeCards` folds a type's modes into one card ("Manufacturer Name", "GDTF · N modes"), which places the first mode.
+  - The card has REMOVE, a two-click confirm.
+  - Search uses the card name.
+  - The IMPORT tooltip names `.gdtf`.
+- **Mode swap.**
+  - `UBaseItemData::CanSwapWith` and `GetSwapOptionName`, overridden by `ULightingFixtureData`, keep a library mode to its own type, listed as "Standard (15 ch)". Built-ins and library modes never mix.
+  - `AModularBaseActor::ResolveSwapTarget` takes an index or an object path; the economy's Type check uses it too.
+  - **Every Type change is now one undo step:** `UStageEditHistoryComponent::RecordItemTypeChange` stores both items by path, so a reordered catalog cannot make undo pick another item.
+- **Inspector.** Library fixtures show Manufacturer and Source rows (new tags `Param_Patch_Manufacturer`, `Param_Patch_Source`).
+- **Status bar.** It shows Added, Replaced and Removed messages, unreadable files and restore failures.
+- **Menu.** File > Import Fixtures (GDTF)...
+- **Drops.** Dropped `.gdtf` files are accepted by the workspace drop target and routed to fixture import.
+- **Help.** `Content/StageCraft/Help/en/fixtures-gdtf.md` and `hy/fixtures-gdtf.md`, panel Library. UI tooltips are English `LOCTEXT`: the project has no UI localization target yet.
+- ADR 0033 §17 records these decisions.
+
+**Files changed**
+- New:
+  - `Public/Fixtures/StageFixtureLibraryView.h`, `Private/Fixtures/StageFixtureLibraryView.cpp`;
+  - `Public/UI/StageFixtureImportDialog.h`, `Private/UI/StageFixtureImportDialog.cpp`;
+  - `Private/Fixtures/Tests/StageFixtureLibraryUITests.cpp`;
+  - `Content/StageCraft/Help/en/fixtures-gdtf.md`, `Content/StageCraft/Help/hy/fixtures-gdtf.md`.
+- Changed:
+  - `Public/Fixtures/StageFixtureLibraryTypes.h`, `StageFixtureLibrarySubsystem.h`, `Private/Fixtures/StageFixtureLibrarySubsystem.cpp`;
+  - `Public/Subsystems/StageItemSubsystem.h`, `Private/Subsystems/StageItemSubsystem.cpp`;
+  - `Public/Data/BaseItemData.h`, `Private/Data/BaseItemData.cpp`, `Public/Data/LightingFixtureData.h`, `Private/Data/LightingFixtureData.cpp`;
+  - `Public/Actors/ModularBaseActor.h`, `Private/Actors/ModularBaseActor.cpp`, `Private/Actors/LightingFixtureActor.cpp`;
+  - `Private/Subsystems/StageEconomySubsystem.cpp`;
+  - `Public/History/StageEditHistoryComponent.h`, `Private/History/StageEditHistoryComponent.cpp`;
+  - `Public/Player/ModularPlayerController.h`, `Private/Player/ModularPlayerController.cpp`;
+  - `Public/Workspace/StageWorkspaceSubsystem.h`, `Private/Workspace/StageWorkspaceSubsystem.cpp`, `Private/Workspace/SStageWorkspaceMenuBar.cpp`;
+  - `Public/UI/StageItemLibraryPanel.h`, `Private/UI/StageItemLibraryPanel.cpp`, `Public/UI/StageStatusBarWidget.h`, `Private/UI/StageStatusBarWidget.cpp`;
+  - `Public/Data/StageParameterTypes.h`, `Private/Data/StageParameterTypes.cpp`;
+  - `Private/Fixtures/Tests/StageFixtureLibraryTests.cpp`: GD2's Library test confirms its reviews.
+- Records: `Docs/ADR/0033-…md` §17, `tasks/todo.md`.
+
+**Verification**
+- **Tests:** `RunAutomation.ps1 -ExpectedCount 255 -NullRHI` gives 255/255, with user data unchanged (129 files). New tests:
+  - `StageCraft.UI.FixtureImportReport` (pure):
+    - the report words: title, source, summary;
+    - ADD or REPLACE; a refused file cannot be confirmed;
+    - mode rows "Standard (15 ch)", "11 mapped · 1 approximated · 3 at default", with the approximated and default names;
+    - the reason of an unusable mode; a file without a type titled by its file name;
+    - `MakeCards` folding two modes into one card at catalog position, placing the first mode, "GDTF · 2 modes".
+  - `StageCraft.Fixtures.ImportFlow`, a real isolated game instance with a world:
+    - the spot's review data (3 modes, 2 usable; Focus and Control at default, the blade approximated, the broken mode's reason);
+    - nothing in the library or catalog before ADD; unknown review ids refused; a file under review not read twice;
+    - ADD with a kind correction; the MaxReviews cap; CANCEL changes nothing.
+    - A placed fixture's Type lists exactly its two modes, labelled with footprints; Manufacturer and Source rows show.
+    - Built-ins and GDTF modes never swap with each other.
+    - Swapping by index keeps the patch; undo and redo by path.
+    - REMOVE is refused while the fixture is placed.
+    - REPLACE moves the placed fixture to the new object at the same path with its patch; the old modes leave the catalog.
+    - REMOVE succeeds once the fixture is gone and deletes the library file and index entry.
+- **Builds:** Editor and Game Development 0 warnings; Game Shipping 0 warnings. No development-only code was added.
+- **Not verified:**
+  - The dialog, the cards, REMOVE and drag and drop in a running `-game` window. Widgets are covered through their pure text models and the request path only.
+  - **Implemented, awaiting manual verification by Gevor.**
+
+**Commit:** uncommitted (working tree), together with #82.
+
+**Known issues / follow-ups**
+- The Patch panel Mode column (ADR §10) is not built; the inspector's Type does the swap.
+- The Library card places the first mode, not the last one used.
+- Armenian UI tooltips need a localization target; Armenian is in the help article.
+- Replace is not an undo step; it is a confirmed library operation.

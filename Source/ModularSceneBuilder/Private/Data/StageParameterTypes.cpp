@@ -112,6 +112,8 @@ namespace StageCraftTags
 	UE_DEFINE_GAMEPLAY_TAG_COMMENT(Param_Patch_Address,			"StageCraft.Param.Patch.Address",		"DMX start address 1..512.");
 	UE_DEFINE_GAMEPLAY_TAG_COMMENT(Param_Patch_Footprint,		"StageCraft.Param.Patch.Footprint",		"Channel count of the DMX mode (read-only).");
 	UE_DEFINE_GAMEPLAY_TAG_COMMENT(Param_Patch_Mode,			"StageCraft.Param.Patch.Mode",			"Name of the fixture's DMX mode (read-only).");
+	UE_DEFINE_GAMEPLAY_TAG_COMMENT(Param_Patch_Manufacturer,	"StageCraft.Param.Patch.Manufacturer",	"Manufacturer of a fixture imported from GDTF (read-only).");
+	UE_DEFINE_GAMEPLAY_TAG_COMMENT(Param_Patch_Source,		"StageCraft.Param.Patch.Source",		"Where an imported fixture type comes from, e.g. its GDTF file (read-only).");
 	UE_DEFINE_GAMEPLAY_TAG_COMMENT(Param_Patch_InvertPan,		"StageCraft.Param.Patch.InvertPan",		"The pan channel runs the other way on the wire (DMX only).");
 	UE_DEFINE_GAMEPLAY_TAG_COMMENT(Param_Patch_InvertTilt,		"StageCraft.Param.Patch.InvertTilt",	"The tilt channel runs the other way on the wire (DMX only).");
 	UE_DEFINE_GAMEPLAY_TAG_COMMENT(Param_Patch_SwapPanTilt,		"StageCraft.Param.Patch.SwapPanTilt",	"The pan and tilt channels carry each other's value (DMX only).");

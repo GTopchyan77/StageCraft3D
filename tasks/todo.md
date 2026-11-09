@@ -671,6 +671,7 @@ Gevor's choices: automation tests on a harness game instance (not AFunctionalTes
 - [ ] GD2 follow-ups: a world-level load test of the missing-type message; per-cell cost of 64-cell rigs (500 bars crossfade 19.9 ms show tick) for the pixel-mapping phase
 - [x] GD3 DMX channel functions and default values in DMX OUT/IN, built-ins byte-identical, DMXOut bench A/B (STATE.md #82)
 - [ ] Gevor: check an imported fixture's DMX OUT on a visualiser (Capture or grandMA3 onPC 3D) or a real fixture
-- [ ] GD4 UI: import and drop, report dialog, mode swap (GetSwappableItems: modes of one type), Replace and Remove of a type, Library cards, help article EN/HY
+- [x] GD4 UI: import and drop, report dialog, undoable mode swap (modes of one type), Replace and Remove of a type, Library cards, help article EN/HY (STATE.md #83)
+- [ ] GD4 follow-ups: Gevor clicks through import / report / swap / replace / remove in a -game run; Patch panel Mode column; Library card places the last mode used; UI localization target for Armenian tooltips
 - [ ] GD5 (optional) glTF meshes, gobo images
 - [ ] ADR 0034 MVR (after GD2)

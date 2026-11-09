@@ -2,7 +2,9 @@
 
 #include "Fixtures/StageFixtureLibrarySubsystem.h"
 
+#include "Actors/ModularBaseActor.h"
 #include "Async/Async.h"
+#include "Engine/GameInstance.h"
 #include "Engine/StaticMesh.h"
 #include "Fixtures/StageFixtureLibraryRules.h"
 #include "Fixtures/StageGdtfFixtureBuilder.h"
@@ -14,8 +16,10 @@
 #include "Misc/Paths.h"
 #include "ModularSceneBuilder.h"
 #include "Subsystems/StageItemSubsystem.h"
+#include "Subsystems/StageSessionSubsystem.h"
 #include "Tasks/Task.h"
 #include "UObject/Package.h"
+#include "Engine/World.h"
 
 #include UE_INLINE_GENERATED_CPP_BY_NAME(StageFixtureLibrarySubsystem)
 
@@ -40,6 +44,8 @@ struct UStageFixtureLibrarySubsystem::FParsedFile
 namespace StageFixtureLibraryPrivate
 {
 	using FParsedFile = UStageFixtureLibrarySubsystem::FParsedFile;
+
+	constexpr int32 MaxNamesListed = 12;
 
 	FString NormalizePath(const FString& File)
 	{
@@ -93,6 +99,26 @@ namespace StageFixtureLibraryPrivate
 		return FText::FromString(Type.Manufacturer.IsEmpty() ? Type.Name : Type.Manufacturer + TEXT(" ") + Type.Name);
 	}
 
+	FText TypeLabel(const ULightingFixtureData& Mode)
+	{
+		const FString Manufacturer = Mode.Specs.Manufacturer.ToString();
+		return FText::FromString(Manufacturer.IsEmpty() ? Mode.SourceTypeName : Manufacturer + TEXT(" ") + Mode.SourceTypeName);
+	}
+
+	TArray<UBaseItemData*> ToItems(const TArray<TObjectPtr<ULightingFixtureData>>& Modes)
+	{
+		TArray<UBaseItemData*> Items;
+		Items.Reserve(Modes.Num());
+		for (ULightingFixtureData* Mode : Modes)
+		{
+			if (Mode)
+			{
+				Items.Add(Mode);
+			}
+		}
+		return Items;
+	}
+
 	FText FirstError(const FParsedFile& File)
 	{
 		if (!File.Report.Errors.IsEmpty())
@@ -120,9 +146,12 @@ void UStageFixtureLibrarySubsystem::Initialize(FSubsystemCollectionBase& Collect
 void UStageFixtureLibrarySubsystem::Deinitialize()
 {
 	Pending.Reset();
+	Reviews.Reset();
+	ReviewFiles.Reset();
 	bRestoring = false;
 	OnImportFinished.Clear();
 	OnLibraryChanged.Clear();
+	OnReviewsChanged.Clear();
 	WritePipe.WaitUntilEmpty();
 
 	constexpr ERenameFlags Flags = REN_DontCreateRedirectors | REN_NonTransactional | REN_DoNotDirty;
@@ -181,10 +210,15 @@ TArray<FStageFixtureImportOutcome> UStageFixtureLibrarySubsystem::RequestImport(
 			Refusal.Message = FText::Format(LOCTEXT("TooLarge", "{0} is larger than {1} MB, the most a GDTF file may be."), FileLabel(Path),
 				FText::AsNumber(StageFixtureLibrary::MaxFileSizeBytes / (1024 * 1024)));
 		}
-		else if (Pending.FindKey(Path) != nullptr)
+		else if (Pending.FindKey(Path) != nullptr || Reviews.ContainsByPredicate([&Path](const FStageFixtureImportReview& Review) { return Review.SourceFile == Path; }))
 		{
 			Refusal.Result = EStageFixtureImportResult::AlreadyInLibrary;
 			Refusal.Message = FText::Format(LOCTEXT("Importing", "{0} is already being imported."), FileLabel(Path));
+		}
+		else if (Pending.Num() + Reviews.Num() >= MaxReviews)
+		{
+			Refusal.Result = EStageFixtureImportResult::Refused;
+			Refusal.Message = FText::Format(LOCTEXT("TooManyWaiting", "{0} was not read: {1} fixture files are already waiting. Add or cancel them first."), FileLabel(Path), FText::AsNumber(MaxReviews));
 		}
 		else
 		{
@@ -218,64 +252,384 @@ void UStageFixtureLibrarySubsystem::FinishImport(uint64 Serial, TSharedPtr<FPars
 		return;
 	}
 
-	FStageFixtureImportOutcome Outcome;
-	Outcome.SourceFile = File->SourceFile;
-	Outcome.Origin = File->Origin;
-	Outcome.Report = ReportText(*File);
-	Outcome.FixtureTypeId = File->bRead ? File->Parsed.Type.FixtureTypeId : FGuid();
-
 	if (!File->bRead)
 	{
+		FStageFixtureImportOutcome Outcome;
+		Outcome.SourceFile = File->SourceFile;
 		Outcome.Result = EStageFixtureImportResult::IOError;
 		Outcome.Message = FText::Format(LOCTEXT("Unreadable", "{0} could not be read."), FileLabel(File->SourceFile));
+		UE_LOG(LogStageCraft, Warning, TEXT("Fixture library: %s"), *Outcome.Message.ToString());
+		OnImportFinished.Broadcast(Outcome);
+		return;
 	}
-	else if (!File->Report.bCanImport)
+
+	FStageFixtureImportReview Review = MakeReview(*File);
+	UE_LOG(LogStageCraft, Log, TEXT("Fixture library: %s read in %.2f ms on a worker; waiting for review (%s).\n%s"), *File->SourceFile, File->ParseMs,
+		Review.bCanImport ? TEXT("can be added") : TEXT("refused"), *Review.ReportText);
+	Reviews.Add(MoveTemp(Review));
+	ReviewFiles.Add(MoveTemp(File));
+	OnReviewsChanged.Broadcast();
+}
+
+FStageFixtureImportReview UStageFixtureLibrarySubsystem::MakeReview(const FParsedFile& File) const
+{
+	using namespace StageFixtureLibraryPrivate;
+
+	FStageFixtureImportReview Review;
+	Review.ReviewId = FGuid::NewGuid();
+	Review.SourceFile = File.SourceFile;
+	Review.ReportText = ReportText(File);
+	Review.Warnings = File.Report.Warnings;
+	Review.Errors = File.Report.Errors;
+	Review.bCanImport = File.Report.bCanImport;
+	if (!File.Parsed.IsOk())
+	{
+		if (Review.Errors.IsEmpty())
+		{
+			Review.Errors.Add(FirstError(File).ToString());
+		}
+		Review.bCanImport = false;
+		return Review;
+	}
+
+	const FStageGdtfFixtureType& Type = File.Parsed.Type;
+	Review.FixtureTypeId = Type.FixtureTypeId;
+	Review.Manufacturer = Type.Manufacturer.Left(StageFixtureLibrary::MaxRefTextLength);
+	Review.Name = Type.Name.Left(StageFixtureLibrary::MaxRefTextLength);
+	Review.InferredKind = File.Capabilities.Kind;
+	Review.bReplaces = FindType(Type.FixtureTypeId) != nullptr;
+	for (const FStageGdtfModeLayout& Layout : File.Layouts)
+	{
+		FStageFixtureModeSummary& Mode = Review.Modes.AddDefaulted_GetRef();
+		Mode.Name = Layout.Name.Left(StageFixtureLibrary::MaxRefTextLength);
+		Mode.Footprint = Layout.Footprint;
+		Mode.bUsable = Layout.IsUsable();
+		Mode.Reason = Layout.Errors.IsEmpty() ? FString() : Layout.Errors[0];
+		for (const FStageGdtfLayoutChannel& Channel : Layout.Channels)
+		{
+			switch (Channel.Status)
+			{
+			case EStageGdtfChannelStatus::Mapped:
+				++Mode.Mapped;
+				break;
+			case EStageGdtfChannelStatus::Approximated:
+				++Mode.Approximated;
+				if (Mode.ApproximatedNames.Num() < MaxNamesListed && !Mode.ApproximatedNames.Contains(Channel.GdtfAttribute))
+				{
+					Mode.ApproximatedNames.Add(Channel.GdtfAttribute);
+				}
+				break;
+			case EStageGdtfChannelStatus::Default:
+				++Mode.Defaulted;
+				if (Mode.DefaultedNames.Num() < MaxNamesListed && !Mode.DefaultedNames.Contains(Channel.GdtfAttribute))
+				{
+					Mode.DefaultedNames.Add(Channel.GdtfAttribute);
+				}
+				break;
+			default:
+				break;
+			}
+		}
+	}
+	return Review;
+}
+
+const FStageFixtureImportReview* UStageFixtureLibrarySubsystem::FindReview(const FGuid& ReviewId) const
+{
+	return Reviews.FindByPredicate([&ReviewId](const FStageFixtureImportReview& Review) { return Review.ReviewId == ReviewId; });
+}
+
+void UStageFixtureLibrarySubsystem::RefreshReviews()
+{
+	for (FStageFixtureImportReview& Review : Reviews)
+	{
+		Review.bReplaces = Review.FixtureTypeId.IsValid() && FindType(Review.FixtureTypeId) != nullptr;
+	}
+}
+
+FStageFixtureImportOutcome UStageFixtureLibrarySubsystem::ConfirmImport(const FGuid& ReviewId, TOptional<EStageFixtureKind> Kind)
+{
+	using namespace StageFixtureLibraryPrivate;
+
+	FStageFixtureImportOutcome Outcome;
+	const int32 Index = Reviews.IndexOfByPredicate([&ReviewId](const FStageFixtureImportReview& Review) { return Review.ReviewId == ReviewId; });
+	if (Index == INDEX_NONE || !ReviewFiles[Index].IsValid())
+	{
+		Outcome.Result = EStageFixtureImportResult::Unknown;
+		Outcome.Message = LOCTEXT("NoReview", "That fixture file is no longer waiting to be added.");
+		return Outcome;
+	}
+
+	FParsedFile& File = *ReviewFiles[Index];
+	Outcome.SourceFile = File.SourceFile;
+	Outcome.Report = ReportText(File);
+	Outcome.FixtureTypeId = File.Parsed.IsOk() ? File.Parsed.Type.FixtureTypeId : FGuid();
+	const int32 Existing = Types.IndexOfByPredicate([&Outcome](const FStageFixtureLibraryType& Type) { return Type.FixtureTypeId == Outcome.FixtureTypeId; });
+
+	bool bRefused = true;
+	if (!File.Report.bCanImport || !File.Parsed.IsOk())
 	{
 		Outcome.Result = EStageFixtureImportResult::Refused;
-		Outcome.Message = FText::Format(LOCTEXT("RefusedFile", "{0} cannot be used: {1}."), FileLabel(File->SourceFile), FirstError(*File));
+		Outcome.Message = FText::Format(LOCTEXT("RefusedFile", "{0} cannot be used: {1}."), FileLabel(File.SourceFile), FirstError(File));
 	}
-	else if (FindType(File->Parsed.Type.FixtureTypeId))
-	{
-		Outcome.Result = EStageFixtureImportResult::AlreadyInLibrary;
-		Outcome.Message = FText::Format(LOCTEXT("AlreadyIn", "{0} is already in the Library."), TypeLabel(File->Parsed.Type));
-	}
-	else if (Types.Num() >= StageFixtureLibrary::MaxTypes)
+	else if (Existing == INDEX_NONE && Types.Num() >= StageFixtureLibrary::MaxTypes)
 	{
 		Outcome.Result = EStageFixtureImportResult::LibraryFull;
 		Outcome.Message = FText::Format(LOCTEXT("Full", "The Library already holds {0} fixture types, the most it can."), FText::AsNumber(StageFixtureLibrary::MaxTypes));
 	}
+	else if (Existing != INDEX_NONE && Types[Existing].bSessionOnly)
+	{
+		Outcome.Result = EStageFixtureImportResult::AlreadyInLibrary;
+		Outcome.Message = FText::Format(LOCTEXT("SessionType", "{0} is a test type of this session and cannot be replaced."), TypeLabel(File.Parsed.Type));
+	}
 	else
 	{
-		File->ImportedUtc = FDateTime::UtcNow();
-		if (RegisterType(*File, /*bSessionOnly*/ false, Outcome))
+		bRefused = false;
+	}
+	if (bRefused)
+	{
+		UE_LOG(LogStageCraft, Log, TEXT("Fixture library: %s"), *Outcome.Message.ToString());
+		OnImportFinished.Broadcast(Outcome);
+		return Outcome;
+	}
+
+	File.Kind = Kind;
+	File.ImportedUtc = FDateTime::UtcNow();
+	const bool bReplacing = Existing != INDEX_NONE;
+	const bool bBuilt = bReplacing ? ReplaceType(Existing, File, Outcome) : RegisterType(File, false, Outcome) != nullptr;
+	if (!bBuilt)
+	{
+		Outcome.Result = EStageFixtureImportResult::Refused;
+		Outcome.Message = FText::Format(LOCTEXT("NotBuilt", "{0} cannot be used: no mode could be built."), FileLabel(File.SourceFile));
+		OnImportFinished.Broadcast(Outcome);
+		return Outcome;
+	}
+
+	WriteLibraryFile(Outcome.FixtureTypeId, MoveTemp(File.Bytes));
+	SaveIndex();
+	Outcome.Result = EStageFixtureImportResult::Success;
+	Outcome.Message = bReplacing
+		? FText::Format(LOCTEXT("Replaced", "Replaced {0} in the Library ({1} {1}|plural(one=mode,other=modes))."), TypeLabel(File.Parsed.Type), FText::AsNumber(Outcome.Modes.Num()))
+		: FText::Format(LOCTEXT("Added", "Added {0} ({1} {1}|plural(one=mode,other=modes)) to the Library."), TypeLabel(File.Parsed.Type), FText::AsNumber(Outcome.Modes.Num()));
+	UE_LOG(LogStageCraft, Log, TEXT("Fixture library: %s"), *Outcome.Message.ToString());
+
+	Reviews.RemoveAt(Index);
+	ReviewFiles.RemoveAt(Index);
+	RefreshReviews();
+	OnLibraryChanged.Broadcast();
+	OnReviewsChanged.Broadcast();
+	OnImportFinished.Broadcast(Outcome);
+	return Outcome;
+}
+
+FStageFixtureImportOutcome UStageFixtureLibrarySubsystem::CancelImport(const FGuid& ReviewId)
+{
+	FStageFixtureImportOutcome Outcome;
+	const int32 Index = Reviews.IndexOfByPredicate([&ReviewId](const FStageFixtureImportReview& Review) { return Review.ReviewId == ReviewId; });
+	if (Index == INDEX_NONE)
+	{
+		Outcome.Result = EStageFixtureImportResult::Unknown;
+		return Outcome;
+	}
+	Outcome.Result = EStageFixtureImportResult::Cancelled;
+	Outcome.SourceFile = Reviews[Index].SourceFile;
+	Outcome.FixtureTypeId = Reviews[Index].FixtureTypeId;
+	Reviews.RemoveAt(Index);
+	ReviewFiles.RemoveAt(Index);
+	OnReviewsChanged.Broadcast();
+	return Outcome;
+}
+
+FStageFixtureImportOutcome UStageFixtureLibrarySubsystem::RemoveType(const FGuid& FixtureTypeId)
+{
+	FStageFixtureImportOutcome Outcome;
+	Outcome.FixtureTypeId = FixtureTypeId;
+	const int32 Index = Types.IndexOfByPredicate([&FixtureTypeId](const FStageFixtureLibraryType& Type) { return Type.FixtureTypeId == FixtureTypeId; });
+	if (Index == INDEX_NONE)
+	{
+		Outcome.Result = EStageFixtureImportResult::Unknown;
+		Outcome.Message = LOCTEXT("RemoveUnknown", "That fixture type is not in the Library.");
+		OnImportFinished.Broadcast(Outcome);
+		return Outcome;
+	}
+
+	const FText Label = Types[Index].Modes.IsEmpty() || !Types[Index].Modes[0] ? FText::FromString(Types[Index].SourceFileName) : StageFixtureLibraryPrivate::TypeLabel(*Types[Index].Modes[0].Get());
+	const int32 Users = FindPlacedUsers(Types[Index]).Num();
+	if (Users > 0)
+	{
+		Outcome.Result = EStageFixtureImportResult::InUse;
+		Outcome.Message = FText::Format(LOCTEXT("InUse", "{0} is used by {1} placed {1}|plural(one=fixture,other=fixtures). Delete or replace them first."), Label, FText::AsNumber(Users));
+		OnImportFinished.Broadcast(Outcome);
+		return Outcome;
+	}
+
+	const FStageFixtureLibraryType Removed = Types[Index];
+	Types.RemoveAt(Index);
+	UnregisterType(Removed);
+	if (!Removed.bSessionOnly)
+	{
+		WritePipe.Launch(UE_SOURCE_LOCATION, [Path = StageFixtureLibrary::GetLibraryFilePath(FixtureTypeId)]()
 		{
-			const FString Target = StageFixtureLibrary::GetLibraryFilePath(Outcome.FixtureTypeId);
-			WritePipe.Launch(UE_SOURCE_LOCATION, [Bytes = MoveTemp(File->Bytes), Target]()
+			if (IFileManager::Get().FileExists(*Path) && !IFileManager::Get().Delete(*Path, false, true, true))
 			{
-				IFileManager::Get().MakeDirectory(*FPaths::GetPath(Target), /*Tree*/ true);
-				if (!StageAtomicFile::WriteBytes(Target, Bytes))
-				{
-					UE_LOG(LogStageCraft, Warning, TEXT("Fixture library: could not write %s; the fixture type is available until the app closes."), *Target);
-				}
-			});
-			SaveIndex();
-			Outcome.Result = EStageFixtureImportResult::Success;
-			Outcome.Message = FText::Format(LOCTEXT("Added", "Added {0} ({1} {1}|plural(one=mode,other=modes)) to the Library."), TypeLabel(File->Parsed.Type), FText::AsNumber(Outcome.Modes.Num()));
-			OnLibraryChanged.Broadcast();
-		}
-		else
+				UE_LOG(LogStageCraft, Warning, TEXT("Fixture library: could not delete %s; it will be restored at the next start."), *Path);
+			}
+		});
+		SaveIndex();
+	}
+	Outcome.Result = EStageFixtureImportResult::Success;
+	Outcome.Message = FText::Format(LOCTEXT("Removed", "Removed {0} from the Library."), Label);
+	UE_LOG(LogStageCraft, Log, TEXT("Fixture library: %s"), *Outcome.Message.ToString());
+	RefreshReviews();
+	OnLibraryChanged.Broadcast();
+	OnReviewsChanged.Broadcast();
+	OnImportFinished.Broadcast(Outcome);
+	return Outcome;
+}
+
+bool UStageFixtureLibrarySubsystem::IsTypeInUse(const FGuid& FixtureTypeId) const
+{
+	const FStageFixtureLibraryType* Type = FindType(FixtureTypeId);
+	return Type && !FindPlacedUsers(*Type).IsEmpty();
+}
+
+const FStageFixtureLibraryType* UStageFixtureLibrarySubsystem::FindTypeOfItem(const UBaseItemData* Item) const
+{
+	const ULightingFixtureData* Fixture = Cast<ULightingFixtureData>(Item);
+	if (!Fixture || !Fixture->IsLibraryType())
+	{
+		return nullptr;
+	}
+	const FStageFixtureLibraryType* Type = FindType(Fixture->FixtureTypeId);
+	return Type && Type->Modes.Contains(Fixture) ? Type : nullptr;
+}
+
+TArray<AModularBaseActor*> UStageFixtureLibrarySubsystem::FindPlacedUsers(const FStageFixtureLibraryType& Type) const
+{
+	TArray<AModularBaseActor*> Users;
+	const UGameInstance* GameInstance = GetGameInstance();
+	const UStageSessionSubsystem* Session = GameInstance ? UWorld::GetSubsystem<UStageSessionSubsystem>(GameInstance->GetWorld()) : nullptr;
+	if (!Session)
+	{
+		return Users;
+	}
+	for (AModularBaseActor* Item : Session->GetPlacedItems())
+	{
+		const ULightingFixtureData* Data = Item ? Cast<ULightingFixtureData>(Item->GetItemData()) : nullptr;
+		if (Data && Data->FixtureTypeId == Type.FixtureTypeId && Data->IsLibraryType())
 		{
-			Outcome.Result = EStageFixtureImportResult::Refused;
-			Outcome.Message = FText::Format(LOCTEXT("NotBuilt", "{0} cannot be used: no mode could be built."), FileLabel(File->SourceFile));
+			Users.Add(Item);
+		}
+	}
+	return Users;
+}
+
+void UStageFixtureLibrarySubsystem::UnregisterType(const FStageFixtureLibraryType& Type)
+{
+	TArray<UBaseItemData*> Items;
+	for (ULightingFixtureData* Mode : Type.Modes)
+	{
+		if (Mode)
+		{
+			Items.Add(Mode);
+		}
+	}
+	if (UStageItemSubsystem* Catalog = ItemSubsystem.Get())
+	{
+		Catalog->RemoveRuntimeItems(Items);
+	}
+	constexpr ERenameFlags Flags = REN_DontCreateRedirectors | REN_NonTransactional | REN_DoNotDirty;
+	for (UBaseItemData* Item : Items)
+	{
+		Item->Rename(nullptr, GetTransientPackage(), Flags);
+	}
+	if (Type.BaseMesh)
+	{
+		Type.BaseMesh->Rename(nullptr, GetTransientPackage(), Flags);
+	}
+}
+
+bool UStageFixtureLibrarySubsystem::ReplaceType(int32 Index, const FParsedFile& File, FStageFixtureImportOutcome& Outcome)
+{
+	const FStageFixtureLibraryType Old = Types[Index];
+	const TArray<AModularBaseActor*> Users = FindPlacedUsers(Old);
+	TMap<const UBaseItemData*, FName> OldSlugs;
+	for (const ULightingFixtureData* Mode : Old.Modes)
+	{
+		if (Mode)
+		{
+			OldSlugs.Add(Mode, Mode->GetFName());
 		}
 	}
 
-	UE_LOG(LogStageCraft, Log, TEXT("Fixture library: %s %s in %.2f ms on a worker: %s\n%s"), *UEnum::GetValueAsString(Outcome.Result), *Outcome.SourceFile,
-		File->ParseMs, *Outcome.Message.ToString(), *Outcome.Report);
-	OnImportFinished.Broadcast(Outcome);
+	UnregisterType(Old);
+	TOptional<FStageFixtureLibraryType> Built = BuildType(File, false, Outcome);
+	if (!Built.IsSet())
+	{
+		UE_LOG(LogStageCraft, Warning, TEXT("Fixture library: the new file of %s built no mode; the old type stays for this session."), *Old.SourceFileName);
+		Outcome.Modes.Reset();
+		return false;
+	}
+
+	Types[Index] = MoveTemp(Built.GetValue());
+	const FStageFixtureLibraryType& New = Types[Index];
+	if (UStageItemSubsystem* Catalog = ItemSubsystem.Get())
+	{
+		Catalog->AddRuntimeItems(StageFixtureLibraryPrivate::ToItems(New.Modes));
+	}
+
+	int32 Moved = 0;
+	int32 Orphaned = 0;
+	for (AModularBaseActor* User : Users)
+	{
+		const FName* Slug = IsValid(User) ? OldSlugs.Find(User->GetItemData()) : nullptr;
+		const TObjectPtr<ULightingFixtureData>* Match = Slug ? New.Modes.FindByPredicate([Slug](const ULightingFixtureData* Mode) { return Mode && Mode->GetFName() == *Slug; }) : nullptr;
+		if (Match)
+		{
+			User->InitializeFromItemData(*Match);
+			++Moved;
+		}
+		else
+		{
+			++Orphaned;
+		}
+	}
+	if (Orphaned > 0)
+	{
+		UE_LOG(LogStageCraft, Warning, TEXT("Fixture library: %d placed fixtures use a mode the new file no longer has; they keep the old mode until the stage is reloaded."), Orphaned);
+	}
+	UE_LOG(LogStageCraft, Log, TEXT("Fixture library: replaced %s; %d placed fixtures moved to the new modes."), *New.FixtureTypeId.ToString(EGuidFormats::DigitsWithHyphens), Moved);
+	return true;
+}
+
+void UStageFixtureLibrarySubsystem::WriteLibraryFile(const FGuid& FixtureTypeId, TArray<uint8> Bytes)
+{
+	WritePipe.Launch(UE_SOURCE_LOCATION, [Bytes = MoveTemp(Bytes), Target = StageFixtureLibrary::GetLibraryFilePath(FixtureTypeId)]()
+	{
+		IFileManager::Get().MakeDirectory(*FPaths::GetPath(Target), true);
+		if (!StageAtomicFile::WriteBytes(Target, Bytes))
+		{
+			UE_LOG(LogStageCraft, Warning, TEXT("Fixture library: could not write %s; the fixture type is available until the app closes."), *Target);
+		}
+	});
 }
 
 FStageFixtureLibraryType* UStageFixtureLibrarySubsystem::RegisterType(const FParsedFile& File, bool bSessionOnly, FStageFixtureImportOutcome& Outcome)
+{
+	TOptional<FStageFixtureLibraryType> Built = BuildType(File, bSessionOnly, Outcome);
+	if (!Built.IsSet())
+	{
+		return nullptr;
+	}
+	FStageFixtureLibraryType& Added = Types.Add_GetRef(MoveTemp(Built.GetValue()));
+	if (UStageItemSubsystem* Catalog = ItemSubsystem.Get())
+	{
+		Catalog->AddRuntimeItems(StageFixtureLibraryPrivate::ToItems(Added.Modes));
+	}
+	return &Added;
+}
+
+TOptional<FStageFixtureLibraryType> UStageFixtureLibrarySubsystem::BuildType(const FParsedFile& File, bool bSessionOnly, FStageFixtureImportOutcome& Outcome)
 {
 	const FStageGdtfFixtureType& Type = File.Parsed.Type;
 	const FGuid Id = Type.FixtureTypeId;
@@ -317,6 +671,7 @@ FStageFixtureLibraryType* UStageFixtureLibrarySubsystem::RegisterType(const FPar
 		UE_LOG(LogStageCraft, Warning, TEXT("Fixture library: the base of %s could not be built; its fixtures show no base."), *Type.Name);
 	}
 
+	Outcome.Modes.Reset();
 	for (const FStageGdtfModeLayout& Layout : File.Layouts)
 	{
 		if (!Layout.IsUsable() || !Slugs.IsValidIndex(Layout.ModeIndex))
@@ -333,19 +688,10 @@ FStageFixtureLibraryType* UStageFixtureLibrarySubsystem::RegisterType(const FPar
 	}
 	if (Entry.Modes.IsEmpty())
 	{
-		return nullptr;
-	}
-
-	FStageFixtureLibraryType& Added = Types.Add_GetRef(MoveTemp(Entry));
-	if (UStageItemSubsystem* Items = ItemSubsystem.Get())
-	{
-		for (ULightingFixtureData* Mode : Added.Modes)
-		{
-			Items->AddRuntimeItem(*Mode);
-		}
+		return {};
 	}
 	Outcome.FixtureTypeId = Id;
-	return &Added;
+	return Entry;
 }
 
 void UStageFixtureLibrarySubsystem::RestoreLibrary()
@@ -457,6 +803,7 @@ void UStageFixtureLibrarySubsystem::HandleLibraryRestored(TArray<TSharedPtr<FPar
 		Restored, Files.Num(), *StageFixtureLibrary::GetLibraryDirectory(), WorkerMs, SlowestMs, (FPlatformTime::Seconds() - Start) * 1000.0);
 	if (Restored > 0)
 	{
+		RefreshReviews();
 		OnLibraryChanged.Broadcast();
 	}
 }

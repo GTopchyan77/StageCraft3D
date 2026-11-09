@@ -9,6 +9,7 @@
 #include "StageItemLibraryPanel.generated.h"
 
 DECLARE_DELEGATE_OneParam(FOnStageLibraryEntryClicked, class UBaseItemData* /*Item*/);
+DECLARE_DELEGATE_OneParam(FOnStageLibraryEntryRemove, const FGuid& /*FixtureTypeId*/);
 DECLARE_DELEGATE_TwoParams(FOnStageLibraryCategoryToggled, FGameplayTag /*Category*/, bool /*bExpanded*/);
 
 namespace StageItemLibrary
@@ -38,6 +39,12 @@ public:
 	/** Binds the entry to its catalog item and the theme it is drawn with. Called once by the panel right after creation. */
 	void SetItem(class UBaseItemData* InItem, const class UStageCraftUITheme& InTheme);
 
+	/**
+	 * Makes the entry stand for a GDTF fixture type (Docs/ADR/0033 §10): Name and Detail replace the item's own, and a REMOVE
+	 * button appears, which asks for a second click before OnRemoveRequested fires. Call after SetItem.
+	 */
+	void SetFixtureType(const FGuid& InFixtureTypeId, const FText& InName, const FText& InDetail);
+
 	/** Display state only; the panel sets it from the placement tool's armed item. */
 	void SetArmed(bool bInArmed);
 
@@ -45,13 +52,28 @@ public:
 
 	FOnStageLibraryEntryClicked OnClicked;
 
+	/** The name the entry shows: the fixture type's for a type card, else the item's. Searched by the panel. */
+	FText GetDisplayName() const;
+
+	const FGuid& GetFixtureTypeId() const { return FixtureTypeId; }
+
+	FOnStageLibraryEntryRemove OnRemoveRequested;
+
 protected:
 	//~ Begin UUserWidget Interface
 	virtual void NativeOnInitialized() override;
+	virtual void NativeOnMouseLeave(const FPointerEvent& InMouseEvent) override;
 	//~ End UUserWidget Interface
 
 	UPROPERTY(BlueprintReadOnly, Category = "StageCraft|Library", meta = (BindWidgetOptional))
 	TObjectPtr<class UButton> EntryButton = nullptr;
+
+	/** Shown on GDTF fixture type cards only: removes the type from the Library after a second click. */
+	UPROPERTY(BlueprintReadOnly, Category = "StageCraft|Library", meta = (BindWidgetOptional))
+	TObjectPtr<class UButton> RemoveButton = nullptr;
+
+	UPROPERTY(BlueprintReadOnly, Category = "StageCraft|Library", meta = (BindWidgetOptional))
+	TObjectPtr<class UTextBlock> RemoveText = nullptr;
 
 	UPROPERTY(BlueprintReadOnly, Category = "StageCraft|Library", meta = (BindWidgetOptional))
 	TObjectPtr<class UImage> IconImage = nullptr;
@@ -69,6 +91,16 @@ private:
 
 	UFUNCTION()
 	void HandleButtonClicked();
+
+	UFUNCTION()
+	void HandleRemoveClicked();
+
+	/** First click arms REMOVE (it then reads "REMOVE?"); leaving the card disarms it. */
+	void SetRemoveArmed(bool bInArmed);
+
+	FGuid FixtureTypeId;
+	FText CardName;
+	bool bRemoveArmed = false;
 
 	UPROPERTY(Transient)
 	TObjectPtr<class UBaseItemData> Item = nullptr;
@@ -155,8 +187,10 @@ private:
  * - Clicking an item asks the owning controller to arm it and enter Place mode (AModularPlayerController::RequestPlaceItem),
  *   so the rules decide and refusals are reported by the controller.
  * - The Place toggle switches the local player's placement tool, the same operation as P and the Edit menu.
- * - Import asks the controller to open the OS file dialog (RequestBrowseModelFiles). Files can also be dropped on the panel
- *   from Explorer (the workspace shell wraps every panel in a drop target).
+ * - Import asks the controller to open the OS file dialog (RequestBrowseModelFiles: models and GDTF fixture files). Files can
+ *   also be dropped on the panel from Explorer (the workspace shell wraps every panel in a drop target).
+ * - A GDTF fixture type is one card for all its modes (StageFixtureLibraryView::MakeCards): clicking it places the first mode,
+ *   whose Type in the inspector switches modes. Its REMOVE asks the controller (RequestRemoveFixtureType).
  *
  * Push only, no tick: it reads the catalog once and rebuilds on UStageItemSubsystem::OnCatalogLoaded and
  * OnCatalogChanged (an import finished), and follows the placement tool's OnArmedItemChanged / OnEditModeChanged.
@@ -243,10 +277,13 @@ private:
 	UFUNCTION()
 	void HandleImportClicked();
 
+	void HandleRemoveRequested(const FGuid& FixtureTypeId);
+
 	class AModularPlayerController* GetStageController() const;
 	const class UStageCraftUITheme& GetTheme() const;
 
 	TWeakObjectPtr<class UStageItemSubsystem> ItemSubsystem;
+	TWeakObjectPtr<class UStageFixtureLibrarySubsystem> FixtureLibrary;
 	TWeakObjectPtr<class UStagePlacementToolComponent> PlacementTool;
 
 	UPROPERTY(Transient)

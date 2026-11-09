@@ -383,6 +383,25 @@ float ULightingFixtureData::DenormalizeFromDMX(const FGameplayTag& Attribute, fl
 	return FMath::Lerp(Min, Max, Clamped);
 }
 
+bool ULightingFixtureData::CanSwapWith(const UBaseItemData& Other) const
+{
+	const ULightingFixtureData* OtherFixture = Cast<ULightingFixtureData>(&Other);
+	if (!OtherFixture || OtherFixture->IsLibraryType() != IsLibraryType())
+	{
+		return false;
+	}
+	return !IsLibraryType() || OtherFixture->FixtureTypeId == FixtureTypeId;
+}
+
+FText ULightingFixtureData::GetSwapOptionName() const
+{
+	if (!IsLibraryType())
+	{
+		return Super::GetSwapOptionName();
+	}
+	return FText::Format(LOCTEXT("SwapModeName", "{0} ({1} ch)"), FText::FromName(DMXModeName), FText::AsNumber(GetDMXFootprint()));
+}
+
 int32 ULightingFixtureData::EncodeDMXChannel(const FStageFixtureDMXChannel& Channel, const FGameplayTag& Attribute, float Value, bool bInverted) const
 {
 	if (Channel.Functions.IsEmpty())

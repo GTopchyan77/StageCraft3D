@@ -1239,6 +1239,9 @@ FStageEconomyResultInfo AModularPlayerController::RequestParameterChange(UObject
 		&& Target->Implements<UStageParameterInterface>()
 		&& IStageParameterInterface::Execute_GetParameterValue(Target, ParameterId, QuantityBefore);
 
+	const AModularBaseActor* SwapTarget = ParameterId == StageCraftTags::Param_Info_Type ? Cast<AModularBaseActor>(Target) : nullptr;
+	const UBaseItemData* TypeBefore = SwapTarget ? SwapTarget->GetItemData() : nullptr;
+
 	if (bGroupEdit)
 	{
 		GroupTransform->BeginGroupEdit(*TransformTarget);
@@ -1268,6 +1271,10 @@ FStageEconomyResultInfo AModularPlayerController::RequestParameterChange(UObject
 	if (bRecordParameter)
 	{
 		EditHistory->RecordParameterChange(Cast<AActor>(Target), ParameterId, FindParameterName(*Target, ParameterId), QuantityBefore);
+	}
+	if (TypeBefore)
+	{
+		EditHistory->RecordItemTypeChange(Cast<AActor>(Target), TypeBefore, FindParameterName(*Target, ParameterId));
 	}
 
 	// A hidden item can be neither seen nor clicked, so it must not keep the gizmo or the inspector.
@@ -2604,6 +2611,111 @@ int32 AModularPlayerController::RequestImportFixtureFiles(const TArray<FString>&
 	return Files.Num() - Refusals.Num();
 }
 
+int32 AModularPlayerController::RequestImportFiles(const TArray<FString>& Files)
+{
+	TArray<FString> Fixtures;
+	TArray<FString> Models;
+	for (const FString& File : Files)
+	{
+		(UStageFixtureLibrarySubsystem::IsFixtureFile(File) ? Fixtures : Models).Add(File);
+	}
+	int32 Accepted = 0;
+	if (!Fixtures.IsEmpty())
+	{
+		Accepted += RequestImportFixtureFiles(Fixtures);
+	}
+	if (!Models.IsEmpty())
+	{
+		Accepted += RequestImportModelFiles(Models);
+	}
+	return Accepted;
+}
+
+FStageFixtureImportOutcome AModularPlayerController::RequestConfirmFixtureImport(const FGuid& ReviewId, bool bCorrectKind, EStageFixtureKind Kind)
+{
+	const AStageCraftGameModeBase* GameMode = GetStageGameMode();
+	UStageFixtureLibrarySubsystem* Library = GetGameInstance() ? GetGameInstance()->GetSubsystem<UStageFixtureLibrarySubsystem>() : nullptr;
+	const FStageEconomyResultInfo Verdict = GameMode && Library
+		? GameMode->EvaluateFixtureImport(this)
+		: FStageEconomyResultInfo::Fail(EStageEconomyResult::InvalidRequest, LOCTEXT("NoFixtureConfirm", "Adding fixtures needs the StageCraft game mode."));
+	if (!Verdict.IsSuccess())
+	{
+		ReportRejection(Verdict);
+		FStageFixtureImportOutcome Refused;
+		Refused.Result = EStageFixtureImportResult::NotAllowed;
+		Refused.Message = Verdict.Message;
+		return Refused;
+	}
+
+	const bool bValidKind = bCorrectKind && StaticEnum<EStageFixtureKind>()->IsValidEnumValue(static_cast<int64>(Kind));
+	const FStageFixtureImportOutcome Outcome = Library->ConfirmImport(ReviewId, bValidKind ? TOptional<EStageFixtureKind>(Kind) : TOptional<EStageFixtureKind>());
+	if (!Outcome.IsSuccess())
+	{
+		ReportRejection(FStageEconomyResultInfo::Fail(EStageEconomyResult::InvalidRequest, Outcome.Message));
+	}
+	return Outcome;
+}
+
+void AModularPlayerController::RequestCancelFixtureImport(const FGuid& ReviewId)
+{
+	if (UStageFixtureLibrarySubsystem* Library = GetGameInstance() ? GetGameInstance()->GetSubsystem<UStageFixtureLibrarySubsystem>() : nullptr)
+	{
+		Library->CancelImport(ReviewId);
+	}
+}
+
+FStageFixtureImportOutcome AModularPlayerController::RequestRemoveFixtureType(const FGuid& FixtureTypeId)
+{
+	const AStageCraftGameModeBase* GameMode = GetStageGameMode();
+	UStageFixtureLibrarySubsystem* Library = GetGameInstance() ? GetGameInstance()->GetSubsystem<UStageFixtureLibrarySubsystem>() : nullptr;
+	const FStageEconomyResultInfo Verdict = GameMode && Library
+		? GameMode->EvaluateFixtureImport(this)
+		: FStageEconomyResultInfo::Fail(EStageEconomyResult::InvalidRequest, LOCTEXT("NoFixtureRemove", "Changing the fixture Library needs the StageCraft game mode."));
+	if (!Verdict.IsSuccess())
+	{
+		ReportRejection(Verdict);
+		FStageFixtureImportOutcome Refused;
+		Refused.Result = EStageFixtureImportResult::NotAllowed;
+		Refused.FixtureTypeId = FixtureTypeId;
+		Refused.Message = Verdict.Message;
+		return Refused;
+	}
+
+	const FStageFixtureImportOutcome Outcome = Library->RemoveType(FixtureTypeId);
+	if (!Outcome.IsSuccess())
+	{
+		ReportRejection(FStageEconomyResultInfo::Fail(EStageEconomyResult::InvalidRequest, Outcome.Message));
+	}
+	return Outcome;
+}
+
+int32 AModularPlayerController::RequestBrowseFixtureFiles()
+{
+	if (!CanBrowseModelFiles())
+	{
+		ReportRejection(FStageEconomyResultInfo::Fail(EStageEconomyResult::InvalidRequest,
+			LOCTEXT("NoFixtureDialog", "This build has no file dialog. Drag .gdtf files onto the Library or the viewport instead.")));
+		return 0;
+	}
+	const AStageCraftGameModeBase* GameMode = GetStageGameMode();
+	const FStageEconomyResultInfo Verdict = GameMode ? GameMode->EvaluateFixtureImport(this)
+		: FStageEconomyResultInfo::Fail(EStageEconomyResult::InvalidRequest, LOCTEXT("NoFixtureImportMode", "Fixture import needs the StageCraft game mode."));
+	if (!Verdict.IsSuccess())
+	{
+		ReportRejection(Verdict);
+		return 0;
+	}
+
+	TArray<FString> Files;
+	const FString Filter = LOCTEXT("GdtfFilter", "GDTF fixture files (*.gdtf)").ToString() + TEXT("|*.gdtf");
+	if (!StageFileDialog::OpenFiles(LOCTEXT("ImportFixturesTitle", "Import GDTF Fixtures into the Library"), LastImportDirectory, Filter, Files))
+	{
+		return 0;
+	}
+	LastImportDirectory = FPaths::GetPath(Files[0]);
+	return RequestImportFixtureFiles(Files);
+}
+
 int32 AModularPlayerController::RequestBrowseModelFiles()
 {
 	const UStageMeshImportSubsystem* Importer = GetGameInstance() ? GetGameInstance()->GetSubsystem<UStageMeshImportSubsystem>() : nullptr;
@@ -2625,13 +2737,16 @@ int32 AModularPlayerController::RequestBrowseModelFiles()
 	}
 
 	TArray<FString> Files;
-	const FString Filter = StageMeshImport::MakeFileDialogFilter(Importer->GetSupportedExtensions());
-	if (!StageFileDialog::OpenFiles(LOCTEXT("ImportTitle", "Import Models into the Library"), LastImportDirectory, Filter, Files))
+	const FString Patterns = FString::JoinBy(Importer->GetSupportedExtensions(), TEXT(";"), [](const FString& Extension) { return TEXT("*.") + Extension; }) + TEXT(";*.gdtf");
+	const FString Filter = FText::Format(LOCTEXT("ModelsAndFixturesFilter", "Models and GDTF fixtures ({0})"), FText::FromString(Patterns)).ToString() + TEXT("|") + Patterns
+		+ TEXT("|") + StageMeshImport::MakeFileDialogFilter(Importer->GetSupportedExtensions())
+		+ TEXT("|") + LOCTEXT("GdtfOnlyFilter", "GDTF fixture files (*.gdtf)").ToString() + TEXT("|*.gdtf");
+	if (!StageFileDialog::OpenFiles(LOCTEXT("ImportTitle", "Import Models or Fixtures into the Library"), LastImportDirectory, Filter, Files))
 	{
 		return 0;
 	}
 	LastImportDirectory = FPaths::GetPath(Files[0]);
-	return RequestImportModelFiles(Files);
+	return RequestImportFiles(Files);
 }
 
 bool AModularPlayerController::CanBrowseModelFiles()

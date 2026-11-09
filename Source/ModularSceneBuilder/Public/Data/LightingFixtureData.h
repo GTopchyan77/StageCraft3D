@@ -282,6 +282,12 @@ public:
 	//~ Begin UBaseItemData Interface
 	/** Library types are built in memory from their file and reference only loaded or engine objects. */
 	virtual bool RequiresAssetStreaming() const override { return !IsLibraryType(); }
+
+	/** A library mode swaps only with the other modes of its fixture type, and a built-in fixture only with built-in fixtures. */
+	virtual bool CanSwapWith(const UBaseItemData& Other) const override;
+
+	/** A library mode is listed by its DMX mode and footprint, e.g. "Standard (15 ch)". */
+	virtual FText GetSwapOptionName() const override;
 	//~ End UBaseItemData Interface
 
 	/** One mode of a fixture type from the user's device library (Docs/ADR/0033 §4.1), not a content asset. */

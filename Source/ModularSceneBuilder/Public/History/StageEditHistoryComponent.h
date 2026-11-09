@@ -112,6 +112,13 @@ public:
 	void RecordParameterChange(AActor* Target, const FGameplayTag& ParameterId, const FText& ParameterName, const FStageParameterValue& Before);
 
 	/**
+	 * Records that Target's catalog item changed in place from Before (the inspector's Type, a GDTF fixture's mode) as one step. The
+	 * step names both items by object path, so undo and redo select them through the rules again even if the catalog changed order.
+	 * Ignored when the item did not change.
+	 */
+	void RecordItemTypeChange(AActor* Target, const class UBaseItemData* Before, const FText& ParameterName);
+
+	/**
 	 * Records a cue edit (store, update, delete) as one step holding the whole cue list before and after it
 	 * (Docs/ADR/0011-cue-list-and-patch-sheet-export.md §2.4). An open transaction is ended first, so the two never merge.
 	 * Description names the step ("Store Cue 3").

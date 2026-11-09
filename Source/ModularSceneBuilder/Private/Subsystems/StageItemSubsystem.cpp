@@ -158,17 +158,57 @@ float UStageItemSubsystem::GetCatalogLoadProgress() const
 
 void UStageItemSubsystem::AddRuntimeItem(UBaseItemData& Item)
 {
-	if (RuntimeItems.Contains(&Item))
-	{
-		return;
-	}
-	RuntimeItems.Add(&Item);
+	UBaseItemData* const Items[] = { &Item };
+	AddRuntimeItems(Items);
+}
 
-	if (bCatalogLoaded)
+void UStageItemSubsystem::AddRuntimeItems(TConstArrayView<UBaseItemData*> Items)
+{
+	int32 Added = 0;
+	for (UBaseItemData* Item : Items)
 	{
-		Catalog.Add(&Item);
+		if (!Item || RuntimeItems.Contains(Item))
+		{
+			continue;
+		}
+		RuntimeItems.Add(Item);
+		if (bCatalogLoaded)
+		{
+			Catalog.Add(Item);
+			UE_LOG(LogStageCraft, Log, TEXT("Stage item catalog: added %s."), *Item->GetPathName());
+			++Added;
+		}
+	}
+	if (Added > 0)
+	{
 		SortCatalog();
-		UE_LOG(LogStageCraft, Log, TEXT("Stage item catalog: added %s (%d items)."), *Item.GetPathName(), Catalog.Num());
+		UE_LOG(LogStageCraft, Log, TEXT("Stage item catalog: %d items."), Catalog.Num());
+		OnCatalogChanged.Broadcast();
+	}
+}
+
+void UStageItemSubsystem::RemoveRuntimeItems(TConstArrayView<UBaseItemData*> Items)
+{
+	int32 Removed = 0;
+	for (UBaseItemData* Item : Items)
+	{
+		if (!Item || RuntimeItems.Remove(Item) == 0)
+		{
+			continue;
+		}
+		Removed += Catalog.Remove(Item);
+		if (PendingSelection == Item)
+		{
+			PendingSelection = nullptr;
+		}
+		if (SelectedItem == Item)
+		{
+			CommitSelection(nullptr);
+		}
+	}
+	if (Removed > 0)
+	{
+		UE_LOG(LogStageCraft, Log, TEXT("Stage item catalog: removed %d runtime items (%d items)."), Removed, Catalog.Num());
 		OnCatalogChanged.Broadcast();
 	}
 }

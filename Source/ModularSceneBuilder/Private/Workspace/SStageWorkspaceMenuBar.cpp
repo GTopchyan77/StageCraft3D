@@ -160,6 +160,9 @@ void SStageWorkspaceMenuBar::FillFileMenu(FMenuBuilder& MenuBuilder)
 		MenuBuilder.AddMenuEntry(LOCTEXT("ImportModels", "Import Models..."),
 			LOCTEXT("ImportModelsTip", "Add .glb, .gltf, .obj or .fbx models to the Library. Files can also be dragged from Explorer onto the Library or the viewport."),
 			FSlateIcon(), FUIAction(FExecuteAction::CreateLambda([WeakController]() { if (WeakController.IsValid()) { WeakController->RequestBrowseModelFiles(); } })));
+		MenuBuilder.AddMenuEntry(LOCTEXT("ImportFixtures", "Import Fixtures (GDTF)..."),
+			LOCTEXT("ImportFixturesTip", "Add a fixture from its manufacturer's GDTF file (.gdtf, e.g. from gdtf-share.com). You see its import report (modes, channels StageCraft drives) before it is added; each DMX mode becomes a mode you can pick under Type in the inspector."),
+			FSlateIcon(), FUIAction(FExecuteAction::CreateLambda([WeakController]() { if (WeakController.IsValid()) { WeakController->RequestBrowseFixtureFiles(); } })));
 	}
 	MenuBuilder.AddMenuEntry(LOCTEXT("ShowLibrary", "Show Library"), LOCTEXT("ShowLibraryTip", "Show the Library panel. Imported models are listed under Imported."),
 		FSlateIcon(), FUIAction(FExecuteAction::CreateSP(this, &SStageWorkspaceMenuBar::ShowPanel, FGameplayTag(StageCraftTags::Panel_Library))));

@@ -344,13 +344,12 @@ FStageEconomyResultInfo UStageEconomySubsystem::ValidateParameterChange(const UO
 	}
 
 	// Switching the Type is "using" the target item, so it is held to the same rule as placing it.
-	if (ParameterId == StageCraftTags::Param_Info_Type && Value.Type == EStageParameterType::Enum)
+	if (ParameterId == StageCraftTags::Param_Info_Type)
 	{
-		TArray<UBaseItemData*> Options;
-		Actor->GetSwappableItems(Options);
-		if (Options.IsValidIndex(Value.Integer) && Options[Value.Integer] != Item)
+		const UBaseItemData* SwapTarget = Actor->ResolveSwapTarget(Value);
+		if (SwapTarget && SwapTarget != Item)
 		{
-			return ValidateItemUse(Options[Value.Integer]);
+			return ValidateItemUse(SwapTarget);
 		}
 	}
 	return FStageEconomyResultInfo::Ok();

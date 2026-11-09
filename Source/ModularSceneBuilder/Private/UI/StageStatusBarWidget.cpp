@@ -17,6 +17,7 @@
 #include "Engine/World.h"
 #include "History/StageEditHistorySubsystem.h"
 #include "Engine/LocalPlayer.h"
+#include "Fixtures/StageFixtureLibrarySubsystem.h"
 #include "Import/StageMeshImportSubsystem.h"
 #include "Input/StageInputPreferencesSubsystem.h"
 #include "Misc/Paths.h"
@@ -369,6 +370,11 @@ void UStageStatusBarWidget::BindSources()
 		ImportSubsystem->OnImportStarted.AddUniqueDynamic(this, &ThisClass::HandleModelImportStarted);
 		ImportSubsystem->OnImportFinished.AddUniqueDynamic(this, &ThisClass::HandleModelImportFinished);
 	}
+	if (UStageFixtureLibrarySubsystem* Library = GameInstance ? GameInstance->GetSubsystem<UStageFixtureLibrarySubsystem>() : nullptr)
+	{
+		FixtureLibrary = Library;
+		Library->OnImportFinished.AddUniqueDynamic(this, &ThisClass::HandleFixtureImportFinished);
+	}
 
 	// The hints name the user's keys.
 	if (UStageInputPreferencesSubsystem* Preferences = ULocalPlayer::GetSubsystem<UStageInputPreferencesSubsystem>(GetOwningLocalPlayer()))
@@ -453,6 +459,10 @@ void UStageStatusBarWidget::UnbindSources()
 	{
 		ImportSubsystem->OnImportStarted.RemoveDynamic(this, &ThisClass::HandleModelImportStarted);
 		ImportSubsystem->OnImportFinished.RemoveDynamic(this, &ThisClass::HandleModelImportFinished);
+	}
+	if (UStageFixtureLibrarySubsystem* Library = FixtureLibrary.Get())
+	{
+		Library->OnImportFinished.RemoveDynamic(this, &ThisClass::HandleFixtureImportFinished);
 	}
 	if (UStageInputPreferencesSubsystem* Preferences = InputPreferences.Get())
 	{
@@ -557,6 +567,16 @@ void UStageStatusBarWidget::HandleModelImportFinished(const FStageMeshImportOutc
 	ShowMessage(Outcome.IsSuccess()
 		? FText::Format(LOCTEXT("ImportedHint", "{0} Click it in the Library to place it."), Outcome.Message)
 		: Outcome.Message, Outcome.IsSuccess() ? EMessageSeverity::Info : EMessageSeverity::Warning);
+}
+
+void UStageStatusBarWidget::HandleFixtureImportFinished(const FStageFixtureImportOutcome& Outcome)
+{
+	const bool bNews = Outcome.IsSuccess() || Outcome.Origin == EStageFixtureImportOrigin::Restore || Outcome.Result == EStageFixtureImportResult::IOError;
+	if (!bNews || Outcome.Message.IsEmpty())
+	{
+		return;
+	}
+	ShowMessage(Outcome.Message, Outcome.IsSuccess() ? EMessageSeverity::Info : EMessageSeverity::Warning);
 }
 
 void UStageStatusBarWidget::ShowMessage(const FText& Message, EMessageSeverity Severity)

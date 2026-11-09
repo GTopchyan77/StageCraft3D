@@ -52,6 +52,15 @@ public:
 	/** Picture on the item's Library tile: the Icon texture (loaded with the UI bundle), or a rendered thumbnail. Null shows an initial. */
 	virtual UObject* GetCatalogIcon() const;
 
+	/**
+	 * Whether a placed item of this data may switch to Other in place (the inspector's Type list, AModularBaseActor::GetSwappableItems).
+	 * Called only for candidates of the same class and item type. Default: any of them.
+	 */
+	virtual bool CanSwapWith(const UBaseItemData& Other) const { return true; }
+
+	/** The item's name in the inspector's Type list. Default: DisplayName. */
+	virtual FText GetSwapOptionName() const;
+
 	// --- Presentation ---
 
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Display")

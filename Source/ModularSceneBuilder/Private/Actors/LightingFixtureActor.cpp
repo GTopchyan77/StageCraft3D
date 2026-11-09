@@ -1534,6 +1534,12 @@ void ALightingFixtureActor::GatherParameterSections(TArray<FStageParameterSectio
 	PatchSection.Add(StageCraftTags::Param_Patch_FixtureId, LOCTEXT("FixtureId", "Fixture ID"), FStageParameterValue::MakeInteger(FixtureId)).Range(1, 99999);
 	PatchSection.Add(StageCraftTags::Param_Patch_Universe, LOCTEXT("Universe", "Universe"), FStageParameterValue::MakeInteger(Patch.Universe)).Range(0, 63999);
 	PatchSection.Add(StageCraftTags::Param_Patch_Address, LOCTEXT("Address", "Address"), FStageParameterValue::MakeInteger(Patch.Address)).Range(0, 512);
+	if (Fixture->IsLibraryType())
+	{
+		PatchSection.Add(StageCraftTags::Param_Patch_Manufacturer, LOCTEXT("Manufacturer", "Manufacturer"), FStageParameterValue::MakeText(Fixture->Specs.Manufacturer)).ReadOnly();
+		PatchSection.Add(StageCraftTags::Param_Patch_Source, LOCTEXT("Source", "Source"),
+			FStageParameterValue::MakeText(FText::Format(LOCTEXT("SourceGdtf", "{0} (GDTF)"), FText::FromString(Fixture->SourceTypeName)))).ReadOnly();
+	}
 	PatchSection.Add(StageCraftTags::Param_Patch_Mode, LOCTEXT("DMXMode", "DMX Mode"), FStageParameterValue::MakeText(FText::FromName(Fixture->DMXModeName))).ReadOnly();
 	PatchSection.Add(StageCraftTags::Param_Patch_Footprint, LOCTEXT("Footprint", "Channels"),
 		FStageParameterValue::MakeInteger(Fixture->GetDMXFootprint())).Display(1.0, LOCTEXT("ChannelUnits", "ch")).ReadOnly();

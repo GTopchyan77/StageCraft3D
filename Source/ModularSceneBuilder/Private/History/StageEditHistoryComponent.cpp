@@ -6,6 +6,7 @@
 #include "Components/SelectionComponent.h"
 #include "Components/SpawnSystemComponent.h"
 #include "Data/BaseItemData.h"
+#include "Data/StageParameterTypes.h"
 #include "Engine/World.h"
 #include "Environment/StageEnvironmentSubsystem.h"
 #include "History/StageBatchCommand.h"
@@ -293,6 +294,19 @@ void UStageEditHistoryComponent::RecordCueListChange(const FText& Description, c
 {
 	EndTransaction();
 	Record(MakeShared<FStageCueListCommand>(Description, Before, After));
+}
+
+void UStageEditHistoryComponent::RecordItemTypeChange(AActor* Target, const UBaseItemData* Before, const FText& ParameterName)
+{
+	AModularBaseActor* Item = Cast<AModularBaseActor>(Target);
+	const UBaseItemData* After = IsValid(Item) ? Item->GetItemData() : nullptr;
+	if (!Before || !After || Before == After)
+	{
+		return;
+	}
+	EndTransaction();
+	Record(MakeShared<FStageParameterItemCommand>(Item->GetInstanceId(), Item->GetInstanceLabel(), ParameterName, StageCraftTags::Param_Info_Type,
+		FStageParameterValue::MakeText(FText::FromString(Before->GetPathName())), FStageParameterValue::MakeText(FText::FromString(After->GetPathName()))));
 }
 
 void UStageEditHistoryComponent::RecordEnvironmentChange(const FText& Description, const FStageEnvironmentSettings& Before, const FStageEnvironmentSettings& After)

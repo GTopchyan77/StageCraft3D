@@ -9,6 +9,7 @@
 #include "Engine/StreamableManager.h"
 #include "Framework/Application/SlateApplication.h"
 #include "HAL/PlatformApplicationMisc.h"
+#include "Fixtures/StageFixtureLibrarySubsystem.h"
 #include "Import/StageMeshImportSubsystem.h"
 #include "IO/StageCraftPaths.h"
 #include "Misc/Paths.h"
@@ -19,6 +20,7 @@
 #include "Startup/SStageBrandedLoader.h"
 #include "Startup/StageStartupSubsystem.h"
 #include "Subsystems/StageSessionSubsystem.h"
+#include "UI/StageFixtureImportDialog.h"
 #include "UI/StageStatusBarWidget.h"
 #include "UI/StageUIAnchors.h"
 #include "UI/StageViewportToolbar.h"
@@ -83,6 +85,82 @@ void UStageWorkspaceSubsystem::Initialize(FSubsystemCollectionBase& Collection)
 
 	LayoutStore = MakeShared<FStageLayoutStore>(FPaths::Combine(StageCraftPaths::DataRoot(), TEXT("Workspace")), FStageWorkspaceShell::PanelLayoutVersion);
 	UAssetManager::CallOrRegister_OnCompletedInitialScan(FSimpleMulticastDelegate::FDelegate::CreateUObject(this, &ThisClass::LoadPanelCatalog));
+
+	if (UStageFixtureLibrarySubsystem* Library = Collection.InitializeDependency<UStageFixtureLibrarySubsystem>())
+	{
+		FixtureLibrary = Library;
+		Library->OnReviewsChanged.AddUniqueDynamic(this, &ThisClass::HandleFixtureReviewsChanged);
+	}
+}
+
+void UStageWorkspaceSubsystem::HandleFixtureReviewsChanged()
+{
+	RequestFixtureReviewRefresh();
+}
+
+void UStageWorkspaceSubsystem::RequestFixtureReviewRefresh()
+{
+	UGameInstance* GameInstance = GetGameInstance();
+	if (bFixtureReviewRefreshPending || !GameInstance)
+	{
+		return;
+	}
+	bFixtureReviewRefreshPending = true;
+	GameInstance->GetTimerManager().SetTimerForNextTick(FTimerDelegate::CreateWeakLambda(this, [this]()
+	{
+		bFixtureReviewRefreshPending = false;
+		ShowNextFixtureReview();
+	}));
+}
+
+void UStageWorkspaceSubsystem::ShowNextFixtureReview()
+{
+	const UStageFixtureLibrarySubsystem* Library = FixtureLibrary.Get();
+	AModularPlayerController* Controller = LocalController.Get();
+	if (!Library || !Controller || !Shell.IsValid() || ExitDialog.IsValid() || WelcomeDialog.IsValid() || StartupLoader.IsValid())
+	{
+		return;
+	}
+	if (Library->GetReviews().IsEmpty())
+	{
+		if (FixtureDialog)
+		{
+			FixtureDialog = nullptr;
+			Shell->CloseDialog();
+		}
+		return;
+	}
+
+	const FStageFixtureImportReview& Next = Library->GetReviews()[0];
+	if (FixtureDialog && FixtureDialog->GetReviewId() == Next.ReviewId)
+	{
+		FixtureDialog->ShowReview(Next);
+		return;
+	}
+	FixtureDialog = CreateWidget<UStageFixtureImportDialog>(Controller, UStageFixtureImportDialog::StaticClass());
+	if (!FixtureDialog)
+	{
+		return;
+	}
+	FixtureDialog->OnClosed.BindUObject(this, &ThisClass::HandleFixtureDialogClosed);
+	const TSharedRef<SWidget> DialogWidget = FixtureDialog->TakeWidget();
+	FixtureDialog->ShowReview(Next);
+	UWidget* Focus = FixtureDialog->GetInitialFocus();
+	Shell->ShowDialog(DialogWidget, Focus ? Focus->TakeWidget().ToSharedPtr() : DialogWidget.ToSharedPtr());
+	UE_LOG(LogStageWorkspace, Log, TEXT("Fixture import report shown for %s (%d waiting)."), *Next.SourceFile, Library->GetReviews().Num());
+}
+
+void UStageWorkspaceSubsystem::HandleFixtureDialogClosed()
+{
+	if (FixtureDialog)
+	{
+		FixtureDialog = nullptr;
+		if (Shell.IsValid())
+		{
+			Shell->CloseDialog();
+		}
+	}
+	RequestFixtureReviewRefresh();
 }
 
 void UStageWorkspaceSubsystem::Deinitialize()
@@ -127,6 +205,16 @@ void UStageWorkspaceSubsystem::Deinitialize()
 	}
 	WelcomeDialog.Reset();
 	StartupLoader.Reset();
+	if (UStageFixtureLibrarySubsystem* Library = FixtureLibrary.Get())
+	{
+		Library->OnReviewsChanged.RemoveDynamic(this, &ThisClass::HandleFixtureReviewsChanged);
+	}
+	FixtureLibrary.Reset();
+	if (FixtureDialog)
+	{
+		FixtureDialog->OnClosed.Unbind();
+		FixtureDialog = nullptr;
+	}
 
 	State = EStageWorkspaceState::ShuttingDown;
 	if (Shell.IsValid())
@@ -165,6 +253,7 @@ void UStageWorkspaceSubsystem::RegisterLocalController(AModularPlayerController*
 	{
 		Shell->RefreshPanelContent();
 	}
+	RequestFixtureReviewRefresh();
 }
 
 void UStageWorkspaceSubsystem::UnregisterLocalController(AModularPlayerController* Controller)
@@ -256,7 +345,7 @@ void UStageWorkspaceSubsystem::InstallIfSupported()
 	{
 		const UStageWorkspaceSubsystem* Self = WeakThis.Get();
 		const UStageMeshImportSubsystem* Importer = Self && Self->GetGameInstance() ? Self->GetGameInstance()->GetSubsystem<UStageMeshImportSubsystem>() : nullptr;
-		return Importer && Importer->CanImportAny(Files);
+		return (Importer && Importer->CanImportAny(Files)) || Files.ContainsByPredicate(&UStageFixtureLibrarySubsystem::IsFixtureFile);
 	};
 	Callbacks.FilesDropped = [WeakThis](const TArray<FString>& Files)
 	{
@@ -264,7 +353,7 @@ void UStageWorkspaceSubsystem::InstallIfSupported()
 		const UStageWorkspaceSubsystem* Self = WeakThis.Get();
 		if (AModularPlayerController* Controller = Self ? Self->LocalController.Get() : nullptr)
 		{
-			Controller->RequestImportModelFiles(Files);
+			Controller->RequestImportFiles(Files);
 		}
 	};
 	Callbacks.PanelHostChanged = [WeakThis](const FGameplayTag& PanelTag, EStagePanelHost NewHost, EStagePanelHost PreviousHost)
@@ -493,6 +582,7 @@ void UStageWorkspaceSubsystem::CloseWelcome()
 	{
 		Shell->CloseDialog();
 	}
+	RequestFixtureReviewRefresh();
 }
 
 // --- Panels ---
@@ -985,6 +1075,11 @@ void UStageWorkspaceSubsystem::ShowSavePrompt(const FString& SceneName, EStageSa
 
 	// One dialog at a time: the prompt replaces the welcome screen if it is up.
 	WelcomeDialog.Reset();
+	if (FixtureDialog)
+	{
+		FixtureDialog->OnClosed.Unbind();
+		FixtureDialog = nullptr;
+	}
 	const TWeakObjectPtr<UStageWorkspaceSubsystem> WeakThis(this);
 	PromptPurpose = Purpose;
 	ExitDialog = SNew(SStageUnsavedChangesDialog)
@@ -1132,6 +1227,7 @@ void UStageWorkspaceSubsystem::CloseExitPrompt()
 	{
 		Shell->CloseDialog();
 	}
+	RequestFixtureReviewRefresh();
 }
 
 void UStageWorkspaceSubsystem::SaveSessionAsync()

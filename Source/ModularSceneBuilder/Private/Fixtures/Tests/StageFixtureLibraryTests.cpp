@@ -347,7 +347,27 @@ bool FStageFixturesLibraryTest::RunTest(const FString& Parameters)
 		TestTrue(TEXT("A file importing now is refused"), Library->RequestImport({ SpotFile }).Num() == 1);
 		TestTrue(TEXT("A scene load would wait"), Library->HasLoadsInProgress());
 		TestTrue(TEXT("Imports finish"), Game.Pump([Library]() { return !Library->HasLoadsInProgress(); }, 20.0));
+		TestEqual(TEXT("Nothing is added before the review"), Library->GetTypes().Num(), 0);
+		TestEqual(TEXT("Three files wait for review"), Library->GetReviews().Num(), 3);
+		TArray<FGuid> ReviewIds;
+		for (const FStageFixtureImportReview& Review : Library->GetReviews())
+		{
+			ReviewIds.Add(Review.ReviewId);
+		}
+		for (const FGuid& ReviewId : ReviewIds)
+		{
+			const FStageFixtureImportReview* Review = Library->FindReview(ReviewId);
+			const bool bDamaged = Review && Review->SourceFile.EndsWith(TEXT("Damaged.gdtf"));
+			const FStageFixtureImportOutcome Outcome = Library->ConfirmImport(ReviewId, {});
+			TestEqual(*FString::Printf(TEXT("Confirming %s"), Review ? *Review->SourceFile : TEXT("?")), Outcome.Result,
+				bDamaged ? EStageFixtureImportResult::Refused : EStageFixtureImportResult::Success);
+			if (bDamaged)
+			{
+				TestEqual(TEXT("A refused review stays until cancelled"), Library->CancelImport(ReviewId).Result, EStageFixtureImportResult::Cancelled);
+			}
+		}
 		TestEqual(TEXT("Two types: the damaged file is refused"), Library->GetTypes().Num(), 2);
+		TestEqual(TEXT("No review left"), Library->GetReviews().Num(), 0);
 
 		const FStageFixtureLibraryType* Spot = Library->FindType(SpotId);
 		const FStageFixtureLibraryType* Bar = Library->FindType(BarTypeId);
@@ -372,7 +392,12 @@ bool FStageFixturesLibraryTest::RunTest(const FString& Parameters)
 
 		TestTrue(TEXT("The same type again is accepted for reading"), Library->RequestImport({ SpotFile }).IsEmpty());
 		TestTrue(TEXT("and finishes"), Game.Pump([Library]() { return !Library->HasLoadsInProgress(); }, 20.0));
-		TestEqual(TEXT("but is not added twice"), Library->GetTypes().Num(), 2);
+		TestTrue(TEXT("as a review that would replace the type"), Library->GetReviews().Num() == 1 && Library->GetReviews()[0].bReplaces);
+		if (Library->GetReviews().Num() == 1)
+		{
+			Library->CancelImport(Library->GetReviews()[0].ReviewId);
+		}
+		TestEqual(TEXT("Cancelled, it is not added twice"), Library->GetTypes().Num(), 2);
 
 		Game.Shutdown();
 		TestTrue(TEXT("The spot is copied into the library"), IFileManager::Get().FileExists(*StageFixtureLibrary::GetLibraryFilePath(SpotId)));

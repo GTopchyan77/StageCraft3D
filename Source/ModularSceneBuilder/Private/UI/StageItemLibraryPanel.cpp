@@ -22,6 +22,8 @@
 #include "Data/StageItemTypes.h"
 #include "Engine/GameInstance.h"
 #include "Engine/Texture2D.h"
+#include "Fixtures/StageFixtureLibrarySubsystem.h"
+#include "Fixtures/StageFixtureLibraryView.h"
 #include "Placement/StagePlacementToolComponent.h"
 #include "Player/ModularPlayerController.h"
 #include "Subsystems/StageItemSubsystem.h"
@@ -102,6 +104,10 @@ void UStageItemLibraryEntry::NativeOnInitialized()
 	{
 		EntryButton->OnClicked.AddUniqueDynamic(this, &ThisClass::HandleButtonClicked);
 	}
+	if (RemoveButton)
+	{
+		RemoveButton->OnClicked.AddUniqueDynamic(this, &ThisClass::HandleRemoveClicked);
+	}
 }
 
 void UStageItemLibraryEntry::BuildDefaultTree()
@@ -162,6 +168,108 @@ void UStageItemLibraryEntry::BuildDefaultTree()
 	DetailText = WidgetTree->ConstructWidget<UTextBlock>(UTextBlock::StaticClass(), TEXT("DetailText"));
 	DetailText->SetTextOverflowPolicy(ETextOverflowPolicy::Ellipsis);
 	Labels->AddChildToVerticalBox(DetailText);
+
+	RemoveButton = WidgetTree->ConstructWidget<UButton>(UStageToolButton::StaticClass(), TEXT("RemoveButton"));
+	RemoveText = WidgetTree->ConstructWidget<UTextBlock>(UTextBlock::StaticClass(), TEXT("RemoveText"));
+	if (UButtonSlot* RemoveLabelSlot = Cast<UButtonSlot>(RemoveButton->AddChild(RemoveText)))
+	{
+		RemoveLabelSlot->SetPadding(FMargin(6.f, 2.f));
+	}
+	if (UHorizontalBoxSlot* RemoveSlot = Row->AddChildToHorizontalBox(RemoveButton))
+	{
+		RemoveSlot->SetVerticalAlignment(VAlign_Center);
+		RemoveSlot->SetPadding(FMargin(6.f, 0.f, 0.f, 0.f));
+	}
+	RemoveButton->SetVisibility(ESlateVisibility::Collapsed);
+}
+
+void UStageItemLibraryEntry::SetFixtureType(const FGuid& InFixtureTypeId, const FText& InName, const FText& InDetail)
+{
+	FixtureTypeId = InFixtureTypeId;
+	CardName = InName;
+	if (NameText && !InName.IsEmpty())
+	{
+		NameText->SetText(InName);
+	}
+	if (DetailText && !InDetail.IsEmpty())
+	{
+		DetailText->SetText(InDetail);
+	}
+	if (InitialText && !InName.IsEmpty())
+	{
+		InitialText->SetText(StageItemLibrary::MakeInitial(InName));
+	}
+	if (EntryButton)
+	{
+		EntryButton->SetToolTipText(LOCTEXT("FixtureTypeTooltip",
+			"A fixture imported from a GDTF file. Click to place it in its first DMX mode; switch the mode with Type in the inspector."));
+	}
+	if (RemoveButton)
+	{
+		RemoveButton->SetVisibility(FixtureTypeId.IsValid() ? ESlateVisibility::Visible : ESlateVisibility::Collapsed);
+	}
+	SetRemoveArmed(false);
+}
+
+FText UStageItemLibraryEntry::GetDisplayName() const
+{
+	if (!CardName.IsEmpty())
+	{
+		return CardName;
+	}
+	return Item ? StageItemLibrary::ItemName(*Item) : FText::GetEmpty();
+}
+
+void UStageItemLibraryEntry::NativeOnMouseLeave(const FPointerEvent& InMouseEvent)
+{
+	Super::NativeOnMouseLeave(InMouseEvent);
+	SetRemoveArmed(false);
+}
+
+void UStageItemLibraryEntry::SetRemoveArmed(bool bInArmed)
+{
+	bRemoveArmed = bInArmed;
+	if (!RemoveButton)
+	{
+		return;
+	}
+	RemoveButton->SetToolTipText(bRemoveArmed
+		? LOCTEXT("RemoveArmedTip", "Click again to remove this fixture type and its library file. Fixtures placed on the stage must be deleted first.")
+		: LOCTEXT("RemoveTip", "Remove this fixture type from the Library (asks for a second click)."));
+	if (!bCodeStyled || !Theme)
+	{
+		return;
+	}
+	using namespace StageCraftWidgetStyle;
+	FButtonStyle Style = bRemoveArmed
+		? MakeFlatButton(Theme->WarningColor, Theme->WarningColor * 1.1f, Theme->WarningColor * 0.85f)
+		: MakeFlatButton(FLinearColor::Transparent, Theme->RowHover, Theme->Divider);
+	if (!bRemoveArmed)
+	{
+		Style.SetNormal(MakeBox(FLinearColor::Transparent, CornerRadius, Theme->Divider, 1.f));
+	}
+	RemoveButton->SetStyle(Style);
+	if (RemoveText)
+	{
+		RemoveText->SetText(bRemoveArmed ? LOCTEXT("RemoveArmed", "REMOVE?") : LOCTEXT("Remove", "REMOVE"));
+		RemoveText->SetFont(MakeFont(7, TEXT("Bold")));
+		RemoveText->SetColorAndOpacity(FSlateColor(bRemoveArmed ? Theme->WindowBackground : Theme->TextSecondary));
+	}
+}
+
+void UStageItemLibraryEntry::HandleRemoveClicked()
+{
+	if (!FixtureTypeId.IsValid())
+	{
+		return;
+	}
+	if (!bRemoveArmed)
+	{
+		SetRemoveArmed(true);
+		return;
+	}
+	SetRemoveArmed(false);
+	OnRemoveRequested.ExecuteIfBound(FixtureTypeId);
 }
 
 void UStageItemLibraryEntry::SetItem(UBaseItemData* InItem, const UStageCraftUITheme& InTheme)
@@ -526,7 +634,7 @@ UButton* UStageItemLibraryPanel::BuildImportButton()
 	Style.SetNormal(MakeBox(FLinearColor::Transparent, CornerRadius, Palette.Divider, 1.f));
 	Button->SetStyle(Style);
 	Button->SetToolTipText(LOCTEXT("ImportTip",
-		"Import 3D models (.glb, .gltf, .obj, .fbx) into the Library.\nYou can also drag model files from Explorer onto the Library or the viewport."));
+		"Import 3D models (.glb, .gltf, .obj, .fbx) or GDTF fixtures (.gdtf) into the Library.\nA fixture file shows its import report before it is added.\nYou can also drag files from Explorer onto the Library or the viewport."));
 
 	UHorizontalBox* Content = WidgetTree->ConstructWidget<UHorizontalBox>(UHorizontalBox::StaticClass(), TEXT("ImportContent"));
 	UImage* Icon = WidgetTree->ConstructWidget<UImage>(UImage::StaticClass(), TEXT("ImportIcon"));
@@ -612,6 +720,7 @@ void UStageItemLibraryPanel::NativeConstruct()
 	const UGameInstance* GameInstance = GetGameInstance();
 	UStageItemSubsystem* Items = GameInstance ? GameInstance->GetSubsystem<UStageItemSubsystem>() : nullptr;
 	ItemSubsystem = Items;
+	FixtureLibrary = GameInstance ? GameInstance->GetSubsystem<UStageFixtureLibrarySubsystem>() : nullptr;
 	if (Items)
 	{
 		Items->OnCatalogLoaded.AddUniqueDynamic(this, &ThisClass::HandleCatalogLoaded);
@@ -652,6 +761,7 @@ void UStageItemLibraryPanel::ClearEntries()
 	for (UStageItemLibraryEntry* Entry : Entries)
 	{
 		Entry->OnClicked.Unbind();
+		Entry->OnRemoveRequested.Unbind();
 	}
 	for (UStageItemLibraryCategory* Group : Categories)
 	{
@@ -685,9 +795,12 @@ void UStageItemLibraryPanel::RebuildEntries()
 	});
 
 	const UStageCraftUITheme& Palette = GetTheme();
+	const UStageFixtureLibrarySubsystem* Library = FixtureLibrary.Get();
+	const TArray<StageFixtureLibraryView::FCard> Cards = StageFixtureLibraryView::MakeCards(Sorted, Library ? TConstArrayView<FStageFixtureLibraryType>(Library->GetTypes()) : TConstArrayView<FStageFixtureLibraryType>());
 	UStageItemLibraryCategory* Group = nullptr;
-	for (UBaseItemData* Item : Sorted)
+	for (const StageFixtureLibraryView::FCard& Card : Cards)
 	{
+		UBaseItemData* Item = Card.Item;
 		if (!Group || Item->CategoryTag != Group->GetCategory())
 		{
 			Group = CreateWidget<UStageItemLibraryCategory>(this, UStageItemLibraryCategory::StaticClass());
@@ -703,6 +816,11 @@ void UStageItemLibraryPanel::RebuildEntries()
 			continue;
 		}
 		Entry->SetItem(Item, Palette);
+		if (Card.IsFixtureType())
+		{
+			Entry->SetFixtureType(Card.FixtureTypeId, Card.Name, Card.Detail);
+			Entry->OnRemoveRequested.BindUObject(this, &ThisClass::HandleRemoveRequested);
+		}
 		Entry->OnClicked.BindUObject(this, &ThisClass::HandleEntryClicked);
 		Group->AddEntry(*Entry);
 		Entries.Add(Entry);
@@ -725,7 +843,7 @@ void UStageItemLibraryPanel::ApplySearch()
 	for (UStageItemLibraryEntry* Entry : Entries)
 	{
 		const UBaseItemData* Item = Entry->GetItem();
-		const bool bMatch = Item && StageItemLibrary::MatchesSearch(StageItemLibrary::ItemName(*Item).ToString(),
+		const bool bMatch = Item && StageItemLibrary::MatchesSearch(Entry->GetDisplayName().ToString(),
 			StageItemLibrary::MakeCategoryLabel(Item->CategoryTag).ToString(), SearchQuery);
 		Entry->SetVisibility(bMatch ? ESlateVisibility::Visible : ESlateVisibility::Collapsed);
 		Matches += bMatch ? 1 : 0;
@@ -838,6 +956,14 @@ void UStageItemLibraryPanel::HandleImportClicked()
 	if (AModularPlayerController* Controller = GetStageController())
 	{
 		Controller->RequestBrowseModelFiles();
+	}
+}
+
+void UStageItemLibraryPanel::HandleRemoveRequested(const FGuid& FixtureTypeId)
+{
+	if (AModularPlayerController* Controller = GetStageController())
+	{
+		Controller->RequestRemoveFixtureType(FixtureTypeId);
 	}
 }
 

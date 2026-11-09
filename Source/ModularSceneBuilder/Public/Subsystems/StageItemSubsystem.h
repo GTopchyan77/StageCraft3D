@@ -94,6 +94,15 @@ private:
 	 * Broadcasts OnCatalogChanged once the catalog has loaded; before that the item simply joins the initial load.
 	 */
 	void AddRuntimeItem(class UBaseItemData& Item);
+
+	/** AddRuntimeItem for several items with one OnCatalogChanged (a fixture type's modes). Nulls and known items are skipped. */
+	void AddRuntimeItems(TConstArrayView<class UBaseItemData*> Items);
+
+	/**
+	 * Takes runtime items out of the catalog (a fixture type removed or replaced), with one OnCatalogChanged. The selected item is
+	 * cleared when it is one of them. Placed actors keep their item; only the catalog forgets it.
+	 */
+	void RemoveRuntimeItems(TConstArrayView<class UBaseItemData*> Items);
 	void SortCatalog();
 
 	void LoadCatalog();

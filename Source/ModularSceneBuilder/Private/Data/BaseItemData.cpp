@@ -33,6 +33,11 @@ UObject* UBaseItemData::GetCatalogIcon() const
 	return Icon.Get();
 }
 
+FText UBaseItemData::GetSwapOptionName() const
+{
+	return DisplayName;
+}
+
 FPrimaryAssetId UBaseItemData::GetPrimaryAssetId() const
 {
 	// All subclasses share one type so the catalog is a single Asset Manager query.

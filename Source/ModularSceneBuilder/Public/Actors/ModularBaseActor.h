@@ -51,10 +51,17 @@ public:
 
 	/**
 	 * Catalog items this instance can be switched to in place (the inspector's Type dropdown, whose
-	 * option index is the index here): same data class and item type as the current ItemData, which
-	 * is always included. Public so rule checks can resolve a Type option to the item it selects.
+	 * option index is the index here): same data class and item type as the current ItemData, that the
+	 * current ItemData allows (UBaseItemData::CanSwapWith: a GDTF fixture lists only its own modes). The
+	 * current ItemData is always included. Public so rule checks can resolve a Type option to the item it selects.
 	 */
 	void GetSwappableItems(TArray<class UBaseItemData*>& OutItems) const;
+
+	/**
+	 * The item a Type value selects: an Enum value is an index into GetSwappableItems, a Text value an item's object path (how undo
+	 * names it, so a catalog that changed in between cannot shift it). Null when the value selects nothing swappable.
+	 */
+	class UBaseItemData* ResolveSwapTarget(const struct FStageParameterValue& Value) const;
 
 	UFUNCTION(BlueprintPure, Category = "StageCraft|Item")
 	class UStaticMeshComponent* GetMeshComponent() const { return MeshComponent; }
