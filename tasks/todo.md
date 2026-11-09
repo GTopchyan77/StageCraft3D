@@ -669,7 +669,8 @@ Gevor's choices: automation tests on a harness game instance (not AFunctionalTes
 - [x] GD1 parser, mapping, units, import report, 5 tests on self-authored files (STATE.md #80); corpus run pending
 - [x] GD2 runtime fixture types, UStageFixtureLibrarySubsystem, stable paths, scene v12, missing types, 64 cells (bench A/B) (STATE.md #81)
 - [ ] GD2 follow-ups: a world-level load test of the missing-type message; per-cell cost of 64-cell rigs (500 bars crossfade 19.9 ms show tick) for the pixel-mapping phase
-- [ ] GD3 DMX channel functions and default values in DMX OUT/IN (built-ins byte-identical; DMXOut bench; Gevor checks a visualiser)
+- [x] GD3 DMX channel functions and default values in DMX OUT/IN, built-ins byte-identical, DMXOut bench A/B (STATE.md #82)
+- [ ] Gevor: check an imported fixture's DMX OUT on a visualiser (Capture or grandMA3 onPC 3D) or a real fixture
 - [ ] GD4 UI: import and drop, report dialog, mode swap (GetSwappableItems: modes of one type), Replace and Remove of a type, Library cards, help article EN/HY
 - [ ] GD5 (optional) glTF meshes, gobo images
 - [ ] ADR 0034 MVR (after GD2)

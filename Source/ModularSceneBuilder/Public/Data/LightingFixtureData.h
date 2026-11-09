@@ -173,6 +173,42 @@ struct MODULARSCENEBUILDER_API FStageFixtureBody
 	FVector2D CellStripSizeCm = FVector2D::ZeroVector;
 };
 
+/**
+ * One DMX range of a channel and what it does (a GDTF channel function or channel set; Docs/ADR/0033 §4.3). Ranges are built
+ * once at import and never change; DMX OUT and DMX IN read them through StageDMXFunctions.
+ */
+USTRUCT(BlueprintType)
+struct MODULARSCENEBUILDER_API FStageDMXFunction
+{
+	GENERATED_BODY()
+
+	/** First and last DMX value of the range, inclusive, in the channel's resolution (0..255, or 0..65535 for 16-bit). */
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "DMX")
+	int32 DMXFrom = 0;
+
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "DMX")
+	int32 DMXTo = 0;
+
+	/** The attribute this range drives: the channel's own attribute, or invalid for a range StageCraft never selects (closed, macro, shake). */
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "DMX", meta = (Categories = "StageCraft.Attribute"))
+	FGameplayTag Attribute;
+
+	/** Attribute values at DMXFrom and at DMXTo, in StageCraft units (degrees, 0..1, rpm, kelvin, Shutter 0..1). Equal for a fixed value. */
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "DMX")
+	float PhysicalFrom = 0.f;
+
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "DMX")
+	float PhysicalTo = 0.f;
+
+	/** The wheel or prism slot the range selects (0 = Open or Out); INDEX_NONE for a continuous range. */
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "DMX")
+	int32 Slot = INDEX_NONE;
+
+	/** The range's name in its source file, for display. */
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "DMX")
+	FName Label;
+};
+
 /** One slot of the fixture's DMX mode (personality). */
 USTRUCT(BlueprintType)
 struct MODULARSCENEBUILDER_API FStageFixtureDMXChannel
@@ -197,7 +233,27 @@ struct MODULARSCENEBUILDER_API FStageFixtureDMXChannel
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "DMX")
 	FName Label;
 
+	/**
+	 * The channel's DMX ranges, sorted by DMXFrom and not overlapping (imported fixtures). Empty keeps the linear encoding of
+	 * ULightingFixtureData::NormalizeForDMX (every built-in fixture), so built-in output is unchanged.
+	 */
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "DMX")
+	TArray<FStageDMXFunction> Functions;
+
+	/**
+	 * Sent, in the channel's resolution, while nothing drives the channel: a channel without an attribute, or an imported channel
+	 * whose attribute the fixture does not have. Built-in channels without functions are never written then, as before.
+	 */
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "DMX", meta = (ClampMin = "0", ClampMax = "65535"))
+	int32 DefaultDMX = 0;
+
 	int32 GetWidth() const { return b16Bit ? 2 : 1; }
+
+	/** The highest value the channel can send: 255, or 65535 for 16-bit. */
+	int32 GetMaxValue() const { return b16Bit ? 65535 : 255; }
+
+	/** Whether an undriven channel is written as DefaultDMX (unmapped or imported) rather than left alone (a built-in channel). */
+	bool SendsDefaultWhenUndriven() const { return !Attribute.IsValid() || !Functions.IsEmpty(); }
 };
 
 /**
@@ -327,6 +383,20 @@ public:
 
 	/** Inverse of NormalizeForDMX: the attribute value for a received 0..1 channel value (stepped: the slot whose share holds it). */
 	float DenormalizeFromDMX(const FGameplayTag& Attribute, float Normalized) const;
+
+	/**
+	 * The value one channel sends, in its resolution, for Value of Attribute (the attribute that feeds the channel after the CMY
+	 * and patch-option resolution; Inverted mirrors it across its range). A channel without functions uses NormalizeForDMX exactly
+	 * as before; with functions, the value is carried into the channel's own attribute and encoded through its ranges
+	 * (StageDMXFunctions::Encode). Pure; safe on any thread for an immutable fixture.
+	 */
+	int32 EncodeDMXChannel(const FStageFixtureDMXChannel& Channel, const FGameplayTag& Attribute, float Value, bool bInverted) const;
+
+	/**
+	 * Inverse of EncodeDMXChannel for a received DMX value. False when the value falls in a range StageCraft does not drive, so
+	 * the attribute keeps its current value.
+	 */
+	bool DecodeDMXChannel(const FStageFixtureDMXChannel& Channel, const FGameplayTag& Attribute, int32 DMXValue, bool bInverted, float& OutValue) const;
 
 #if WITH_EDITOR
 	/**

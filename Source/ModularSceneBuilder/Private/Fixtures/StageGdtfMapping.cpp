@@ -327,6 +327,9 @@ namespace StageGdtfMapping
 					StrobeHz.Y = FMath::Max(StrobeHz.Y, double(FMath::Max(From, To)));
 					Range.ValueFrom = From;
 					Range.ValueTo = To;
+					Range.bStrobe = true;
+					Range.StrobeHzFrom = From;
+					Range.StrobeHzTo = To;
 					break;
 				default:
 					Range.ValueFrom = From;

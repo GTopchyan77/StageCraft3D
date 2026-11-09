@@ -8191,10 +8191,109 @@ All times in ms.
   - A placed library fixture's look in a `-game` run.
   - Real manufacturer files: the G5 corpus is still pending.
 
-**Commit:** uncommitted (working tree).
+**Commit:** `153d75a`.
 
 **Known issues / follow-ups**
 - **GD3:** DMX functions and `DefaultDMX`. Until then, unmapped channels send 0.
 - **GD4:** the UI, Replace and Remove, and the mode swap limited to one type's modes.
 - **Large 64-cell rigs** (500 bars = 32,000 pixels) cost about 20 ms of show tick in a crossfade. This is a target for the pixel-mapping phase.
 - **Gevor's G5 corpus** and the probe run are still the gate for confirming the cell and position rules.
+
+## #82 — GDTF GD3: DMX channel functions and default values in DMX OUT and IN (ADR 0033; 2026-11-09)
+
+**What & why**
+- Gevor asked (2026-11-09) for GD3 of ADR 0033:
+  - encode and decode channel functions, wheel slots, shutter states and default DMX values for imported GDTF fixtures;
+  - make DMX OUT and IN use them, with unmapped channels sending their defaults and built-in fixtures byte-identical;
+  - test it all.
+- **Root problem.** GD2 placed imported fixtures with their real footprint, but DMX OUT still encoded every channel linearly over the attribute's range and sent 0 on unmapped channels. A real fixture would have read wrong values:
+  - a shutter's 0..255 has closed, open, strobe and random parts;
+  - a gobo channel has slot ranges, then shake;
+  - Focus or Control at 0 instead of their GDTF default.
+- **Data** (`Public/Data/LightingFixtureData.h`):
+  - New `FStageDMXFunction` {DMXFrom, DMXTo, Attribute, PhysicalFrom, PhysicalTo, Slot, Label}.
+  - `FStageFixtureDMXChannel` gains `Functions`, `DefaultDMX`, `GetMaxValue()` and `SendsDefaultWhenUndriven()` (no attribute, or has functions).
+- **Encoder** (new `Public/Show/StageDMXFunctions.h`, `Private/Show/StageDMXFunctions.cpp`): pure, allocation-free, any thread.
+  - `Encode`:
+    - the first range of the channel's attribute that holds the value;
+    - slots and fixed values at the range centre, continuous ranges interpolated;
+    - otherwise the nearest range;
+    - Shutter open with no open range sends `DefaultDMX`;
+    - no range of the attribute, or a non-finite value, sends `DefaultDMX`.
+  - `Decode`:
+    - a slot or the interpolated value;
+    - a range StageCraft does not drive leaves the attribute unchanged, except on a Shutter channel, where it reads as open (0), so a console leaving strobe never leaves the fixture strobing.
+  - `AreValid`: at most 256 ranges, inside the resolution, From ≤ To, rising, finite.
+- **`ULightingFixtureData::EncodeDMXChannel` / `DecodeDMXChannel`.**
+  - A channel without functions runs exactly the old linear code.
+  - With functions, the value is first carried into the channel's own attribute (CMY inversion, pan and tilt invert and swap), then goes through `StageDMXFunctions`.
+- **`ALightingFixtureActor::WriteDMX` / `ReadDMX`** use them.
+  - Undriven channels that `SendsDefaultWhenUndriven` are written as `DefaultDMX`. Built-in channels are skipped as before.
+  - `ReadDMX` adds an attribute only when the value decodes.
+- **Builder** (`StageGdtfFixtureBuilder::MakeDMXChannels(Layout, StrobeRateHz)`):
+  - Mapped channels get the layout's ranges as functions; ranges of other attributes become undriven ranges.
+  - Every channel gets its GDTF default, split per byte when its bytes become separate channels (24-bit, fine byte apart).
+  - Strobe ranges are scaled over the fixture's `StrobeRateHz` (`StrobeHzToShutter`), not over their own channel. For this the mapping keeps the Hz of each strobe range (`FStageGdtfRange::bStrobe`, `StrobeHzFrom/To`).
+  - A channel that cannot be driven at full resolution, or has ranges `AreValid` refuses, is kept at its default.
+- ADR 0033 §16 records these decisions.
+
+**Files changed**
+- New:
+  - `Public/Show/StageDMXFunctions.h`, `Private/Show/StageDMXFunctions.cpp`;
+  - `Private/Fixtures/Tests/StageDMXFunctionTests.cpp`.
+- Changed:
+  - `Public/Data/LightingFixtureData.h`, `Private/Data/LightingFixtureData.cpp`;
+  - `Public/Actors/LightingFixtureActor.h` (doc), `Private/Actors/LightingFixtureActor.cpp`;
+  - `Private/Fixtures/StageGdtfMapping.h/.cpp`, `StageGdtfFixtureBuilder.h/.cpp`;
+  - `Private/Fixtures/Tests/StageFixtureLibraryTests.cpp`: MakeDMXChannels expectations. A 24-bit or split channel is now kept at its default, with defaults per byte.
+- Records:
+  - `Docs/ADR/0033-…md` §16, `tasks/todo.md`;
+  - STATE.md: #81 now carries `153d75a`.
+
+**Verification**
+- **Tests.** `RunAutomation.ps1 -ExpectedCount 253 -NullRHI` gives 253/253, with user data unchanged (129 files). New tests:
+  - `StageCraft.Fixtures.DMXFunctions` (pure):
+    - shutter closed / open / strobe / random both ways, every strobe value surviving decode and encode;
+    - strobe-only open sends the default;
+    - gobo slot centres, nearest slot, shake unchanged;
+    - a falling 16-bit pan range, clamping of received values;
+    - first-range-wins with several ranges, no owning range sends the default;
+    - hostile ranges clamped; `AreValid` refusals;
+    - `StrobeHzToShutter`.
+  - `StageCraft.Fixtures.DMXBuiltInsUnchanged`: all 13 built-ins (11 `DA_Fixture_*`, 2 `DA_MovingHead_*`), 8 invert/swap combinations, 4 random frames each. Of the 416 frames:
+    - `WriteDMX` equals the pre-GD3 encoder (reproduced in the test) byte for byte;
+    - `ReadDMX` of random universes sets the same values as the pre-GD3 decoder;
+    - every built-in channel has an attribute, no functions and default 0.
+  - `StageCraft.Fixtures.DMXImported`, the self-authored spot's Standard mode in a world:
+    - Focus and Control send their defaults over a 0xEE-filled universe;
+    - shutter open = 23, closed and random read as open;
+    - 10 Hz lands within one DMX step of 10 Hz on the file's own strobe range;
+    - wheel, gobo and prism at range centres, decoded from inside their ranges;
+    - gobo shake leaves the gobo;
+    - 16-bit pan; inverted pan;
+    - 64 random frames across all patch options re-send identical bytes after DMX IN.
+- **Builds:** Editor, Game Development and Game Shipping, 0 warnings. No development-only code was added, so the Shipping string set is unchanged.
+- **Benchmark:** `Bench.Fixtures DMXOut=1 Effects=1`, DA_Fixture_PixelBar16. A clean worktree of `153d75a` against a clean worktree of the GD3 code, two alternating rounds. Show tick in ms (Art-Net and sACN sent, 0 errors):
+
+    | Fixtures | Phase | Baseline (2 runs) | GD3 (2 runs) |
+    |---|---|---|---|
+    | 200 | idle | 2.70 / 2.65 | 2.65 / 2.65 |
+    | 200 | crossfade | 4.12 / 4.24 | 4.19 / 4.31 |
+    | 500 | idle | 5.99 / 6.12 | 5.96 / 5.95 |
+    | 500 | crossfade | 10.73 / 11.15 | 11.09 / 11.41 |
+
+  - Idle is unchanged.
+  - Crossfade (every universe re-rendered each frame) averages 1.7 % (200) and 2.8 % (500) higher. That is smaller than the baseline's own run-to-run spread (3.9 % at 500), so there is no measurable regression, and the ADR's 5 % bound holds.
+  - **64-cell test bar** (the imported path, every channel through its functions), 200 bars, one run each: idle 5.08 vs 5.12 ms, crossfade 9.87 vs 9.55 ms (+3.3 %, one run).
+
+- **Not verified:**
+  - A real fixture or a visualiser receiving DMX OUT (ADR §13 asks Gevor to check one: Capture, or the grandMA3 onPC 3D view). **Implemented, awaiting manual verification.**
+  - Real manufacturer files (G5 corpus still pending).
+
+**Commit:** uncommitted (working tree).
+
+**Known issues / follow-ups**
+- Gevor: a visualiser or real-fixture check of an imported fixture's DMX OUT.
+- The slowest strobe rate shows 1 % of the span faster on stage (`StrobeFloor`); DMX is exact.
+- StageCraft has no closed shutter: DMX IN reads closed as open (the dimmer still closes the light).
+- GD4: UI, Replace and Remove, mode swap. G5 corpus run.

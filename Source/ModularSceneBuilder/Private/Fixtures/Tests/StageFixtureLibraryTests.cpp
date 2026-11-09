@@ -247,11 +247,13 @@ bool FStageFixturesBuilderTest::RunTest(const FString& Parameters)
 	Split.Attribute = Attribute_Dimmer;
 	Split.Status = EStageGdtfChannelStatus::Mapped;
 	Split.GdtfAttribute = TEXT("Dimmer");
+	Split.DefaultDMX = 0xABCD;
 	FStageGdtfLayoutChannel& Wide = Layout.Channels.AddDefaulted_GetRef();
 	Wide.Offsets = { 1, 2, 3 };
 	Wide.Attribute = Attribute_Pan;
 	Wide.Status = EStageGdtfChannelStatus::Approximated;
 	Wide.GdtfAttribute = TEXT("Pan");
+	Wide.DefaultDMX = 0x123456;
 	FStageGdtfLayoutChannel& Virtual = Layout.Channels.AddDefaulted_GetRef();
 	Virtual.Status = EStageGdtfChannelStatus::Virtual;
 	FStageGdtfLayoutChannel& Unmapped = Layout.Channels.AddDefaulted_GetRef();
@@ -259,7 +261,8 @@ bool FStageFixturesBuilderTest::RunTest(const FString& Parameters)
 	Unmapped.Attribute = Attribute_Iris;
 	Unmapped.Status = EStageGdtfChannelStatus::Default;
 	Unmapped.GdtfAttribute = TEXT("Fan");
-	const TArray<FStageFixtureDMXChannel> Channels = StageGdtfFixtureBuilder::MakeDMXChannels(Layout);
+	Unmapped.DefaultDMX = 0x0102;
+	const TArray<FStageFixtureDMXChannel> Channels = StageGdtfFixtureBuilder::MakeDMXChannels(Layout, FVector2D(1.0, 20.0));
 	TArray<int32> Order;
 	for (const FStageFixtureDMXChannel& Channel : Channels)
 	{
@@ -268,9 +271,9 @@ bool FStageFixturesBuilderTest::RunTest(const FString& Parameters)
 	TestEqual(TEXT("Sorted, virtual channels left out"), Order, TArray<int32>({ 1, 3, 5, 6, 9 }));
 	if (Channels.Num() == 5)
 	{
-		TestTrue(TEXT("24-bit: 16-bit coarse and fine, then the third byte without an attribute"), Channels[0].b16Bit && Channels[0].Attribute == Attribute_Pan && !Channels[1].Attribute.IsValid());
-		TestTrue(TEXT("Fine apart from coarse: an 8-bit coarse"), !Channels[2].b16Bit && Channels[2].Attribute == Attribute_Dimmer && !Channels[4].Attribute.IsValid());
-		TestTrue(TEXT("Default status never drives an attribute"), Channels[3].b16Bit && !Channels[3].Attribute.IsValid() && Channels[3].Label == TEXT("Fan"));
+		TestTrue(TEXT("24-bit: kept at its default as a 16-bit pair and a third byte, the default split by byte"), Channels[0].b16Bit && !Channels[0].Attribute.IsValid() && Channels[0].DefaultDMX == 0x1234 && !Channels[1].Attribute.IsValid() && Channels[1].DefaultDMX == 0x56);
+		TestTrue(TEXT("Fine apart from coarse: two 8-bit channels at their default bytes"), !Channels[2].b16Bit && !Channels[2].Attribute.IsValid() && Channels[2].DefaultDMX == 0xAB && !Channels[4].Attribute.IsValid() && Channels[4].DefaultDMX == 0xCD);
+		TestTrue(TEXT("Default status never drives an attribute"), Channels[3].b16Bit && !Channels[3].Attribute.IsValid() && Channels[3].Label == TEXT("Fan") && Channels[3].DefaultDMX == 0x0102);
 	}
 
 	AddInfo(TEXT("A 64-cell bar (ADR 0033 G4)."));

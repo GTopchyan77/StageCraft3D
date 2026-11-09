@@ -145,10 +145,16 @@ public:
 
 	// --- DMX codec ---
 
-	/** Writes this fixture's channels into a 512-slot universe buffer (index 0 = address 1). No-op if unpatched. */
+	/**
+	 * Writes this fixture's channels into a 512-slot universe buffer (index 0 = address 1). No-op if unpatched. Driven channels go
+	 * through ULightingFixtureData::EncodeDMXChannel; undriven ones of an imported fixture send their DefaultDMX (Docs/ADR/0033 §4.3).
+	 */
 	void WriteDMX(TArrayView<uint8> UniverseData) const;
 
-	/** Reads this fixture's channels from a 512-slot universe buffer. Returns true if any attribute changed. */
+	/**
+	 * Reads this fixture's channels from a 512-slot universe buffer. Returns true if any attribute changed. A value in a range the
+	 * fixture's StageCraft attributes do not drive leaves that attribute as it is.
+	 */
 	bool ReadDMX(TConstArrayView<uint8> UniverseData);
 
 	//~ Begin IInteractableInterface

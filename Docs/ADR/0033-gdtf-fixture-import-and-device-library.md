@@ -358,3 +358,35 @@ GD2 was built on 2026-11-09 (STATE.md #81). Where it settles a detail this ADR l
   - `fixtureType` is written for library items and read only for library paths. A bad reference is dropped, and the item still loads.
   - Unknown library items are named in the load message by type and mode, and kept for the next save like any unknown item.
   - Library fixtures make a scene `NotPortable` until step 4 (§9).
+
+## 16. GD3 implementation notes
+
+GD3 was built on 2026-11-09 (STATE.md #82). Where it settles a detail of §4.3, or departs from it, it is recorded here.
+
+- **Data.**
+  - `FStageDMXFunction` stores `DMXTo` as well as `DMXFrom`, instead of ending each range at the next one's start. Ranges may then leave gaps, and decoding needs no neighbour. It also carries the range's `Label`.
+  - `FStageFixtureDMXChannel` gains `Functions` and `DefaultDMX`, both in the channel's resolution.
+  - The pure encoder is `StageDMXFunctions` (`Public/Show/StageDMXFunctions.h`): `Encode`, `Decode` and `AreValid`. It allocates nothing and runs on any thread.
+  - `ULightingFixtureData::EncodeDMXChannel` and `DecodeDMXChannel` wrap it. A channel without functions takes exactly the code path of the linear encoding it had before.
+- **Encoding.**
+  - Slot ranges, and ranges whose value is fixed (an open shutter), send the centre of their DMX range.
+  - Continuous ranges interpolate, in either direction.
+  - A value no range holds goes to the nearest range of the channel's attribute, as §4.3 says.
+  - **One exception for the Shutter.** Open (0) on a channel that has no open range sends `DefaultDMX`, never the slowest strobe. A strobe-only channel's default is its no-strobe value.
+  - CMY channels and the pan and tilt patch options (invert, swap) work as before. The value is carried into the channel's own attribute (normalised, mirrored if inverted) before the ranges are looked up.
+- **Decoding.**
+  - A value in a range StageCraft does not drive leaves the attribute as it is, as §4.3 says (a gobo shake keeps the gobo).
+  - **One exception for the Shutter.** Closed, random strobe and any undriven shutter range read as open (0). StageCraft has no closed shutter, and a console leaving strobe must not leave the fixture strobing.
+- **Defaults.**
+  - `WriteDMX` sends `DefaultDMX` for every channel nothing drives, when the channel has no attribute or has functions.
+  - A built-in channel whose attribute the fixture lacks is still skipped, so built-in output is byte for byte what it was.
+  - Where a channel's bytes become separate channels (a 24-bit channel, or a fine byte that does not follow its coarse byte), the default is split by byte.
+  - GDTF defaults are byte-mirrored to the channel's resolution, as the spec says: `128/1` on 16 bits is 0x8080.
+- **Strobe rates.**
+  - GD1 scaled a strobe range over its own channel. The builder now scales it over the fixture's `StrobeRateHz`, which every mode shares (`StageGdtfFixtureBuilder::StrobeHzToShutter`). A Shutter value then means the same rate in every mode and on the stage.
+  - The slowest rate maps to `StrobeFloor` (0.01), so it stays distinct from open. That shifts the visible rate at the slow end by 1 % of the span.
+- **Narrower than GD2.**
+  - Only a channel StageCraft can drive at its full resolution carries functions: 8-bit, or 16-bit with the fine byte next to the coarse one.
+  - A mapped channel whose fine byte lies elsewhere is now kept at its default, because its ranges are in 16-bit values. GD1 never marks such a channel as mapped.
+  - A channel with more than 256 ranges (`StageDMXFunctions::MaxFunctions`), or with ranges `AreValid` refuses, is also kept at its default.
+- **Cost.** Built-in channels skip the function scan entirely. The `Bench.Fixtures DMXOut=1` A/B is in STATE.md #82.

@@ -7,6 +7,7 @@
 #include "Materials/Material.h"
 #include "MeshDescription.h"
 #include "PhysicsEngine/BodySetup.h"
+#include "Show/StageDMXFunctions.h"
 #include "Show/StageFixtureCells.h"
 #include "StaticMeshAttributes.h"
 
@@ -167,31 +168,70 @@ namespace StageGdtfFixtureBuilder
 		return Body;
 	}
 
-	TArray<FStageFixtureDMXChannel> MakeDMXChannels(const FStageGdtfModeLayout& Layout)
+	float StrobeHzToShutter(float Hz, const FVector2D& StrobeRateHz)
+	{
+		const double Span = StrobeRateHz.Y - StrobeRateHz.X;
+		const double Scaled = Span > UE_KINDA_SMALL_NUMBER ? (double(Hz) - StrobeRateHz.X) / Span : 1.0;
+		return float(FMath::Clamp(Scaled, double(StageGdtfMapping::StrobeFloor), 1.0));
+	}
+
+	TArray<FStageFixtureDMXChannel> MakeDMXChannels(const FStageGdtfModeLayout& Layout, const FVector2D& StrobeRateHz)
 	{
 		TArray<FStageFixtureDMXChannel> Channels;
 		Channels.Reserve(Layout.Channels.Num());
 		for (const FStageGdtfLayoutChannel& Source : Layout.Channels)
 		{
-			if (Source.Offsets.IsEmpty())
+			const int32 Bytes = Source.Offsets.Num();
+			if (Bytes == 0)
 			{
 				continue;
 			}
-			const bool bDriven = (Source.Status == EStageGdtfChannelStatus::Mapped || Source.Status == EStageGdtfChannelStatus::Approximated) && Source.Attribute.IsValid();
 			const FName Label(*Source.GdtfAttribute.Left(MaxLabelLength));
-			const bool bFineFollows = Source.Offsets.Num() >= 2 && Source.Offsets[1] == Source.Offsets[0] + 1;
+			const bool bFineFollows = Bytes >= 2 && Source.Offsets[1] == Source.Offsets[0] + 1;
+			const int32 FirstWidth = bFineFollows ? 2 : 1;
+			const uint64 Default = uint64(FMath::Max<int64>(Source.DefaultDMX, 0));
+			const auto BytesAt = [Default, Bytes](int32 First, int32 Width)
+			{
+				const int32 Shift = 8 * (Bytes - First - Width);
+				return Shift >= 0 && Shift < 64 ? int32((Default >> Shift) & ((uint64(1) << (8 * Width)) - 1)) : 0;
+			};
 
 			FStageFixtureDMXChannel& First = Channels.AddDefaulted_GetRef();
-			First.Attribute = bDriven ? Source.Attribute : FGameplayTag();
 			First.Channel = Source.Offsets[0];
 			First.b16Bit = bFineFollows;
 			First.Label = Label;
+			First.DefaultDMX = BytesAt(0, FirstWidth);
 
-			for (int32 Index = bFineFollows ? 2 : 1; Index < Source.Offsets.Num(); ++Index)
+			const bool bDriven = (Source.Status == EStageGdtfChannelStatus::Mapped || Source.Status == EStageGdtfChannelStatus::Approximated)
+				&& Source.Attribute.IsValid() && Bytes == FirstWidth && Source.Ranges.Num() <= StageDMXFunctions::MaxFunctions;
+			if (bDriven)
+			{
+				First.Attribute = Source.Attribute;
+				First.Functions.Reserve(Source.Ranges.Num());
+				for (const FStageGdtfRange& Range : Source.Ranges)
+				{
+					FStageDMXFunction& Function = First.Functions.AddDefaulted_GetRef();
+					Function.DMXFrom = int32(FMath::Clamp<int64>(Range.DMXFrom, 0, First.GetMaxValue()));
+					Function.DMXTo = int32(FMath::Clamp<int64>(Range.DMXTo, Function.DMXFrom, First.GetMaxValue()));
+					Function.Attribute = Range.Attribute == Source.Attribute ? Range.Attribute : FGameplayTag();
+					Function.Slot = Function.Attribute.IsValid() ? Range.Slot : INDEX_NONE;
+					Function.PhysicalFrom = Range.bStrobe ? StrobeHzToShutter(Range.StrobeHzFrom, StrobeRateHz) : Range.ValueFrom;
+					Function.PhysicalTo = Range.bStrobe ? StrobeHzToShutter(Range.StrobeHzTo, StrobeRateHz) : Range.ValueTo;
+					Function.Label = FName(*Range.Label.Left(MaxLabelLength));
+				}
+				if (!StageDMXFunctions::AreValid(First))
+				{
+					First.Attribute = FGameplayTag();
+					First.Functions.Reset();
+				}
+			}
+
+			for (int32 Index = FirstWidth; Index < Bytes; ++Index)
 			{
 				FStageFixtureDMXChannel& Extra = Channels.AddDefaulted_GetRef();
 				Extra.Channel = Source.Offsets[Index];
 				Extra.Label = Label;
+				Extra.DefaultDMX = BytesAt(Index, 1);
 			}
 		}
 		Channels.StableSort([](const FStageFixtureDMXChannel& A, const FStageFixtureDMXChannel& B) { return A.Channel < B.Channel; });
@@ -277,7 +317,7 @@ namespace StageGdtfFixtureBuilder
 		Data.Body.CellStripSizeCm = Body.CellStripSizeCm;
 
 		Data.DMXModeName = FName(*Layout.Name.Left(StageFixtureLibrary::MaxRefTextLength));
-		Data.DMXChannels = MakeDMXChannels(Layout);
+		Data.DMXChannels = MakeDMXChannels(Layout, Data.StrobeRateHz);
 
 		Data.FixtureTypeId = Type.FixtureTypeId;
 		Data.SourceFormat = StageFixtureLibrary::GdtfFormat;

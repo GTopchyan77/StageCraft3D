@@ -1314,10 +1314,6 @@ void ALightingFixtureActor::WriteDMX(TArrayView<uint8> UniverseData) const
 		const FStageDMXChannelSource Source = StageDMXPatchOptions::GetChannelSource(Attribute, Options);
 		Attribute = Source.Attribute;
 		bInverted ^= Source.bInvert;
-		if (!Fixture->SupportsAttribute(Channel.Attribute) || !Fixture->SupportsAttribute(Attribute))
-		{
-			continue;
-		}
 
 		const int32 Index = Patch.Address - 1 + Channel.Channel - 1;
 		if (Index < 0 || Index + Channel.GetWidth() > UniverseData.Num())
@@ -1325,18 +1321,28 @@ void ALightingFixtureActor::WriteDMX(TArrayView<uint8> UniverseData) const
 			continue;
 		}
 
-		float Normalized = Fixture->NormalizeForDMX(Attribute, GetAttribute(Attribute));
-		Normalized = FMath::Clamp(bInverted ? 1.f - Normalized : Normalized, 0.f, 1.f);
+		int32 Value = 0;
+		if (Fixture->SupportsAttribute(Channel.Attribute) && Fixture->SupportsAttribute(Attribute))
+		{
+			Value = Fixture->EncodeDMXChannel(Channel, Attribute, GetAttribute(Attribute), bInverted);
+		}
+		else if (Channel.SendsDefaultWhenUndriven())
+		{
+			Value = FMath::Clamp(Channel.DefaultDMX, 0, Channel.GetMaxValue());
+		}
+		else
+		{
+			continue;
+		}
 
 		if (Channel.b16Bit)
 		{
-			const uint16 Value = static_cast<uint16>(FMath::RoundToInt(Normalized * 65535.f));
-			UniverseData[Index] = static_cast<uint8>(Value >> 8);
+			UniverseData[Index] = static_cast<uint8>((Value >> 8) & 0xFF);
 			UniverseData[Index + 1] = static_cast<uint8>(Value & 0xFF);
 		}
 		else
 		{
-			UniverseData[Index] = static_cast<uint8>(FMath::RoundToInt(Normalized * 255.f));
+			UniverseData[Index] = static_cast<uint8>(Value & 0xFF);
 		}
 	}
 }
@@ -1369,15 +1375,12 @@ bool ALightingFixtureActor::ReadDMX(TConstArrayView<uint8> UniverseData)
 			continue;
 		}
 
-		float Normalized = Channel.b16Bit
-			? static_cast<float>((UniverseData[Index] << 8) | UniverseData[Index + 1]) / 65535.f
-			: static_cast<float>(UniverseData[Index]) / 255.f;
-		if (bInverted)
+		const int32 Received = Channel.b16Bit ? (UniverseData[Index] << 8) | UniverseData[Index + 1] : UniverseData[Index];
+		float Value = 0.f;
+		if (Fixture->DecodeDMXChannel(Channel, Attribute, Received, bInverted, Value))
 		{
-			Normalized = 1.f - Normalized;
+			Values.Add(Attribute, Value);
 		}
-
-		Values.Add(Attribute, Fixture->DenormalizeFromDMX(Attribute, Normalized));
 	}
 
 	return SetAttributes(Values);

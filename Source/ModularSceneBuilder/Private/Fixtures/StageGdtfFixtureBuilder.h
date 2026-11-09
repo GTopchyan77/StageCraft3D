@@ -47,10 +47,16 @@ namespace StageGdtfFixtureBuilder
 		TOptional<EStageFixtureKind> Kind, UStaticMesh* BaseMesh);
 
 	/**
-	 * DMX channels of a layout in StageCraft's form: mapped channels with their attribute (16-bit when the fine byte follows the
-	 * coarse one), everything else as channels without an attribute that keep their slots. Sorted by channel. Pure.
+	 * DMX channels of a layout in StageCraft's form (Docs/ADR/0033 §4.3): mapped channels with their attribute (16-bit when the fine
+	 * byte follows the coarse one) and their ranges as functions; everything else as channels without an attribute that keep
+	 * their slots. Every channel carries its GDTF default, split per byte where its bytes become separate channels. Strobe ranges
+	 * are scaled over StrobeRateHz, the fixture's strobe rates in Hz. A channel with more than StageDMXFunctions::MaxFunctions
+	 * ranges is kept at its default. Sorted by channel. Pure.
 	 */
-	TArray<FStageFixtureDMXChannel> MakeDMXChannels(const FStageGdtfModeLayout& Layout);
+	TArray<FStageFixtureDMXChannel> MakeDMXChannels(const FStageGdtfModeLayout& Layout, const FVector2D& StrobeRateHz);
+
+	/** The Shutter value of a strobe rate on a fixture whose strobe spans StrobeRateHz: StageGdtfMapping::StrobeFloor..1. Pure. */
+	float StrobeHzToShutter(float Hz, const FVector2D& StrobeRateHz);
 
 	/**
 	 * A box of SizeCm centred on its origin, with the engine's basic-shape material and a simple box collision so the fixture can be

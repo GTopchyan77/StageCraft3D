@@ -77,6 +77,13 @@ struct FStageGdtfRange
 	int32 Slot = INDEX_NONE;
 	/** The GDTF function or set name, for the report. */
 	FString Label;
+	/**
+	 * A strobe range of the Shutter: its rates in Hz at DMXFrom and DMXTo. ValueFrom/To scale them over this channel alone; the
+	 * builder rescales them over the fixture's StrobeRateHz, which every mode shares.
+	 */
+	bool bStrobe = false;
+	float StrobeHzFrom = 0.f;
+	float StrobeHzTo = 0.f;
 };
 
 /** One channel of a mode as StageCraft will drive it. */

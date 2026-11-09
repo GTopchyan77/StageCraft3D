@@ -5,6 +5,7 @@
 #include "Actors/LightingFixtureActor.h"
 #include "Data/StageParameterTypes.h"
 #include "Show/StageColorScience.h"
+#include "Show/StageDMXFunctions.h"
 #include "Show/StageFixtureCells.h"
 
 #if WITH_EDITOR
@@ -380,6 +381,51 @@ float ULightingFixtureData::DenormalizeFromDMX(const FGameplayTag& Attribute, fl
 		return Min + FMath::Min(FMath::FloorToInt32(Clamped * SlotCount), SlotCount - 1);
 	}
 	return FMath::Lerp(Min, Max, Clamped);
+}
+
+int32 ULightingFixtureData::EncodeDMXChannel(const FStageFixtureDMXChannel& Channel, const FGameplayTag& Attribute, float Value, bool bInverted) const
+{
+	if (Channel.Functions.IsEmpty())
+	{
+		float Normalized = NormalizeForDMX(Attribute, Value);
+		Normalized = FMath::Clamp(bInverted ? 1.f - Normalized : Normalized, 0.f, 1.f);
+		return Channel.b16Bit ? static_cast<int32>(static_cast<uint16>(FMath::RoundToInt(Normalized * 65535.f)))
+			: static_cast<int32>(static_cast<uint8>(FMath::RoundToInt(Normalized * 255.f)));
+	}
+	float ChannelValue = Value;
+	if (bInverted || Attribute != Channel.Attribute)
+	{
+		const float Normalized = NormalizeForDMX(Attribute, Value);
+		ChannelValue = DenormalizeFromDMX(Channel.Attribute, bInverted ? 1.f - Normalized : Normalized);
+	}
+	return StageDMXFunctions::Encode(Channel, ChannelValue);
+}
+
+bool ULightingFixtureData::DecodeDMXChannel(const FStageFixtureDMXChannel& Channel, const FGameplayTag& Attribute, int32 DMXValue, bool bInverted, float& OutValue) const
+{
+	if (Channel.Functions.IsEmpty())
+	{
+		const int32 Received = FMath::Clamp(DMXValue, 0, Channel.GetMaxValue());
+		float Normalized = static_cast<float>(Received) / (Channel.b16Bit ? 65535.f : 255.f);
+		if (bInverted)
+		{
+			Normalized = 1.f - Normalized;
+		}
+		OutValue = DenormalizeFromDMX(Attribute, Normalized);
+		return true;
+	}
+	const TOptional<float> ChannelValue = StageDMXFunctions::Decode(Channel, DMXValue);
+	if (!ChannelValue.IsSet())
+	{
+		return false;
+	}
+	OutValue = ChannelValue.GetValue();
+	if (bInverted || Attribute != Channel.Attribute)
+	{
+		const float Normalized = NormalizeForDMX(Channel.Attribute, OutValue);
+		OutValue = DenormalizeFromDMX(Attribute, bInverted ? 1.f - Normalized : Normalized);
+	}
+	return true;
 }
 
 FText ULightingFixtureData::GetGoboSlotName(int32 Slot, EStageGoboWheel Wheel) const
