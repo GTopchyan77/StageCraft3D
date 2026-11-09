@@ -223,6 +223,11 @@ bool UStageSketchSubsystem::RequestPlanAssets(const FStageSketchBuildPlan& Plan,
 	AddItem(Plan.DeckItem.Get(), !Plan.Decks.IsEmpty());
 	AddItem(Plan.TrussItem.Get(), !Plan.Trusses.IsEmpty());
 	AddItem(Plan.FixtureItem.Get(), !Plan.Fixtures.IsEmpty());
+	// Items placed as they are (the Vision Inspector's fixtures and audio, a starter stage's props) stream like the rest.
+	for (const FStageSketchItemPlan& Entry : Plan.Items)
+	{
+		AddItem(Entry.Item.Get(), true);
+	}
 
 	PendingPlan = Plan;
 	bPendingPlanReady = false;

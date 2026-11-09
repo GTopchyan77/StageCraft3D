@@ -136,6 +136,13 @@ public:
 	UFUNCTION(BlueprintPure, Category = "StageCraft|Economy")
 	bool IsListingPurchasePending(FGuid ListingId) const;
 
+	/**
+	 * Stops waiting for the pending purchase of ListingId (the buyer left the hosted checkout, ADR 0032 §6). The backend answers it as
+	 * declined, so it ends through the normal path (OnListingPurchaseCompleted). False when nothing is pending or the backend cannot
+	 * cancel (purchases settled at once never wait).
+	 */
+	bool RequestCancelListingPurchase(FGuid ListingId);
+
 	/** True when the commerce backend is an authoritative server that can settle real money. */
 	UFUNCTION(BlueprintPure, Category = "StageCraft|Economy")
 	bool CanSettleRealMoney() const;
@@ -193,8 +200,14 @@ protected:
 	float BackendTimeoutSeconds = 30.f;
 
 private:
-	/** Starts the answer deadline of TransactionId. Called before the backend is asked: it may answer inside the call. */
-	void StartBackendTimer(const FGuid& TransactionId);
+	/**
+	 * Starts the answer deadline of TransactionId: Seconds, or BackendTimeoutSeconds when 0. Called before the backend is asked: it may
+	 * answer inside the call.
+	 */
+	void StartBackendTimer(const FGuid& TransactionId, float Seconds = 0.f);
+
+	/** The deadline Backend asks for to settle Request (UStageCommerceBackend::GetSettlementTimeoutSeconds), clamped to 1 s..1 h. */
+	float GetSettlementTimeoutSeconds(const class UStageCommerceBackend& CommerceBackend, const struct FStagePurchaseRequest& Request) const;
 	/** Clears the deadline of TransactionId, if it still has one. Idempotent. */
 	void StopBackendTimer(const FGuid& TransactionId);
 	void HandleBackendTimeout(FGuid TransactionId);

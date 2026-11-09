@@ -536,6 +536,9 @@ void SStageWorkspaceMenuBar::FillEditMenu(FMenuBuilder& MenuBuilder)
 	MenuBuilder.AddMenuEntry(LOCTEXT("SketchToStage", "Sketch to Stage..."),
 		LOCTEXT("SketchToStageTip", "Open the drawing window: sketch stage shapes, truss lines and fixtures from above, then generate them in 3D as one undoable step."),
 		FSlateIcon(), FUIAction(FExecuteAction::CreateSP(this, &SStageWorkspaceMenuBar::ShowPanel, FGameplayTag(StageCraftTags::Panel_Sketch))));
+	MenuBuilder.AddMenuEntry(LOCTEXT("VisionInspector", "Vision Inspector (Photo to BOM)..."),
+		LOCTEXT("VisionInspectorTip", "Drop a photo of a real stage: the online model lists the trusses, LED walls, fixtures and audio it sees, matched to the catalog, as a bill of materials you can check, save as CSV and build here in one undoable step."),
+		FSlateIcon(), FUIAction(FExecuteAction::CreateSP(this, &SStageWorkspaceMenuBar::ShowPanel, FGameplayTag(StageCraftTags::Panel_VisionInspector))));
 	MenuBuilder.EndSection();
 
 	MenuBuilder.BeginSection(TEXT("Assistant"), LOCTEXT("AssistantSection", "Assistant"));
@@ -551,6 +554,9 @@ void SStageWorkspaceMenuBar::FillEditMenu(FMenuBuilder& MenuBuilder)
 	MenuBuilder.AddMenuEntry(LOCTEXT("Services", "Services & Keys..."),
 		LOCTEXT("ServicesTip", "Add, check or remove the API keys of AI tools (stored encrypted for your Windows user), and see which 3D apps are connected."),
 		FSlateIcon(), FUIAction(FExecuteAction::CreateSP(this, &SStageWorkspaceMenuBar::ShowPanel, FGameplayTag(StageCraftTags::Panel_Services))));
+	MenuBuilder.AddMenuEntry(LOCTEXT("Support", "Support && Bug Report..."),
+		LOCTEXT("SupportTip", "Tell StageCraft support what went wrong. You choose whether the log and a screenshot go with it; keys, e-mail addresses and your user name are removed first."),
+		FSlateIcon(), FUIAction(FExecuteAction::CreateSP(this, &SStageWorkspaceMenuBar::ShowPanel, FGameplayTag(StageCraftTags::Panel_Support))));
 	MenuBuilder.EndSection();
 
 	MenuBuilder.BeginSection(TEXT("Preferences"));

@@ -25,6 +25,8 @@ namespace StageCraftTags
 	UE_DEFINE_GAMEPLAY_TAG_COMMENT(Panel_Effects,		"StageCraft.Panel.Effects",		"Effects: quick effects on the selection, the running effects and their rate, size, phase, spread and shape (ADR 0027).");
 	UE_DEFINE_GAMEPLAY_TAG_COMMENT(Panel_Audio,		"StageCraft.Panel.Audio",		"Audio: the music audio effects follow (file, input, system audio, test beat), its transport, band meters, tempo and beat (ADR 0029).");
 	UE_DEFINE_GAMEPLAY_TAG_COMMENT(Panel_Problems,	"StageCraft.Panel.Problems",	"Problems: what keeps the show from looking or working as intended (patch, DMX in and out, masters, cues, music), worst first; a click goes to the fix (ADR 0030).");
+	UE_DEFINE_GAMEPLAY_TAG_COMMENT(Panel_VisionInspector,	"StageCraft.Panel.VisionInspector",	"Vision Inspector: a photo of a real stage read into a bill of materials, matched to the catalog and built in one undo step (ADR 0032 §8).");
+	UE_DEFINE_GAMEPLAY_TAG_COMMENT(Panel_Support,	"StageCraft.Panel.Support",	"Support and bug report: send a report with optional log and screenshot to StageCraft Cloud, or save it on disk (ADR 0032 §7).");
 	UE_DEFINE_GAMEPLAY_TAG_COMMENT(Panel_Preferences,	"StageCraft.Panel.Preferences",	"Preferences: keyboard shortcuts, camera look, viewport and audio.");
 	UE_DEFINE_GAMEPLAY_TAG_COMMENT(Panel_Sketch,		"StageCraft.Panel.Sketch",		"Sketch to Stage: draw decks, truss lines and fixtures in 2D and generate them in 3D.");
 	UE_DEFINE_GAMEPLAY_TAG_COMMENT(Panel_Assistant,	"StageCraft.Panel.Assistant",	"AI Assistant: ask about the stage and request safe, undoable changes in plain language.");

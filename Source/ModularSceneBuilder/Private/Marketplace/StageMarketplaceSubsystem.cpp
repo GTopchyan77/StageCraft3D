@@ -54,6 +54,7 @@ namespace StageMarketplace
 		case EStageMarketplaceResult::TimedOut: return LOCTEXT("Result_TimedOut", "The marketplace did not deliver the package in time. If you bought it, get it again: it costs nothing.");
 		case EStageMarketplaceResult::NotYours: return LOCTEXT("Result_NotYours", "Only listings published from this computer can be unpublished here.");
 		case EStageMarketplaceResult::InUse: return LOCTEXT("Result_InUse", "This listing is being downloaded or delivered right now; try again when that has finished.");
+		case EStageMarketplaceResult::SignInRequired: return LOCTEXT("Result_SignInRequired", "Sign in to StageCraft Cloud first (Account menu).");
 		}
 		return FText::GetEmpty();
 	}

@@ -7747,7 +7747,7 @@ All times in ms.
   (A request for 20,000 was capped by the item's 80 m width.) The crowd costs no CPU (game thread and show tick flat). The GPU cost is about +1 ms at 18k people on this PC.
 - **Awaiting manual verification (Gevor):** see todo.md, "Phase I manual verification".
 
-**Commit:** uncommitted (working tree).
+**Commit:** `8f1a5ed`.
 
 **Known issues / follow-ups**
 - Not done:
@@ -7760,3 +7760,147 @@ All times in ms.
 - The starter-stage camera now frames the whole Concert stage including the FOH desks 21 m out, so the opening view is wider than before.
 - The hover and selection overlay shows on prop parts only, never on the people.
 - The figures are stylised box people: convincing at crowd distance, clearly proxies close up.
+
+## #77 — Phase J: real-money marketplace on StageCraft Cloud, secure checkout and payouts, one-click purchase, Vision Inspector (photo → BOM), support and bug reports, admin backend (2026-11-07)
+
+**Housekeeping first:** #76 now carries `8f1a5ed`, since Gevor committed Phase I.
+
+**What & why**
+- Gevor's brief (2026-11-07, auto mode) asks for Phase J:
+  - a real-money marketplace (15 % platform, 85 % seller) on AWS / Kubernetes;
+  - hosted checkout settled only by server webhooks; card data never reaches StageCraft;
+  - a ledger, orders, refunds, disputes and seller balances;
+  - in-app browsing, buying and publishing with one-click purchase and instant import;
+  - an AI image-to-BOM inspector;
+  - an in-app support center and bug report;
+  - admin endpoints;
+  - 0 warnings on every target, tests, todo.md and STATE.md.
+- Architecture, contract and open decisions: **ADR 0032** (new). Its §12 records the as-built details.
+- **Decisions only Gevor can make (ADR 0032 §2, D1–D8).**
+  - Stripe cannot open a platform account in Armenia. Global Payouts (Armenia, AMD) can be sent only from a US or UK platform (docs.stripe.com/global-payouts/recipient-countries). Selling therefore needs a US or UK entity.
+  - Lemon Squeezy and Paddle have no multi-seller payouts.
+  - Also open: tax, who pays the card fee (assumed: the platform, out of its 15 %), the hold period (assumed 14 days), the identity provider, AWS, and the refund policy.
+- **Nothing moves real money until those decisions are made and the service is deployed with live keys.**
+
+**StageCraft Cloud service (`Services/StageCraftCloud`, new)**
+- Built by a subagent from the ADR contract and reviewed by me.
+- **Stack:** Node 22 and TypeScript, run with type stripping. The only runtime dependency is `pg`. Hand-written HTTP; Stripe over plain REST.
+- **Money.**
+  - The ledger is double-entry and balanced per currency; balances are sums of journal lines only. Amounts are bigint minor units. The split is `seller = floor(P * 8500 / 10000)`.
+  - Refunds and disputes are apportioned with caps.
+  - Settlement happens only through Stripe-signed webhooks: HMAC, 300 s tolerance, event-id idempotency, one database transaction. An amount mismatch puts the order `OnHold`.
+  - Orders use a pure state machine; the client's TransactionId is the idempotency key.
+  - Payouts after the hold period go by Stripe transfer (US, UK, EEA, CA, CH) or as manual batches (Armenia until a Global Payouts adapter exists).
+- **Listings.** The server re-reads `.stage` packages with its own port of `StagePackage::Read`. The author comes from the account, and an admin approves before a listing is shown. Entitlement-checked downloads come from a short-lived address (S3 SigV4 or local).
+- **Accounts.** RFC 8628 device sign-in through OIDC, with PKCE and an RS256 check against the JWKS. Session tokens are stored only as a SHA-256 hash. The admin role is a database row.
+- **Support tickets.** Redacted, with an idempotent `clientReportId`.
+- **Admin.** Summary, orders, refund, payouts (run and mark paid), moderation and support, each mutation with an audit log.
+- **Deployment.** Rate limits, security headers, Dockerfile, Kubernetes manifests (Deployment, Ingress for AWS Load Balancer Controller, HPA, PDB, NetworkPolicy, ExternalSecret, migration Job), `docs/RUNBOOK.md`.
+- Production refuses to start with dev settings.
+
+**Client (UE)**
+- **`UStageCloudSubsystem`.**
+  - `BaseUrl` in config; empty means offline, the default.
+  - Device sign-in.
+  - The session lives in the credential vault, bound to its server address.
+  - One send path: `/v1/` paths only, a 401 ends the session, downloads carry no session.
+  - A test transport for tests.
+  - Dev-only `StageCraft.Cloud.Status / SignIn / SignOut / LogBrowserUrls`.
+- **`StageCloudJson`.** The pure wire format. Every answer is validated and capped; unknown error codes deny; only safe addresses are opened.
+- **`UStageCloudMarketplaceBackend`.** Uses the cloud while configured, otherwise the community folder.
+- **`UStageCloudCommerceBackend`.**
+  - Real-money listings: order, Stripe hosted checkout in the browser, long polls, approve only when the server reports paid.
+  - Already owned on the server means approved, with no charge.
+  - Cancel answers declined, once.
+  - Credits stay local.
+- **Commerce backend contract.** `GetSettlementTimeoutSeconds` (checkout lifetime instead of 30 s, clamped to 1 s..1 h) and `CancelPurchase`.
+- **New requests.** `UStageEconomySubsystem::RequestCancelListingPurchase`, `AModularPlayerController::RequestMarketplaceCancelPayment`.
+- **Config.** `DefaultGame.ini` uses both cloud backends. With an empty `BaseUrl` they behave exactly like the local ones.
+- **Marketplace panel.**
+  - Account bar: SIGN IN, the code while signing in, SIGN OUT.
+  - Money prices ("$15.00").
+  - One-click BUY opens the checkout and turns into PAYING IN BROWSER · CANCEL; the stage opens when paid, and a stage with unsaved changes still asks.
+  - New result `SignInRequired`.
+- **Vision Inspector** (`StageVisionBom`, `UStageVisionBomSubsystem`, `UStageClaudeVisionBomBackend`, `UStageVisionInspectorPanel`).
+  - A photo is resized to 1568 px and read by Claude with the strict `stage_inventory` tool: 24 kinds, counts, confidence, sizes and coarse positions.
+  - The answer is validated (case-sensitive names, caps, unknown kinds dropped) and matched to the catalog by category and keyword, required where the category alone would be wrong.
+  - Real-world specs: truss runs in 3 / 2 / 1 / 0.5 m sections, LED walls in 500 mm panels, decks in 2 x 1 m.
+  - Weight and power totals; CSV with formula-injection protection.
+  - **Build in Scene** goes through the sketch generator (deck, truss) plus matched items laid out by region, as one undo step via `RequestBuildFromVisionBom`.
+  - Lines under 50 % confidence are marked CHECK.
+- **Fix:** `UStageSketchSubsystem::RequestPlanAssets` now also streams a plan's `Items`.
+- **Support** (`StageSupportReport`, `UStageSupportSubsystem`, `UStageSupportPanel`).
+  - Redaction: API, Stripe and webhook keys, Bearer and x-api-key values, the cloud session, e-mail addresses and the Windows user name in paths.
+  - Opt-in log tail (256 KiB) and window screenshot (<= 4 MiB, halved until it fits).
+  - Sent to the cloud, or saved to `Saved/StageCraft/Support/<time>_<id>/`; a failed send is saved too.
+- **Panels:** tags `StageCraft.Panel.VisionInspector` and `.Support`, menu entries (Edit › Draw, Community), `DA_Panel_*` from `Scripts/Content/create_phase_j_content.py`.
+
+**Files changed**
+- **New (service):** the whole of `Services/StageCraftCloud/`:
+  - `package.json` and lock, `tsconfig.json`, `.env.example`, `Dockerfile`, `.dockerignore`, `README.md`;
+  - `docs/RUNBOOK.md`, `deploy/k8s/*`, `migrations/0001_init.sql`;
+  - `scripts/test-pg.ts`, `scripts/make-dev-package.ts`;
+  - `src/**` and `test/**` (12 tests, helpers, one C++-written fixture package).
+- **New (client):**
+  - `Public|Private/Cloud/StageCloudTypes.h`, `StageCloudJson`, `StageCloudSubsystem`, `StageCloudMarketplaceBackend`, `StageCloudCommerceBackend`, `Private/Cloud/StageCloudConsoleCommands.cpp`, `Private/Cloud/Tests/StageCloudTests.cpp`;
+  - `Public|Private/Vision/StageVisionBom`, `StageVisionBomBackend`, `StageVisionBomSubsystem`, `Private/Vision/Tests/StageTestVisionBomBackend.h/.cpp`, `StageVisionBomTests.cpp`;
+  - `Public|Private/Support/StageSupportReport`, `StageSupportSubsystem`, `Private/Support/Tests/StageSupportReportTests.cpp`;
+  - `Public|Private/UI/StageVisionInspectorPanel`, `StageSupportPanel`.
+- **New (other):**
+  - `Content/StageCraft/UI/Panels/DA_Panel_VisionInspector.uasset`, `DA_Panel_Support.uasset`;
+  - `Scripts/Content/create_phase_j_content.py`, `Scripts/Tests/RunCloudEndToEnd.ps1`;
+  - `Docs/ADR/0032-real-money-marketplace-cloud-and-stage-inspector.md`.
+- **Changed:**
+  - `Public/Economy/StageCommerceBackend.h`;
+  - `Public|Private` `StageEconomySubsystem`;
+  - `Public/Marketplace/StageMarketplaceTypes.h` (`SignInRequired`), `Private/Marketplace/StageMarketplaceSubsystem.cpp`;
+  - `Public|Private` `ModularPlayerController`;
+  - `Public|Private/UI/StageMarketplaceWidget`;
+  - `Private/Sketch/StageSketchSubsystem.cpp`;
+  - `Public|Private/Workspace/StageWorkspaceTypes`, `Private/Workspace/StageWorkspaceShell.cpp`, `SStageWorkspaceMenuBar.cpp`;
+  - `Config/DefaultGame.ini`, `.gitignore`, `tasks/todo.md`, STATE.md.
+
+**Verification**
+- **Server:**
+  - `npm test` 71/71 (I re-ran it). `npm run test:pg` against `postgres:16-alpine` in Docker also passes.
+  - Line coverage: 100 % for money, ledger, orders, webhook signature and processing, package reader, redaction, query and support; 96.9 % overall.
+  - `docker build` succeeds and the container runs healthy with a read-only root filesystem.
+  - `kubectl kustomize` parses the manifests. There is no cluster for schema validation.
+- **Client tests:** `RunAutomation.ps1 -ExpectedCount 240 -NullRHI` gives 240/240, user data unchanged.
+  - New: StageCraft.Vision.Request / Parse / Spec / Match / Layout / Flow, StageCraft.Support.Validate / Redact / Format / Submit, StageCraft.Cloud.Json / SignIn / Marketplace / Checkout.
+  - Bugs the tests caught and I fixed: `FString ==` is case-insensitive, so wire names now match case-sensitively; `AsObject` on a non-object logged errors.
+- **End to end:** `Scripts/Tests/RunCloudEndToEnd.ps1` passed 13/13. It runs the real game against the real dev server:
+  - the seller publishes, the admin approves;
+  - the game signs in through the device flow;
+  - one-click purchase of a $15.00 listing;
+  - the fake checkout pays and sends a signed webhook;
+  - the game sees it paid, downloads and imports ("Added to your scenes");
+  - the server books 1500 gross, 1275 seller, 225 platform;
+  - no session token in the log; sign-out.
+- **Scripted `-game` screenshot J10:** the Marketplace account bar, Vision Inspector and Support panel render as designed (window capture only).
+- **Builds and Shipping scan:** Editor, Game Development and Game Shipping build with 0 warnings. The Shipping exe (UTF-16 scan) does not contain `StageCraft.Cloud.Status`, `.SignIn` or `.LogBrowserUrls`, nor the older dev commands. It does contain `StageCloudSubsystem`, `StageCloudCommerceBackend`, `StageVisionInspectorPanel`, `StageSupportPanel`, `stage_inventory` and `/v1/orders`.
+- **Not verified:**
+  - real Stripe test mode, AWS and an identity provider (D1–D8);
+  - a paid Claude reading of a real stage photo (needs Gevor's key; the parser is tested with recorded answers);
+  - clicking through the panels by mouse;
+  - Shipping packaging.
+
+**Commit:** uncommitted (working tree).
+
+**Known issues / follow-ups**
+- **A scripted `-game` run stalls when a panel window is created mid-run.**
+  - Any `StageCraft.Workspace.OpenPanel` or `Workspace.Reset` step stops the core ticker, so later Delay steps never run. The game keeps responding and drawing.
+  - It reproduces identically on a fresh build of `8f1a5ed` (Phase I), so it is not caused by Phase J. The likely cause is the floating or new window creation on this multi-monitor setup (the main window sits at X 3840).
+  - Workaround used: put panels into the saved layout before the run.
+  - Needs Gevor to check whether opening a panel from the Window menu by hand also freezes. Not investigated further.
+- **Follow-ups** (todo.md):
+  - Global Payouts adapter;
+  - card fees in the ledger;
+  - admin web UI;
+  - credits for money;
+  - signed packages;
+  - ratings;
+  - seller onboarding and sales in the app;
+  - merging a bought rig into the open scene;
+  - drag-and-drop of photos.
+- **Manual checks for Gevor** are in todo.md (Phase J manual verification).

@@ -119,6 +119,16 @@ Paths are relative to `Source/ModularSceneBuilder/` (`Public/` and `Private/` sh
 | Shop UI, server commerce | ⚪ | — |
 | UI audio feedback | ✅ | `Audio/StageAudioSubsystem` |
 
+## Cloud, marketplace money, support, vision (Phase J, #77, ADR 0032)
+| Item | Detail |
+|---|---|
+| StageCraft Cloud service | `Services/StageCraftCloud` (Node 22 + TypeScript, Postgres or SQLite): listings with server re-validation and moderation, Stripe Checkout orders settled by signed webhooks, double-entry ledger (85 / 15), payouts, device + OIDC sign-in, support tickets, admin endpoints; 71 tests; Docker + Kubernetes manifests; not deployed |
+| Client connection | `UStageCloudSubsystem` (`[StageCloudSubsystem] BaseUrl`, empty = offline), session in the credential vault bound to the server |
+| Backends | `UStageCloudMarketplaceBackend`, `UStageCloudCommerceBackend` (configured; behave as the local ones while offline) |
+| Vision Inspector | `UStageVisionBomSubsystem` (world) + `UStageVisionInspectorPanel`: photo to BOM with Claude, catalog match, CSV, Build in Scene |
+| Support | `UStageSupportSubsystem` + `UStageSupportPanel`: redacted report to the cloud or `Saved/StageCraft/Support` |
+| End to end | `Scripts/Tests/RunCloudEndToEnd.ps1` |
+
 ## State owners
 | Scope | Owner |
 |---|---|
@@ -136,6 +146,6 @@ Paths are relative to `Source/ModularSceneBuilder/` (`Public/` and `Private/` sh
 | Engine | UE 5.8 |
 | Plugins enabled | Interchange, SkyCreatorPlugin, AudioCapture (plus Python and ModelingTools in the editor only) |
 | Plugins tracked but disabled | 19 |
-| Tests | 226 `StageCraft.*` automation tests (#76; `Scripts/Tests/RunAutomation.ps1`); at #49 there were 117: pure logic (colour science, gel library, fixture capabilities and cells, assistant fixture commands, camera rules and the mouse input config, DMX patching and protocol, shadow budget, stage shape geometry, assistant edits and shapes, assistant grammar in English and Armenian, command schema, voice audio and upload format, photo tracing and the online photo reading, sketch strokes, deck geometry, sketch plans, reports, PDF composer, cable schedule, shopping list, frame statistics, key bindings, crash-safe files, import list file, kept scene items) plus world tests for Sky Creator, sketch generation (all or nothing, one undo step), stairs / curved truss / round riser placement and a replacement step (#45), undo/redo rules and transactions, cues, the fixture output path and restored-state sanitizing |
+| Tests | 240 `StageCraft.*` automation tests (#77; `Scripts/Tests/RunAutomation.ps1`); at #49 there were 117: pure logic (colour science, gel library, fixture capabilities and cells, assistant fixture commands, camera rules and the mouse input config, DMX patching and protocol, shadow budget, stage shape geometry, assistant edits and shapes, assistant grammar in English and Armenian, command schema, voice audio and upload format, photo tracing and the online photo reading, sketch strokes, deck geometry, sketch plans, reports, PDF composer, cable schedule, shopping list, frame statistics, key bindings, crash-safe files, import list file, kept scene items) plus world tests for Sky Creator, sketch generation (all or nothing, one undo step), stairs / curved truss / round riser placement and a replacement step (#45), undo/redo rules and transactions, cues, the fixture output path and restored-state sanitizing |
 | Areas with no tests | Request bridge, selection, session, economy/profile, patch conflicts, fixture playback (scripted runs only) |
 | Console commands | About 88, all inside `#if !UE_BUILD_SHIPPING` |

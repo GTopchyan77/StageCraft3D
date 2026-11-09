@@ -17,3 +17,7 @@ Obj/
 *.VC.db
 # Node dependencies installed by plugins (UnrealNGGMCP bootstrap)
 node_modules/
+
+# StageCraft Cloud local data (Services/StageCraftCloud)
+Services/StageCraftCloud/data/
+Services/StageCraftCloud/.env

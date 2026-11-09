@@ -66,6 +66,7 @@
 #include "Sketch/StageSketchBuilder.h"
 #include "Sketch/StageSketchGenerator.h"
 #include "Sketch/StageSketchSubsystem.h"
+#include "Vision/StageVisionBomSubsystem.h"
 #include "Subsystems/ShowControlSubsystem.h"
 #include "Subsystems/StageDMXPatchSubsystem.h"
 #include "Subsystems/StageEconomySubsystem.h"
@@ -1963,6 +1964,64 @@ void AModularPlayerController::HandleSketchAssetsReady()
 	Sketch->ReportGeneration(Result);
 }
 
+bool AModularPlayerController::RequestBuildFromVisionBom()
+{
+	UStageSketchSubsystem* Sketch = UWorld::GetSubsystem<UStageSketchSubsystem>(GetWorld());
+	const UStageVisionBomSubsystem* Vision = UWorld::GetSubsystem<UStageVisionBomSubsystem>(GetWorld());
+	FText Reason;
+	FStageSketchBuildPlan Plan;
+	if (!Sketch || !Vision || !SpawnSystem)
+	{
+		Reason = LOCTEXT("NoVision", "Building from a photo is not available in this level.");
+	}
+	else if (IsBusyWithPointer())
+	{
+		Reason = LOCTEXT("VisionBusy", "Finish the drag or camera move first, then build.");
+	}
+	else if (Sketch->IsGenerationPending())
+	{
+		Reason = LOCTEXT("VisionPending", "Something is already being built.");
+	}
+	else
+	{
+		Vision->MakeBuildPlan(Plan, Reason);
+	}
+
+	if (Reason.IsEmpty() && Sketch->RequestPlanAssets(Plan, FSimpleDelegate::CreateUObject(this, &ThisClass::HandleVisionBomAssetsReady)))
+	{
+		return true;
+	}
+	ReportRejection(FStageEconomyResultInfo::Fail(EStageEconomyResult::InvalidRequest,
+		Reason.IsEmpty() ? LOCTEXT("VisionNotStarted", "The bill of materials could not be built.") : Reason));
+	return false;
+}
+
+void AModularPlayerController::HandleVisionBomAssetsReady()
+{
+	UStageSketchSubsystem* Sketch = UWorld::GetSubsystem<UStageSketchSubsystem>(GetWorld());
+	TOptional<FStageSketchBuildPlan> Plan = Sketch ? Sketch->TakeReadyPlan() : TOptional<FStageSketchBuildPlan>();
+	if (!Plan.IsSet())
+	{
+		return;
+	}
+	FStageSketchGenerateResult Result = RequestBuildPlan(*Plan, FText::Format(LOCTEXT("VisionStep", "Build from Photo ({0} {0}|plural(one=item,other=items))"),
+		FText::AsNumber(Plan->Num())));
+	if (Result.bSucceeded)
+	{
+		Result.Message = Plan->Warnings.IsEmpty()
+			? FText::Format(LOCTEXT("VisionBuilt", "Built {0}. Undo removes all of it in one step."), Result.Message)
+			: FText::Format(LOCTEXT("VisionBuiltWarnings", "Built {0}. Undo removes all of it in one step. {1}"), Result.Message, Plan->Warnings[0]);
+	}
+	else
+	{
+		Result.Message = FText::Format(LOCTEXT("VisionRefused", "Nothing was built: {0}"), Result.Message);
+	}
+	if (UStageVisionBomSubsystem* Vision = UWorld::GetSubsystem<UStageVisionBomSubsystem>(GetWorld()))
+	{
+		Vision->ReportBuild(Result);
+	}
+}
+
 FStageSketchGenerateResult AModularPlayerController::RequestBuildPlan(const FStageSketchBuildPlan& Plan, const FText& StepName)
 {
 	FStageSketchGenerateResult Result;
@@ -2696,6 +2755,17 @@ bool AModularPlayerController::RequestMarketplaceUnpublish(FGuid ListingId)
 		ReportRejection(StageMarketplaceRequests::ToRejection(Result));
 	}
 	return Result.IsSuccess();
+}
+
+bool AModularPlayerController::RequestMarketplaceCancelPayment(FGuid ListingId)
+{
+	UStageEconomySubsystem* Economy = GetGameInstance() ? GetGameInstance()->GetSubsystem<UStageEconomySubsystem>() : nullptr;
+	if (Economy && Economy->RequestCancelListingPurchase(ListingId))
+	{
+		return true;
+	}
+	ReportRejection(FStageEconomyResultInfo::Fail(EStageEconomyResult::InvalidRequest, LOCTEXT("NoPaymentAwaited", "No payment is being awaited for this listing.")));
+	return false;
 }
 
 bool AModularPlayerController::RequestMarketplaceRemoveFromLibrary(FGuid ListingId)

@@ -2,6 +2,7 @@
 
 #include "UI/StageMarketplaceWidget.h"
 
+#include "Cloud/StageCloudSubsystem.h"
 #include "Blueprint/WidgetTree.h"
 #include "Components/Border.h"
 #include "Components/ButtonSlot.h"
@@ -303,6 +304,16 @@ UWidget* UStageMarketplaceWidget::BuildHeader()
 		CreditsSlot->SetHorizontalAlignment(HAlign_Right);
 		CreditsSlot->SetVerticalAlignment(VAlign_Center);
 	}
+	// StageCraft Cloud account (ADR 0032 §5): hidden while the cloud is offline.
+	AccountText = MakeText(FText::GetEmpty(), 8, TEXT("Regular"), Palette.TextSecondary);
+	if (UHorizontalBoxSlot* AccountSlot = Row->AddChildToHorizontalBox(AccountText))
+	{
+		AccountSlot->SetPadding(FMargin(StageMarketplacePanel::GroupGap, 0.f, 6.f, 0.f));
+		AccountSlot->SetVerticalAlignment(VAlign_Center);
+	}
+	AccountButton = MakeButton(LOCTEXT("SignIn", "SIGN IN"), LOCTEXT("SignInTip", "Sign in to StageCraft Cloud in your browser to buy and sell for real money."),
+		0, &ThisClass::HandleAccountPicked);
+	Row->AddChildToHorizontalBox(AccountButton)->SetVerticalAlignment(VAlign_Center);
 	return Header;
 }
 
@@ -555,6 +566,12 @@ void UStageMarketplaceWidget::NativeConstruct()
 		BoundDispatch = Dispatch;
 		Dispatch->OnOrderCompleted.AddUniqueDynamic(this, &ThisClass::HandleOrderCompleted);
 	}
+	if (UStageCloudSubsystem* Cloud = GameInstance ? GameInstance->GetSubsystem<UStageCloudSubsystem>() : nullptr)
+	{
+		BoundCloud = Cloud;
+		CloudStateHandle = Cloud->OnStateChanged.AddUObject(this, &ThisClass::HandleCloudStateChanged);
+	}
+	RefreshAccount();
 	SearchField->OnTextCommitted.AddUniqueDynamic(this, &ThisClass::HandleSearchCommitted);
 	CategoryCombo->OnSelectionChanged.AddUniqueDynamic(this, &ThisClass::HandleCategoryChanged);
 	SortCombo->OnSelectionChanged.AddUniqueDynamic(this, &ThisClass::HandleSortChanged);
@@ -570,6 +587,12 @@ void UStageMarketplaceWidget::NativeConstruct()
 
 void UStageMarketplaceWidget::NativeDestruct()
 {
+	if (UStageCloudSubsystem* Cloud = BoundCloud.Get())
+	{
+		Cloud->OnStateChanged.Remove(CloudStateHandle);
+	}
+	CloudStateHandle.Reset();
+	BoundCloud.Reset();
 	if (UStageMarketplaceSubsystem* Marketplace = BoundMarketplace.Get())
 	{
 		Marketplace->OnListingsUpdated.RemoveDynamic(this, &ThisClass::HandleListingsUpdated);
@@ -758,12 +781,96 @@ FText UStageMarketplaceWidget::DescribePrice(const FStageMarketplaceListing& Lis
 	case EStageOwnershipState::Owned:
 		return LOCTEXT("PriceOwnedBadge", "OWNED");
 	case EStageOwnershipState::Purchasable:
-		return FText::Format(LOCTEXT("PriceCreditsBadge", "{0} CREDITS"), FText::AsNumber(Listing.Price.Credits));
+		return Listing.Price.HasRealMoneyPrice() ? FormatMoney(Listing.Price)
+			: FText::Format(LOCTEXT("PriceCreditsBadge", "{0} CREDITS"), FText::AsNumber(Listing.Price.Credits));
 	default:
-		return Listing.Price.HasRealMoneyPrice()
-			? LOCTEXT("PriceMoneyBadge", "REAL-MONEY LISTING · NEEDS AN ONLINE STORE")
-			: LOCTEXT("PriceLockedBadge", "LOCKED · PROFILE COULD NOT BE VERIFIED");
+		if (!Listing.Price.HasRealMoneyPrice())
+		{
+			return LOCTEXT("PriceLockedBadge", "LOCKED · PROFILE COULD NOT BE VERIFIED");
+		}
+		{
+			const UStageCloudSubsystem* Cloud = BoundCloud.Get();
+			return Cloud && Cloud->IsOnline()
+				? FText::Format(LOCTEXT("PriceSignInBadge", "{0} · SIGN IN TO BUY"), FormatMoney(Listing.Price))
+				: LOCTEXT("PriceMoneyBadge", "REAL-MONEY LISTING · NEEDS AN ONLINE STORE");
+		}
 	}
+}
+
+FText UStageMarketplaceWidget::FormatMoney(const FStageMarketplacePrice& Price)
+{
+	// Minor units in the listing's currency, shown in the user's locale ("$15.00", "15,00 €").
+	return FText::AsCurrencyBase(Price.RealMoneyMinorUnits, Price.RealMoneyCurrency);
+}
+
+bool UStageMarketplaceWidget::IsWaitingForPayment(const FStageMarketplaceListing& Listing) const
+{
+	const UStageMarketplaceSubsystem* Marketplace = GetMarketplace();
+	return Listing.Price.HasRealMoneyPrice() && Marketplace && Marketplace->IsAcquiring(Listing.ListingId) && AutoOpenListings.Contains(Listing.ListingId);
+}
+
+void UStageMarketplaceWidget::RefreshAccount()
+{
+	const UStageCloudSubsystem* Cloud = BoundCloud.Get();
+	const bool bOnline = Cloud && Cloud->IsOnline();
+	AccountText->SetVisibility(bOnline ? ESlateVisibility::HitTestInvisible : ESlateVisibility::Collapsed);
+	AccountButton->SetVisibility(bOnline ? ESlateVisibility::Visible : ESlateVisibility::Collapsed);
+	if (!bOnline)
+	{
+		return;
+	}
+	switch (Cloud->GetState())
+	{
+	case EStageCloudState::SignedIn:
+		AccountText->SetText(Cloud->GetAccount().DisplayName.IsEmpty() ? LOCTEXT("SignedIn", "Signed in")
+			: FText::Format(LOCTEXT("SignedInAs", "Signed in as {0}"), FText::FromString(Cloud->GetAccount().DisplayName)));
+		StageMarketplacePanel::SetLabel(AccountButton, LOCTEXT("SignOut", "SIGN OUT"));
+		break;
+	case EStageCloudState::SigningIn:
+		AccountText->SetText(Cloud->GetDeviceCode().UserCode.IsEmpty() ? LOCTEXT("Connecting", "Connecting...")
+			: FText::Format(LOCTEXT("Code", "Code {0} · finish in the browser"), FText::FromString(Cloud->GetDeviceCode().UserCode)));
+		StageMarketplacePanel::SetLabel(AccountButton, LOCTEXT("CancelSignIn", "CANCEL"));
+		break;
+	default:
+		AccountText->SetText(Cloud->GetStatusMessage().IsEmpty() ? LOCTEXT("SignedOut", "Not signed in") : Cloud->GetStatusMessage());
+		StageMarketplacePanel::SetLabel(AccountButton, LOCTEXT("SignIn", "SIGN IN"));
+		break;
+	}
+}
+
+void UStageMarketplaceWidget::HandleAccountPicked(int32 Index)
+{
+	UStageCloudSubsystem* Cloud = BoundCloud.Get();
+	if (!Cloud)
+	{
+		return;
+	}
+	switch (Cloud->GetState())
+	{
+	case EStageCloudState::SignedIn:
+		Cloud->SignOut();
+		break;
+	case EStageCloudState::SigningIn:
+		Cloud->CancelSignIn();
+		break;
+	default:
+	{
+		FText Error;
+		if (!Cloud->StartSignIn(Error))
+		{
+			ShowStatus(Error, true);
+		}
+		break;
+	}
+	}
+}
+
+void UStageMarketplaceWidget::HandleCloudStateChanged()
+{
+	RefreshAccount();
+	RefreshHeader();
+	// Signing in or out changes what can be bought and who owns what: ask again.
+	RunQuery();
 }
 
 void UStageMarketplaceWidget::RefreshDetails()
@@ -812,9 +919,18 @@ void UStageMarketplaceWidget::RefreshDetails()
 	DetailPrice->SetColorAndOpacity(FSlateColor(Ownership == EStageOwnershipState::Locked ? GetTheme().WarningColor : GetTheme().AccentColor));
 
 	FText AcquireLabel;
-	if (Marketplace->IsAcquiring(Listing->ListingId))
+	const bool bWaitingForPayment = IsWaitingForPayment(*Listing);
+	if (bWaitingForPayment)
+	{
+		AcquireLabel = LOCTEXT("WaitingPayment", "PAYING IN BROWSER · CANCEL");
+	}
+	else if (Marketplace->IsAcquiring(Listing->ListingId))
 	{
 		AcquireLabel = LOCTEXT("Getting", "GETTING...");
+	}
+	else if (Ownership == EStageOwnershipState::Purchasable && Listing->Price.HasRealMoneyPrice())
+	{
+		AcquireLabel = FText::Format(LOCTEXT("BuyMoney", "BUY · {0}"), FormatMoney(Listing->Price));
 	}
 	else
 	{
@@ -827,7 +943,7 @@ void UStageMarketplaceWidget::RefreshDetails()
 		}
 	}
 	StageMarketplacePanel::SetLabel(ActionButtons[int32(EAction::Acquire)], AcquireLabel);
-	ActionButtons[int32(EAction::Acquire)]->SetIsEnabled(!Marketplace->IsAcquiring(Listing->ListingId) && Ownership != EStageOwnershipState::Locked);
+	ActionButtons[int32(EAction::Acquire)]->SetIsEnabled(bWaitingForPayment || (!Marketplace->IsAcquiring(Listing->ListingId) && Ownership != EStageOwnershipState::Locked));
 	StyleChoice(*ActionButtons[int32(EAction::Acquire)], Ownership == EStageOwnershipState::Purchasable);
 
 	const bool bImported = ImportedScenes.Contains(Listing->ListingId);
@@ -933,7 +1049,23 @@ void UStageMarketplaceWidget::HandleActionPicked(int32 Index)
 		break;
 
 	case EAction::Acquire:
-		if (Listing)
+		if (Listing && Controller && IsWaitingForPayment(*Listing))
+		{
+			Controller->RequestMarketplaceCancelPayment(Listing->ListingId);
+		}
+		else if (Listing && Controller && Listing->Price.HasRealMoneyPrice()
+			&& GetMarketplace() && GetMarketplace()->GetListingOwnership(Listing->ListingId) == EStageOwnershipState::Purchasable)
+		{
+			// One click: Stripe's page in the browser is the confirmation (it shows the price and takes the card). When the server
+			// confirms the payment, the stage downloads and opens here (HandleAcquireCompleted).
+			if (Controller->RequestMarketplaceAcquire(Listing->ListingId))
+			{
+				AutoOpenListings.Add(Listing->ListingId);
+				ShowStatus(LOCTEXT("PayInBrowser", "Complete the payment in your browser. The stage opens here as soon as it is paid."), false);
+			}
+			RefreshDetails();
+		}
+		else if (Listing)
 		{
 			OpenAcquireDialog(Listing->ListingId);
 		}
@@ -1121,12 +1253,18 @@ void UStageMarketplaceWidget::HandleListingsUpdated(FStageMarketplaceResultInfo 
 
 void UStageMarketplaceWidget::HandleAcquireCompleted(FGuid ListingId, FStageMarketplaceResultInfo Result, const FString& SceneName)
 {
+	const bool bOpenNow = AutoOpenListings.Remove(ListingId) > 0 && Result.IsSuccess();
 	if (Result.IsSuccess())
 	{
 		ImportedScenes.Add(ListingId, SceneName);
 		RefreshSceneChoices();
 	}
 	ShowStatus(Result.Message, !Result.IsSuccess());
+	if (bOpenNow)
+	{
+		// Bought with one click: straight into the stage (a stage with unsaved changes still asks first).
+		OpenImportedScene(ListingId);
+	}
 	// Ownership and downloads changed: ask again rather than patching the cards.
 	RunQuery();
 }

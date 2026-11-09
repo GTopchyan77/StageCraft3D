@@ -1,0 +1,21 @@
+{
+  "name": "stagecraft-cloud",
+  "version": "0.1.0",
+  "private": true,
+  "description": "StageCraft Cloud: marketplace, orders, ledger, payouts, sign-in and support for StageCraft 3D (ADR 0032).",
+  "type": "module",
+  "engines": {
+    "node": ">=22.18.0"
+  },
+  "scripts": {
+    "start": "node src/main.ts",
+    "migrate": "node src/cli.ts migrate",
+    "test": "node --test --test-concurrency=1 \"test/**/*.test.ts\"",
+    "test:coverage": "node --test --test-concurrency=1 --experimental-test-coverage --test-coverage-exclude=\"test/**\" \"test/**/*.test.ts\"",
+    "test:pg": "node scripts/test-pg.ts",
+    "typecheck": "echo \"no compiler dependency: open in an editor with tsconfig.json for type checking\""
+  },
+  "dependencies": {
+    "pg": "8.16.3"
+  }
+}

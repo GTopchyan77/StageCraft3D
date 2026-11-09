@@ -43,6 +43,19 @@ public:
 	virtual bool CanSettleRealMoney() const { return false; }
 
 	/**
+	 * Seconds this backend needs to answer Request before the economy ends it as BackendTimeout (ADR 0021 §14). The default is the
+	 * economy's own deadline (DefaultSeconds); a backend that sends the buyer to a hosted checkout page asks for that page's lifetime
+	 * (ADR 0032 §6). The economy clamps the answer to 1 s..1 h.
+	 */
+	virtual float GetSettlementTimeoutSeconds(const FStagePurchaseRequest& Request, float DefaultSeconds) const { return DefaultSeconds; }
+
+	/**
+	 * Abandons the purchase TransactionId while it still waits (the buyer closed the checkout page). A backend that can, answers that
+	 * purchase now as declined, through its OnProcessed (still exactly once) and returns true. The default cannot.
+	 */
+	virtual bool CancelPurchase(const FGuid& TransactionId) { return false; }
+
+	/**
 	 * True only for a server backend that sells in-app currency for real money (Economy security 7). The economy refuses top-ups
 	 * as ServerRequired otherwise, and never calls ProcessCreditTopUp (ADR 0022 §11.4).
 	 */

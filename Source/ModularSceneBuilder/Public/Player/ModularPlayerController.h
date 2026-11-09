@@ -292,6 +292,16 @@ public:
 	bool RequestGenerateFromSketch();
 
 	/**
+	 * Builds the Vision Inspector's bill of materials (Docs/ADR/0032 §8): the deck and truss runs through the sketch generator, then the
+	 * matched fixtures, audio and set pieces, laid out on the estimated stage (UStageVisionBomSubsystem::MakeBuildPlan). Like
+	 * RequestGenerateFromSketch: the items stream in, then everything is placed through the GameMode rules, all or nothing, as ONE undo
+	 * step; the result arrives on UStageVisionBomSubsystem::OnChanged. Refused (and reported on OnRequestRejected) during a gizmo drag
+	 * or camera flight, while a generation is in flight, or when nothing on the bill can be built.
+	 */
+	UFUNCTION(BlueprintCallable, Category = "StageCraft|Requests")
+	bool RequestBuildFromVisionBom();
+
+	/**
 	 * Places a build plan (decks, truss paths, fixtures) as ONE undo step named StepName: every element through the GameMode rules, all
 	 * or nothing (StageSketchBuilder, Docs/ADR/0016-ai-assistant.md §2.4). The plan's items should be in memory already. Used by
 	 * the Sketch window and the AI assistant. A refusal (gizmo drag or camera flight, empty plan, a rule) is reported on
@@ -686,6 +696,14 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "StageCraft|Requests")
 	bool RequestMarketplaceUnpublish(FGuid ListingId);
 
+	/**
+	 * Stops waiting for the payment of ListingId on the hosted checkout (Docs/ADR/0032 §6); the acquisition then ends as declined on
+	 * OnAcquireCompleted. If the buyer did pay, buying again returns the same paid order and charges nothing. Refused (and reported) when
+	 * no payment is awaited.
+	 */
+	UFUNCTION(BlueprintCallable, Category = "StageCraft|Requests")
+	bool RequestMarketplaceCancelPayment(FGuid ListingId);
+
 	/** Deletes the library copy of an acquired listing; ownership stays (ADR 0021 §15). Reported likewise; completion on OnLibraryChanged. */
 	UFUNCTION(BlueprintCallable, Category = "StageCraft|Requests")
 	bool RequestMarketplaceRemoveFromLibrary(FGuid ListingId);
@@ -951,6 +969,7 @@ private:
 
 	/** The sketch plan's items are in memory: places the plan (all or nothing), records it as one step, reports the result. */
 	void HandleSketchAssetsReady();
+	void HandleVisionBomAssetsReady();
 
 	/** Records the cue list change from Before to the current list as one undo step named Description. */
 	void RecordCueEdit(const FText& Description, const TArray<FShowCue>& Before, const class UShowControlSubsystem& Show) const;

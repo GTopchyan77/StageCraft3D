@@ -47,6 +47,8 @@ enum class EStageMarketplaceResult : uint8
 	NotYours,
 	/** The listing is being acquired or ordered right now; try again when that has finished. */
 	InUse,
+	/** StageCraft Cloud needs the user to sign in first (ADR 0032 §5). */
+	SignInRequired,
 };
 
 /** Result of a marketplace request. Message is user-facing; Code is for logic. */

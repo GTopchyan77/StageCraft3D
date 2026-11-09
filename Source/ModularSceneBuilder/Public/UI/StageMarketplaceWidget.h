@@ -139,6 +139,22 @@ private:
 	class UStageMarketplaceSubsystem* GetMarketplace() const { return BoundMarketplace.Get(); }
 	class AModularPlayerController* GetStageController() const;
 
+	// StageCraft Cloud (ADR 0032 §6): the account bar and one-click real-money purchases.
+	static FText FormatMoney(const FStageMarketplacePrice& Price);
+	bool IsWaitingForPayment(const FStageMarketplaceListing& Listing) const;
+	void RefreshAccount();
+	void HandleAccountPicked(int32 Index);
+	void HandleCloudStateChanged();
+
+	UPROPERTY(Transient)
+	TObjectPtr<class UTextBlock> AccountText = nullptr;
+	UPROPERTY(Transient)
+	TObjectPtr<class UStageChoiceButton> AccountButton = nullptr;
+	TWeakObjectPtr<class UStageCloudSubsystem> BoundCloud;
+	FDelegateHandle CloudStateHandle;
+	/** Real-money listings bought here with one click: opened in the stage when their download completes. */
+	TSet<FGuid> AutoOpenListings;
+
 	// Header.
 	UPROPERTY(Transient)
 	TObjectPtr<class UTextBlock> CreditsText = nullptr;

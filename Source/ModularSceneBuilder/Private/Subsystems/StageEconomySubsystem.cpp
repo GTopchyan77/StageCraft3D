@@ -110,7 +110,15 @@ float UStageEconomySubsystem::GetBackendTimeoutSeconds() const
 	return BackendTimeoutSeconds > 0.f ? BackendTimeoutSeconds : DefaultTimeoutSeconds;
 }
 
-void UStageEconomySubsystem::StartBackendTimer(const FGuid& TransactionId)
+float UStageEconomySubsystem::GetSettlementTimeoutSeconds(const UStageCommerceBackend& CommerceBackend, const FStagePurchaseRequest& Request) const
+{
+	// A backend may need longer than the economy's deadline (a person paying on a hosted checkout page), never less than a second nor
+	// more than an hour: a backend that never answers must still end as BackendTimeout (ADR 0021 §14).
+	const float Seconds = CommerceBackend.GetSettlementTimeoutSeconds(Request, GetBackendTimeoutSeconds());
+	return FMath::IsFinite(Seconds) ? FMath::Clamp(Seconds, 1.f, 3600.f) : GetBackendTimeoutSeconds();
+}
+
+void UStageEconomySubsystem::StartBackendTimer(const FGuid& TransactionId, float Seconds)
 {
 	UGameInstance* GameInstance = GetGameInstance();
 	if (!GameInstance)
@@ -119,7 +127,7 @@ void UStageEconomySubsystem::StartBackendTimer(const FGuid& TransactionId)
 	}
 	FTimerHandle& Handle = BackendTimers.FindOrAdd(TransactionId);
 	GameInstance->GetTimerManager().SetTimer(Handle, FTimerDelegate::CreateUObject(this, &ThisClass::HandleBackendTimeout, TransactionId),
-		GetBackendTimeoutSeconds(), /*bLoop*/ false);
+		Seconds > 0.f ? Seconds : GetBackendTimeoutSeconds(), /*bLoop*/ false);
 }
 
 void UStageEconomySubsystem::StopBackendTimer(const FGuid& TransactionId)
@@ -440,7 +448,7 @@ FStageEconomyResultInfo UStageEconomySubsystem::RequestPurchase(UStageProductDat
 	UE_LOG(LogStageCraft, Log, TEXT("Purchase %s of %s sent to %s."), *Request.TransactionId.ToString(), *Request.ProductId.ToString(), *GetNameSafe(Backend));
 
 	// May complete synchronously (local backend) or much later (server); both paths are the same.
-	StartBackendTimer(Request.TransactionId);
+	StartBackendTimer(Request.TransactionId, GetSettlementTimeoutSeconds(*Backend, Request));
 	Backend->ProcessPurchase(Request, FOnStagePurchaseProcessed::CreateUObject(this, &ThisClass::HandlePurchaseProcessed,
 		Request.TransactionId, TWeakObjectPtr<UStageProductData>(Product)));
 	return FStageEconomyResultInfo::Ok();
@@ -541,6 +549,13 @@ bool UStageEconomySubsystem::IsListingPurchasePending(FGuid ListingId) const
 	return ListingId.IsValid() && PendingPurchases.Contains(StageMarketplaceRules::MakeListingProductId(ListingId));
 }
 
+bool UStageEconomySubsystem::RequestCancelListingPurchase(FGuid ListingId)
+{
+	const FGuid* TransactionId = ListingId.IsValid() ? PendingPurchases.Find(StageMarketplaceRules::MakeListingProductId(ListingId)) : nullptr;
+	// The backend answers through HandleListingPurchaseProcessed, which ends the purchase as every refusal does.
+	return TransactionId && Backend && Backend->CancelPurchase(FGuid(*TransactionId));
+}
+
 FStageEconomyResultInfo UStageEconomySubsystem::ValidateListingPurchase(const FStageMarketplaceListing* Offer, bool bIgnorePending) const
 {
 	const UStageProfileSubsystem* Profile = GetProfile();
@@ -585,7 +600,7 @@ FStageEconomyResultInfo UStageEconomySubsystem::RequestListingPurchase(FGuid Lis
 		Listing->Price.Credits, *GetNameSafe(Backend));
 
 	// The local backend answers inside this call; a server answers later. Both paths are the same.
-	StartBackendTimer(Request.TransactionId);
+	StartBackendTimer(Request.TransactionId, GetSettlementTimeoutSeconds(*Backend, Request));
 	Backend->ProcessPurchase(Request, FOnStagePurchaseProcessed::CreateUObject(this, &ThisClass::HandleListingPurchaseProcessed, Request.TransactionId));
 	return FStageEconomyResultInfo::Ok();
 }
