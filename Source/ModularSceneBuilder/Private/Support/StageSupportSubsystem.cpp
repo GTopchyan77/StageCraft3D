@@ -2,6 +2,7 @@
 
 #include "Support/StageSupportSubsystem.h"
 
+#include "Async/Async.h"
 #include "Cloud/StageCloudJson.h"
 #include "Cloud/StageCloudSubsystem.h"
 #include "Engine/GameEngine.h"
@@ -11,6 +12,7 @@
 #include "HAL/FileManager.h"
 #include "HAL/PlatformOutputDevices.h"
 #include "HAL/PlatformProcess.h"
+#include "IImageWrapperModule.h"
 #include "ImageUtils.h"
 #include "IO/StageAtomicFile.h"
 #include "IO/StageCraftPaths.h"
@@ -18,9 +20,11 @@
 #include "Misc/OutputDeviceFile.h"
 #include "Misc/Paths.h"
 #include "ModularSceneBuilder.h"
+#include "Modules/ModuleManager.h"
 #include "RHIGlobals.h"
 #include "Subsystems/ShowControlSubsystem.h"
 #include "Subsystems/StageSessionSubsystem.h"
+#include "Tasks/Task.h"
 #include "Widgets/SWindow.h"
 
 #include UE_INLINE_GENERATED_CPP_BY_NAME(StageSupportSubsystem)
@@ -103,7 +107,7 @@ FString UStageSupportSubsystem::ReadLogTail() const
 	return Redact(StageSupportReport::TailLog(FString::ConstructFromPtrSize(Converted.Get(), Converted.Length())));
 }
 
-bool UStageSupportSubsystem::CaptureScreenshot(TArray<uint8>& OutPng, FText& OutError) const
+bool UStageSupportSubsystem::CaptureScreenshot(FOnStageSupportScreenshot OnDone, FText& OutError) const
 {
 	const UGameEngine* GameEngine = Cast<UGameEngine>(GEngine);
 	const TSharedPtr<SWindow> Window = GameEngine ? GameEngine->GameViewportWindow.Pin() : nullptr;
@@ -114,17 +118,48 @@ bool UStageSupportSubsystem::CaptureScreenshot(TArray<uint8>& OutPng, FText& Out
 		OutError = LOCTEXT("NoCapture", "The window could not be captured.");
 		return false;
 	}
+	// The worker must not load modules; the game thread loads the PNG codec first.
+	FModuleManager::LoadModuleChecked<IImageWrapperModule>(TEXT("ImageWrapper"));
+	TWeakObjectPtr<const UStageSupportSubsystem> WeakThis = this;
+	UE::Tasks::Launch(UE_SOURCE_LOCATION, [WeakThis, OnDone = MoveTemp(OnDone), Pixels = MoveTemp(Pixels), Size]() mutable
+	{
+		const double Start = FPlatformTime::Seconds();
+		FStageSupportScreenshot Result;
+		if (!EncodeScreenshot(MoveTemp(Pixels), FIntPoint(Size.X, Size.Y), StageSupportReport::MaxScreenshotBytes, Result.Png))
+		{
+			Result.Error = LOCTEXT("CaptureTooLarge", "The screenshot is too large to attach.");
+		}
+		UE_LOG(LogStageCraft, Log, TEXT("Support: %dx%d screenshot encoded on a worker in %.0f ms (%d KB)."), Size.X, Size.Y,
+			(FPlatformTime::Seconds() - Start) * 1000.0, Result.Png.Num() / 1024);
+		AsyncTask(ENamedThreads::GameThread, [WeakThis, OnDone = MoveTemp(OnDone), Result = MoveTemp(Result)]()
+		{
+			if (WeakThis.IsValid())
+			{
+				OnDone.ExecuteIfBound(Result);
+			}
+		});
+	});
+	return true;
+}
+
+bool UStageSupportSubsystem::EncodeScreenshot(TArray<FColor> Pixels, FIntPoint Size, int64 MaxBytes, TArray<uint8>& OutPng)
+{
+	OutPng.Reset();
+	int32 Width = Size.X;
+	int32 Height = Size.Y;
+	if (Width <= 0 || Height <= 0 || int64(Width) * Height != Pixels.Num())
+	{
+		return false;
+	}
 	for (FColor& Pixel : Pixels)
 	{
 		Pixel.A = 255;
 	}
-	int32 Width = Size.X;
-	int32 Height = Size.Y;
 	for (int32 Attempt = 0; Attempt < 4; ++Attempt)
 	{
 		TArray64<uint8> Png;
 		FImageUtils::PNGCompressImageArray(Width, Height, Pixels, Png);
-		if (Png.Num() > 0 && Png.Num() <= StageSupportReport::MaxScreenshotBytes)
+		if (Png.Num() > 0 && Png.Num() <= MaxBytes)
 		{
 			OutPng = TArray<uint8>(Png.GetData(), int32(Png.Num()));
 			return true;
@@ -149,7 +184,6 @@ bool UStageSupportSubsystem::CaptureScreenshot(TArray<uint8>& OutPng, FText& Out
 		Width = HalfWidth;
 		Height = HalfHeight;
 	}
-	OutError = LOCTEXT("CaptureTooLarge", "The screenshot is too large to attach.");
 	return false;
 }
 

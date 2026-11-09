@@ -126,8 +126,7 @@ protected:
 	//~ End UWorldSubsystem Interface
 
 private:
-	UFUNCTION()
-	void HandleItemParameterChanged(class AModularBaseActor* Item, FGameplayTag ParameterId);
+	void HandleItemParameterChanged(class AModularBaseActor* Item, const FGameplayTag& ParameterId);
 
 	/** The outdoor environment is part of the scene file (format version 2), so changing it is an unsaved edit. */
 	UFUNCTION()

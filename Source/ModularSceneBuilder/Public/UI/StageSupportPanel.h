@@ -44,6 +44,7 @@ private:
 	void Refresh();
 	void HandleAction(int32 Index);
 	void HandleSubmitted(const struct FStageSupportSubmitResult& Result);
+	void HandleScreenshot(uint32 Serial, const struct FStageSupportScreenshot& Screenshot);
 	void ResetForm();
 
 	UPROPERTY(Transient)
@@ -72,5 +73,8 @@ private:
 	/** Read when the box is ticked, so the user sees how much goes; sent as it was then. */
 	FString LogTail;
 	TArray<uint8> ScreenshotPng;
+	/** The capture being encoded; an answer for an older one (unticked or reset since) is dropped. 0 when none is pending. */
+	uint32 PendingScreenshot = 0;
+	uint32 ScreenshotSerial = 0;
 	FString SavedFolder;
 };

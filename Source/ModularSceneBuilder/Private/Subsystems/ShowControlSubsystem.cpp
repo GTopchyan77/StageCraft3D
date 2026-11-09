@@ -1560,23 +1560,34 @@ TOptional<float> UShowControlSubsystem::FindSettingCue(int32 FixtureId, const FG
 
 void UShowControlSubsystem::ResolveFixture(ALightingFixtureActor& Fixture, EResolveScope Scope)
 {
-	FLayerScratch Scratch;
-	StageShowMix::FFixtureLayers Layers;
-	BuildLayers(Fixture, Scratch, Layers);
+	if (bResolveScratchInUse)
+	{
+		FResolveScratch Nested;
+		ResolveFixtureWith(Fixture, Scope, Nested);
+		return;
+	}
+	TGuardValue<bool> InUse(bResolveScratchInUse, true);
+	ResolveFixtureWith(Fixture, Scope, ResolveScratch);
+}
 
-	TArray<FGameplayTag> Attributes;
+void UShowControlSubsystem::ResolveFixtureWith(ALightingFixtureActor& Fixture, EResolveScope Scope, FResolveScratch& Scratch)
+{
+	// Every buffer is overwritten or reset before it is read (BuildLayers, GetKeys, StageShowMix::ResolveFixture).
+	StageShowMix::FFixtureLayers Layers;
+	BuildLayers(Fixture, Scratch.Layers, Layers);
+
+	Scratch.Attributes.Reset();
 	if (Scope == EResolveScope::EffectAttributes)
 	{
-		Scratch.Effects.GetKeys(Attributes);
+		Scratch.Layers.Effects.GetKeys(Scratch.Attributes);
 	}
 	else
 	{
-		Fixture.GetAttributes().GetKeys(Attributes);
+		Fixture.GetAttributes().GetKeys(Scratch.Attributes);
 	}
-	TMap<FGameplayTag, float> Mixed;
-	StageShowMix::ResolveFixture(Attributes, Layers, Mixed);
+	StageShowMix::ResolveFixture(Scratch.Attributes, Layers, Scratch.Mixed);
 	// SetAttributes stores and applies only the values that differ from the output.
-	WriteFixtureOutput(Fixture, Mixed);
+	WriteFixtureOutput(Fixture, Scratch.Mixed);
 }
 
 void UShowControlSubsystem::RemoveHeldAttributes(const ALightingFixtureActor& Fixture, TMap<FGameplayTag, float>& Frame) const

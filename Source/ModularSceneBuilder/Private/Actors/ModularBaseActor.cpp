@@ -487,6 +487,7 @@ bool AModularBaseActor::WriteParameter(const FGameplayTag& ParameterId, const FS
 
 void AModularBaseActor::NotifyParameterChanged(const FGameplayTag& ParameterId)
 {
+	OnParameterChangedNative.Broadcast(this, ParameterId);
 	OnParameterChanged.Broadcast(this, ParameterId);
 }
 

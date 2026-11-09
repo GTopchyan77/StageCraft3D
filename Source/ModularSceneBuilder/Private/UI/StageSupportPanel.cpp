@@ -211,11 +211,12 @@ void UStageSupportPanel::Refresh()
 	}
 	if (bIncludeScreenshot)
 	{
-		Parts.Add(FText::Format(LOCTEXT("ShotSize", "Screenshot: {0} KB."), FText::AsNumber(FMath::DivideAndRoundUp(ScreenshotPng.Num(), 1024))));
+		Parts.Add(PendingScreenshot != 0 ? LOCTEXT("ShotPending", "Screenshot: attaching...")
+			: FText::Format(LOCTEXT("ShotSize", "Screenshot: {0} KB."), FText::AsNumber(FMath::DivideAndRoundUp(ScreenshotPng.Num(), 1024))));
 	}
 	Parts.Add(bOnline ? LOCTEXT("ToCloud", "Goes to StageCraft support (StageCraft Cloud).") : LOCTEXT("ToDisk", "StageCraft Cloud is offline: the report is saved on this computer for you to send."));
 	AttachText->SetText(FText::Join(FText::FromString(TEXT(" ")), Parts));
-	ActionButtons[int32(EAction::Send)]->SetIsEnabled(Support && !Support->IsSubmitting());
+	ActionButtons[int32(EAction::Send)]->SetIsEnabled(Support && !Support->IsSubmitting() && PendingScreenshot == 0);
 	ActionButtons[int32(EAction::OpenFolder)]->SetVisibility(SavedFolder.IsEmpty() ? ESlateVisibility::Collapsed : ESlateVisibility::Visible);
 }
 
@@ -235,10 +236,19 @@ void UStageSupportPanel::HandleAction(int32 Index)
 	case EAction::IncludeScreenshot:
 		bIncludeScreenshot = !bIncludeScreenshot;
 		ScreenshotPng.Reset();
+		PendingScreenshot = 0;
 		if (bIncludeScreenshot)
 		{
 			FText Error;
-			if (!Support->CaptureScreenshot(ScreenshotPng, Error))
+			const uint32 Serial = ++ScreenshotSerial;
+			if (Support->CaptureScreenshot(FOnStageSupportScreenshot::CreateWeakLambda(this, [this, Serial](const FStageSupportScreenshot& Screenshot)
+				{
+					HandleScreenshot(Serial, Screenshot);
+				}), Error))
+			{
+				PendingScreenshot = Serial;
+			}
+			else
 			{
 				bIncludeScreenshot = false;
 				StatusText->SetText(Error);
@@ -300,8 +310,25 @@ void UStageSupportPanel::HandleSubmitted(const FStageSupportSubmitResult& Result
 	Refresh();
 }
 
+void UStageSupportPanel::HandleScreenshot(uint32 Serial, const FStageSupportScreenshot& Screenshot)
+{
+	if (Serial != PendingScreenshot)
+	{
+		return;
+	}
+	PendingScreenshot = 0;
+	ScreenshotPng = Screenshot.Png;
+	if (ScreenshotPng.IsEmpty())
+	{
+		bIncludeScreenshot = false;
+		StatusText->SetText(Screenshot.Error);
+	}
+	Refresh();
+}
+
 void UStageSupportPanel::ResetForm()
 {
+	PendingScreenshot = 0;
 	for (UEditableTextBox* Field : { TitleField.Get(), ExpectedField.Get(), ActualField.Get() })
 	{
 		Field->SetText(FText::GetEmpty());

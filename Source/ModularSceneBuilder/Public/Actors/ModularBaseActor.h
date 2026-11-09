@@ -13,6 +13,9 @@ DECLARE_DYNAMIC_MULTICAST_DELEGATE_TwoParams(FOnModularActorSelectionChanged, cl
 /** ParameterId is the row that changed. An invalid tag means "structure changed, rebuild everything". */
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_TwoParams(FOnStageParameterChanged, class AModularBaseActor*, Actor, FGameplayTag, ParameterId);
 
+/** The same notification for C++ listeners (AModularBaseActor::OnParameterChangedNative). */
+DECLARE_MULTICAST_DELEGATE_TwoParams(FOnStageParameterChangedNative, class AModularBaseActor* /*Actor*/, const FGameplayTag& /*ParameterId*/);
+
 /**
  * Parent class for every item the user places on stage.
  *
@@ -107,6 +110,13 @@ public:
 	 */
 	UPROPERTY(BlueprintAssignable, Category = "StageCraft|Parameters")
 	FOnStageParameterChanged OnParameterChanged;
+
+	/**
+	 * Fires with OnParameterChanged, for C++ listeners that watch many items (the session, the patch table). While a show plays every
+	 * fixture notifies each attribute it writes every frame, and a native broadcast costs a fraction of the reflected one (STATE #78).
+	 * Bind with AddUObject and unbind with RemoveAll(Listener).
+	 */
+	FOnStageParameterChangedNative OnParameterChangedNative;
 
 	/** User-facing instance name, e.g. "Spot 101" or "Main L 03". Falls back to the catalog name when empty. */
 	UFUNCTION(BlueprintPure, Category = "StageCraft|Item")

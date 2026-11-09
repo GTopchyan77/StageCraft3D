@@ -99,7 +99,7 @@ void UStageSessionSubsystem::Deinitialize()
 	{
 		if (AModularBaseActor* Actor = Item.Get())
 		{
-			Actor->OnParameterChanged.RemoveDynamic(this, &ThisClass::HandleItemParameterChanged);
+			Actor->OnParameterChangedNative.RemoveAll(this);
 		}
 	}
 	Items.Reset();
@@ -131,7 +131,7 @@ void UStageSessionSubsystem::RegisterItem(AModularBaseActor* Item)
 	ensureMsgf(!Existing, TEXT("Stage session: %s registered with the instance id of %s."), *Item->GetName(), *GetNameSafe(Existing));
 
 	Items.Add(Item);
-	Item->OnParameterChanged.AddUniqueDynamic(this, &ThisClass::HandleItemParameterChanged);
+	Item->OnParameterChangedNative.AddUObject(this, &ThisClass::HandleItemParameterChanged);
 	RecomputeStats();
 	OnItemListChanged.Broadcast();
 
@@ -150,7 +150,7 @@ void UStageSessionSubsystem::UnregisterItem(AModularBaseActor* Item)
 		return;
 	}
 
-	Item->OnParameterChanged.RemoveDynamic(this, &ThisClass::HandleItemParameterChanged);
+	Item->OnParameterChangedNative.RemoveAll(this);
 	RecomputeStats();
 	OnItemListChanged.Broadcast();
 
@@ -194,7 +194,7 @@ AModularBaseActor* UStageSessionSubsystem::FindItemById(const FGuid& InstanceId)
 	return nullptr;
 }
 
-void UStageSessionSubsystem::HandleItemParameterChanged(AModularBaseActor* Item, FGameplayTag ParameterId)
+void UStageSessionSubsystem::HandleItemParameterChanged(AModularBaseActor* Item, const FGameplayTag& ParameterId)
 {
 	// An invalid tag means the structure changed (item type swapped), which changes power and weight.
 	if (!ParameterId.IsValid())

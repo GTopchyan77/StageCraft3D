@@ -21,6 +21,15 @@ struct FStageSupportSubmitResult
 
 DECLARE_DELEGATE_OneParam(FOnStageSupportSubmitted, const FStageSupportSubmitResult& /*Result*/);
 
+/** A window capture for a report: Png when it worked, else Error. */
+struct FStageSupportScreenshot
+{
+	TArray<uint8> Png;
+	FText Error;
+};
+
+DECLARE_DELEGATE_OneParam(FOnStageSupportScreenshot, const FStageSupportScreenshot& /*Screenshot*/);
+
 /**
  * Support requests and bug reports (Docs/ADR/0032 §7): builds a draft with the app's details, reads the log tail and captures the
  * window when the user asks, and sends the report to StageCraft Cloud, or saves it on disk when the cloud is offline or unreachable.
@@ -41,8 +50,18 @@ public:
 	/** The end of this session's log (StageSupportReport::MaxLogBytes), redacted. Empty when the log cannot be read. */
 	FString ReadLogTail() const;
 
-	/** The app window as a PNG of at most StageSupportReport::MaxScreenshotBytes (halved until it fits). False, with a reason, otherwise. */
-	bool CaptureScreenshot(TArray<uint8>& OutPng, FText& OutError) const;
+	/**
+	 * Captures the app window now and encodes it on a worker thread (EncodeScreenshot), so a 4K window does not stall the frame. OnDone runs
+	 * once on the game thread, unless this subsystem is gone by then. False, with a reason, when the window cannot be captured; OnDone
+	 * does not run then.
+	 */
+	bool CaptureScreenshot(FOnStageSupportScreenshot OnDone, FText& OutError) const;
+
+	/**
+	 * Pixels (Size.X by Size.Y) as a PNG of at most MaxBytes, halved with a box filter up to three times until it fits. False when it
+	 * still does not fit or the input is invalid. Pure and thread-safe once the ImageWrapper module is loaded.
+	 */
+	static bool EncodeScreenshot(TArray<FColor> Pixels, FIntPoint Size, int64 MaxBytes, TArray<uint8>& OutPng);
 
 	/** Text the user sees and sends, redacted the same way as the report will be. */
 	FString Redact(const FString& Text) const;

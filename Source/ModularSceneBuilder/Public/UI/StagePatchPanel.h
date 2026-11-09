@@ -141,8 +141,7 @@ private:
 	UFUNCTION()
 	void HandleFixturesChanged();
 
-	UFUNCTION()
-	void HandleFixtureParameterChanged(class AModularBaseActor* Actor, FGameplayTag ParameterId);
+	void HandleFixtureParameterChanged(class AModularBaseActor* Actor, const FGameplayTag& ParameterId);
 
 	UFUNCTION()
 	void HandleSelectionSetChanged(int32 Count);
@@ -333,7 +332,7 @@ private:
 	TArray<TWeakObjectPtr<class ALightingFixtureActor>> RowFixtures;
 	TArray<FChannelRow> ChannelRows;
 
-	/** Fixtures whose OnParameterChanged this panel is bound to. */
+	/** Fixtures whose OnParameterChangedNative this panel is bound to. */
 	TArray<TWeakObjectPtr<class ALightingFixtureActor>> BoundFixtures;
 
 	/** The fixture shown in the channel map. */

@@ -538,6 +538,22 @@ private:
 		StageShowMix::FEffectMap Effects;
 	};
 
+	/** ResolveFixture's working storage. Kept between calls (ResolveScratch), so the per-frame effect and fade writes reuse its allocations. */
+	struct FResolveScratch
+	{
+		FLayerScratch Layers;
+		TArray<FGameplayTag> Attributes;
+		TMap<FGameplayTag, float> Mixed;
+	};
+
+	/** ResolveFixture with the given storage. */
+	void ResolveFixtureWith(class ALightingFixtureActor& Fixture, EResolveScope Scope, FResolveScratch& Scratch);
+
+	FResolveScratch ResolveScratch;
+
+	/** True while ResolveScratch is in use. A ResolveFixture nested inside it (a listener of the write re-mixing) uses its own storage. */
+	bool bResolveScratchInUse = false;
+
 	/** The layers ResolveFixture mixes for Fixture now (under External: only what the user holds by hand), pointing into Scratch. */
 	void BuildLayers(const class ALightingFixtureActor& Fixture, FLayerScratch& Scratch, StageShowMix::FFixtureLayers& OutLayers) const;
 

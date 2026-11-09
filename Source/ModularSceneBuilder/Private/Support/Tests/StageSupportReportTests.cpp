@@ -14,6 +14,7 @@
 #include "Serialization/JsonReader.h"
 #include "Serialization/JsonSerializer.h"
 #include "Support/StageSupportReport.h"
+#include "Support/StageSupportSubsystem.h"
 
 namespace StageSupportReportTests
 {
@@ -178,6 +179,38 @@ bool FStageSupportFormatTest::RunTest(const FString& Parameters)
 	TestTrue(TEXT("Text uses CRLF in answers"), Text.Contains(TEXT("1. Buy\r\n2. Wait")));
 	TestTrue(TEXT("Text says what is attached"), Text.Contains(TEXT("Log attached: yes")));
 	TestFalse(TEXT("Empty answers are left out"), Text.Contains(TEXT("Expected:")));
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FStageSupportScreenshotTest, "StageCraft.Support.Screenshot", StageSupportReportTests::Flags)
+
+bool FStageSupportScreenshotTest::RunTest(const FString& Parameters)
+{
+	// The PNG header's width (big-endian, bytes 16..19 of the IHDR chunk).
+	auto PngWidth = [](const TArray<uint8>& Png)
+	{
+		return Png.Num() < 24 ? -1 : int32(Png[16]) << 24 | int32(Png[17]) << 16 | int32(Png[18]) << 8 | int32(Png[19]);
+	};
+	TArray<uint8> Png;
+	TestFalse(TEXT("No pixels"), UStageSupportSubsystem::EncodeScreenshot({}, FIntPoint(0, 0), StageSupportReport::MaxScreenshotBytes, Png));
+	TArray<FColor> Wrong;
+	Wrong.Init(FColor::Red, 10);
+	TestFalse(TEXT("Size and pixels disagree"), UStageSupportSubsystem::EncodeScreenshot(Wrong, FIntPoint(4, 4), StageSupportReport::MaxScreenshotBytes, Png) || !Png.IsEmpty());
+
+	// Seeded noise compresses badly, so a small limit forces the halving.
+	FRandomStream Random(7);
+	TArray<FColor> Noise;
+	Noise.SetNumUninitialized(256 * 256);
+	for (FColor& Pixel : Noise)
+	{
+		Pixel = FColor(uint8(Random.RandRange(0, 255)), uint8(Random.RandRange(0, 255)), uint8(Random.RandRange(0, 255)), 0);
+	}
+	TestTrue(TEXT("Fits as it is"), UStageSupportSubsystem::EncodeScreenshot(Noise, FIntPoint(256, 256), StageSupportReport::MaxScreenshotBytes, Png)
+		&& StageSupportReport::IsPng(Png) && PngWidth(Png) == 256);
+	const int32 FullBytes = Png.Num();
+	TestTrue(TEXT("Halved until it fits"), UStageSupportSubsystem::EncodeScreenshot(Noise, FIntPoint(256, 256), FullBytes / 3, Png)
+		&& StageSupportReport::IsPng(Png) && Png.Num() <= FullBytes / 3 && PngWidth(Png) < 256);
+	TestFalse(TEXT("Too large even after three halvings"), UStageSupportSubsystem::EncodeScreenshot(Noise, FIntPoint(256, 256), 16, Png) || !Png.IsEmpty());
 	return true;
 }
 

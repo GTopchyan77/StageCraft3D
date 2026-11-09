@@ -762,8 +762,11 @@ void UStagePatchPanel::NativeDestruct()
 
 void UStagePatchPanel::BindFixture(ALightingFixtureActor& Fixture)
 {
-	Fixture.OnParameterChanged.AddUniqueDynamic(this, &ThisClass::HandleFixtureParameterChanged);
-	BoundFixtures.Add(&Fixture);
+	if (!Fixture.OnParameterChangedNative.IsBoundToObject(this))
+	{
+		Fixture.OnParameterChangedNative.AddUObject(this, &ThisClass::HandleFixtureParameterChanged);
+		BoundFixtures.Add(&Fixture);
+	}
 }
 
 void UStagePatchPanel::UnbindFixtures()
@@ -772,7 +775,7 @@ void UStagePatchPanel::UnbindFixtures()
 	{
 		if (ALightingFixtureActor* Fixture = Bound.Get())
 		{
-			Fixture->OnParameterChanged.RemoveDynamic(this, &ThisClass::HandleFixtureParameterChanged);
+			Fixture->OnParameterChangedNative.RemoveAll(this);
 		}
 	}
 	BoundFixtures.Reset();
@@ -1008,7 +1011,7 @@ void UStagePatchPanel::HandleFixturesChanged()
 	RequestRebuild();
 }
 
-void UStagePatchPanel::HandleFixtureParameterChanged(AModularBaseActor* Actor, FGameplayTag ParameterId)
+void UStagePatchPanel::HandleFixtureParameterChanged(AModularBaseActor* Actor, const FGameplayTag& ParameterId)
 {
 	if (StagePatchPanel::IsTableParameter(ParameterId))
 	{

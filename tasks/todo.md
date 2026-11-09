@@ -650,3 +650,13 @@ Gevor's choices: automation tests on a harness game instance (not AFunctionalTes
 - [ ] Phase J decisions (Gevor): D1-D8 in ADR 0032 section 2; then Stripe test-mode keys, a staging deployment (docs/RUNBOOK.md) and a test-card purchase before live keys
 - [ ] Phase J manual verification (Gevor): with the dev server running (npm start in Services/StageCraftCloud, BaseUrl=http://127.0.0.1:8080), sign in from the Marketplace header, buy a listing with the fake checkout, cancel one payment; open Vision Inspector with ANTHROPIC_API_KEY set and read a real stage photo (paid API run); send a support report online and offline
 - [ ] Phase J follow-ups: Global Payouts adapter (Armenia, AMD) once the account has access; card fees in the ledger; admin web UI; selling credits through the same checkout; server-signed packages; ratings and reviews; seller onboarding and sales in the app (today: API only); merging a bought rig into the open scene; drag-and-drop of photos onto the Vision Inspector
+
+## Phase 36 - Measured performance pass (requested by Gevor 2026-11-09; STATE.md #78)
+- [x] Audit ticks, timers, async work, GC, caps on growth, AI context size (nothing unbounded or leaking found)
+- [x] CPU trace of the 500-fixture bench; native parameter delegate for C++ listeners; ResolveFixture scratch reuse (show tick about 35 % lower)
+- [x] Support screenshot PNG encode on a worker; StageCraft.Support.Screenshot test
+- [ ] UI: DisableNativeTick / invalidation for panels with no per-frame work (A/B each; Slate is about 6.5 ms a frame at 500 fixtures)
+- [ ] Fixture moving-part physics bodies (SetBodyTransform about 1.5 ms per show tick at 500)
+- [ ] Fixture ID index (O(n^2) registration on load)
+- [ ] Decide: in-app graphics quality settings (scalability, screen percentage, frame cap)
+- [ ] Gevor: tick INCLUDE SCREENSHOT at 4K; Patch panel live channel values while a show plays

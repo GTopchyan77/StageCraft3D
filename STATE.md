@@ -7885,7 +7885,7 @@ All times in ms.
   - clicking through the panels by mouse;
   - Shipping packaging.
 
-**Commit:** uncommitted (working tree).
+**Commit:** `9cb5b16`. Before it, on 2026-11-09, the suite passed 240/240 (user data unchanged), and the three targets rebuilt as already up to date, with 0 warnings.
 
 **Known issues / follow-ups**
 - **A scripted `-game` run stalls when a panel window is created mid-run.**
@@ -7904,3 +7904,63 @@ All times in ms.
   - merging a bought rig into the open scene;
   - drag-and-drop of photos.
 - **Manual checks for Gevor** are in todo.md (Phase J manual verification).
+
+## #78 — Measured performance pass: show control 35 % cheaper per frame, support screenshot off the game thread (2026-11-09)
+
+**What & why**
+- Gevor asked (2026-11-09) for a broad optimisation pass: AI assistant, ticks, rendering and streaming, GC, async work, licensing. Rules §22 requires measuring first, so I audited, traced, and changed only what the evidence showed.
+- **The audit found little to fix.**
+  - A subagent swept the source; I checked its findings myself.
+  - Only `AStageCameraPawn` can tick, and it switches its tick off at rest. ShowControl and Environment stop ticking when idle.
+  - All tickers and timers have stop conditions. HTTP and async callbacks hold weak pointers, and delegates are unbound.
+  - The conversation is capped at 200 messages, with 10 history lines sent per online turn (0–40). The undo history is capped at 100.
+  - The AI, Vision, Voice, Cloud and Marketplace heavy work already runs on workers.
+  - Rendering is the stock UE 5.8 setup (Lumen, VSM, ray tracing, Substrate); changing it without a target machine and budget is not justified.
+- **Baseline trace** (`RunFixtureBench -Counts 500 -Effects 1` with `-trace=cpu,frame`, analysed in Insights): the frame at 500 fixtures with effects is game-thread bound (24 ms). Show tick inclusive is 12.6 ms. Inside it:
+  - every attribute a fixture writes broadcasts `AModularBaseActor::OnParameterChanged`, a dynamic (reflected) delegate. Two C++ listeners are bound to every fixture: the session and the Patch panel. That is 3.49 M calls in the run, about 4,500 per show tick and about 3 ms of it (handler plus ProcessEvent);
+  - `ResolveFixture` allocated three maps and arrays per fixture per frame.
+- **Changes**
+  1. **`AModularBaseActor::OnParameterChangedNative`** (new). A native multicast delegate fired by `NotifyParameterChanged` next to the dynamic one.
+     - `UStageSessionSubsystem` and `UStagePatchPanel` bind it with `AddUObject` and unbind with `RemoveAll`. The Patch panel's bind is duplicate-safe (`IsBoundToObject`).
+     - The Blueprint-assignable `OnParameterChanged` is unchanged, and the inspector (`UStageParameterViewWidget`, one actor) still uses it.
+  2. **`UShowControlSubsystem::ResolveFixture`** reuses a member `FResolveScratch` (layer maps, attribute list, mixed values). Every buffer is reset or overwritten before it is read. A nested call made while it is in use (a listener of the write re-mixing) gets its own storage through the `bResolveScratchInUse` guard.
+  3. **The support screenshot is encoded on a worker.**
+     - `UStageSupportSubsystem::CaptureScreenshot(OnDone, OutError)` captures the window on the game thread, then PNG-encodes and halves it in `UE::Tasks`, with the ImageWrapper module loaded first on the game thread. It answers once on the game thread, through a weak pointer.
+     - The pure `EncodeScreenshot(Pixels, Size, MaxBytes, OutPng)` now validates its size.
+     - Before, up to four 4K PNG encodes ran inside the button click.
+     - The Support panel shows "Screenshot: attaching..." and disables SEND until the encode is done. A stale answer, after an untick or New, is dropped by serial number. The encode time is logged.
+- **Licensing:** no third-party code or assets were added. The changes use engine APIs only (delegates, `UE::Tasks`, `FImageUtils`).
+
+**Files changed**
+- `Public/Actors/ModularBaseActor.h`, `Private/Actors/ModularBaseActor.cpp`
+- `Public|Private` `Subsystems/StageSessionSubsystem`
+- `Public|Private` `UI/StagePatchPanel`
+- `Public|Private` `Subsystems/ShowControlSubsystem`
+- `Public|Private` `Support/StageSupportSubsystem`
+- `Public|Private` `UI/StageSupportPanel`
+- `Private/Support/Tests/StageSupportReportTests.cpp` (new test `StageCraft.Support.Screenshot`)
+- `tasks/todo.md`, STATE.md
+
+**Verification**
+- **Benchmark** (`RunFixtureBench.ps1 -Counts 200,500 -Effects 1`, same machine and session, no other editor open), show tick mean:
+
+  | Case | 200 idle | 200 crossfade | 500 idle | 500 crossfade | 500 frame mean (idle) |
+  |---|---|---|---|---|---|
+  | Before (`9cb5b16`) | 4.54 ms | 4.79 ms | 10.89 ms | 12.79 ms | 24.07 ms |
+  | After | 3.04 ms | 3.57 ms | 7.04 ms | 8.24 ms | 21.51 ms |
+
+  - CSVs: `Saved/StageCraft/Benchmarks/FixtureBench_20261109-103833.csv` (before) and `-105452.csv` (after).
+  - The difference (about 35 %) is far above the run-to-run noise seen in #62–#64 (about 5–10 %). Only one run each.
+- **Tests:** `RunAutomation.ps1 -ExpectedCount 241 -NullRHI` passed 241/241, user data unchanged. The new `StageCraft.Support.Screenshot` covers invalid sizes, a PNG that fits, halving under a small limit, and too large after three halvings.
+- **Builds:** Editor, Game Development and Game Shipping, 0 warnings. No dev command was added or changed, so the Shipping string scan from #77 still holds.
+- **Not verified by hand:** ticking INCLUDE SCREENSHOT in the Support panel at 4K (the log line gives the encode time), and the Patch panel live channel values while a show plays.
+
+**Commit:** uncommitted (working tree).
+
+**Known issues / follow-ups (measured, not changed)**
+- **The UI is now the largest game-thread cost.** In the same trace Slate tick and paint take about 6.5 ms a frame, and the layout prepass alone (`SlatePrepass`, exclusive) about 2.6 ms.
+  - The panels that tick every frame include `StageEnvironmentPanel` (about 0.2 ms exclusive), `StageSketchCanvasWidget`, `StageOutlinerPanel` (about 0.57 ms inclusive), `StageViewportToolbar` and `StageItemLibraryPanel`.
+  - Candidates: `DisableNativeTick` on panels that do no per-frame work, and Slate global invalidation or invalidation boxes around static panels. Each needs its own A/B and a check that animations and live values still update.
+- **Fixture physics bodies:** `Phys SetBodyTransform` runs about twice per fixture per frame while heads move (about 1.5 ms per show tick at 500). Check whether moving parts need collision (picking may rely on it) before changing anything.
+- **O(n²) fixture registration on scene load** (`FindFixture` is a linear scan). It costs a few ms at about 500 fixtures; an ID index would fix it if larger rigs matter.
+- **No in-app graphics quality settings** (scalability, screen percentage, frame cap). This is the main lever for 60 FPS on weaker GPUs and would be a feature of its own.
