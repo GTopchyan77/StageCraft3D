@@ -3,6 +3,7 @@
 #include "Audio/StageAudioCaptureSources.h"
 
 #include "Audio/StageAudioTap.h"
+#include "HAL/IConsoleManager.h"
 #include "HAL/PlatformProcess.h"
 #include "HAL/PlatformTime.h"
 #include "HAL/RunnableThread.h"
@@ -24,8 +25,22 @@ namespace
 	/** Room in the tap: 2.7 s at 48 kHz, far more than the analyser ever lags. */
 	constexpr int32 TapCapacitySamples = 1 << 17;
 
-	/** The capture thread drains the device every 2 ms (packets are 10 ms). */
-	constexpr float PollSeconds = 0.002f;
+	/**
+	 * How often the capture thread drains the device. Packets arrive once per device period (10 ms on most PCs) and WASAPI keeps
+	 * BufferDuration100ns of slack, so half a period loses no audio and adds at most that much latency, with 40% of the wake-ups of
+	 * the fixed 2 ms poll it replaces (STATE.md #88 measures both).
+	 */
+	TAutoConsoleVariable<float> CVarLoopbackPollMs(TEXT("StageCraft.Audio.LoopbackPollMs"), 0.f,
+		TEXT("How often the System audio thread drains the playback device, in ms (1-20). 0 = half the device period. Read when System audio starts. Development tuning only."),
+		ECVF_Cheat);
+
+	/** The poll interval for a device whose default period is DevicePeriod100ns. */
+	float GetPollSeconds(int64 DevicePeriod100ns)
+	{
+		const float Override = CVarLoopbackPollMs.GetValueOnAnyThread();
+		const float Ms = Override > 0.f ? Override : (DevicePeriod100ns > 0 ? float(DevicePeriod100ns) * 1e-4f * 0.5f : 5.f);
+		return FMath::Clamp(Ms, 1.f, 20.f) * 1e-3f;
+	}
 
 	/** WASAPI's own buffer: 200 ms of slack if the thread is held up. */
 	constexpr int64 BufferDuration100ns = 2000000;
@@ -105,6 +120,7 @@ uint32 FStageLoopbackCapture::Run()
 	bool bPcm16 = false;
 	int32 Rate = 0;
 	int32 Channels = 0;
+	float PollSeconds = GetPollSeconds(0);
 
 	do
 	{
@@ -134,6 +150,9 @@ uint32 FStageLoopbackCapture::Run()
 			OpenError = LOCTEXT("Format", "The playback device uses a sample format StageCraft cannot read.");
 			break;
 		}
+		REFERENCE_TIME DefaultPeriod = 0;
+		REFERENCE_TIME MinimumPeriod = 0;
+		PollSeconds = GetPollSeconds(SUCCEEDED(Client->GetDevicePeriod(&DefaultPeriod, &MinimumPeriod)) ? int64(DefaultPeriod) : 0);
 		Tap->Init(TapCapacitySamples, Rate);
 		if (FAILED(Client->Start()))
 		{
@@ -155,9 +174,14 @@ uint32 FStageLoopbackCapture::Run()
 	LARGE_INTEGER Frequency;
 	QueryPerformanceFrequency(&Frequency);
 	TArray<float> Converted;
+	const double Started = FPlatformTime::Seconds();
+	int64 Wakeups = 0;
+	ULONG64 CyclesAtStart = 0;
+	QueryThreadCycleTime(GetCurrentThread(), &CyclesAtStart);
 	while (OpenError.IsEmpty() && !bStopping)
 	{
 		FPlatformProcess::SleepNoStats(PollSeconds);
+		++Wakeups;
 		UINT32 Next = 0;
 		HRESULT Result = S_OK;
 		while (!bStopping && SUCCEEDED(Result = CaptureClient->GetNextPacketSize(&Next)) && Next > 0)
@@ -206,6 +230,17 @@ uint32 FStageLoopbackCapture::Run()
 				: LOCTEXT("CaptureFailed", "Listening to the playback device stopped with an error."));
 			break;
 		}
+	}
+
+	// What listening cost this thread, so the poll interval is chosen on measurements. Cycle counts are exact; GetThreadTimes only
+	// samples at the scheduler tick (15.6 ms) and reads 0 for a thread that wakes for microseconds.
+	ULONG64 CyclesNow = 0;
+	if (OpenError.IsEmpty() && QueryThreadCycleTime(GetCurrentThread(), &CyclesNow))
+	{
+		const double Seconds = FMath::Max(1e-3, FPlatformTime::Seconds() - Started);
+		const double Cycles = double(CyclesNow - CyclesAtStart);
+		UE_LOG(LogStageCraft, Log, TEXT("Audio: system audio thread ran %.1f s polling every %.1f ms: %lld wake-ups, %.2f M cycles (%.3f M cycles per second, %.0f cycles per wake-up)."),
+			Seconds, PollSeconds * 1000.0, Wakeups, Cycles * 1e-6, Cycles * 1e-6 / Seconds, Wakeups > 0 ? Cycles / double(Wakeups) : 0.0);
 	}
 
 	if (Client) { Client->Stop(); }

@@ -143,6 +143,19 @@ public:
 	void AssignInstanceId(const FGuid& RestoredId);
 
 	/**
+	 * The MVR object this item was imported from (Docs/ADR/0034 §6, §8), so a later import of the same file does not place it twice
+	 * and an export can write the same UUID back. Invalid for items made in StageCraft. SaveGame: undo and scene files keep it.
+	 */
+	const FGuid& GetMvrId() const { return MvrId; }
+
+	/**
+	 * MVR import support: names a spawning item and records the MVR UUID it comes from. Only valid on a deferred actor, before
+	 * BeginPlay (as AssignInstanceId); ignored with an ensure otherwise. The label is cut to MaxLabelLength; an empty one keeps
+	 * the catalog name.
+	 */
+	void PrepareImported(const FText& Label, const FGuid& InMvrId);
+
+	/**
 	 * Duplicate support (USpawnSystemComponent::DuplicateItem): called on a copy after the source's state was restored onto it and
 	 * before its item data is applied and it begins play. A subclass clears what must be unique per item (a fixture's ID and DMX
 	 * address), so registration gives the copy its own. The base keeps everything.
@@ -279,4 +292,8 @@ private:
 
 	UPROPERTY(VisibleInstanceOnly, SaveGame, Category = "StageCraft|Item")
 	bool bTransformLocked = false;
+
+	/** See GetMvrId. Tagged SaveGame data, so scenes written before it load with none and older builds skip it. */
+	UPROPERTY(VisibleInstanceOnly, SaveGame, Category = "StageCraft|Item")
+	FGuid MvrId;
 };

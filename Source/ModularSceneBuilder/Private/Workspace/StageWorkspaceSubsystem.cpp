@@ -11,6 +11,7 @@
 #include "HAL/PlatformApplicationMisc.h"
 #include "Fixtures/StageFixtureLibrarySubsystem.h"
 #include "Import/StageMeshImportSubsystem.h"
+#include "Mvr/StageMvrImportSubsystem.h"
 #include "IO/StageCraftPaths.h"
 #include "Misc/Paths.h"
 #include "MoviePlayer.h"
@@ -21,6 +22,7 @@
 #include "Startup/StageStartupSubsystem.h"
 #include "Subsystems/StageSessionSubsystem.h"
 #include "UI/StageFixtureImportDialog.h"
+#include "UI/StageMvrImportDialog.h"
 #include "UI/StageStatusBarWidget.h"
 #include "UI/StageUIAnchors.h"
 #include "UI/StageViewportToolbar.h"
@@ -91,6 +93,12 @@ void UStageWorkspaceSubsystem::Initialize(FSubsystemCollectionBase& Collection)
 		FixtureLibrary = Library;
 		Library->OnReviewsChanged.AddUniqueDynamic(this, &ThisClass::HandleFixtureReviewsChanged);
 	}
+	if (UStageMvrImportSubsystem* Importer = Collection.InitializeDependency<UStageMvrImportSubsystem>())
+	{
+		MvrImporter = Importer;
+		// Coalesced to the next tick like the GDTF reviews: while placing, the importer changes once per frame at most.
+		MvrChangedHandle = Importer->OnChanged.AddUObject(this, &ThisClass::RequestFixtureReviewRefresh);
+	}
 }
 
 void UStageWorkspaceSubsystem::HandleFixtureReviewsChanged()
@@ -128,6 +136,13 @@ void UStageWorkspaceSubsystem::ShowNextFixtureReview()
 			FixtureDialog = nullptr;
 			Shell->CloseDialog();
 		}
+		ShowMvrReview();
+		return;
+	}
+	if (MvrDialog)
+	{
+		// An MVR review is open: the GDTF report waits until it closes (the importer's change brings us back).
+		ShowMvrReview();
 		return;
 	}
 
@@ -148,6 +163,58 @@ void UStageWorkspaceSubsystem::ShowNextFixtureReview()
 	UWidget* Focus = FixtureDialog->GetInitialFocus();
 	Shell->ShowDialog(DialogWidget, Focus ? Focus->TakeWidget().ToSharedPtr() : DialogWidget.ToSharedPtr());
 	UE_LOG(LogStageWorkspace, Log, TEXT("Fixture import report shown for %s (%d waiting)."), *Next.SourceFile, Library->GetReviews().Num());
+}
+
+void UStageWorkspaceSubsystem::ShowMvrReview()
+{
+	const UStageMvrImportSubsystem* Importer = MvrImporter.Get();
+	AModularPlayerController* Controller = LocalController.Get();
+	if (!Importer || !Controller || !Shell.IsValid() || FixtureDialog)
+	{
+		return;
+	}
+	if (!Importer->GetReview())
+	{
+		CloseMvrDialog();
+		return;
+	}
+	if (MvrDialog && MvrDialog->GetReviewId() == Importer->GetReview()->ReviewId)
+	{
+		MvrDialog->ShowState(*Importer);
+		return;
+	}
+	CloseMvrDialog();
+	MvrDialog = CreateWidget<UStageMvrImportDialog>(Controller, UStageMvrImportDialog::StaticClass());
+	if (!MvrDialog)
+	{
+		return;
+	}
+	MvrDialog->OnClosed.BindUObject(this, &ThisClass::HandleMvrDialogClosed);
+	const TSharedRef<SWidget> DialogWidget = MvrDialog->TakeWidget();
+	MvrDialog->ShowState(*Importer);
+	UWidget* Focus = MvrDialog->GetInitialFocus();
+	Shell->ShowDialog(DialogWidget, Focus ? Focus->TakeWidget().ToSharedPtr() : DialogWidget.ToSharedPtr());
+	UE_LOG(LogStageWorkspace, Log, TEXT("MVR import review shown for %s."), *Importer->GetReview()->SourceFile);
+}
+
+void UStageWorkspaceSubsystem::CloseMvrDialog()
+{
+	if (!MvrDialog)
+	{
+		return;
+	}
+	MvrDialog->OnClosed.Unbind();
+	MvrDialog = nullptr;
+	if (Shell.IsValid())
+	{
+		Shell->CloseDialog();
+	}
+}
+
+void UStageWorkspaceSubsystem::HandleMvrDialogClosed()
+{
+	CloseMvrDialog();
+	RequestFixtureReviewRefresh();
 }
 
 void UStageWorkspaceSubsystem::HandleFixtureDialogClosed()
@@ -214,6 +281,17 @@ void UStageWorkspaceSubsystem::Deinitialize()
 	{
 		FixtureDialog->OnClosed.Unbind();
 		FixtureDialog = nullptr;
+	}
+	if (UStageMvrImportSubsystem* Importer = MvrImporter.Get())
+	{
+		Importer->OnChanged.Remove(MvrChangedHandle);
+	}
+	MvrChangedHandle.Reset();
+	MvrImporter.Reset();
+	if (MvrDialog)
+	{
+		MvrDialog->OnClosed.Unbind();
+		MvrDialog = nullptr;
 	}
 
 	State = EStageWorkspaceState::ShuttingDown;
@@ -345,7 +423,8 @@ void UStageWorkspaceSubsystem::InstallIfSupported()
 	{
 		const UStageWorkspaceSubsystem* Self = WeakThis.Get();
 		const UStageMeshImportSubsystem* Importer = Self && Self->GetGameInstance() ? Self->GetGameInstance()->GetSubsystem<UStageMeshImportSubsystem>() : nullptr;
-		return (Importer && Importer->CanImportAny(Files)) || Files.ContainsByPredicate(&UStageFixtureLibrarySubsystem::IsFixtureFile);
+		return (Importer && Importer->CanImportAny(Files)) || Files.ContainsByPredicate(&UStageFixtureLibrarySubsystem::IsFixtureFile)
+			|| Files.ContainsByPredicate(&UStageMvrImportSubsystem::IsMvrFile);
 	};
 	Callbacks.FilesDropped = [WeakThis](const TArray<FString>& Files)
 	{

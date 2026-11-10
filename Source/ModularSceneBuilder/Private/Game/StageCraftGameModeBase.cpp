@@ -167,6 +167,20 @@ FStageEconomyResultInfo AStageCraftGameModeBase::EvaluateFixtureImport_Implement
 	return FStageEconomyResultInfo::Ok();
 }
 
+FStageEconomyResultInfo AStageCraftGameModeBase::EvaluateMvrImport_Implementation(const APlayerController* Player) const
+{
+	if (!Player)
+	{
+		return FStageEconomyResultInfo::Fail(EStageEconomyResult::InvalidRequest, LOCTEXT("CannotImportMvr", "MVR import is not available."));
+	}
+	// The fixture types an MVR carries go into the device library, so a session without fixture import has no MVR import either.
+	if (!SessionRules.bAllowMvrImport || !SessionRules.bAllowFixtureImport)
+	{
+		return FStageEconomyResultInfo::Fail(EStageEconomyResult::SessionRuleViolation, LOCTEXT("MvrImportDisabled", "Importing MVR scenes is switched off for this session."));
+	}
+	return FStageEconomyResultInfo::Ok();
+}
+
 FStageEconomyResultInfo AStageCraftGameModeBase::EvaluateAudioRequest_Implementation(const APlayerController* Player, EStageAudioRequest Request) const
 {
 	if (!Player)

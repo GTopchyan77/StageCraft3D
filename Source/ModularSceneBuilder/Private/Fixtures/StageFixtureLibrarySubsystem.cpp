@@ -183,6 +183,77 @@ const FStageFixtureLibraryType* UStageFixtureLibrarySubsystem::FindType(const FG
 	return Types.FindByPredicate([&FixtureTypeId](const FStageFixtureLibraryType& Type) { return Type.FixtureTypeId == FixtureTypeId; });
 }
 
+TSharedRef<UStageFixtureLibrarySubsystem::FParsedFile> UStageFixtureLibrarySubsystem::ParseEmbeddedFile(TArray<uint8> Bytes, const FString& SourceName)
+{
+	TSharedRef<FParsedFile> File = MakeShared<FParsedFile>();
+	File->SourceFile = SourceName;
+	File->SourceFileName = FPaths::GetCleanFilename(SourceName);
+	File->bRead = Bytes.Num() <= StageFixtureLibrary::MaxFileSizeBytes;
+	File->Bytes = MoveTemp(Bytes);
+	if (File->bRead)
+	{
+		StageFixtureLibraryPrivate::ParseInto(*File);
+	}
+	else
+	{
+		File->Bytes.Empty();
+	}
+	return File;
+}
+
+FStageFixtureImportOutcome UStageFixtureLibrarySubsystem::AddEmbeddedFile(FParsedFile& File)
+{
+	using namespace StageFixtureLibraryPrivate;
+
+	FStageFixtureImportOutcome Outcome;
+	Outcome.SourceFile = File.SourceFile;
+	Outcome.Report = ReportText(File);
+	if (!File.bRead || !File.Parsed.IsOk() || !File.Report.bCanImport)
+	{
+		Outcome.Result = EStageFixtureImportResult::Refused;
+		Outcome.Message = File.bRead
+			? FText::Format(LOCTEXT("EmbeddedRefused", "{0} cannot be used: {1}."), FileLabel(File.SourceFile), FirstError(File))
+			: FText::Format(LOCTEXT("EmbeddedTooLarge", "{0} is larger than {1} MB, the most a GDTF file may be."), FileLabel(File.SourceFile),
+				FText::AsNumber(StageFixtureLibrary::MaxFileSizeBytes / (1024 * 1024)));
+		OnImportFinished.Broadcast(Outcome);
+		return Outcome;
+	}
+
+	Outcome.FixtureTypeId = File.Parsed.Type.FixtureTypeId;
+	if (const FStageFixtureLibraryType* Existing = FindType(Outcome.FixtureTypeId))
+	{
+		Outcome.Result = EStageFixtureImportResult::AlreadyInLibrary;
+		Outcome.Modes = Existing->Modes;
+		Outcome.Message = FText::Format(LOCTEXT("EmbeddedKnown", "{0} is already in the Library; the Library's copy is used."), TypeLabel(File.Parsed.Type));
+		return Outcome;
+	}
+	if (Types.Num() >= StageFixtureLibrary::MaxTypes)
+	{
+		Outcome.Result = EStageFixtureImportResult::LibraryFull;
+		Outcome.Message = FText::Format(LOCTEXT("EmbeddedFull", "The Library already holds {0} fixture types, the most it can."), FText::AsNumber(StageFixtureLibrary::MaxTypes));
+		OnImportFinished.Broadcast(Outcome);
+		return Outcome;
+	}
+
+	File.ImportedUtc = FDateTime::UtcNow();
+	if (!RegisterType(File, /*bSessionOnly*/ false, Outcome))
+	{
+		Outcome.Result = EStageFixtureImportResult::Refused;
+		Outcome.Message = FText::Format(LOCTEXT("EmbeddedNotBuilt", "{0} cannot be used: no mode could be built."), FileLabel(File.SourceFile));
+		OnImportFinished.Broadcast(Outcome);
+		return Outcome;
+	}
+	WriteLibraryFile(Outcome.FixtureTypeId, MoveTemp(File.Bytes));
+	SaveIndex();
+	RefreshReviews();
+	Outcome.Result = EStageFixtureImportResult::Success;
+	Outcome.Message = FText::Format(LOCTEXT("EmbeddedAdded", "Added {0} ({1} {1}|plural(one=mode,other=modes)) to the Library."), TypeLabel(File.Parsed.Type), FText::AsNumber(Outcome.Modes.Num()));
+	UE_LOG(LogStageCraft, Log, TEXT("Fixture library: %s (from %s)"), *Outcome.Message.ToString(), *File.SourceFile);
+	OnImportFinished.Broadcast(Outcome);
+	OnLibraryChanged.Broadcast();
+	return Outcome;
+}
+
 TArray<FStageFixtureImportOutcome> UStageFixtureLibrarySubsystem::RequestImport(const TArray<FString>& Files)
 {
 	using namespace StageFixtureLibraryPrivate;

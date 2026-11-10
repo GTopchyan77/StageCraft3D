@@ -38,6 +38,13 @@ struct MODULARSCENEBUILDER_API FStageSessionRules
 	/** Users may import GDTF fixture files into the device library (Docs/ADR/0033 §7). Off for curated sessions. */
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Session")
 	bool bAllowFixtureImport = true;
+
+	/**
+	 * Users may import MVR scenes (Docs/ADR/0034 §6): their fixtures and trusses are placed and their GDTF types added to the
+	 * library. Free in every tier (M1). Off for curated sessions.
+	 */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Session")
+	bool bAllowMvrImport = true;
 };
 
 /** Live totals of the stage, recomputed whenever an item is added, removed or changes type. */

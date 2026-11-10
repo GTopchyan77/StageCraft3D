@@ -44,6 +44,14 @@ public:
 	/** A copy gets the next free fixture ID and (with auto-patch on) the next free DMX address instead of sharing the source's. */
 	virtual void PrepareAsDuplicate() override;
 
+	/**
+	 * MVR import (Docs/ADR/0034 §6): the console fixture ID, DMX patch and, when set, the pan and tilt (degrees) of the home look
+	 * the file gives this fixture. Only valid on a deferred actor before BeginPlay (SpawnConfiguredItem's Configure), so applying
+	 * the item data sanitizes everything as restored state (ranges, patch) and registration keeps the ID and patch. The caller
+	 * picks a free ID; a taken one is replaced at registration as for any fixture.
+	 */
+	void PrepareImportedPatch(int32 InFixtureId, const FStageDMXPatch& InPatch, const TOptional<FVector2D>& PanTilt);
+
 	UFUNCTION(BlueprintPure, Category = "StageCraft|Fixture")
 	class ULightingFixtureData* GetFixtureData() const;
 

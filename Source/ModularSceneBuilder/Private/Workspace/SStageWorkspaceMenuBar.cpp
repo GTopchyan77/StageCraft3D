@@ -163,6 +163,9 @@ void SStageWorkspaceMenuBar::FillFileMenu(FMenuBuilder& MenuBuilder)
 		MenuBuilder.AddMenuEntry(LOCTEXT("ImportFixtures", "Import Fixtures (GDTF)..."),
 			LOCTEXT("ImportFixturesTip", "Add a fixture from its manufacturer's GDTF file (.gdtf, e.g. from gdtf-share.com). You see its import report (modes, channels StageCraft drives) before it is added; each DMX mode becomes a mode you can pick under Type in the inspector."),
 			FSlateIcon(), FUIAction(FExecuteAction::CreateLambda([WeakController]() { if (WeakController.IsValid()) { WeakController->RequestBrowseFixtureFiles(); } })));
+		MenuBuilder.AddMenuEntry(LOCTEXT("ImportMvr", "Import MVR Scene..."),
+			LOCTEXT("ImportMvrTip", "Bring in a lighting plot from Vectorworks, grandMA3, Capture or another MVR application (.mvr): its fixtures with their types, patch, IDs and focus, and its trusses. You see what the file holds before anything changes; one undo step takes the whole import back."),
+			FSlateIcon(), FUIAction(FExecuteAction::CreateLambda([WeakController]() { if (WeakController.IsValid()) { WeakController->RequestBrowseMvrFile(); } })));
 	}
 	MenuBuilder.AddMenuEntry(LOCTEXT("ShowLibrary", "Show Library"), LOCTEXT("ShowLibraryTip", "Show the Library panel. Imported models are listed under Imported."),
 		FSlateIcon(), FUIAction(FExecuteAction::CreateSP(this, &SStageWorkspaceMenuBar::ShowPanel, FGameplayTag(StageCraftTags::Panel_Library))));

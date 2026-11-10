@@ -151,6 +151,7 @@ private:
 	/** Library changes the user made (added, replaced, removed) and fixture files that could not be read; refusals of a request are reported by the controller. */
 	UFUNCTION()
 	void HandleFixtureImportFinished(const FStageFixtureImportOutcome& Outcome);
+	void HandleMvrImportFinished(const struct FStageMvrImportOutcome& Outcome);
 
 	/** Shows LISTENING while a capture source (microphone, line input, this PC's output) is live (Docs/ADR/0029 §6). */
 	void HandleAudioStatusChanged();
@@ -191,6 +192,8 @@ private:
 	TWeakObjectPtr<class UStageCableScheduleSubsystem> CableSchedule;
 	TWeakObjectPtr<class UStageMeshImportSubsystem> Importer;
 	TWeakObjectPtr<class UStageFixtureLibrarySubsystem> FixtureLibrary;
+	TWeakObjectPtr<class UStageMvrImportSubsystem> MvrImporter;
+	FDelegateHandle MvrFinishedHandle;
 	TWeakObjectPtr<class UStageInputPreferencesSubsystem> InputPreferences;
 	TWeakObjectPtr<class UStageAudioReactiveSubsystem> AudioReactive;
 	FDelegateHandle AudioStatusHandle;

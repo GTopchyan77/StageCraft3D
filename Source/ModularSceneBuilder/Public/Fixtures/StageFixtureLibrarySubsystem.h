@@ -76,6 +76,9 @@ class MODULARSCENEBUILDER_API UStageFixtureLibrarySubsystem : public UGameInstan
 	GENERATED_BODY()
 
 public:
+	/** A parsed GDTF file. Opaque here: defined in the .cpp so the GDTF model stays out of this header. */
+	struct FParsedFile;
+
 	//~ Begin USubsystem Interface
 	virtual void Initialize(FSubsystemCollectionBase& Collection) override;
 	virtual void Deinitialize() override;
@@ -137,6 +140,23 @@ public:
 	/** True for a file name the library imports (.gdtf). */
 	static bool IsFixtureFile(const FString& File);
 
+	// --- GDTF files carried by an MVR scene (Docs/ADR/0034 §6) ---
+
+	/** Reads and checks GDTF bytes taken out of another file (SourceName names it in reports). Any thread; nothing is registered. */
+	static TSharedRef<FParsedFile> ParseEmbeddedFile(TArray<uint8> Bytes, const FString& SourceName);
+
+	/** What the import report shows for a parsed file: type, modes, warnings, errors, and whether the library has that type. */
+	FStageFixtureImportReview DescribeParsedFile(const FParsedFile& File) const { return MakeReview(File); }
+
+	/**
+	 * Adds a GDTF file an MVR scene carries, as ConfirmImport adds a reviewed one (copied into the library, kept for the next start),
+	 * without a review of its own: the MVR import report covered it. A type the library already holds (same FixtureTypeID) is used
+	 * as it is and not replaced: Result AlreadyInLibrary with its Modes. Refused like ConfirmImport (the report refuses the file, the
+	 * library is full). Game thread; broadcasts OnImportFinished and, when a type was added, OnLibraryChanged. File's bytes move into
+	 * the library.
+	 */
+	FStageFixtureImportOutcome AddEmbeddedFile(FParsedFile& File);
+
 #if !UE_BUILD_SHIPPING
 	/**
 	 * Development only: builds a fixture type from GDTF bytes for this session, without writing anything to the library (the
@@ -155,9 +175,6 @@ public:
 	/** A review was added, confirmed or cancelled. Views show GetReviews()[0] and come back here when it changes. */
 	UPROPERTY(BlueprintAssignable, Category = "StageCraft|Fixtures")
 	FOnStageFixtureReviewsChanged OnReviewsChanged;
-
-	/** A parsed file waiting for the game thread. Opaque here: defined in the .cpp so the GDTF model stays out of this header. */
-	struct FParsedFile;
 
 private:
 	void RestoreLibrary();

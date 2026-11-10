@@ -8592,7 +8592,7 @@ All times in ms.
   - The Sketch import is squared and includes the truss line.
 - **Not verified:** a dropdown opened by a physical click (the OS-click helper did not find the game window this time); mouse selection and Ctrl+C in a reply; Claude's `scale` on a real dimensioned plan (online); YouTube in a real browser (ffplay stood in for it); MVR on real files.
 
-**Commit:** uncommitted (working tree).
+**Commit:** `949d6a1`.
 
 **Known issues / follow-ups**
 - Gevor: answer ADR 0034 M1–M4 and provide real `.mvr` files (Vectorworks, grandMA3, GDTF-Share) for `StageCraft.Mvr.Probe`. Then MV2 (review and import as one undo step through the GDTF library), MV3 (File › Import MVR…), MV4 (export, Pro gate), MV5.
@@ -8600,3 +8600,76 @@ All times in ms.
 - Other crowded panels (the Sketch window's toolbar, the Audio panel) could get the same dropdown treatment once Gevor approves the viewport bar.
 - A focused read-only reply text takes keyboard focus until the user clicks the viewport. Viewport shortcuts wait for that click.
 - The local trace cannot read written dimensions; only Claude's reading sets the scale from the drawing.
+
+## #88 — MVR import (MV2) and its review dialog (MV3), frame-sliced placement, lower-memory reading, loopback poll and UI redraw trims (2026-11-10)
+
+**What & why**
+- **Context.** Gevor asked (2026-11-10) for MV2–MV3 with strict performance and memory work, a look at the SYSTEM audio thread, and no redundant UI redraws. M1–M4 of ADR 0034 were still open; the build follows the recommendations where it must (ADR 0034 §15). #87 now carries its commit `949d6a1`.
+- **Reading (worker).** `UStageMvrImportSubsystem::RequestRead` (GameInstance subsystem, one file at a time) reads the `.mvr` on a worker with `StageMvrArchive::Read`:
+  - the MV1 parser for the scene;
+  - every GDTF it names, parsed through `UStageFixtureLibrarySubsystem::ParseEmbeddedFile`;
+  - the bounds of the geometry that trusses use, through `StageMvrGeometry` (glTF/GLB: the `POSITION` accessors' required min/max moved by the node transforms, no vertex buffers; 3DS: vertex lists; untrusted-input caps on JSON size, node count and depth, chunk count).
+  - Memory: the scene XML's UTF-8 bytes are freed as soon as they are converted (before the XML tree), entries are extracted one at a time and released, only truss geometry is extracted, and the archive bytes never reach the game thread. The log gives the archive size and the largest extracted entry.
+- **Review (MV3).** `FStageMvrImportReview`: counts (fixtures, trusses, layers, focus points, other objects), each GDTF type (new / in the Library / unusable, its fixtures, missing modes), fixtures that will be generic, warnings and errors. Shown by `UStageMvrImportDialog` (File › Import MVR Scene…, or drag and drop) in the workspace's dialog layer, one at a time with the GDTF report. Nothing changes before IMPORT; CANCEL drops it.
+- **Import (MV2).** `AModularPlayerController::RequestConfirmMvrImport` → GameMode `EvaluateMvrImport` (new session rule `bAllowMvrImport`, also off when fixture import is off) → `StartImport`:
+  - GDTF types go into the library with `AddEmbeddedFile` (a type already there is reused; outside the stage's undo, like any GDTF import).
+  - `StageMvrImport::Build` (pure) plans fixtures: the type's mode or the Sketch window's generic fixture; MVR's hanging rest pose turned to StageCraft's (half turn about X), scale dropped; FixtureIDNumeric / numeric FixtureID when free, else the next free ID; the first break-0 address as the patch; pan and tilt that aim at the FocusPoint (`SolvePanTilt`, the exact inverse of the pivots, least movement inside the ranges, clamped and reported); multipatch fixtures and items whose MVR UUID is already on the stage are skipped.
+  - Trusses become runs of whole sections of the Sketch window's truss along the longest side of their bounds; towers and unreadable geometry are reported. Scene objects, supports, screens and projectors are counted, not placed (M2 follow-up).
+  - `FStageMvrPlacementJob` places the plan through the spawn system, 8 ms per frame, all or nothing (a refusal or a closed stage deletes everything it placed). Each deferred actor gets its label and MVR UUID (`AModularBaseActor::PrepareImported`, new `SaveGame` `MvrId`) and, for a fixture, its ID, patch and aim as its home look (`ALightingFixtureActor::PrepareImportedPatch`) before its data is applied, so everything is sanitized as restored state.
+  - `RecordMvrImport` records the placed items and a fixture group per layer as ONE undo step.
+  - `MvrId` lives in the item's tagged SaveGame state: no scene format bump (ADR 0034 §9 superseded).
+- **System audio (WASAPI loopback).** It already ran on its own thread and wrote a lock-free ring (no locks on the audio path). The thread polled every 2 ms for 10 ms packets; it now polls at half the device period (5 ms on this PC; `StageCraft.Audio.LoopbackPollMs`, a cheat cvar, to compare) and logs its wake-ups and exact thread cycles when it stops.
+- **UI redraws.**
+  - `UStageMenuButton::SetLabel` ignores identical text, so a zoom or pan step (which refreshes the toolbar) no longer re-sets the dropdown labels.
+  - The AI Assistant panel keys each message row on everything it shows and reuses unchanged rows on a conversation change instead of rebuilding every selectable text (a selection in an older reply survives a new message).
+  - The MVR review redraws its lists only when its notes change; while placing it updates only the progress line.
+- **Help:** `mvr-import` article (EN/HY).
+
+**Files changed**
+- New:
+  - `Public/Mvr/StageMvrImportTypes.h`, `Public/Mvr/StageMvrImportSubsystem.h`, `Private/Mvr/StageMvrImportSubsystem.cpp`
+  - `Private/Mvr/StageMvrArchive.h/.cpp`, `StageMvrGeometry.h/.cpp`, `StageMvrImportPlan.h/.cpp`, `StageMvrPlacement.h/.cpp`
+  - `Private/Mvr/Tests/StageMvrImportTests.cpp`
+  - `Private/Player/ModularPlayerControllerMvr.cpp`
+  - `Public/UI/StageMvrImportDialog.h`, `Private/UI/StageMvrImportDialog.cpp`
+  - `Content/StageCraft/Help/en/mvr-import.md`, `Content/StageCraft/Help/hy/mvr-import.md`
+- Changed:
+  - MVR: `Private/Mvr/StageMvrParser.cpp` (UTF-8 freed early), `Private/Mvr/StageMvrConsoleCommands.cpp` (`StageCraft.Mvr.Import`, `.Confirm`, `.Cancel`, `.Status`, dev only)
+  - Library: `Public/Fixtures/StageFixtureLibrarySubsystem.h`, `Private/Fixtures/StageFixtureLibrarySubsystem.cpp` (`ParseEmbeddedFile`, `DescribeParsedFile`, `AddEmbeddedFile`)
+  - Actors: `Public/Actors/ModularBaseActor.h`, `Private/Actors/ModularBaseActor.cpp` (`MvrId`, `PrepareImported`); `Public/Actors/LightingFixtureActor.h`, `Private/Actors/LightingFixtureActor.cpp` (`PrepareImportedPatch`)
+  - Rules: `Public/Game/StageSessionTypes.h` (`bAllowMvrImport`), `Public/Game/StageCraftGameModeBase.h`, `Private/Game/StageCraftGameModeBase.cpp` (`EvaluateMvrImport`)
+  - Controller: `Public/Player/ModularPlayerController.h`, `Private/Player/ModularPlayerController.cpp` (`.mvr` in `RequestImportFiles`)
+  - UI: `Private/Workspace/StageWorkspaceSubsystem.cpp`, `Public/Workspace/StageWorkspaceSubsystem.h` (review hosting, drop filter), `Private/Workspace/SStageWorkspaceMenuBar.cpp` (menu entry), `Public/UI/StageStatusBarWidget.h`, `Private/UI/StageStatusBarWidget.cpp` (outcome), `Private/UI/StageMenuButton.cpp`, `Public/UI/StageAIAssistantWidget.h`, `Private/UI/StageAIAssistantWidget.cpp`
+  - Audio: `Private/Audio/StageAudioCaptureSources.cpp`
+  - Docs: ADR 0034 §15; `tasks/todo.md` (Phase 38, 38c); `STATE.md`.
+- No content assets, input actions or maps changed.
+
+**Verification** (Claude, 2026-11-10)
+- Builds: Editor, Game (Development) and Shipping succeeded with 0 warning or error lines. Shipping (UTF-16 scan): no `StageCraft.Mvr.Import` / `.Probe` / `.Status`; "Import MVR Scene..." and the dialog are there. `StageCraft.Audio.LoopbackPollMs` is in Shipping as a cheat cvar (not settable there).
+- Automation: **268/268 passed** (263 + `StageCraft.Mvr.Geometry`, `.Aim`, `.Plan`, `.Place`, `.Review`), first run. User data unchanged (127 files).
+  - Geometry: GLB with node translation and scale, `.gltf` without scenes, 3DS, a truncated GLB, no positions, a self-parenting node (depth cap), bad JSON, a damaged 3DS chunk.
+  - Aim: ~130 directions solved exactly, out-of-reach clamped, the hanging rest pose, mm to cm, the Y mirror and a turn.
+  - Plan: type vs generic, IDs (kept, taken → renumbered, string ID), patch (U.A and absolute), focus aim checked against the focus direction, truss run position and sections, tower and multipatch notes, a second import planning nothing.
+  - Place: one item per step at a zero budget, ID / patch / label / home aim, groups by layer, one undo step, redo restores everything, a refusal on the third item and an abort both leave the stage as it was.
+  - Review: archive read (GDTF parsed, truss bounds, damaged geometry reported, scene-object geometry not extracted), refusals, one file at a time, review counts and missing mode, a confirm without a stage refused with nothing changed, cancel, `AddEmbeddedFile` added once / reused / refused when damaged, the library file kept.
+- Scripted `-game` run `Verify88` with a self-authored `sample_rig.mvr` (8 spots of the tests' Test Spot hung on two 8 m trusses aiming at two focus points, a fixture without GDTF, a set piece):
+  - Read in 0.9 ms; review dialog screenshot: counts, "StageCraft Test Spot · 8 fixtures · new", notes for the generic fixture and the missing set-piece geometry.
+  - IMPORT: "Added StageCraft Test Spot (2 modes)"; 11 items placed in 2 frames (12.9 ms, 1.17 ms per item); IDs 101–108 and 201, patches 1.001…1.106 and 2.001, mirror-symmetric pan/tilt aims, trusses at the converted positions; 1 group; status bar "Imported sample_rig.mvr: 9 fixtures, 2 truss runs, 1 group." Screenshot: two trusses, hung spots, beams converging on the focus points.
+  - Same file again: "Everything in this file is already on the stage." Undo removed all 11 in one step; redo restored them with IDs, patches and aims.
+- Audio (`Verify88Audio`, ffplay playing a 120 BPM beat as a separate process, SYSTEM source, two 30 s runs per setting, exact thread cycles via `QueryThreadCycleTime`):
+  - 2 ms poll: 11,078 and 10,781 wake-ups, 16.3 and 17.8 M cycles/s.
+  - Half the device period (5 ms here): 5,476 and 5,288 wake-ups, 9.9 and 9.3 M cycles/s: **about 41% less CPU on the capture thread**, half the wake-ups.
+  - Analysis unchanged: BPM 120.0, confidence 1.00, 120 onsets in 30 s at both settings.
+  - A first attempt with `GetThreadTimes` was discarded: it samples at the 15.6 ms scheduler tick and read 0 ms for a thread that wakes for microseconds.
+- Cleanup: the scripted import added the Test Spot to the real fixture library (`Saved/StageCraft/Fixtures`, which was empty: "0 of 0 fixture types restored"); its two files were removed again. `RunGameScripted.ps1` protects imports, scenes, profile and marketplace but not the fixture library (follow-up below). User data check: 127 files.
+- **Not verified:** real `.mvr` files (Vectorworks, grandMA3): the glTF axis mapping and the hanging rest pose are assumptions from the specs; the dialog clicked with a real mouse; a 2,000-fixture rig (the per-item cost suggests about 2.3 s of placing spread over ~300 frames, not measured); the assistant panel's rebuild time (now logged at Verbose).
+
+**Commit:** uncommitted (working tree).
+
+**Known issues / follow-ups**
+- Gevor: answer ADR 0034 M1–M4 (M1 and the truss part of M2 are applied as recommended) and supply a real `.mvr` corpus for `StageCraft.Mvr.Probe` and an import check.
+- Not placed yet: scene objects, supports, video screens, projectors (needs `.glb` through the runtime model import), truss towers, a Geometry3D's own Matrix. GDTF revisions are not compared when a library type is reused.
+- MV4 (export, Pro gate) and MV5 (re-import that updates by MVR UUID, preserved nodes).
+- A refused confirm (for example "everything is already on the stage") keeps the review open until CANCEL.
+- `Scripts/Tests/RunGameScripted.ps1` should also save and restore `Saved/StageCraft/Fixtures`, so a scripted MVR or GDTF import cannot leave types in the user's library.
+- The sample's floor fixture is placed hanging at floor level, as its identity matrix says; real files rotate floor fixtures.

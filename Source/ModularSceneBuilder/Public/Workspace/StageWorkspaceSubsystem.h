@@ -353,6 +353,18 @@ private:
 	TWeakObjectPtr<class UStageFixtureLibrarySubsystem> FixtureLibrary;
 	bool bFixtureReviewRefreshPending = false;
 
+	// --- MVR import review (Docs/ADR/0034 §6, MV3). Shares the dialog layer with the GDTF report: one at a time. ---
+
+	/** Shows, updates or closes the MVR review from the importer's state. Called from ShowNextFixtureReview when no GDTF review waits. */
+	void ShowMvrReview();
+	void HandleMvrDialogClosed();
+	void CloseMvrDialog();
+
+	UPROPERTY(Transient)
+	TObjectPtr<class UStageMvrImportDialog> MvrDialog = nullptr;
+	TWeakObjectPtr<class UStageMvrImportSubsystem> MvrImporter;
+	FDelegateHandle MvrChangedHandle;
+
 	/** The local UI bridge the panels are built against. Owned by the world; null between levels. */
 	TWeakObjectPtr<class AModularPlayerController> LocalController;
 

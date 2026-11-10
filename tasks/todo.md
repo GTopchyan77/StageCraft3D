@@ -686,7 +686,10 @@ Gevor's choices: automation tests on a harness game instance (not AFunctionalTes
 - [ ] Ctrl+Click in the viewport: not reproducible (real OS clicks in -game Top/Perspective and the packaged Development build all multi-select); Gevor to give exact steps
 - [ ] MV0 spike on real .mvr files (corpus needed: Vectorworks, grandMA3, GDTF-Share samples); probe command StageCraft.Mvr.Probe ready (STATE.md #87)
 - [x] MV1 parser: StageMvr::Parse (archive rules, caps, matrices, addresses, UUIDs, layers, groups, focus, symdefs, report), StageMvrUnits, XML reader keeps element text (STATE.md #87)
-- [ ] MV2 import (review, fixtures through the GDTF library, one undo step), MV3 UI, MV4 export (Pro gate), MV5 re-import
+- [x] MV2 import: review, GDTF types through the library (AddEmbeddedFile), fixtures (type, ID, patch, focus aim, label, MVR UUID) and trusses (runs from geometry bounds) placed a slice per frame, all or nothing, ONE undo step with a fixture group per layer (STATE.md #88)
+- [x] MV3 UI: File > Import MVR Scene..., drag and drop, the review dialog with progress, status bar outcome, help article EN/HY (STATE.md #88)
+- [ ] MV2 follow-ups: set pieces / supports / video screens (needs M2: .glb through the runtime model import), upright truss towers, Geometry3D's own Matrix, GDTF revision check on reuse
+- [ ] MV4 export (Pro gate), MV5 re-import (update by MVR UUID, preserved nodes)
 
 ## Phase 38b - UX and quality pass before MV2 (requested by Gevor 2026-11-10; STATE.md #87)
 - [x] FOLLOW MUSIC starts the SYSTEM source (WASAPI loopback: YouTube, any player) when no source is listening (RequestFollowMusic)
@@ -695,3 +698,11 @@ Gevor's choices: automation tests on a harness game instance (not AFunctionalTes
 - [x] Sketch import accuracy: Regularize squares near-rectilinear decks and straightens near-axis truss (both readers); Claude reports a written dimension (scale) that sets the plan's real width
 - [ ] Other crowded panels (Sketch window toolbar, Audio panel) for the same dropdown treatment, after Gevor's look at the viewport bar
 - [ ] Entitlement tags StageCraft.Entitlement.Pro.* and GameMode gates (open until Step 6 licensing)
+
+## Phase 38c - MV2-MV3 with performance and memory work (requested by Gevor 2026-11-10; STATE.md #88)
+- [x] MVR read on a worker: archive released before the game thread, scene XML bytes freed before the XML tree, only truss geometry extracted, GDTF bytes moved into the library
+- [x] Frame-sliced placement (8 ms per frame), all or nothing, rolled back on refusal or a closed stage
+- [x] System audio loopback: poll at half the device period instead of every 2 ms; thread CPU logged when it stops (StageCraft.Audio.LoopbackPollMs to compare)
+- [x] UI: menu-button labels skip identical text; assistant panel reuses unchanged message rows; MVR review redraws only when its notes change
+- [ ] Gevor: a real .mvr corpus (Saved/MVRCorpus) to check glTF axis/units and fixture orientation against Vectorworks / grandMA3 exports
+- [ ] Gevor: manual check of File > Import MVR Scene... with a real plot

@@ -142,4 +142,16 @@ private:
 
 	/** The reply whose COPY button reads COPIED; INDEX_NONE once the conversation changes (an index is only valid until then). */
 	int32 CopiedMessageIndex = INDEX_NONE;
+
+	/** Everything a message row shows (speaker, outcome, text, proposal state, buttons) as one key: an unchanged row is reused. */
+	uint32 MakeMessageKey(const struct FStageAIMessage& Message, int32 MessageIndex) const;
+
+	/**
+	 * The rows of the last rebuild by message index, and their keys. A conversation change rebuilds only the rows whose key changed
+	 * (usually the newest), so a long conversation does not recreate every selectable text each time and a reader's selection in an
+	 * older reply survives a new message.
+	 */
+	UPROPERTY(Transient)
+	TArray<TObjectPtr<class UWidget>> MessageRows;
+	TArray<uint32> MessageRowKeys;
 };

@@ -125,3 +125,26 @@ MVR is additive: the import and export requests, the subsystem and the menu entr
 - **World matrices** are resolved in the parser: object, then each parent object, then the layer (row vectors, mm). `StageMvrUnits::ToUnreal` / `FromUnreal` mirror Y and convert mm to cm; tested on offsets, a 90 degree turn and a round trip.
 - **MV0 probe:** `StageCraft.Mvr.Probe [folder or file]` (Development only, default `Saved/MVRCorpus`) logs each file's scene, report and parse time. It waits for a real corpus.
 - Not yet: MV2–MV5. M1–M4 are still open.
+
+## 15. Amendment: MV2 and MV3 as built (STATE.md #88, 2026-11-10)
+
+Gevor asked for MV2–MV3 on 2026-11-10 while M1–M4 were still open, so the build follows the recommendations where it has to:
+- **M1 (import Free):** applied. `EvaluateMvrImport` allows every player unless `SessionRules.bAllowMvrImport` or `bAllowFixtureImport` is off (the GDTF types go into the library).
+- **M2 (geometry):** only partly. Trusses do **not** import their meshes: each MVR `Truss` becomes a StageCraft truss run (the Sketch window's truss item) of whole sections along the longest side of its geometry's bounds, at the bottom of the bounds. The bounds come from the numbers the files state about themselves: the glTF `POSITION` accessors' required `min`/`max` moved by the node transforms (no vertex buffers read), or the vertex lists of a 3DS file. Upright towers (more than 45° from level) and trusses without readable geometry are reported, not placed. SceneObject, Support, VideoScreen and Projector are counted in the review, not placed. Importing their `.glb` meshes through the runtime model import is the M2 follow-up.
+- **M3, M4:** not needed by MV2–MV3.
+
+Decisions made while building (each reversible):
+- **glTF axes:** MVR 1.6 states no unit or axis for glTF geometry. glTF itself is metres, Y up; bounds are converted with the usual glTF-to-Z-up mapping `(x, y, z) -> (x, -z, y) × 1000` mm. To be checked against real exports (MV0 corpus).
+- **Rest pose:** MVR's `Alignment` default is a beam along −Z (hanging, as GDTF). A StageCraft fixture at rest shines along its local +Z, so every imported fixture gets a half turn about X under its converted MVR transform. Scale is dropped.
+- **Focus:** pan and tilt aiming at the FocusPoint are solved from the fixture's pivots (`StageMvrImport::SolvePanTilt`, the inverse of how the pan and tilt pivots turn the beam), inside the mode's ranges with the least movement, clamped and reported when out of reach. They become the fixture's home look.
+- **IDs and patch:** `FixtureIDNumeric`, else a whole-number `FixtureID`, when free on the stage and in the file; otherwise the next free ID, reported. The first `break="0"` address is the patch. Multipatch fixtures (second patches of one fixture) are not placed.
+- **Types:** a GDTF type the library holds (same FixtureTypeID) is reused as it is; revisions are not compared yet. A new one is added through `UStageFixtureLibrarySubsystem::AddEmbeddedFile` (copied into the library, outside the stage's undo, as any GDTF import). A fixture whose type or mode cannot be used becomes the Sketch window's generic fixture, named in the notes.
+- **MvrId** is a `SaveGame` FGuid on `AModularBaseActor`, so it lives in each item's tagged state (undo snapshots and scene files) instead of a new top-level `"mvrId"` field: **no scene format bump** (§9 is superseded), older scenes load with none, older builds skip the unknown tag. A second import of the same file skips items whose UUID is on the stage; updating them is MV5.
+- **Layers** become fixture groups (the show library's groups) named after the layer, recorded in the same undo step. The Outliner's groups are derived from catalog categories, so there is nothing else to map a layer to.
+- **Subsystem lifetime:** `UStageMvrImportSubsystem` is a `UGameInstanceSubsystem`, not the `UWorldSubsystem` of §6: the review is not tied to a level and the workspace that shows it lives as long. Placement uses the requesting controller's spawn system and ends (rolled back) if that goes away.
+
+Performance and memory (Rules.md §21–§22, §29):
+- The read runs on a worker: the whole `.mvr` (≤ 64 MB) is read once; the scene XML's UTF-8 bytes are freed once converted, before the XML tree is built; each GDTF and each truss geometry file is extracted, used and released in turn; only truss geometry is extracted at all. The archive bytes never reach the game thread. The review keeps the parsed scene and the GDTF bytes until IMPORT or CANCEL; IMPORT moves the bytes into the library and drops the rest before placing. The log names the archive size and the largest extracted entry.
+- Placement is frame-sliced (`FStageMvrPlacementJob`, 8 ms per frame on the game instance's timer), all or nothing: a refusal or a closed stage deletes everything the job placed. The log gives frames, total placing time and time per item.
+
+UI (MV3): File › Import MVR Scene… and drag and drop; `UStageMvrImportDialog` (types new / in the Library / unusable, counts, generic fixtures, notes, progress), hosted in the workspace's dialog layer one at a time with the GDTF report; the status bar shows the outcome; help article `mvr-import` (EN/HY). Development console: `StageCraft.Mvr.Import`, `.Confirm`, `.Cancel`, `.Status`.

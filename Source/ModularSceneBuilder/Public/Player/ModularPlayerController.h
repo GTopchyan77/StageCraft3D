@@ -700,6 +700,29 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "StageCraft|Requests")
 	int32 RequestBrowseFixtureFiles();
 
+	// --- MVR scenes (Docs/ADR/0034 §6, MV2 and MV3) ---
+
+	/**
+	 * Reads an .mvr file for review (UStageMvrImportSubsystem::RequestRead). The GameMode decides (EvaluateMvrImport); a refusal
+	 * or a file that cannot be read is reported on OnRequestRejected. True when the read started; the review then waits for
+	 * RequestConfirmMvrImport or RequestCancelMvrImport. Nothing changes before the confirm.
+	 */
+	bool RequestImportMvr(const FString& File);
+
+	/** Lets the user pick an .mvr file in the operating system's file dialog, then reads it as RequestImportMvr does. */
+	bool RequestBrowseMvrFile();
+
+	/**
+	 * Imports the reviewed MVR file (the review's IMPORT): its GDTF types into the library, then its fixtures (type, ID, patch, focus
+	 * aim, label) and trusses placed through the GameMode's placement rules, a slice per frame, all or nothing, recorded as ONE undo
+	 * step with a fixture group per layer. Refused (and reported on OnRequestRejected) during a gizmo drag or camera flight, by the
+	 * GameMode, or when nothing can be placed. The outcome arrives on UStageMvrImportSubsystem::OnFinished.
+	 */
+	FStageEconomyResultInfo RequestConfirmMvrImport(const FGuid& ReviewId);
+
+	/** Drops the MVR file under review (the review's CANCEL). Always allowed: it changes nothing. */
+	void RequestCancelMvrImport(const FGuid& ReviewId);
+
 	/**
 	 * Lets the user pick model or GDTF fixture files in the operating system's file dialog, then imports them as RequestImportFiles does.
 	 * The dialog is modal. Returns how many files were queued (0 when cancelled or when this build has no file dialog).
@@ -1147,6 +1170,9 @@ private:
 
 	/** Records a group list edit made by Edit (true when it changed something), as one undo step named Description. */
 	bool EditGroups(const FText& Description, TFunctionRef<bool(class UStageShowLibrarySubsystem&)> Edit);
+
+	/** Records an MVR import's placed rig as one undo step with a fixture group per layer; returns the groups made. */
+	int32 RecordMvrImport(TConstArrayView<class AModularBaseActor*> Items, const TArray<TPair<FString, TArray<int32>>>& LayerGroups, const FText& StepName);
 
 	/** Records a palette list edit made by Edit (true when it changed something), as one undo step named Description. */
 	bool EditPalettes(const FText& Description, TFunctionRef<bool(class UStageShowLibrarySubsystem&)> Edit);

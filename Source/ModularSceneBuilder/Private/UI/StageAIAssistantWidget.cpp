@@ -22,6 +22,8 @@
 #include "Engine/GameInstance.h"
 #include "Engine/World.h"
 #include "HAL/PlatformApplicationMisc.h"
+#include "HAL/PlatformTime.h"
+#include "ModularSceneBuilder.h"
 #include "Player/ModularPlayerController.h"
 #include "TimerManager.h"
 #include "UI/StageCraftUITheme.h"
@@ -291,6 +293,24 @@ void UStageAIAssistantWidget::BuildTree()
 	Add(FooterText);
 }
 
+uint32 UStageAIAssistantWidget::MakeMessageKey(const FStageAIMessage& Message, int32 MessageIndex) const
+{
+	// Every input BuildMessage reads: the line itself, whether it is the open proposal (and whether its buttons are enabled), and
+	// whether its COPY reads COPIED.
+	const UStageAICommandSubsystem* Assistant = GetAssistant();
+	const bool bOpenProposal = Message.ProposalId != 0 && Assistant && Message.ProposalId == Assistant->GetOpenProposalId();
+	uint32 Key = GetTypeHash(Message.Text.ToString());
+	Key = HashCombine(Key, GetTypeHash(uint8(Message.Speaker)));
+	Key = HashCombine(Key, GetTypeHash(uint8(Message.Outcome)));
+	Key = HashCombine(Key, GetTypeHash(Message.ProposalId));
+	Key = HashCombine(Key, GetTypeHash(bOpenProposal));
+	Key = HashCombine(Key, GetTypeHash(bOpenProposal && Assistant->IsBusy()));
+	Key = HashCombine(Key, GetTypeHash(Message.Reference.Panel));
+	Key = HashCombine(Key, GetTypeHash(Message.Reference.Control));
+	Key = HashCombine(Key, GetTypeHash(Message.Reference.SourceTitle));
+	return HashCombine(Key, GetTypeHash(MessageIndex == CopiedMessageIndex));
+}
+
 UWidget* UStageAIAssistantWidget::BuildMessage(const FStageAIMessage& Message, int32 MessageIndex)
 {
 	using namespace StageCraftWidgetStyle;
@@ -509,11 +529,35 @@ void UStageAIAssistantWidget::Rebuild()
 		}
 		else
 		{
+			const double Start = FPlatformTime::Seconds();
 			const TArray<FStageAIMessage>& Messages = Assistant->GetMessages();
+			TArray<TObjectPtr<UWidget>> Rows;
+			TArray<uint32> Keys;
+			Rows.Reserve(Messages.Num());
+			Keys.Reserve(Messages.Num());
+			int32 Built = 0;
 			for (int32 Index = 0; Index < Messages.Num(); ++Index)
 			{
-				AddRow(BuildMessage(Messages[Index], Index));
+				const uint32 Key = MakeMessageKey(Messages[Index], Index);
+				UWidget* Row = MessageRowKeys.IsValidIndex(Index) && MessageRowKeys[Index] == Key && MessageRows.IsValidIndex(Index) ? MessageRows[Index].Get() : nullptr;
+				if (!Row)
+				{
+					Row = BuildMessage(Messages[Index], Index);
+					++Built;
+				}
+				AddRow(Row);
+				Rows.Add(Row);
+				Keys.Add(Key);
 			}
+			MessageRows = MoveTemp(Rows);
+			MessageRowKeys = MoveTemp(Keys);
+			UE_LOG(LogStageCraft, Verbose, TEXT("Assistant panel: %d message rows, %d built, %d reused, %.2f ms."), Messages.Num(), Built, Messages.Num() - Built,
+				(FPlatformTime::Seconds() - Start) * 1000.0);
+		}
+		if (!Assistant || Assistant->GetMessages().IsEmpty())
+		{
+			MessageRows.Reset();
+			MessageRowKeys.Reset();
 		}
 		if (Assistant && Assistant->GetState() == EStageAIAssistantState::Interpreting)
 		{

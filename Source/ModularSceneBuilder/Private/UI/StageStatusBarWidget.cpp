@@ -18,6 +18,7 @@
 #include "History/StageEditHistorySubsystem.h"
 #include "Engine/LocalPlayer.h"
 #include "Fixtures/StageFixtureLibrarySubsystem.h"
+#include "Mvr/StageMvrImportSubsystem.h"
 #include "Import/StageMeshImportSubsystem.h"
 #include "Input/StageInputPreferencesSubsystem.h"
 #include "Misc/Paths.h"
@@ -375,6 +376,11 @@ void UStageStatusBarWidget::BindSources()
 		FixtureLibrary = Library;
 		Library->OnImportFinished.AddUniqueDynamic(this, &ThisClass::HandleFixtureImportFinished);
 	}
+	if (UStageMvrImportSubsystem* MvrSubsystem = GameInstance ? GameInstance->GetSubsystem<UStageMvrImportSubsystem>() : nullptr; MvrSubsystem && !MvrFinishedHandle.IsValid())
+	{
+		MvrImporter = MvrSubsystem;
+		MvrFinishedHandle = MvrSubsystem->OnFinished.AddUObject(this, &ThisClass::HandleMvrImportFinished);
+	}
 
 	// The hints name the user's keys.
 	if (UStageInputPreferencesSubsystem* Preferences = ULocalPlayer::GetSubsystem<UStageInputPreferencesSubsystem>(GetOwningLocalPlayer()))
@@ -464,6 +470,12 @@ void UStageStatusBarWidget::UnbindSources()
 	{
 		Library->OnImportFinished.RemoveDynamic(this, &ThisClass::HandleFixtureImportFinished);
 	}
+	if (UStageMvrImportSubsystem* MvrSubsystem = MvrImporter.Get())
+	{
+		MvrSubsystem->OnFinished.Remove(MvrFinishedHandle);
+	}
+	MvrFinishedHandle.Reset();
+	MvrImporter.Reset();
 	if (UStageInputPreferencesSubsystem* Preferences = InputPreferences.Get())
 	{
 		Preferences->OnInputPreferencesChanged.RemoveDynamic(this, &ThisClass::HandleInputPreferencesChanged);
@@ -577,6 +589,11 @@ void UStageStatusBarWidget::HandleFixtureImportFinished(const FStageFixtureImpor
 		return;
 	}
 	ShowMessage(Outcome.Message, Outcome.IsSuccess() ? EMessageSeverity::Info : EMessageSeverity::Warning);
+}
+
+void UStageStatusBarWidget::HandleMvrImportFinished(const FStageMvrImportOutcome& Outcome)
+{
+	ShowMessage(Outcome.Message, Outcome.bSucceeded && Outcome.Notes.IsEmpty() ? EMessageSeverity::Info : EMessageSeverity::Warning);
 }
 
 void UStageStatusBarWidget::ShowMessage(const FText& Message, EMessageSeverity Severity)

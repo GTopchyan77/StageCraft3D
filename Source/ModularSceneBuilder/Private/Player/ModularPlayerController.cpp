@@ -42,6 +42,7 @@
 #include "History/StageItemSnapshot.h"
 #include "Import/StageFileDialog.h"
 #include "Fixtures/StageFixtureLibrarySubsystem.h"
+#include "Mvr/StageMvrImportSubsystem.h"
 #include "Import/StageMeshImportSubsystem.h"
 #include "Input/StageInputPreferencesSubsystem.h"
 #include "Input/StageShortcutRouting.h"
@@ -2615,11 +2616,17 @@ int32 AModularPlayerController::RequestImportFiles(const TArray<FString>& Files)
 {
 	TArray<FString> Fixtures;
 	TArray<FString> Models;
+	int32 Accepted = 0;
 	for (const FString& File : Files)
 	{
+		// An MVR scene is reviewed on its own (one at a time); other files go on as fixtures or models.
+		if (UStageMvrImportSubsystem::IsMvrFile(File))
+		{
+			Accepted += RequestImportMvr(File) ? 1 : 0;
+			continue;
+		}
 		(UStageFixtureLibrarySubsystem::IsFixtureFile(File) ? Fixtures : Models).Add(File);
 	}
-	int32 Accepted = 0;
 	if (!Fixtures.IsEmpty())
 	{
 		Accepted += RequestImportFixtureFiles(Fixtures);

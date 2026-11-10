@@ -274,6 +274,17 @@ void AModularBaseActor::AssignInstanceId(const FGuid& RestoredId)
 	InstanceId = RestoredId;
 }
 
+void AModularBaseActor::PrepareImported(const FText& Label, const FGuid& InMvrId)
+{
+	if (!ensureMsgf(!HasActorBegunPlay(), TEXT("%s: PrepareImported is only valid before BeginPlay."), *GetName()))
+	{
+		return;
+	}
+	const FString Text = Label.ToString();
+	InstanceLabel = Text.Len() > MaxLabelLength ? FText::FromString(Text.Left(MaxLabelLength)) : Label;
+	MvrId = InMvrId;
+}
+
 FStageItemSnapshot AModularBaseActor::CaptureSnapshot() const
 {
 	FStageItemSnapshot Snapshot;

@@ -20,6 +20,11 @@ void UStageMenuButton::ApplyTheme(const UStageCraftUITheme& Theme)
 
 void UStageMenuButton::SetLabel(const FText& InLabel)
 {
+	// Views refresh labels on every pushed change (a zoom step changes the view); the same text must not invalidate the layout.
+	if (Label.IdenticalTo(InLabel) || Label.EqualTo(InLabel))
+	{
+		return;
+	}
 	Label = InLabel;
 	if (MyLabel)
 	{

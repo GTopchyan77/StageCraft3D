@@ -286,6 +286,25 @@ void ALightingFixtureActor::PrepareAsDuplicate()
 	HomeAttributes = Attributes;
 }
 
+void ALightingFixtureActor::PrepareImportedPatch(int32 InFixtureId, const FStageDMXPatch& InPatch, const TOptional<FVector2D>& PanTilt)
+{
+	if (!ensureMsgf(!HasActorBegunPlay(), TEXT("%s: PrepareImportedPatch is only valid before BeginPlay."), *GetName()))
+	{
+		return;
+	}
+	// Plain writes, as a restored snapshot's: ApplyItemData sanitizes them and BeginPlay registers them.
+	FixtureId = FMath::Max(0, InFixtureId);
+	Patch = InPatch;
+	if (PanTilt.IsSet())
+	{
+		// The output and the home look agree, so the mix keeps the aim until a cue or the programmer moves the fixture.
+		Attributes.Add(StageCraftTags::Attribute_Pan, float(PanTilt->X));
+		Attributes.Add(StageCraftTags::Attribute_Tilt, float(PanTilt->Y));
+		HomeAttributes.Add(StageCraftTags::Attribute_Pan, float(PanTilt->X));
+		HomeAttributes.Add(StageCraftTags::Attribute_Tilt, float(PanTilt->Y));
+	}
+}
+
 void ALightingFixtureActor::BeginPlay()
 {
 	Super::BeginPlay();

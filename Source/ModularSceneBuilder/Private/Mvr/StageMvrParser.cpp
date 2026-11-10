@@ -774,6 +774,8 @@ namespace StageMvr
 		}
 		const int32 Skip = (Bytes.Num() >= 3 && Bytes[0] == 0xEF && Bytes[1] == 0xBB && Bytes[2] == 0xBF) ? 3 : 0;
 		const FUTF8ToTCHAR Text(reinterpret_cast<const ANSICHAR*>(Bytes.GetData() + Skip), Bytes.Num() - Skip);
+		// The converted text is a copy: free the UTF-8 bytes (up to MaxSceneBytes) before the XML tree is built.
+		Bytes.Empty();
 
 		FStageMvrParseResult Result = ParseSceneDescription(FStringView(Text.Get(), Text.Length()), Limits);
 		if (!Result.IsValid())
