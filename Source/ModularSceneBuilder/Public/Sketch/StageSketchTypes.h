@@ -50,6 +50,16 @@ enum class EStageSketchReader : uint8
 	Claude,
 };
 
+/** Whether a photo import traces an image that looks like a photograph rather than a drawing (STATE.md #86). */
+UENUM(BlueprintType)
+enum class EStageSketchPhotoCheck : uint8
+{
+	/** Refuse it on this computer, with a pointer to Claude, the Vision Inspector and the colour look (the default). */
+	Refuse,
+	/** Trace it anyway: the user decided after a refusal (TRACE ANYWAY), e.g. a plan on textured or graph paper. */
+	TraceAnyway,
+};
+
 /** What a photo import is doing. */
 UENUM(BlueprintType)
 enum class EStageSketchImportState : uint8

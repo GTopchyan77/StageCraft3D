@@ -113,8 +113,13 @@ public:
 	 * arrives on OnImportChanged. Reader Claude asks the online model first and falls back to the local reading when it fails.
 	 * False, with a reason, while another import runs, for an unsupported or missing file, or when Claude is asked for but not
 	 * available. Nothing is built: the user checks the strokes and generates as usual.
+	 * An image that looks like a photograph (StageSketchImageImport::LooksLikePhoto) is not traced on this computer unless Check is
+	 * TraceAnyway: the import fails, adds nothing and GetRefusedPhotoPath names the file. Claude still reads it when asked.
 	 */
-	bool ImportImage(const FString& FilePath, EStageSketchReader Reader, FText& OutError);
+	bool ImportImage(const FString& FilePath, EStageSketchReader Reader, FText& OutError, EStageSketchPhotoCheck Check = EStageSketchPhotoCheck::Refuse);
+
+	/** The file the last import refused as a photograph (for TRACE ANYWAY or a colour look); empty otherwise. */
+	const FString& GetRefusedPhotoPath() const { return RefusedPhotoPath; }
 
 	EStageSketchImportState GetImportState() const { return ImportState; }
 	bool IsImportPending() const { return ImportState != EStageSketchImportState::Idle; }
@@ -174,6 +179,8 @@ private:
 
 	void ShowReference(const struct FStageSketchImportJob& Job);
 	void FinishImport(bool bSucceeded, const FText& Message);
+	/** Ends the import as refused: the image is a photograph and tracing it was not asked for. Nothing is added. */
+	void RefusePhoto(const struct FStageSketchImportJob& Job);
 
 	class UStageItemSubsystem* GetCatalog() const;
 
@@ -200,6 +207,8 @@ private:
 	FText ImportMessage;
 	bool bImportSucceeded = false;
 	uint32 ImportsFinished = 0;
+	/** Set by RefusePhoto, cleared by the next import. */
+	FString RefusedPhotoPath;
 
 	/** The import waiting for the online reading, kept for its local fallback. */
 	TSharedPtr<struct FStageSketchImportJob> OnlineJob;

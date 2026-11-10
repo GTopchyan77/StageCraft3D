@@ -125,3 +125,10 @@ Each part is separable:
 - The language layer is a lexicon plus `Pick` calls; removing Armenian means removing the `INVTEXT` branches.
 - Voice is one component, its backend and the MIC button.
 - Photo import is an additive subsystem API, the PHOTO row and the reference drawing. No save format, asset or map changed.
+
+## Amendment (STATE.md #86, 2026-11-10): photographs are not traced
+
+- **Problem.** The local tracer (§2.6) turns any image into strokes. A photograph of a real stage gives decks from shadows and fixtures from speckle: random noise in the sketch.
+- **Decision.** The worker measures every imported image (`StageSketchImageImport::MeasureImage`): the share of pixels with weak-to-moderate texture that are not next to a strong stroke, on a copy reduced to 256 px. Drawings are flat paper plus high-contrast strokes and score near 0 however dense they are; photographs have texture almost everywhere. At or above `PhotoWeakTextureShare` (0.10, calibrated in STATE.md #86) the local reading refuses the image and adds nothing, also when Claude's reading fails and would fall back to it. Claude still reads photographs when asked.
+- **The user decides last.** The refusal message points to CLAUDE, the Vision Inspector, USE COLOURS (the photo's dominant colours as a colour look on the selected fixtures, `AModularPlayerController::RequestColorLookFromPhoto`, one undo step) and TRACE ANYWAY (`EStageSketchPhotoCheck::TraceAnyway`) for a drawing on textured or graph paper.
+- **Tests:** `StageCraft.ImageLook.PhotoCheck`, `StageCraft.ImageLook.Palette`.

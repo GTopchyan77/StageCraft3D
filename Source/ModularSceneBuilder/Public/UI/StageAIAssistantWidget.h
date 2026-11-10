@@ -78,6 +78,9 @@ private:
 	/** SHOW ME or OPEN PANEL under a knowledge reply: the workspace opens the panel and pulses the control (Docs/ADR/0030 §7). */
 	void HandleShowMePicked(int32 MessageIndex);
 
+	/** COPY under an assistant reply: puts the reply's text on the system clipboard. Local UI only; nothing on the stage changes. */
+	void HandleCopyPicked(int32 MessageIndex);
+
 	/** MIC: starts recording, or stops it (STOP) and sends it for transcription. */
 	void HandleMicPicked(int32 Unused);
 
@@ -134,4 +137,7 @@ private:
 	TWeakObjectPtr<class UStageAICommandSubsystem> BoundAssistant;
 	TWeakObjectPtr<class UStageVoiceInputComponent> BoundVoice;
 	bool bRebuildQueued = false;
+
+	/** The reply whose COPY button reads COPIED; INDEX_NONE once the conversation changes (an index is only valid until then). */
+	int32 CopiedMessageIndex = INDEX_NONE;
 };

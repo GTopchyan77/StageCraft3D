@@ -319,9 +319,13 @@ void UStageSketchCanvasWidget::BuildTree()
 	Add(BuildRow(ItemGroups));
 
 	// A photo or scan of a drawing, read into strokes.
-	UWidget* PhotoSegment = BuildSegment({ LOCTEXT("ImportPhoto", "IMPORT PHOTO..."), LOCTEXT("RemovePhoto", "REMOVE") },
+	// TRACE ANYWAY and USE COLOURS only show after an image was refused as a photograph (Refresh).
+	UWidget* PhotoSegment = BuildSegment({ LOCTEXT("ImportPhoto", "IMPORT PHOTO..."), LOCTEXT("RemovePhoto", "REMOVE"),
+			LOCTEXT("TraceAnyway", "TRACE ANYWAY"), LOCTEXT("UseColours", "USE COLOURS") },
 		{ LOCTEXT("ImportPhotoTip", "Read a PNG or JPEG of a stage drawn from above (paper, whiteboard, printed plan): closed outlines become decks, lines become truss, dots and small circles become fixtures. The strokes are added to the sketch to check before GENERATE 3D."),
-		  LOCTEXT("RemovePhotoTip", "Take the photo away from under the canvas (the strokes stay).") },
+		  LOCTEXT("RemovePhotoTip", "Take the photo away from under the canvas (the strokes stay)."),
+		  LOCTEXT("TraceAnywayTip", "Trace the refused image on this computer after all: for a drawing on textured or graph paper. A real photograph gives random strokes."),
+		  LOCTEXT("UseColoursTip", "Light the selected fixtures with the photo's main colours instead: one colour per fixture, brighter colours brighter, one undo step.") },
 		PhotoButtons, &ThisClass::HandlePhotoPicked);
 	UWidget* PhotoWidthSlider = BuildSlider(ESlider::PhotoWidth, LOCTEXT("PhotoWidth", "PHOTO WIDTH"),
 		LOCTEXT("PhotoWidthTip", "The real width of the whole photo: it sets the drawing's scale. Applies to the next import."), StageSketchMath::MinPhotoWidth, StageSketchMath::MaxPhotoWidth);
@@ -499,10 +503,19 @@ void UStageSketchCanvasWidget::Refresh()
 	{
 		PhotoReader = EStageSketchReader::Local;
 	}
+	const bool bRefusedPhoto = Sketch && !Sketch->GetRefusedPhotoPath().IsEmpty();
+	const AModularPlayerController* Controller = GetStageController();
 	for (UStageChoiceButton* Button : PhotoButtons)
 	{
-		const bool bImport = Button->GetChoiceIndex() == 0;
+		const int32 Choice = Button->GetChoiceIndex();
+		const bool bImport = Choice == 0;
 		StyleChoice(*Button, false);
+		if (Choice >= 2)
+		{
+			Button->SetVisibility(bRefusedPhoto ? ESlateVisibility::Visible : ESlateVisibility::Collapsed);
+			Button->SetIsEnabled(bRefusedPhoto && !bImporting && (Choice == 2 || (Controller && !Controller->IsColorLookPending())));
+			continue;
+		}
 		Button->SetIsEnabled(Sketch && !bImporting && (bImport ? StageFileDialog::IsAvailable() : bHasPhoto));
 		if (UTextBlock* Label = Cast<UTextBlock>(Button->GetContent()); Label && bImport)
 		{
@@ -733,6 +746,35 @@ void UStageSketchCanvasWidget::HandlePhotoPicked(int32 Index)
 	if (Index == 1)
 	{
 		Sketch->ClearReference();
+		Refresh();
+		return;
+	}
+	if (Index == 2 || Index == 3)
+	{
+		const FString Refused = Sketch->GetRefusedPhotoPath();
+		if (Refused.IsEmpty())
+		{
+			return;
+		}
+		FText Error;
+		if (Index == 2)
+		{
+			if (!Sketch->ImportImage(Refused, EStageSketchReader::Local, Error, EStageSketchPhotoCheck::TraceAnyway))
+			{
+				ResultMessage = Error;
+				bResultSucceeded = false;
+			}
+		}
+		else if (AModularPlayerController* Controller = GetStageController())
+		{
+			// A refusal (nothing selected) goes to the status bar; the message here says what was asked.
+			if (Controller->RequestColorLookFromPhoto(Refused))
+			{
+				ResultMessage = FText::Format(LOCTEXT("ColoursRequested", "The colours of {0} go on the selected fixtures (one undo step)."),
+					FText::FromString(FPaths::GetCleanFilename(Refused)));
+				bResultSucceeded = true;
+			}
+		}
 		Refresh();
 		return;
 	}

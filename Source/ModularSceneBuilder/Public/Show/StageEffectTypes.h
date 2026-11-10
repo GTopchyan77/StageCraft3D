@@ -338,6 +338,13 @@ namespace StageEffectRules
 	/** The Effects panel's one-click audio effects (ADR 0029 §5): bass pulse, beat chase, high sparkle, hue per bar, beat swing, mid zoom. */
 	MODULARSCENEBUILDER_API TArray<FStageEffect> MakeAudioQuickEffects();
 
+	/**
+	 * The Audio panel's FOLLOW MUSIC look (STATE.md #86): three effects that follow the music together. Bass drives the intensity
+	 * (Bass Pulse), the mids drive how fast the colour turns (Mid Colour), the highs drive a strobe on fixtures with a shutter (High
+	 * Strobe; open in silence, capped by the flash limiter). Started as one step by AModularPlayerController::RequestStartEffects.
+	 */
+	MODULARSCENEBUILDER_API TArray<FStageEffect> MakeMusicLook();
+
 	/** Beats per cycle (Sync) or between steps (Trigger): 0.25 .. 8. */
 	MODULARSCENEBUILDER_API float GetBeatsPerCycle(EStageEffectBeatDivision Division);
 

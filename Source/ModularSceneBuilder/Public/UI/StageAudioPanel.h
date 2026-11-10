@@ -68,6 +68,8 @@ private:
 	class UWidget* BuildInputRow();
 	class UWidget* BuildMeters();
 	class UWidget* BuildSafetyRows();
+	/** LIGHTS: FOLLOW MUSIC (StageEffectRules::MakeMusicLook on the selection) and why listening alone moves nothing. */
+	class UWidget* BuildLightsRow();
 	/** A slider with its value text, reporting to HandleSliderMoved as SliderIndex and released through HandleSliderReleased. */
 	class UWidget* MakeSliderLine(int32 SliderIndex, float StepSize, TWeakObjectPtr<class UStageValueSlider>& OutSlider, TWeakObjectPtr<class UTextBlock>& OutValue);
 	class UWidget* BuildFooter();
@@ -92,6 +94,7 @@ private:
 	void HandleSourcePicked(int32 SourceIndex);
 	void HandleTransportPicked(int32 CommandIndex);
 	void HandleBackgroundPicked(int32 ChoiceIndex);
+	void HandleFollowMusicPicked(int32 Unused);
 	void HandleSliderMoved(int32 SliderIndex, float Value);
 
 	UFUNCTION()

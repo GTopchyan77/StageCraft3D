@@ -527,12 +527,32 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "StageCraft|Requests")
 	bool RequestDeletePalette(FGuid PaletteId);
 
+	/**
+	 * A colour look from a photo (STATE.md #86): its dominant colours (StageImagePalette) are read off the game thread, then each
+	 * fixture selected now gets one, in selection order and largest share first (cycling), with a dimmer from the colour's
+	 * brightness. Applied through RequestProgrammerChange, so the GameMode judges every write, as ONE undo step. Fixtures destroyed
+	 * meanwhile are skipped. False, reported on OnRequestRejected, when no fixture is selected or a read is already running; a
+	 * file that cannot be read is reported when the read ends.
+	 */
+	UFUNCTION(BlueprintCallable, Category = "StageCraft|Requests")
+	bool RequestColorLookFromPhoto(const FString& FilePath);
+
+	/** Whether a RequestColorLookFromPhoto read is in flight. */
+	bool IsColorLookPending() const { return bColorLookPending; }
+
 	// Effect requests (Docs/ADR/0027-effects-engine.md §4): effects in the programmer, judged by EvaluateCueRequest (Effects), refused
 	// under External DMX. Start, commit and stop are one undo step each; previews (a control being dragged) are not.
 
 	/** Starts Effect on the selected fixtures, in selection order (the order its pattern runs). Returns its id; invalid when refused. */
 	UFUNCTION(BlueprintCallable, Category = "StageCraft|Requests")
 	FGuid RequestStartEffect(const FStageEffect& Effect);
+
+	/**
+	 * Starts every effect in Effects on the selected fixtures as ONE undo step named StepName, all or nothing: when the programmer
+	 * cannot take them all (StageEffectRules::MaxEffects) none is started. Returns their ids in order; empty when refused (reported
+	 * on OnRequestRejected). Used by FOLLOW MUSIC (StageEffectRules::MakeMusicLook).
+	 */
+	TArray<FGuid> RequestStartEffects(TConstArrayView<FStageEffect> Effects, const FText& StepName);
 
 	/**
 	 * Changes a running effect at once without an undo step, while a control is dragged; the first preview remembers the effects as
@@ -1138,6 +1158,12 @@ private:
 
 	EStageFanMode FanMode = EStageFanMode::Off;
 	bool bHighlightOn = false;
+
+	/** A RequestColorLookFromPhoto read is in flight (one at a time). */
+	bool bColorLookPending = false;
+
+	/** Applies a read photo's colours to the fixtures captured by RequestColorLookFromPhoto, as one undo step. */
+	void ApplyColorLook(const TArray<TWeakObjectPtr<class ALightingFixtureActor>>& Fixtures, TConstArrayView<struct FStageImageSwatch> Swatches, const FString& FileName);
 
 	/** The programmer's effects before the first RequestPreviewEffect of a drag; RequestUpdateEffect records the step from here. */
 	TOptional<FStageProgrammerEffects> EffectsBeforePreview;

@@ -20,6 +20,7 @@
 #include "Components/VerticalBoxSlot.h"
 #include "Engine/GameInstance.h"
 #include "Engine/World.h"
+#include "HAL/PlatformApplicationMisc.h"
 #include "Player/ModularPlayerController.h"
 #include "TimerManager.h"
 #include "UI/StageCraftUITheme.h"
@@ -335,15 +336,30 @@ UWidget* UStageAIAssistantWidget::BuildMessage(const FStageAIMessage& Message, i
 			ActionsSlot->SetPadding(FMargin(0.f, 6.f, 0.f, 0.f));
 		}
 	}
-	// A knowledge reply (Docs/ADR/0030 §7): where it came from, and SHOW ME (the control) or OPEN PANEL (the panel).
-	if (!bUser && Message.Reference.HasPanel())
+	// Under every finished reply: COPY, and for a knowledge reply (Docs/ADR/0030 §7) SHOW ME (the control) or OPEN PANEL (the panel).
+	// A reply still being written has no final text to copy yet.
+	const bool bCanCopy = !bUser && Message.Outcome != EStageAIOutcome::Pending && !Message.Text.IsEmpty();
+	if (!bUser && (Message.Reference.HasPanel() || bCanCopy))
 	{
 		UHorizontalBox* Actions = WidgetTree->ConstructWidget<UHorizontalBox>(UHorizontalBox::StaticClass());
-		const bool bControl = !Message.Reference.Control.IsNone();
-		UStageChoiceButton* Show = MakeButton(bControl ? LOCTEXT("ShowMe", "SHOW ME") : LOCTEXT("OpenPanel", "OPEN PANEL"),
-			bControl ? LOCTEXT("ShowMeTip", "Open the panel and point at the control.") : LOCTEXT("OpenPanelTip", "Open the panel."),
-			MessageIndex, &ThisClass::HandleShowMePicked, false);
-		Actions->AddChildToHorizontalBox(Show);
+		if (Message.Reference.HasPanel())
+		{
+			const bool bControl = !Message.Reference.Control.IsNone();
+			UStageChoiceButton* Show = MakeButton(bControl ? LOCTEXT("ShowMe", "SHOW ME") : LOCTEXT("OpenPanel", "OPEN PANEL"),
+				bControl ? LOCTEXT("ShowMeTip", "Open the panel and point at the control.") : LOCTEXT("OpenPanelTip", "Open the panel."),
+				MessageIndex, &ThisClass::HandleShowMePicked, false);
+			if (UHorizontalBoxSlot* ShowSlot = Actions->AddChildToHorizontalBox(Show))
+			{
+				ShowSlot->SetPadding(FMargin(0.f, 0.f, 6.f, 0.f));
+			}
+		}
+		if (bCanCopy)
+		{
+			const bool bCopied = MessageIndex == CopiedMessageIndex;
+			UStageChoiceButton* Copy = MakeButton(bCopied ? LOCTEXT("Copied", "COPIED") : LOCTEXT("Copy", "COPY"),
+				LOCTEXT("CopyTip", "Copy this reply's text to the clipboard."), MessageIndex, &ThisClass::HandleCopyPicked, false);
+			Actions->AddChildToHorizontalBox(Copy);
+		}
 		if (UVerticalBoxSlot* ActionsSlot = Content->AddChildToVerticalBox(Actions))
 		{
 			ActionsSlot->SetPadding(FMargin(0.f, 5.f, 0.f, 0.f));
@@ -428,6 +444,7 @@ void UStageAIAssistantWidget::NativeDestruct()
 
 void UStageAIAssistantWidget::HandleConversationChanged()
 {
+	CopiedMessageIndex = INDEX_NONE;
 	RequestRebuild();
 }
 
@@ -666,6 +683,19 @@ void UStageAIAssistantWidget::HandleClearPicked(int32 Unused)
 	{
 		Assistant->ClearConversation();
 	}
+}
+
+void UStageAIAssistantWidget::HandleCopyPicked(int32 MessageIndex)
+{
+	const UStageAICommandSubsystem* Assistant = GetAssistant();
+	if (!Assistant || !Assistant->GetMessages().IsValidIndex(MessageIndex))
+	{
+		return;
+	}
+	// The displayed text, exactly as shown (FText::ToString is the current culture's display string).
+	FPlatformApplicationMisc::ClipboardCopy(*Assistant->GetMessages()[MessageIndex].Text.ToString());
+	CopiedMessageIndex = MessageIndex;
+	RequestRebuild();
 }
 
 void UStageAIAssistantWidget::HandleShowMePicked(int32 MessageIndex)

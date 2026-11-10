@@ -21,6 +21,7 @@
 #include "Import/StageFileDialog.h"
 #include "Misc/Paths.h"
 #include "Player/ModularPlayerController.h"
+#include "Show/StageEffectTypes.h"
 #include "Subsystems/StageAudioReactiveSubsystem.h"
 #include "TimerManager.h"
 #include "UI/StageCraftUITheme.h"
@@ -280,7 +281,7 @@ void UStageAudioPanel::BuildTree()
 	}
 	UVerticalBox* Rows = WidgetTree->ConstructWidget<UVerticalBox>(UVerticalBox::StaticClass());
 	Scroll->AddChild(Rows);
-	for (UWidget* Row : { BuildSourceRow(), BuildFileRow(), BuildInputRow(), BuildMeters(), BuildSafetyRows(), BuildFooter() })
+	for (UWidget* Row : { BuildSourceRow(), BuildFileRow(), BuildInputRow(), BuildMeters(), BuildLightsRow(), BuildSafetyRows(), BuildFooter() })
 	{
 		if (UVerticalBoxSlot* RowSlot = Rows->AddChildToVerticalBox(Row))
 		{
@@ -542,6 +543,37 @@ UWidget* UStageAudioPanel::BuildSafetyRows()
 		FlashSlot->SetPadding(FMargin(0.f, 6.f, 0.f, 0.f));
 	}
 	return Block;
+}
+
+UWidget* UStageAudioPanel::BuildLightsRow()
+{
+	const UStageCraftUITheme& UITheme = GetTheme();
+	UVerticalBox* Block = WidgetTree->ConstructWidget<UVerticalBox>(UVerticalBox::StaticClass());
+	UStageChoiceButton* Follow = MakeButton(LOCTEXT("FollowMusic", "FOLLOW MUSIC"),
+		LOCTEXT("FollowMusicTip", "Start three effects on the selected fixtures that follow the music: the bass drives the intensity, the mids how fast the colour turns, the highs a strobe (open when the music stops, never faster than the flash limit). One undo step; stop them in the Effects panel."), 0);
+	Follow->OnPicked.BindUObject(this, &ThisClass::HandleFollowMusicPicked);
+	if (UVerticalBoxSlot* ButtonSlot = Block->AddChildToVerticalBox(Follow))
+	{
+		ButtonSlot->SetHorizontalAlignment(HAlign_Left);
+	}
+	// Listening alone moves nothing: say so where the music is chosen (STATE.md #86).
+	UTextBlock* Hint = MakeText(LOCTEXT("FollowMusicHint", "Music moves only the effects that follow it. Select fixtures, then FOLLOW MUSIC, or pick an audio effect in the Effects panel."),
+		7, TEXT("Regular"), UITheme.TextDisabled);
+	Hint->SetAutoWrapText(true);
+	if (UVerticalBoxSlot* HintSlot = Block->AddChildToVerticalBox(Hint))
+	{
+		HintSlot->SetPadding(FMargin(0.f, 4.f, 0.f, 0.f));
+	}
+	return MakeLabeledRow(LOCTEXT("Lights", "LIGHTS"), Block);
+}
+
+void UStageAudioPanel::HandleFollowMusicPicked(int32 Unused)
+{
+	// A refusal (nothing selected, programmer full, External DMX) is reported on the status bar by the controller.
+	if (AModularPlayerController* Controller = GetStageController())
+	{
+		Controller->RequestStartEffects(StageEffectRules::MakeMusicLook(), LOCTEXT("FollowMusicStep", "Follow Music"));
+	}
 }
 
 UWidget* UStageAudioPanel::BuildFooter()

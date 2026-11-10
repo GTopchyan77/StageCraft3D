@@ -2,6 +2,7 @@
 
 #include "Show/StageEffects.h"
 
+#include "Data/StageParameterTypes.h"
 #include "Show/StageShowMix.h"
 
 namespace StageEffects
@@ -181,9 +182,14 @@ namespace StageEffects
 		return Input;
 	}
 
-	float GetModulationBand(const FStageEffectAudio& Audio, const FAudioInput& Input)
+	float GetSilentBand(const FStageEffect& Effect)
 	{
-		return Input.bSignal ? FMath::Clamp(Input.GetBand(Audio.Band), 0.f, 1.f) : 1.f;
+		return Effect.Target == EStageEffectTarget::Beam && Effect.Attribute == StageCraftTags::Attribute_Shutter ? 0.f : 1.f;
+	}
+
+	float GetModulationBand(const FStageEffectAudio& Audio, const FAudioInput& Input, float SilentBand)
+	{
+		return Input.bSignal ? FMath::Clamp(Input.GetBand(Audio.Band), 0.f, 1.f) : SilentBand;
 	}
 
 	float SmoothBand(float Previous, float Target, float DeltaSeconds, EStageEffectAudioResponse Response)
@@ -274,9 +280,9 @@ namespace StageEffects
 		return Difference - FMath::FloorToDouble(Difference + 0.5);
 	}
 
-	float ApplyAudioMaster(float Band, float Master)
+	float ApplyAudioMaster(float Band, float Master, float SilentBand)
 	{
-		return 1.f + (Band - 1.f) * FMath::Clamp(Master, 0.f, 1.f);
+		return SilentBand + (Band - SilentBand) * FMath::Clamp(Master, 0.f, 1.f);
 	}
 
 	float FFlashGate::Apply(float Fraction, double NowSeconds, float LimitHz)

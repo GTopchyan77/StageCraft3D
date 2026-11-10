@@ -8418,7 +8418,7 @@ All times in ms.
 
 **Verification:** none needed. No code changed.
 
-**Commit:** uncommitted (working tree).
+**Commit:** `ac6afb2`.
 
 **Known issues / follow-ups**
 - Gevor locks D1–D8. Then: the ADR, then the Step 1 remainder or Step 2.
@@ -8459,9 +8459,64 @@ All times in ms.
 - Test game windows were closed afterwards.
 - **Not verified:** the network and file-import checks themselves are Gevor's manual tests.
 
-**Commit:** uncommitted (working tree).
+**Commit:** `ac6afb2`.
 
 **Known issues / follow-ups**
 - Web Remote does not exist yet; it is roadmap Step 5, waiting for #84's D1–D8.
 - On first use of Art-Net or sACN, Windows Firewall asks for the packaged executable separately from the editor.
 - Shipping has no console or log by design, so diagnose with Development.
+
+## #86 — D1–D8 locked, ADR 0034 (MVR and tiers); photo guard and photo colour look; FOLLOW MUSIC; COPY in the assistant; Ctrl+Click not reproducible (2026-11-10)
+
+**What & why**
+- **Context.** Gevor asked (2026-11-10) to continue "the 4 recent fixes alongside Step 2 (MVR)". STATE.md, git and tasks/todo.md had no record of those fixes (that conversation ended before anything was written down), so Gevor restated them. #84 and #85 said "uncommitted" but were in `ac6afb2`; both now carry it.
+- **D1–D8 locked; ADR 0034 written** (`Docs/ADR/0034-mvr-scene-exchange-and-product-tiers.md`).
+  - Tiers (accepted): Free = 1 universe of DMX OUT, GDTF import, design; Pro = unlimited universes, DMX IN, MIDI/OSC, Web Remote, MVR export. Gates will be exact entitlement tags `StageCraft.Entitlement.Pro.*` judged by the GameMode, open until Step 6 licensing; DMX IN and multi-universe OUT, free today, become Pro then.
+  - Only the Free/Pro split was restated; **the exact wording of D3–D8 is not in the repository**, and the ADR says so rather than inventing it.
+  - Roadmap: **MVR is now Step 2**, MIDI/OSC Step 3.
+  - MVR design (proposed): facts checked against the MVR 1.6 spec (ZIP STORE/DEFLATE, `GeneralSceneDescription.xml`, Z-up right-handed mm, `Universe.Address` or absolute addresses, glTF or deprecated 3DS); reuse of the GD1 ZIP/XML readers; a pure parser; a GD4-style review, then import as one undo step through the GDTF library; layers as Outliner groups; `MvrId` on items and scene v13; export behind the Pro gate; phases MV0–MV5. Open for Gevor: M1 (import Free?), M2 (glb geometry), M3 (export geometry), M4 (no MVR-xchange in v1).
+- **Photo guard (Sketch to Stage photo import).** A photograph was traced into random strokes (decks from shadows, fixtures from speckle).
+  - The worker measures each image (`StageSketchImageImport::MeasureImage`): the share of weak-to-moderate texture not next to a strong stroke, on a 256 px copy. At ≥ 0.10 (`PhotoWeakTextureShare`) the local reading refuses it and adds nothing, also when Claude's reading fails and would fall back to it. Claude still reads photographs.
+  - Calibration (numbers only; the images stay on this PC): synthetic drawings (clean, unevenly lit, blackboard, densely hatched, colour-filled, a phone photo of a pencil plan) scored 0.000–0.015; real colour and B&W photos 0.110–0.303; a flat illustration and a texture atlas 0.063–0.079 (still traced). The C++ numbers match the prototype.
+  - The refusal names CLAUDE, the Vision Inspector, **USE COLOURS** and **TRACE ANYWAY** (`EStageSketchPhotoCheck::TraceAnyway`, for plans on textured or graph paper). Both buttons appear in the Sketch window only after a refusal.
+- **Photo colour look (USE COLOURS).** `AModularPlayerController::RequestColorLookFromPhoto(Path)`:
+  - The file is read and its dominant colours extracted off the game thread (`StageImageLookReader` with the same file checks as the photo import; `StageImagePalette::Extract`, deterministic k-means seeded at luminance quantiles).
+  - Each fixture selected at request time gets one colour (largest share first, cycling) and a dimmer from its brightness, through `RequestProgrammerChange` inside one edit transaction: every write is judged by the GameMode, it is **one undo step**, and fixtures deleted meanwhile are skipped.
+  - Refused with nothing selected or while a read is already running.
+- **Audio-to-light.** Measured first: the analyser and the effect path work (TestSignal at 120 BPM, Bass Pulse moved fixture 1's dimmer 0.09–0.92). The real gap: **listening alone moves nothing** (ADR 0029 §4), and nothing told the user. Fix:
+  - Audio panel LIGHTS row: **FOLLOW MUSIC** starts `StageEffectRules::MakeMusicLook()` on the selection: bass → Bass Pulse (intensity), mids → Mid Colour (a rainbow whose rate the mids double), highs → High Strobe (Shutter). It goes through the new all-or-nothing `RequestStartEffects` (one undo step, rolled back if the programmer cannot take them all). A hint says why listening alone moves nothing. `RequestStartEffect` now calls `RequestStartEffects`.
+  - **Safety amendment (ADR 0029 §16):** Modulate read the band as 1 in silence, which for a Shutter effect meant the fastest strobe in silence and under KILL. `StageEffects::GetSilentBand` is now 0 for Beam effects on the Shutter (1 for everything else, unchanged). The runner also starts such an effect's band at 0, so it never flashes on start.
+- **AI chat COPY.** Every finished assistant reply has a COPY button (next to SHOW ME when there is one). It calls `FPlatformApplicationMisc::ClipboardCopy` with the reply's text and reads COPIED until the conversation changes. Local UI only.
+- **Ctrl+Click in the viewport: not reproduced; no code changed.**
+  - Real OS input (Win32 `SendInput`: Ctrl down, left click) multi-selected decks, spots and a truss in Top and Perspective, both in the `-game` build and in the packaged Development build of #85. The status bar read "3 items selected" and the Outliner rows were highlighted.
+  - The selection lives in `USelectionComponent` on the controller; there is no `UStageSelectionSubsystem`.
+  - Imported models were not loaded in these runs (`-WithoutUserImports`).
+
+**Files changed**
+- New: `Docs/ADR/0034-mvr-scene-exchange-and-product-tiers.md`; `Source/ModularSceneBuilder/Public/Show/StageImagePalette.h`, `Private/Show/StageImagePalette.cpp`, `Private/Show/StageImageLookReader.h/.cpp`, `Private/Show/Tests/StageImageLookTests.cpp`.
+- Changed:
+  - Sketch: `Private/Sketch/StageSketchImageImport.h/.cpp` (LoadImageFile, MeasureImage, LooksLikePhoto, Run), `Public/Sketch/StageSketchTypes.h` (EStageSketchPhotoCheck), `Public/Sketch/StageSketchSubsystem.h`, `Private/Sketch/StageSketchSubsystem.cpp` (refusal, GetRefusedPhotoPath), `Private/Sketch/StageSketchConsoleCommands.cpp` (Import `anyway`, PhotoCheck, ColorLook; Development only), `Private/UI/StageSketchCanvasWidget.cpp` (TRACE ANYWAY, USE COLOURS).
+  - Controller: `Public/Player/ModularPlayerController.h`, `Private/Player/ModularPlayerControllerProgrammer.cpp` (RequestColorLookFromPhoto, ApplyColorLook, RequestStartEffects).
+  - Effects and audio: `Public/Show/StageEffects.h`, `Private/Show/StageEffects.cpp` (GetSilentBand), `Private/Show/StageEffectRunner.cpp`, `Public/Show/StageEffectTypes.h`, `Private/Show/StageEffectTypes.cpp` (MakeMusicLook), `Public/UI/StageAudioPanel.h`, `Private/UI/StageAudioPanel.cpp` (LIGHTS row), `Private/Audio/StageAudioReactiveConsoleCommands.cpp` (`StageCraft.Music.Follow`, Development only).
+  - Assistant: `Public/UI/StageAIAssistantWidget.h`, `Private/UI/StageAIAssistantWidget.cpp` (COPY).
+  - Docs: `Docs/ADR/0017-multilingual-voice-and-photo-import.md` and `Docs/ADR/0029-audio-analysis-and-audio-reactive-effects.md` (amendments), `tasks/todo.md` (Phase 38), `STATE.md`.
+- No content assets, input actions or maps changed.
+
+**Verification** (Claude, 2026-11-10)
+- Builds: Editor, Game (Development) and Shipping all succeeded with 0 warning and 0 error lines. The Shipping binary contains none of the new dev commands (`StageCraft.Music.Follow`, `StageCraft.Sketch.PhotoCheck`, `StageCraft.Sketch.ColorLook`; UTF-16 scan, with the UI string "FOLLOW MUSIC" found as a control).
+- Automation: **258/258 passed** (255 + `StageCraft.ImageLook.PhotoCheck`, `.Palette`, `.MusicLook`); user data unchanged (127 files checked).
+- Scripted `-game` runs `Verify86` and `Verify86b` (screenshots checked):
+  - Photo check in C++: drawing 0.000; colour photo 0.183 and B&W photo 0.110 refused; illustration 0.073 traced. The Sketch window shows the refusal with TRACE ANYWAY and USE COLOURS. The drawing traced to 1 deck and 2 fixtures. TRACE ANYWAY on the photo produced 64 truss lines and 37 fixtures of noise, which is what the guard prevents.
+  - USE COLOURS on fixtures 1 and 2: a blue look (dimmers 0.30 and 1.00), one undo step; undo restored the exact values. Refused with nothing selected.
+  - FOLLOW MUSIC: in silence Shutter 0 and Dimmer 1; with TestSignal the dimmer moved 0.09→0.93, the colour turned and the Shutter was capped at 0.105; under KILL Shutter 0 and Dimmer 1. One undo step removes all three. Refused with nothing selected. The Audio panel shows the LIGHTS row.
+  - The assistant reply shows COPY. The clipboard content itself was not read back.
+- **Not verified:** a physical click on COPY, TRACE ANYWAY, USE COLOURS or FOLLOW MUSIC (the console drove the same requests); FOLLOW MUSIC with real music on real fixtures; the strobe's DMX OUT on a visualiser.
+
+**Commit:** uncommitted (working tree).
+
+**Known issues / follow-ups**
+- Gevor: exact steps for the Ctrl+Click failure (which view, which items, imported models loaded or not, docked or floating viewport, whether a panel had focus before the click).
+- Gevor: restate the D3–D8 wording; answer ADR 0034 M1–M4; a corpus of real `.mvr` files for MV0.
+- The USE COLOURS undo step is named after its first write ("Color: Spot 101"), not "Colour look from <file>", because `EndEditTransaction` takes no name.
+- The photo threshold is calibrated on few real photos. Flat illustrations (0.06–0.08) still trace; graph paper may be refused (TRACE ANYWAY covers it).
+- High Strobe strobes whenever the highs are present; the flash limiter (3 Hz default) caps it. A strobe amount control for the look may be wanted.

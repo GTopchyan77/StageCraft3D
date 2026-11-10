@@ -142,33 +142,158 @@ namespace StageSketchImageImport
 		return Out;
 	}
 
-	void Run(FStageSketchImportJob& Job)
+	bool LoadImageFile(const FString& FilePath, TArray<uint8>& OutBGRA, int32& OutWidth, int32& OutHeight, FText& OutError)
 	{
-		const int64 Size = IFileManager::Get().FileSize(*Job.FilePath);
+		const int64 Size = IFileManager::Get().FileSize(*FilePath);
 		if (Size <= 0)
 		{
-			Job.Error = LOCTEXT("Unreadable", "The file could not be found or read.");
-			return;
+			OutError = LOCTEXT("Unreadable", "The file could not be found or read.");
+			return false;
 		}
 		if (Size > MaxFileBytes)
 		{
-			Job.Error = FText::Format(LOCTEXT("FileTooLarge", "The file is larger than {0} MB."), FText::AsNumber(MaxFileBytes / (1024 * 1024)));
-			return;
+			OutError = FText::Format(LOCTEXT("FileTooLarge", "The file is larger than {0} MB."), FText::AsNumber(MaxFileBytes / (1024 * 1024)));
+			return false;
 		}
 		TArray64<uint8> Bytes;
-		if (!FFileHelper::LoadFileToArray(Bytes, *Job.FilePath))
+		if (!FFileHelper::LoadFileToArray(Bytes, *FilePath))
 		{
-			Job.Error = LOCTEXT("Unreadable", "The file could not be found or read.");
-			return;
+			OutError = LOCTEXT("Unreadable", "The file could not be found or read.");
+			return false;
 		}
-		TArray<uint8> BGRA;
-		if (!DecodeImage(Bytes, BGRA, Job.SourceWidth, Job.SourceHeight, Job.Error))
-		{
-			return;
-		}
-		Bytes.Empty();
+		return DecodeImage(Bytes, OutBGRA, OutWidth, OutHeight, OutError);
+	}
 
-		Job.Trace = StageSketchImageTrace::Trace(ToGray(BGRA, Job.SourceWidth, Job.SourceHeight), Job.Options);
+	FStageSketchImageMetrics MeasureImage(TConstArrayView<uint8> BGRA, int32 Width, int32 Height)
+	{
+		FStageSketchImageMetrics Metrics;
+		if (Width <= 0 || Height <= 0 || BGRA.Num() != Width * Height * 4)
+		{
+			return Metrics;
+		}
+		int32 W = 0;
+		int32 H = 0;
+		const TArray<uint8> Small = DownscaleBGRA(BGRA, Width, Height, MeasureMaxSide, W, H);
+		const int32 Count = W * H;
+
+		// Luma, then a 3x3 box blur so paper grain and JPEG noise do not count as texture.
+		TArray<float> Luma;
+		Luma.SetNumUninitialized(Count);
+		double SumRG = 0.0;
+		double SumYB = 0.0;
+		double SumRG2 = 0.0;
+		double SumYB2 = 0.0;
+		for (int32 Pixel = 0; Pixel < Count; ++Pixel)
+		{
+			const float B = Small[Pixel * 4];
+			const float G = Small[Pixel * 4 + 1];
+			const float R = Small[Pixel * 4 + 2];
+			Luma[Pixel] = 0.299f * R + 0.587f * G + 0.114f * B;
+			const double RG = R - G;
+			const double YB = 0.5 * (R + G) - B;
+			SumRG += RG;
+			SumYB += YB;
+			SumRG2 += RG * RG;
+			SumYB2 += YB * YB;
+		}
+		TArray<float> Blurred;
+		Blurred.SetNumUninitialized(Count);
+		for (int32 Y = 0; Y < H; ++Y)
+		{
+			for (int32 X = 0; X < W; ++X)
+			{
+				float Sum = 0.f;
+				int32 Taps = 0;
+				for (int32 DY = -1; DY <= 1; ++DY)
+				{
+					for (int32 DX = -1; DX <= 1; ++DX)
+					{
+						const int32 SX = X + DX;
+						const int32 SY = Y + DY;
+						if (SX >= 0 && SY >= 0 && SX < W && SY < H)
+						{
+							Sum += Luma[SY * W + SX];
+							++Taps;
+						}
+					}
+				}
+				Blurred[Y * W + X] = Sum / float(Taps);
+			}
+		}
+
+		// Gradient (central differences, 0..510). Strong = a stroke edge; weak = texture, shading or grain that survived the blur.
+		constexpr float WeakGradient = 6.f;
+		constexpr float StrongGradient = 30.f;
+		constexpr int32 StrokeReach = 2;
+		TArray<float> Gradient;
+		Gradient.SetNumZeroed(Count);
+		for (int32 Y = 1; Y < H - 1; ++Y)
+		{
+			for (int32 X = 1; X < W - 1; ++X)
+			{
+				const int32 Index = Y * W + X;
+				Gradient[Index] = FMath::Abs(Blurred[Index + 1] - Blurred[Index - 1]) + FMath::Abs(Blurred[Index + W] - Blurred[Index - W]);
+			}
+		}
+		int32 Weak = 0;
+		for (int32 Y = 0; Y < H; ++Y)
+		{
+			for (int32 X = 0; X < W; ++X)
+			{
+				const float Value = Gradient[Y * W + X];
+				if (Value < WeakGradient || Value >= StrongGradient)
+				{
+					continue;
+				}
+				// The soft rim of a drawn stroke is not texture.
+				bool bNearStroke = false;
+				for (int32 DY = -StrokeReach; DY <= StrokeReach && !bNearStroke; ++DY)
+				{
+					for (int32 DX = -StrokeReach; DX <= StrokeReach; ++DX)
+					{
+						const int32 SX = X + DX;
+						const int32 SY = Y + DY;
+						if (SX >= 0 && SY >= 0 && SX < W && SY < H && Gradient[SY * W + SX] >= StrongGradient)
+						{
+							bNearStroke = true;
+							break;
+						}
+					}
+				}
+				Weak += bNearStroke ? 0 : 1;
+			}
+		}
+		Metrics.WeakTextureShare = float(Weak) / float(Count);
+
+		const double MeanRG = SumRG / Count;
+		const double MeanYB = SumYB / Count;
+		const double VarRG = FMath::Max(0.0, SumRG2 / Count - MeanRG * MeanRG);
+		const double VarYB = FMath::Max(0.0, SumYB2 / Count - MeanYB * MeanYB);
+		Metrics.Colourfulness = float(FMath::Sqrt(VarRG + VarYB) + 0.3 * FMath::Sqrt(MeanRG * MeanRG + MeanYB * MeanYB));
+		return Metrics;
+	}
+
+	void Run(FStageSketchImportJob& Job)
+	{
+		TArray<uint8> BGRA;
+		if (!LoadImageFile(Job.FilePath, BGRA, Job.SourceWidth, Job.SourceHeight, Job.Error))
+		{
+			return;
+		}
+
+		Job.Metrics = MeasureImage(BGRA, Job.SourceWidth, Job.SourceHeight);
+		Job.bLooksLikePhoto = LooksLikePhoto(Job.Metrics);
+		// Tracing a photograph makes random strokes from its texture (decks from shadows, fixtures from speckle): not done unless asked.
+		const bool bTrace = !Job.bLooksLikePhoto || Job.bTraceIfPhoto;
+		if (!bTrace && !Job.bWantVisionImage)
+		{
+			Job.bDecoded = true;
+			return;
+		}
+		if (bTrace)
+		{
+			Job.Trace = StageSketchImageTrace::Trace(ToGray(BGRA, Job.SourceWidth, Job.SourceHeight), Job.Options);
+		}
 		Job.Preview = DownscaleBGRA(BGRA, Job.SourceWidth, Job.SourceHeight, PreviewMaxSide, Job.PreviewWidth, Job.PreviewHeight);
 		if (Job.bWantVisionImage)
 		{

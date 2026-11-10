@@ -674,4 +674,16 @@ Gevor's choices: automation tests on a harness game instance (not AFunctionalTes
 - [x] GD4 UI: import and drop, report dialog, undoable mode swap (modes of one type), Replace and Remove of a type, Library cards, help article EN/HY (STATE.md #83)
 - [ ] GD4 follow-ups: Gevor clicks through import / report / swap / replace / remove in a -game run; Patch panel Mode column; Library card places the last mode used; UI localization target for Armenian tooltips
 - [ ] GD5 (optional) glTF meshes, gobo images
-- [ ] ADR 0034 MVR (after GD2)
+- [x] ADR 0034 MVR and tiers written (STATE.md #86): tiers accepted, MVR design proposed
+
+## Phase 38 - Four fixes and Step 2 MVR (requested by Gevor 2026-11-10; STATE.md #86; ADR 0034)
+- [x] D1-D8 locked (Free: 1 universe DMX OUT, GDTF import, design; Pro: unlimited universes, DMX IN, MIDI/OSC, Web Remote, MVR export); MVR moved to Step 2
+- [ ] Gevor: restate the exact wording of D3-D8 (pricing, enforcement/offline, payment provider/entity, fixture sources, protocol security) for the record
+- [ ] Gevor: answer ADR 0034 M1-M4 (recommended: import Free, glb meshes, export Truss/SceneObject with glb, no MVR-xchange in v1)
+- [x] Photo guard in the Sketch photo import (refuse photographs, TRACE ANYWAY, USE COLOURS colour look on selected fixtures)
+- [x] Audio: FOLLOW MUSIC (bass intensity, mids colour, highs strobe), music strobe open in silence
+- [x] AI chat: COPY on every finished assistant reply
+- [ ] Ctrl+Click in the viewport: not reproducible (real OS clicks in -game Top/Perspective and the packaged Development build all multi-select); Gevor to give exact steps
+- [ ] MV0 spike on real .mvr files (corpus needed: Vectorworks, grandMA3, GDTF-Share samples)
+- [ ] MV1 parser, MV2 import, MV3 UI, MV4 export (Pro gate), MV5 re-import
+- [ ] Entitlement tags StageCraft.Entitlement.Pro.* and GameMode gates (open until Step 6 licensing)

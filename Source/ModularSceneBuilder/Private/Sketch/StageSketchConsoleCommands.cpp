@@ -14,8 +14,11 @@
 #include "Engine/World.h"
 #include "Framework/Application/SlateApplication.h"
 #include "HAL/IConsoleManager.h"
+#include "IImageWrapperModule.h"
 #include "ImageUtils.h"
 #include "Misc/FileHelper.h"
+#include "Modules/ModuleManager.h"
+#include "Sketch/StageSketchImageImport.h"
 #include "Misc/Paths.h"
 #include "UI/StageSketchCanvasWidget.h"
 #include "UObject/UObjectIterator.h"
@@ -149,10 +152,48 @@ namespace StageSketchCommands
 			UE_LOG(LogStageCraft, Display, TEXT("Usage: StageCraft.Sketch.Import <png or jpg path> [claude]   (PhotoWidth sets the scale)"));
 			return;
 		}
-		const bool bClaude = Args.Num() > 1 && Args[1].Equals(TEXT("claude"), ESearchCase::IgnoreCase);
+		const bool bClaude = Args.ContainsByPredicate([](const FString& Arg) { return Arg.Equals(TEXT("claude"), ESearchCase::IgnoreCase); });
+		const bool bAnyway = Args.ContainsByPredicate([](const FString& Arg) { return Arg.Equals(TEXT("anyway"), ESearchCase::IgnoreCase); });
 		FText Error;
-		const bool bStarted = Sketch->ImportImage(Args[0], bClaude ? EStageSketchReader::Claude : EStageSketchReader::Local, Error);
+		const bool bStarted = Sketch->ImportImage(Args[0], bClaude ? EStageSketchReader::Claude : EStageSketchReader::Local, Error,
+			bAnyway ? EStageSketchPhotoCheck::TraceAnyway : EStageSketchPhotoCheck::Refuse);
 		UE_LOG(LogStageCraft, Display, TEXT("StageCraft.Sketch.Import %s: %s"), *Args[0], bStarted ? TEXT("started (see Status)") : *Error.ToString());
+	}
+
+	/** "PhotoCheck <path>": the photo check's numbers and verdict for one file, read on this thread (development calibration). */
+	void PhotoCheck(const TArray<FString>& Args, UWorld* World)
+	{
+		if (Args.IsEmpty())
+		{
+			UE_LOG(LogStageCraft, Display, TEXT("Usage: StageCraft.Sketch.PhotoCheck <png or jpg path>"));
+			return;
+		}
+		FModuleManager::LoadModuleChecked<IImageWrapperModule>(TEXT("ImageWrapper"));
+		TArray<uint8> BGRA;
+		int32 Width = 0;
+		int32 Height = 0;
+		FText Error;
+		if (!StageSketchImageImport::LoadImageFile(Args[0], BGRA, Width, Height, Error))
+		{
+			UE_LOG(LogStageCraft, Display, TEXT("StageCraft.Sketch.PhotoCheck %s: %s"), *Args[0], *Error.ToString());
+			return;
+		}
+		const FStageSketchImageMetrics Metrics = StageSketchImageImport::MeasureImage(BGRA, Width, Height);
+		UE_LOG(LogStageCraft, Display, TEXT("StageCraft.Sketch.PhotoCheck %s: %dx%d, weak texture %.3f (photo at %.2f), colourfulness %.1f -> %s."),
+			*FPaths::GetCleanFilename(Args[0]), Width, Height, Metrics.WeakTextureShare, StageSketchImageImport::PhotoWeakTextureShare, Metrics.Colourfulness,
+			StageSketchImageImport::LooksLikePhoto(Metrics) ? TEXT("photo") : TEXT("drawing"));
+	}
+
+	/** "ColorLook <path>": USE COLOURS on the selected fixtures through the controller's request. */
+	void ColorLook(const TArray<FString>& Args, UWorld* World)
+	{
+		AModularPlayerController* Controller = World ? Cast<AModularPlayerController>(World->GetFirstPlayerController()) : nullptr;
+		if (!Controller || Args.IsEmpty())
+		{
+			UE_LOG(LogStageCraft, Display, TEXT("Usage: StageCraft.Sketch.ColorLook <png or jpg path>   (select fixtures first; needs a StageCraft player)"));
+			return;
+		}
+		UE_LOG(LogStageCraft, Display, TEXT("StageCraft.Sketch.ColorLook %s: %s"), *Args[0], Controller->RequestColorLookFromPhoto(Args[0]) ? TEXT("reading") : TEXT("refused"));
 	}
 
 	void Clear(const TArray<FString>& Args, UWorld* World)
@@ -221,7 +262,11 @@ namespace StageSketchCommands
 	FAutoConsoleCommandWithWorldAndArgs SetCommand(TEXT("StageCraft.Sketch.Set"),
 		TEXT("DeckHeight|TrussHeight|Grid|PhotoWidth <cm> | Snap 0|1 | Smoothing <0..0.9>  Changes a sketch setting."), FConsoleCommandWithWorldAndArgsDelegate::CreateStatic(&Set));
 	FAutoConsoleCommandWithWorldAndArgs ImportCommand(TEXT("StageCraft.Sketch.Import"),
-		TEXT("<png or jpg path> [claude]  Reads a drawing into the sketch, like IMPORT PHOTO..."), FConsoleCommandWithWorldAndArgsDelegate::CreateStatic(&Import));
+		TEXT("<png or jpg path> [claude] [anyway]  Reads a drawing into the sketch, like IMPORT PHOTO... (anyway = TRACE ANYWAY)"), FConsoleCommandWithWorldAndArgsDelegate::CreateStatic(&Import));
+	FAutoConsoleCommandWithWorldAndArgs PhotoCheckCommand(TEXT("StageCraft.Sketch.PhotoCheck"),
+		TEXT("<png or jpg path>  Logs the photo check's numbers and verdict for a file."), FConsoleCommandWithWorldAndArgsDelegate::CreateStatic(&PhotoCheck));
+	FAutoConsoleCommandWithWorldAndArgs ColorLookCommand(TEXT("StageCraft.Sketch.ColorLook"),
+		TEXT("<png or jpg path>  USE COLOURS: the photo's colours on the selected fixtures (one undo step)."), FConsoleCommandWithWorldAndArgsDelegate::CreateStatic(&ColorLook));
 	FAutoConsoleCommandWithWorldAndArgs ClearCommand(TEXT("StageCraft.Sketch.Clear"),
 		TEXT("Empties the sketch (the stage is unchanged)."), FConsoleCommandWithWorldAndArgsDelegate::CreateStatic(&Clear));
 	FAutoConsoleCommandWithWorldAndArgs UndoStrokeCommand(TEXT("StageCraft.Sketch.UndoStroke"),

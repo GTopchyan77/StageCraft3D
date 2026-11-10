@@ -375,3 +375,10 @@ How G3 realised §6 and §7, and what it settled that they left open.
 - `Show.AudioMaster` (Modulate Rate at 1, 0.5 and 0; Trigger holds and primes again; Sync keeps its tempo);
 - `Show.FlashLimitOnFixtures` (an 8 Hz synced square limited to 3 a second on a real fixture, untouched at 10 and without music; the shutter capped; Bass Pulse under the master);
 - `Show.AudioOnFixtures`, extended with KILL on the show, the limit pushed from the settings, and a latency change that keeps the tempo.
+
+## 16. Amendment (STATE.md #86, 2026-11-10): a music strobe rests open, and FOLLOW MUSIC
+
+- **Problem.** §4 makes Modulate read the band as 1 without music, so a show built on audio stays lit. For an effect on the **Shutter** that means the strobe's fastest setting in silence and under KILL, which is the opposite of what §7 wants.
+- **Decision.** `StageEffects::GetSilentBand(Effect)` is 0 for a Beam effect on `Attribute_Shutter` and 1 for every other effect. `GetModulationBand` and `ApplyAudioMaster` take it, and the runner starts a new effect's smoothed band at it, so a music strobe starts open. Intensity, colour, position and other beam effects are unchanged byte for byte.
+- **FOLLOW MUSIC.** Users read "the lights do not react to the music" (Gevor, 2026-11-10) when a source played but no effect followed it: listening alone moves nothing, by design (§4). The Audio panel gains a LIGHTS row: FOLLOW MUSIC starts `StageEffectRules::MakeMusicLook()` on the selected fixtures (bass → Bass Pulse on intensity; mids → Mid Colour, a rainbow whose rate the mids double; highs → High Strobe on the shutter, open in silence and capped by the flash limiter) through `AModularPlayerController::RequestStartEffects`, all or nothing and one undo step, with a hint saying why listening alone moves nothing.
+- **Tests:** `StageCraft.ImageLook.MusicLook`.

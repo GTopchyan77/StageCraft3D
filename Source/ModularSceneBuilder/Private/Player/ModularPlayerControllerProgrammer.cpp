@@ -15,6 +15,10 @@
 #include "History/StageEditHistoryComponent.h"
 #include "History/StageShowCommands.h"
 #include "Interaction/StageParameterInterface.h"
+#include "Misc/Paths.h"
+#include "ModularSceneBuilder.h"
+#include "Show/StageImageLookReader.h"
+#include "Show/StageImagePalette.h"
 #include "Show/StageShowMix.h"
 #include "Subsystems/ShowControlSubsystem.h"
 #include "Subsystems/StageProgrammerSubsystem.h"
@@ -137,6 +141,87 @@ FStageEconomyResultInfo AModularPlayerController::RequestProgrammerChange(TConst
 		: FText::Format(LOCTEXT("ProgramMany", "{0}: {1} fixtures"), FindParameterName(Primary, ParameterId), FText::AsNumber(Applied));
 	EditHistory->RecordProgrammerChange(Description, FixtureIds, Before);
 	return FStageEconomyResultInfo::Ok();
+}
+
+bool AModularPlayerController::RequestColorLookFromPhoto(const FString& FilePath)
+{
+	if (bColorLookPending)
+	{
+		ReportRejection(FStageEconomyResultInfo::Fail(EStageEconomyResult::InvalidRequest, LOCTEXT("ColorLookBusy", "A photo's colours are already being read.")));
+		return false;
+	}
+	TArray<TWeakObjectPtr<ALightingFixtureActor>> Fixtures;
+	for (ALightingFixtureActor* Fixture : GetSelectedFixtures())
+	{
+		Fixtures.Add(Fixture);
+	}
+	if (Fixtures.IsEmpty())
+	{
+		ReportRejection(FStageEconomyResultInfo::Fail(EStageEconomyResult::InvalidRequest,
+			LOCTEXT("ColorLookNoFixtures", "Select the fixtures that should take the photo's colours first.")));
+		return false;
+	}
+
+	// As many colours as fixtures (up to the palette's limit), so a small selection gets the photo's main colours, not its noise.
+	const int32 Colors = FMath::Clamp(Fixtures.Num(), StageImagePalette::MinColors, StageImagePalette::MaxColors);
+	bColorLookPending = true;
+	const FString FileName = FPaths::GetCleanFilename(FilePath);
+	UE_LOG(LogStageCraft, Log, TEXT("%s: reading the colours of %s for %d fixture(s)."), *GetName(), *FileName, Fixtures.Num());
+	StageImageLookReader::ReadAsync(FilePath, Colors, [WeakThis = TWeakObjectPtr<AModularPlayerController>(this), Fixtures = MoveTemp(Fixtures), FileName](FStageImageLookRead&& Read)
+	{
+		AModularPlayerController* Controller = WeakThis.Get();
+		if (!Controller)
+		{
+			return;
+		}
+		Controller->bColorLookPending = false;
+		if (!Read.Error.IsEmpty())
+		{
+			Controller->ReportRejection(FStageEconomyResultInfo::Fail(EStageEconomyResult::InvalidRequest,
+				FText::Format(LOCTEXT("ColorLookUnreadable", "{0}: {1}"), FText::FromString(FileName), Read.Error)));
+			return;
+		}
+		Controller->ApplyColorLook(Fixtures, Read.Swatches, FileName);
+	});
+	return true;
+}
+
+void AModularPlayerController::ApplyColorLook(const TArray<TWeakObjectPtr<ALightingFixtureActor>>& Fixtures, TConstArrayView<FStageImageSwatch> Swatches, const FString& FileName)
+{
+	if (Swatches.IsEmpty())
+	{
+		return;
+	}
+	float Brightest = 0.f;
+	for (const FStageImageSwatch& Swatch : Swatches)
+	{
+		Brightest = FMath::Max(Brightest, Swatch.Luminance);
+	}
+
+	// Many writes, one undo step. When another edit is already open (a slider being dragged), these join it, as any edit would.
+	const bool bOwnTransaction = BeginEditTransaction();
+	int32 Lit = 0;
+	int32 Index = 0;
+	for (const TWeakObjectPtr<ALightingFixtureActor>& Weak : Fixtures)
+	{
+		ALightingFixtureActor* Fixture = Weak.Get();
+		if (!IsValid(Fixture))
+		{
+			continue; // Deleted while the photo was read.
+		}
+		const FStageImageSwatch& Swatch = Swatches[Index++ % Swatches.Num()];
+		// One fixture per write: each gets its own colour, and the fan never spreads one fixture's change over the others.
+		const TArray<ALightingFixtureActor*> Single = { Fixture };
+		const bool bColour = RequestProgrammerChange(Single, *Fixture, StageCraftTags::Attribute_ColorRGB, FStageParameterValue::MakeColor(Swatch.LightColor)).IsSuccess();
+		const bool bDimmer = RequestProgrammerChange(Single, *Fixture, StageCraftTags::Attribute_Dimmer,
+			FStageParameterValue::MakeFloat(StageImagePalette::DimmerFor(Swatch, Brightest))).IsSuccess();
+		Lit += (bColour || bDimmer) ? 1 : 0;
+	}
+	if (bOwnTransaction)
+	{
+		EndEditTransaction();
+	}
+	UE_LOG(LogStageCraft, Log, TEXT("%s: colour look from %s: %d colour(s) on %d of %d fixture(s)."), *GetName(), *FileName, Swatches.Num(), Lit, Fixtures.Num());
 }
 
 bool AModularPlayerController::RequestClearProgrammer()
@@ -465,10 +550,17 @@ void AModularPlayerController::RecordEffectsStep(const FText& Description, FStag
 
 FGuid AModularPlayerController::RequestStartEffect(const FStageEffect& Effect)
 {
-	UStageProgrammerSubsystem* Programmer = ApproveEffectRequest();
+	const TArray<FGuid> Ids = RequestStartEffects(MakeArrayView(&Effect, 1), FText::GetEmpty());
+	return Ids.IsEmpty() ? FGuid() : Ids[0];
+}
+
+TArray<FGuid> AModularPlayerController::RequestStartEffects(TConstArrayView<FStageEffect> Effects, const FText& StepName)
+{
+	TArray<FGuid> Ids;
+	UStageProgrammerSubsystem* Programmer = Effects.IsEmpty() ? nullptr : ApproveEffectRequest();
 	if (!Programmer)
 	{
-		return FGuid();
+		return Ids;
 	}
 	TArray<int32> FixtureIds;
 	for (const ALightingFixtureActor* Fixture : GetSelectedFixtures())
@@ -479,20 +571,28 @@ FGuid AModularPlayerController::RequestStartEffect(const FStageEffect& Effect)
 	{
 		ReportRejection(FStageEconomyResultInfo::Fail(EStageEconomyResult::InvalidRequest,
 			LOCTEXT("EffectNeedsFixtures", "Select the fixtures the effect should run on first.")));
-		return FGuid();
+		return Ids;
 	}
 	FStageProgrammerEffects Before = Programmer->GetEffectState();
-	const FGuid Id = Programmer->AddEffect(Effect, FixtureIds);
-	if (!Id.IsValid())
+	for (const FStageEffect& Effect : Effects)
 	{
-		ReportRejection(FStageEconomyResultInfo::Fail(EStageEconomyResult::InvalidRequest, FText::Format(
-			LOCTEXT("EffectsFull", "The programmer runs at most {0} effects. Stop one first."), FText::AsNumber(StageEffectRules::MaxEffects))));
-		return FGuid();
+		const FGuid Id = Programmer->AddEffect(Effect, FixtureIds);
+		if (!Id.IsValid())
+		{
+			// All or nothing: the ones already added go again, so a half-started look never runs.
+			Programmer->SetEffectState(MoveTemp(Before));
+			ReportRejection(FStageEconomyResultInfo::Fail(EStageEconomyResult::InvalidRequest, FText::Format(
+				LOCTEXT("EffectsFull", "The programmer runs at most {0} effects. Stop one first."), FText::AsNumber(StageEffectRules::MaxEffects))));
+			return TArray<FGuid>();
+		}
+		Ids.Add(Id);
 	}
 	EffectsBeforePreview.Reset();
-	const FStageEffectEntry* Started = Programmer->FindEffect(Id);
-	RecordEffectsStep(FText::Format(LOCTEXT("StartEffect", "Start Effect: {0}"), Started ? Started->Effect.Name : FText::GetEmpty()), MoveTemp(Before), *Programmer);
-	return Id;
+	const FStageEffectEntry* First = Programmer->FindEffect(Ids[0]);
+	const FText Description = !StepName.IsEmpty() ? StepName
+		: FText::Format(LOCTEXT("StartEffect", "Start Effect: {0}"), First ? First->Effect.Name : FText::GetEmpty());
+	RecordEffectsStep(Description, MoveTemp(Before), *Programmer);
+	return Ids;
 }
 
 bool AModularPlayerController::RequestPreviewEffect(FGuid EffectId, const FStageEffect& Effect)

@@ -20,6 +20,7 @@
 #include "HAL/IConsoleManager.h"
 #include "ModularSceneBuilder.h"
 #include "Player/ModularPlayerController.h"
+#include "Show/StageEffectTypes.h"
 #include "Subsystems/ShowControlSubsystem.h"
 #include "Subsystems/StageAudioReactiveSubsystem.h"
 
@@ -198,6 +199,16 @@ namespace StageAudioReactiveCommands
 		UE_LOG(LogStageCraft, Display, TEXT("StageCraft.Music.Master: AUDIO %.2f, KILL %s"), Show->GetAudioMaster(), Show->IsAudioKilled() ? TEXT("on") : TEXT("off"));
 	}
 
+	/** The Audio panel's FOLLOW MUSIC on the selected fixtures, through the controller. */
+	void Follow(const TArray<FString>& Args, UWorld* World)
+	{
+		if (AModularPlayerController* Controller = GetController(World))
+		{
+			const TArray<FGuid> Ids = Controller->RequestStartEffects(StageEffectRules::MakeMusicLook(), FText::FromString(TEXT("Follow Music")));
+			UE_LOG(LogStageCraft, Display, TEXT("StageCraft.Music.Follow: %s (%d effects)."), Ids.IsEmpty() ? TEXT("refused") : TEXT("started"), Ids.Num());
+		}
+	}
+
 	/** On|Off: AUDIO KILL, through the controller. */
 	void Kill(const TArray<FString>& Args, UWorld* World)
 	{
@@ -367,6 +378,8 @@ namespace StageAudioReactiveCommands
 		FConsoleCommandWithWorldAndArgsDelegate::CreateStatic(&Master));
 	FAutoConsoleCommandWithWorldAndArgs KillCommand(TEXT("StageCraft.Music.Kill"), TEXT("[On|Off]: logs or sets AUDIO KILL (effects that follow the music run as without it)."),
 		FConsoleCommandWithWorldAndArgsDelegate::CreateStatic(&Kill));
+	FAutoConsoleCommandWithWorldAndArgs FollowCommand(TEXT("StageCraft.Music.Follow"), TEXT("FOLLOW MUSIC on the selected fixtures (bass intensity, mids colour, highs strobe; one undo step)."),
+		FConsoleCommandWithWorldAndArgsDelegate::CreateStatic(&Follow));
 	FAutoConsoleCommandWithWorldAndArgs DevicesCommand(TEXT("StageCraft.Music.Devices"), TEXT("Lists the recording devices the Input source can use."),
 		FConsoleCommandWithWorldAndArgsDelegate::CreateStatic(&Devices));
 }

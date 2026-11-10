@@ -310,7 +310,7 @@ bool UStageSketchSubsystem::CanReadOnline(FText& OutReason) const
 	return VisionBackend ? VisionBackend->IsAvailable(OutReason) : GetDefault<UStageClaudeSketchVisionBackend>()->IsAvailable(OutReason);
 }
 
-bool UStageSketchSubsystem::ImportImage(const FString& FilePath, EStageSketchReader Reader, FText& OutError)
+bool UStageSketchSubsystem::ImportImage(const FString& FilePath, EStageSketchReader Reader, FText& OutError, EStageSketchPhotoCheck Check)
 {
 	if (IsImportPending())
 	{
@@ -345,6 +345,8 @@ bool UStageSketchSubsystem::ImportImage(const FString& FilePath, EStageSketchRea
 	Job->Options.WidthCm = Settings.PhotoWidth;
 	Job->Options.DeckHeight = Settings.DeckHeight;
 	Job->bWantVisionImage = bOnline;
+	Job->bTraceIfPhoto = Check == EStageSketchPhotoCheck::TraceAnyway;
+	RefusedPhotoPath.Reset();
 
 	const uint32 Serial = ++ImportSerial;
 	ImportState = EStageSketchImportState::Reading;
@@ -380,6 +382,13 @@ void UStageSketchSubsystem::HandleImageRead(uint32 Serial, TSharedRef<FStageSket
 	if (!Job->bDecoded)
 	{
 		FinishImport(false, FText::Format(LOCTEXT("ImportUnreadable", "{0} could not be read: {1}"), FileName, Job->Error));
+		return;
+	}
+	UE_LOG(LogStageCraft, Log, TEXT("Sketch: photo check of %s: weak texture %.3f (photo at %.2f), colourfulness %.1f -> %s."), *FileName.ToString(),
+		Job->Metrics.WeakTextureShare, StageSketchImageImport::PhotoWeakTextureShare, Job->Metrics.Colourfulness, Job->bLooksLikePhoto ? TEXT("photo") : TEXT("drawing"));
+	if (Job->bLooksLikePhoto && !Job->bTraceIfPhoto && !bImportOnline)
+	{
+		RefusePhoto(*Job);
 		return;
 	}
 	ShowReference(*Job);
@@ -433,6 +442,13 @@ void UStageSketchSubsystem::HandleOnlineReading(const FStageSketchVisionResult& 
 
 void UStageSketchSubsystem::ApplyLocalReading(const FStageSketchImportJob& Job, const FText& OnlineFailure)
 {
+	// Claude could not read a photograph: falling back to the local tracer would add its texture as random strokes.
+	if (Job.bLooksLikePhoto && !Job.bTraceIfPhoto)
+	{
+		ClearReference();
+		RefusePhoto(Job);
+		return;
+	}
 	const FText FileName = FText::FromString(FPaths::GetCleanFilename(Job.FilePath));
 	const FStageSketchTraceResult& Trace = Job.Trace;
 	const TArray<FStageSketchStroke> Added = AddImportedStrokes(Trace.Strokes);
@@ -513,6 +529,15 @@ void UStageSketchSubsystem::FinishImport(bool bSucceeded, const FText& Message)
 	ImportMessage = Message;
 	UE_LOG(LogStageCraft, Log, TEXT("Sketch: import %s: %s"), bSucceeded ? TEXT("finished") : TEXT("failed"), *Message.ToString());
 	OnImportChanged.Broadcast();
+}
+
+void UStageSketchSubsystem::RefusePhoto(const FStageSketchImportJob& Job)
+{
+	RefusedPhotoPath = Job.FilePath;
+	FinishImport(false, FText::Format(LOCTEXT("ImportLooksLikePhoto",
+		"{0} looks like a photo, not a plan: tracing it would add random strokes. Read it with CLAUDE (READ) or the Vision Inspector, "
+		"use its colours on the selected fixtures (USE COLOURS), or TRACE ANYWAY if it really is a drawing."),
+		FText::FromString(FPaths::GetCleanFilename(Job.FilePath))));
 }
 
 void UStageSketchSubsystem::CancelImport()

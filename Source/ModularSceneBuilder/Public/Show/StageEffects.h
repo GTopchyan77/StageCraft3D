@@ -83,8 +83,15 @@ namespace StageEffects
 		static FAudioInput FromFeatures(const FStageAudioFeatures& Features, double NowSeconds);
 	};
 
-	/** The band Modulate reads: the analyser's, or 1 without a signal (a show built on audio stays lit when the music stops). */
-	MODULARSCENEBUILDER_API float GetModulationBand(const FStageEffectAudio& Audio, const FAudioInput& Input);
+	/**
+	 * The band Modulate reads when there is no music (no signal, AUDIO KILL, master 0): 1 for most effects, so a show built on audio
+	 * stays lit when the music stops; 0 for one that drives the Shutter, so a music strobe rests open instead of strobing at its
+	 * fastest in silence (STATE.md #86, amends Docs/ADR/0029 §4).
+	 */
+	MODULARSCENEBUILDER_API float GetSilentBand(const FStageEffect& Effect);
+
+	/** The band Modulate reads: the analyser's, or SilentBand without a signal (see GetSilentBand). */
+	MODULARSCENEBUILDER_API float GetModulationBand(const FStageEffectAudio& Audio, const FAudioInput& Input, float SilentBand = 1.f);
 
 	/** Band smoothed from Previous towards Target over DeltaSeconds: rises at once, falls with the response's time constant. */
 	MODULARSCENEBUILDER_API float SmoothBand(float Previous, float Target, float DeltaSeconds, EStageEffectAudioResponse Response);
@@ -113,8 +120,8 @@ namespace StageEffects
 	/** Shortest signed distance from Cycles to Target on the cycle, -0.5 .. 0.5. */
 	MODULARSCENEBUILDER_API double GetCycleError(double Cycles, double Target);
 
-	/** The AUDIO master's share of Band for Modulate: 1 (as without music) at Master 0, Band itself at 1. */
-	MODULARSCENEBUILDER_API float ApplyAudioMaster(float Band, float Master);
+	/** The AUDIO master's share of Band for Modulate: SilentBand (as without music) at Master 0, Band itself at 1. */
+	MODULARSCENEBUILDER_API float ApplyAudioMaster(float Band, float Master, float SilentBand = 1.f);
 
 	// --- Flash safety (Docs/ADR/0029-audio-analysis-and-audio-reactive-effects.md §7) ---
 

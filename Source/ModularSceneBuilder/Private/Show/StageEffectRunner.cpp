@@ -111,6 +111,11 @@ bool FStageEffectRunner::SetEffects(TConstArrayView<FSourcedEntry> Entries, FFin
 	{
 		const FRunning* Existing = Running.FindByPredicate([&Source](const FRunning& Old) { return Old.Source.Entry.Id == Source.Entry.Id; });
 		FRunning Item = Existing ? *Existing : FRunning();
+		if (!Existing)
+		{
+			// Before the first analyser frame the band reads as silence: a music strobe starts open, not at its fastest.
+			Item.SmoothedBand = StageEffects::GetSilentBand(Source.Entry.Effect);
+		}
 		const bool bNew = !Existing || Existing->bStopping;
 		const bool bChanged = Existing && !Existing->Source.Entry.Effect.Equals(Source.Entry.Effect);
 		const float Weight = Existing ? Existing->GetWeight() : 0.f;
@@ -221,7 +226,7 @@ void FStageEffectRunner::UpdateModulated(FRunning& Item, float Master)
 	{
 		Item.Modulated.Emplace(Effect);
 	}
-	StageEffects::ApplyModulation(Item.Modulated.GetValue(), StageEffects::ApplyAudioMaster(Item.SmoothedBand, Master));
+	StageEffects::ApplyModulation(Item.Modulated.GetValue(), StageEffects::ApplyAudioMaster(Item.SmoothedBand, Master, StageEffects::GetSilentBand(Effect)));
 }
 
 void FStageEffectRunner::AdvanceClock(FRunning& Item, double Rate, float DeltaSeconds, const StageEffects::FAudioInput& Audio, float Master)
@@ -252,8 +257,11 @@ void FStageEffectRunner::AdvanceClock(FRunning& Item, double Rate, float DeltaSe
 	}
 
 	case EStageEffectAudioMode::Modulate:
-		Item.SmoothedBand = StageEffects::SmoothBand(Item.SmoothedBand, StageEffects::GetModulationBand(Effect.Audio, Audio), DeltaSeconds, Effect.Audio.Response);
-		Item.Cycles += StageEffects::GetModulatedRate(Effect, static_cast<float>(Rate), StageEffects::ApplyAudioMaster(Item.SmoothedBand, Master)) * DeltaSeconds;
+	{
+		const float Silent = StageEffects::GetSilentBand(Effect);
+		Item.SmoothedBand = StageEffects::SmoothBand(Item.SmoothedBand, StageEffects::GetModulationBand(Effect.Audio, Audio, Silent), DeltaSeconds, Effect.Audio.Response);
+		Item.Cycles += StageEffects::GetModulatedRate(Effect, static_cast<float>(Rate), StageEffects::ApplyAudioMaster(Item.SmoothedBand, Master, Silent)) * DeltaSeconds;
+	}
 		break;
 
 	case EStageEffectAudioMode::Trigger:

@@ -277,6 +277,47 @@ namespace StageEffectRules
 		return Effects;
 	}
 
+	TArray<FStageEffect> MakeMusicLook()
+	{
+		TArray<FStageEffect> Effects;
+		// Bass: the same pulse as the quick effect, so the look and the button behave alike.
+		const TArray<FStageEffect> Quick = MakeAudioQuickEffects();
+		Effects.Add(Quick[0]);
+		check(Effects[0].Audio.Band == EStageAudioBand::Bass);
+
+		// Mids: a slow walk round the colour wheel, spread over the fixtures, that speeds up to twice its rate when the mids are loud.
+		FStageEffect& Colour = Effects.AddDefaulted_GetRef();
+		Colour.Name = LOCTEXT("MidColour", "Mid Colour");
+		Colour.Target = EStageEffectTarget::Color;
+		Colour.Waveform = EStageEffectWaveform::RampUp;
+		Colour.ColorMode = EStageEffectColorMode::Rainbow;
+		Colour.RateHz = 0.08f;
+		Colour.Spread = 360.f;
+		Colour.Audio.Mode = EStageEffectAudioMode::Modulate;
+		Colour.Audio.Band = EStageAudioBand::Mid;
+		Colour.Audio.Modulates = EStageEffectAudioTarget::Rate;
+		Colour.Audio.Amount = 1.f;
+		Colour.Audio.Response = EStageEffectAudioResponse::Slow;
+
+		// Highs: the shutter strobes faster with the cymbals and hats. A still wave at its top (rate 0), so the level is the band alone;
+		// open in silence (StageEffects::GetSilentBand) and never faster than the flash limit.
+		FStageEffect& Strobe = Effects.AddDefaulted_GetRef();
+		Strobe.Name = LOCTEXT("HighStrobe", "High Strobe");
+		Strobe.Target = EStageEffectTarget::Beam;
+		Strobe.Attribute = StageCraftTags::Attribute_Shutter;
+		Strobe.Waveform = EStageEffectWaveform::Cosine;
+		Strobe.RateHz = 0.f;
+		Strobe.Spread = 0.f;
+		Strobe.Low = 0.f;
+		Strobe.High = 0.6f;
+		Strobe.Audio.Mode = EStageEffectAudioMode::Modulate;
+		Strobe.Audio.Band = EStageAudioBand::High;
+		Strobe.Audio.Modulates = EStageEffectAudioTarget::Level;
+		Strobe.Audio.Amount = 1.f;
+		Strobe.Audio.Response = EStageEffectAudioResponse::Fast;
+		return Effects;
+	}
+
 	float GetBeatsPerCycle(EStageEffectBeatDivision Division)
 	{
 		switch (Division)
