@@ -37,10 +37,13 @@ namespace StageViewportToolbar
 	constexpr float CollapsedBarHeight = 14.f;
 	/** Space on each side of a section divider. */
 	constexpr float SectionGap = 8.f;
-	/** Space between a section's caption (SNAP, ANGLE) and its buttons. */
-	constexpr float CaptionGap = 4.f;
 	constexpr float DividerHeight = 14.f;
 	constexpr float ChoiceGap = 2.f;
+	/** Widths of the menu buttons: room for their longest label ("Detail Lighting", "Snap 100 cm · 45°"). */
+	constexpr float ViewMenuWidth = 120.f;
+	constexpr float SnapMenuWidth = 136.f;
+	constexpr float TransformMenuWidth = 84.f;
+	constexpr float ToolsMenuWidth = 72.f;
 
 	/** Order of the projection dropdown; its index is the enum value. */
 	const EStageViewProjection Projections[] = { EStageViewProjection::Perspective, EStageViewProjection::Top, EStageViewProjection::Front,
@@ -87,17 +90,40 @@ namespace StageViewportToolbar
 		}
 	}
 
-	/** Index of Value in a preset list, or INDEX_NONE. */
-	int32 FindPreset(TConstArrayView<float> Presets, float Value)
-	{
-		return Presets.IndexOfByPredicate([Value](float Preset) { return FMath::IsNearlyEqual(Preset, Value, 1.e-3f); });
-	}
-
 	FText DescribePreset(float Value, const FText& Units)
 	{
 		return Value > 0.f
 			? FText::Format(LOCTEXT("PresetValue", "{0}{1}"), FText::AsNumber(FMath::RoundToInt(Value)), Units)
-			: LOCTEXT("PresetOff", "OFF");
+			: LOCTEXT("PresetOff", "Off");
+	}
+
+	FText GetGizmoModeName(EGizmoMode Mode)
+	{
+		switch (Mode)
+		{
+		case EGizmoMode::Rotate:	return LOCTEXT("Rotate", "Rotate");
+		case EGizmoMode::Scale:		return LOCTEXT("Scale", "Scale");
+		case EGizmoMode::Translate:
+		default:					return LOCTEXT("Move", "Move");
+		}
+	}
+
+	FText GetGizmoModeTip(EGizmoMode Mode)
+	{
+		switch (Mode)
+		{
+		case EGizmoMode::Rotate:	return LOCTEXT("RotateTip", "Rotate the selection (in angle snap steps).");
+		case EGizmoMode::Scale:		return LOCTEXT("ScaleTip", "Scale the selection.");
+		case EGizmoMode::Translate:
+		default:					return LOCTEXT("MoveTip", "Move the selection (in grid snap steps).");
+		}
+	}
+
+	/** "Snap 10 cm · 15°", "Snap Off · 15°". */
+	FText DescribeSnap(float GridCm, float AngleDegrees)
+	{
+		return FText::Format(LOCTEXT("SnapLabel", "Snap {0} · {1}"),
+			DescribePreset(GridCm, LOCTEXT("Cm", " cm")), DescribePreset(AngleDegrees, LOCTEXT("Degrees", "°")));
 	}
 }
 
@@ -131,11 +157,6 @@ UTextBlock* UStageViewportToolbar::MakeText(const FText& Text, int32 Size, FName
 	Block->SetFont(StageCraftWidgetStyle::MakeFont(Size, Typeface));
 	Block->SetColorAndOpacity(FSlateColor(Color));
 	return Block;
-}
-
-UWidget* UStageViewportToolbar::MakeLabel(const FText& Text) const
-{
-	return MakeText(Text, 7, TEXT("Bold"), GetTheme().TextSecondary);
 }
 
 UWidget* UStageViewportToolbar::MakeSeparator() const
@@ -248,60 +269,45 @@ void UStageViewportToolbar::BuildTree()
 	ProjectionBox->SetContent(ProjectionCombo);
 	Add(ProjectionBox, 0.f);
 
-	// 2. View menu: view modes and the grid toggle.
-	ViewMenuButton = WidgetTree->ConstructWidget<UStageMenuButton>(UStageMenuButton::StaticClass(), TEXT("ViewMenuButton"));
-	ViewMenuButton->ApplyTheme(Palette);
-	ViewMenuButton->SetLabel(GetViewModeButtonLabel(EStageViewMode::Lit));
-	ViewMenuButton->SetToolTipText(LOCTEXT("ViewMenuTip", "View mode and the reference grid."));
-	ViewMenuButton->OnGetMenuContent.BindUObject(this, &ThisClass::BuildViewMenu);
-	USizeBox* ViewMenuBox = WidgetTree->ConstructWidget<USizeBox>(USizeBox::StaticClass(), TEXT("ViewMenuBox"));
-	ViewMenuBox->SetWidthOverride(120.f);
-	ViewMenuBox->SetHeightOverride(BarHeight);
-	ViewMenuBox->SetContent(ViewMenuButton);
-	AddDivider();
-	Add(ViewMenuBox, SectionGap);
-
-	// Snaps. Labels come from the presets, so the buttons and StageViewMath can never disagree.
-	TArray<FText> GridOptions;
-	for (float Preset : StageViewMath::GetGridSnapPresets())
+	// Each menu button sits in a fixed-width box, so the bar does not jump when a label changes (Lit -> Detail Lighting).
+	const auto AddMenu = [this, &Add, &AddDivider](UStageMenuButton* Button, FName BoxName, float Width)
 	{
-		GridOptions.Add(DescribePreset(Preset, LOCTEXT("Cm", " cm")));
-	}
-	const FText GridSnapTip = LOCTEXT("GridSnapTip", "Grid snap for placing and moving items; positions land on the grid, which the reference grid shows.\nClick the active step to turn snapping off; click OFF again to restore the last step.");
-	TArray<FText> GridTips;
-	GridTips.Init(GridSnapTip, GridOptions.Num());
+		USizeBox* Box = WidgetTree->ConstructWidget<USizeBox>(USizeBox::StaticClass(), BoxName);
+		Box->SetWidthOverride(Width);
+		Box->SetHeightOverride(BarHeight);
+		Box->SetContent(Button);
+		AddDivider();
+		Add(Box, SectionGap);
+	};
 
-	TArray<FText> AngleOptions;
-	for (float Preset : StageViewMath::GetAngleSnapPresets())
-	{
-		AngleOptions.Add(DescribePreset(Preset, LOCTEXT("Degrees", "°")));
-	}
-	const FText AngleSnapTip = LOCTEXT("AngleSnapTip", "Rotation snap for the rotate tool.\nClick the active step to turn snapping off; click OFF again to restore the last step.");
-	TArray<FText> AngleTips;
-	AngleTips.Init(AngleSnapTip, AngleOptions.Num());
+	// 2. View: view modes and the grid toggle.
+	ViewMenuButton = MakeMenuButton(TEXT("ViewMenuButton"), LOCTEXT("ViewMenuTip", "View mode and the reference grid."), &ThisClass::BuildViewMenu);
+	AddMenu(ViewMenuButton, TEXT("ViewMenuBox"), ViewMenuWidth);
 
-	// 3. Grid snap.
-	AddDivider();
-	Add(MakeLabel(LOCTEXT("GridSnapLabel", "SNAP")), SectionGap);
-	Add(MakeSegment(GridOptions, GridTips, GridSnapButtons, &ThisClass::HandleGridSnapPicked), CaptionGap);
+	// 3. Snap: grid and angle steps and Snap to Items, in one menu whose label shows both steps.
+	SnapMenuButton = MakeMenuButton(TEXT("SnapMenuButton"),
+		LOCTEXT("SnapMenuTip", "Snapping: the grid step for placing and moving, the angle step for rotating, and snapping to other items."), &ThisClass::BuildSnapMenu);
+	AddMenu(SnapMenuButton, TEXT("SnapMenuBox"), SnapMenuWidth);
 
-	// 4. Angle snap.
-	AddDivider();
-	Add(MakeLabel(LOCTEXT("AngleSnapLabel", "ANGLE")), SectionGap);
-	Add(MakeSegment(AngleOptions, AngleTips, AngleSnapButtons, &ThisClass::HandleAngleSnapPicked), CaptionGap);
+	// 4. Transform: the gizmo tool.
+	TransformMenuButton = MakeMenuButton(TEXT("TransformMenuButton"),
+		LOCTEXT("TransformMenuTip", "The transform tool for the selection: Move, Rotate or Scale (Space cycles them)."), &ThisClass::BuildTransformMenu);
+	AddMenu(TransformMenuButton, TEXT("TransformMenuBox"), TransformMenuWidth);
 
-	// 5. Gizmo.
-	AddDivider();
-	Add(MakeSegment({ LOCTEXT("Move", "MOVE"), LOCTEXT("Rotate", "ROTATE"), LOCTEXT("Scale", "SCALE") },
-		{ LOCTEXT("MoveTip", "Move the selection (Space cycles the tools)."), LOCTEXT("RotateTip", "Rotate the selection."), LOCTEXT("ScaleTip", "Scale the selection.") },
-		GizmoModeButtons, &ThisClass::HandleGizmoModePicked), SectionGap);
+	// 5. Tools: open (or bring forward) Sketch to Stage and the AI Assistant.
+	ToolsMenuButton = MakeMenuButton(TEXT("ToolsMenuButton"), LOCTEXT("ToolsMenuTip", "Sketch to Stage and the AI Assistant."), &ThisClass::BuildToolsMenu);
+	ToolsMenuButton->SetLabel(LOCTEXT("ToolsLabel", "Tools"));
+	AddMenu(ToolsMenuButton, TEXT("ToolsMenuBox"), ToolsMenuWidth);
+}
 
-	// 6. Tool windows: open (or bring forward) Sketch to Stage and the AI Assistant.
-	AddDivider();
-	Add(MakeSegment({ LOCTEXT("Sketch", "SKETCH"), LOCTEXT("Assist", "ASSIST") },
-		{ LOCTEXT("SketchTip", "Sketch to Stage: draw stage shapes, truss lines and fixtures from above and generate them in 3D."),
-		  LOCTEXT("AssistTip", "AI Assistant: ask about the stage, or ask for fixtures, cues, weather and reports in plain language.") },
-		ToolWindowButtons, &ThisClass::HandleToolWindowPicked), SectionGap);
+UStageMenuButton* UStageViewportToolbar::MakeMenuButton(FName Name, const FText& Tip, TSharedRef<SWidget> (UStageViewportToolbar::*Builder)())
+{
+	UStageMenuButton* Button = WidgetTree->ConstructWidget<UStageMenuButton>(UStageMenuButton::StaticClass(), Name);
+	// Before the button builds its Slate widget: its style is copied then.
+	Button->ApplyTheme(GetTheme());
+	Button->SetToolTipText(Tip);
+	Button->OnGetMenuContent.BindUObject(this, Builder);
+	return Button;
 }
 
 void UStageViewportToolbar::HandleCollapsePicked(int32 Index)
@@ -310,16 +316,6 @@ void UStageViewportToolbar::HandleCollapsePicked(int32 Index)
 	if (UStageViewportComponent* Viewport = BoundViewport.Get())
 	{
 		Viewport->SetToolbarCollapsed(!Viewport->IsToolbarCollapsed());
-	}
-}
-
-void UStageViewportToolbar::HandleToolWindowPicked(int32 Index)
-{
-	// Opening a panel is workspace layout, not stage state.
-	const UGameInstance* GameInstance = GetGameInstance();
-	if (UStageWorkspaceSubsystem* Workspace = GameInstance ? GameInstance->GetSubsystem<UStageWorkspaceSubsystem>() : nullptr)
-	{
-		Workspace->OpenPanel(Index == 0 ? StageCraftTags::Panel_Sketch : StageCraftTags::Panel_Assistant);
 	}
 }
 
@@ -412,10 +408,16 @@ void UStageViewportToolbar::Refresh()
 		ViewMenuButton->SetLabel(GetViewModeButtonLabel(Viewport ? Viewport->GetViewMode() : EStageViewMode::Lit));
 		ViewMenuButton->SetIsEnabled(Viewport != nullptr);
 	}
-	StyleGroup(GizmoModeButtons, Gizmo ? int32(Gizmo->GetMode()) : INDEX_NONE, Gizmo != nullptr);
-	StyleGroup(GridSnapButtons, Snapping ? FindPreset(StageViewMath::GetGridSnapPresets(), Snapping->GetGridSnap()) : INDEX_NONE, Snapping != nullptr);
-	StyleGroup(AngleSnapButtons, Snapping ? FindPreset(StageViewMath::GetAngleSnapPresets(), Snapping->GetAngleSnap()) : INDEX_NONE, Snapping != nullptr);
-	StyleGroup(ToolWindowButtons, INDEX_NONE, true);
+	if (SnapMenuButton)
+	{
+		SnapMenuButton->SetLabel(Snapping ? DescribeSnap(Snapping->GetGridSnap(), Snapping->GetAngleSnap()) : LOCTEXT("SnapUnavailable", "Snap"));
+		SnapMenuButton->SetIsEnabled(Snapping != nullptr);
+	}
+	if (TransformMenuButton)
+	{
+		TransformMenuButton->SetLabel(GetGizmoModeName(Gizmo ? Gizmo->GetMode() : EGizmoMode::Translate));
+		TransformMenuButton->SetIsEnabled(Gizmo != nullptr);
+	}
 
 	// Collapsed: only the toggle remains, on a thinner strip; the sections keep their state and come back as they were.
 	const bool bCollapsed = Viewport && Viewport->IsToolbarCollapsed();
@@ -528,33 +530,125 @@ TSharedRef<SWidget> UStageViewportToolbar::BuildViewMenu()
 	return Menu.MakeWidget();
 }
 
-void UStageViewportToolbar::HandleGizmoModePicked(int32 Index)
+TSharedRef<SWidget> UStageViewportToolbar::BuildSnapMenu()
 {
-	if (AModularTransformGizmo* Gizmo = BoundGizmo.Get(); Gizmo && Index >= 0 && Index < UE_ARRAY_COUNT(StageViewportToolbar::GizmoModes))
+	using namespace StageViewportToolbar;
+
+	// As BuildViewMenu: built from the state now, the lambdas hold the component weakly. The entries are radio buttons that
+	// set a step directly (SetGridSnap), not the old segment's toggle semantics: in a menu, picking the checked entry keeps it.
+	// The component broadcasts OnSnapSettingsChanged, which redraws the button label.
+	const TWeakObjectPtr<UStageSnappingComponent> WeakSnapping = BoundSnapping;
+	const UStageSnappingComponent* Snapping = WeakSnapping.Get();
+
+	FMenuBuilder Menu(/*bInShouldCloseWindowAfterMenuSelection*/ true, /*InCommandList*/ nullptr);
+	const auto AddPresets = [&Menu, &WeakSnapping, Snapping](TConstArrayView<float> Presets, float Current, const FText& Units, const FText& Tip, bool bGrid)
 	{
-		Gizmo->SetMode(StageViewportToolbar::GizmoModes[Index]);
-	}
-	Refresh();
+		for (const float Preset : Presets)
+		{
+			const bool bChecked = Snapping && FMath::IsNearlyEqual(Preset, Current, 1.e-3f);
+			Menu.AddMenuEntry(DescribePreset(Preset, Units), Tip, FSlateIcon(),
+				FUIAction(
+					FExecuteAction::CreateLambda([WeakSnapping, Preset, bGrid]()
+					{
+						if (UStageSnappingComponent* Target = WeakSnapping.Get())
+						{
+							bGrid ? Target->SetGridSnap(Preset) : Target->SetAngleSnap(Preset);
+						}
+					}),
+					FCanExecuteAction::CreateLambda([bCanPick = Snapping != nullptr]() { return bCanPick; }),
+					FIsActionChecked::CreateLambda([bChecked]() { return bChecked; })),
+				NAME_None, EUserInterfaceActionType::RadioButton);
+		}
+	};
+
+	Menu.BeginSection(TEXT("GridSnap"), LOCTEXT("GridSnapSection", "Grid Snap"));
+	AddPresets(StageViewMath::GetGridSnapPresets(), Snapping ? Snapping->GetGridSnap() : 0.f, LOCTEXT("Cm", " cm"),
+		LOCTEXT("GridSnapTip", "Grid step for placing and moving items; positions land on the grid, which the reference grid shows."), true);
+	Menu.EndSection();
+
+	Menu.BeginSection(TEXT("AngleSnap"), LOCTEXT("AngleSnapSection", "Angle Snap"));
+	AddPresets(StageViewMath::GetAngleSnapPresets(), Snapping ? Snapping->GetAngleSnap() : 0.f, LOCTEXT("Degrees", "°"),
+		LOCTEXT("AngleSnapTip", "Rotation step for the rotate tool."), false);
+	Menu.EndSection();
+
+	const bool bSnapToItems = Snapping && Snapping->IsSnapToItemsEnabled();
+	Menu.BeginSection(TEXT("Items"), LOCTEXT("ItemsSection", "Items"));
+	Menu.AddMenuEntry(LOCTEXT("SnapToItems", "Snap to Items"),
+		LOCTEXT("SnapToItemsTip", "Placed and moved items snap to the edges and faces of nearby items."), FSlateIcon(),
+		FUIAction(
+			FExecuteAction::CreateLambda([WeakSnapping]()
+			{
+				if (UStageSnappingComponent* Target = WeakSnapping.Get())
+				{
+					Target->SetSnapToItemsEnabled(!Target->IsSnapToItemsEnabled());
+				}
+			}),
+			FCanExecuteAction::CreateLambda([bCanToggle = Snapping != nullptr]() { return bCanToggle; }),
+			FIsActionChecked::CreateLambda([bSnapToItems]() { return bSnapToItems; })),
+		NAME_None, EUserInterfaceActionType::ToggleButton);
+	Menu.EndSection();
+
+	return Menu.MakeWidget();
 }
 
-void UStageViewportToolbar::HandleGridSnapPicked(int32 Index)
+TSharedRef<SWidget> UStageViewportToolbar::BuildTransformMenu()
 {
-	const TConstArrayView<float> Presets = StageViewMath::GetGridSnapPresets();
-	if (UStageSnappingComponent* Snapping = BoundSnapping.Get(); Snapping && Presets.IsValidIndex(Index))
+	using namespace StageViewportToolbar;
+
+	// The gizmo broadcasts OnModeChanged, which redraws the button label.
+	const TWeakObjectPtr<AModularTransformGizmo> WeakGizmo = BoundGizmo;
+	const AModularTransformGizmo* Gizmo = WeakGizmo.Get();
+	const EGizmoMode CurrentMode = Gizmo ? Gizmo->GetMode() : EGizmoMode::Translate;
+
+	FMenuBuilder Menu(/*bInShouldCloseWindowAfterMenuSelection*/ true, /*InCommandList*/ nullptr);
+	Menu.BeginSection(TEXT("Transform"), LOCTEXT("TransformSection", "Transform Tool (Space cycles)"));
+	for (const EGizmoMode Mode : GizmoModes)
 	{
-		Snapping->PickGridSnap(Presets[Index]);
+		const bool bChecked = Gizmo && Mode == CurrentMode;
+		Menu.AddMenuEntry(GetGizmoModeName(Mode), GetGizmoModeTip(Mode), FSlateIcon(),
+			FUIAction(
+				FExecuteAction::CreateLambda([WeakGizmo, Mode]()
+				{
+					if (AModularTransformGizmo* Target = WeakGizmo.Get())
+					{
+						Target->SetMode(Mode);
+					}
+				}),
+				FCanExecuteAction::CreateLambda([bCanPick = Gizmo != nullptr]() { return bCanPick; }),
+				FIsActionChecked::CreateLambda([bChecked]() { return bChecked; })),
+			NAME_None, EUserInterfaceActionType::RadioButton);
 	}
-	Refresh();
+	Menu.EndSection();
+	return Menu.MakeWidget();
 }
 
-void UStageViewportToolbar::HandleAngleSnapPicked(int32 Index)
+TSharedRef<SWidget> UStageViewportToolbar::BuildToolsMenu()
 {
-	const TConstArrayView<float> Presets = StageViewMath::GetAngleSnapPresets();
-	if (UStageSnappingComponent* Snapping = BoundSnapping.Get(); Snapping && Presets.IsValidIndex(Index))
+	// Opening a panel is workspace layout, not stage state. The workspace lives on the game instance; held weakly.
+	const UGameInstance* GameInstance = GetGameInstance();
+	const TWeakObjectPtr<UStageWorkspaceSubsystem> WeakWorkspace = GameInstance ? GameInstance->GetSubsystem<UStageWorkspaceSubsystem>() : nullptr;
+
+	FMenuBuilder Menu(/*bInShouldCloseWindowAfterMenuSelection*/ true, /*InCommandList*/ nullptr);
+	const auto AddPanel = [&Menu, &WeakWorkspace](const FText& Label, const FText& Tip, FGameplayTag Panel)
 	{
-		Snapping->PickAngleSnap(Presets[Index]);
-	}
-	Refresh();
+		Menu.AddMenuEntry(Label, Tip, FSlateIcon(),
+			FUIAction(
+				FExecuteAction::CreateLambda([WeakWorkspace, Panel]()
+				{
+					if (UStageWorkspaceSubsystem* Workspace = WeakWorkspace.Get())
+					{
+						Workspace->OpenPanel(Panel);
+					}
+				}),
+				FCanExecuteAction::CreateLambda([bCanOpen = WeakWorkspace.IsValid()]() { return bCanOpen; })));
+	};
+	Menu.BeginSection(TEXT("Tools"), LOCTEXT("ToolsSection", "Tool Windows"));
+	AddPanel(LOCTEXT("Sketch", "Sketch to Stage"),
+		LOCTEXT("SketchTip", "Draw stage shapes, truss lines and fixtures from above, or import a plan, and generate them in 3D."), StageCraftTags::Panel_Sketch);
+	AddPanel(LOCTEXT("Assist", "AI Assistant"),
+		LOCTEXT("AssistTip", "Ask about the stage, or ask for fixtures, cues, weather and reports in plain language."), StageCraftTags::Panel_Assistant);
+	Menu.EndSection();
+	return Menu.MakeWidget();
 }
 
 // --- Pushed changes ---

@@ -71,6 +71,14 @@ namespace StageXml
 						{
 							return Fail(TEXT("unexpected '>'"));
 						}
+						if (!Open.IsEmpty() && Limits.bKeepText)
+						{
+							if (!ReadText(Document.Nodes[Open.Last()]))
+							{
+								return false;
+							}
+							continue;
+						}
 						if (!Open.IsEmpty() || IsSpace(Char))
 						{
 							Advance(1); // Text content is not used.
@@ -98,7 +106,12 @@ namespace StageXml
 						{
 							return Fail(TEXT("CDATA outside the root element"));
 						}
+						const int32 ContentStart = Position + 9; // after "<![CDATA["
 						if (!SkipPast(TEXT("]]>"), TEXT("unterminated CDATA section")))
+						{
+							return false;
+						}
+						if (Limits.bKeepText && !AppendText(Document.Nodes[Open.Last()], Text.Mid(ContentStart, Position - 3 - ContentStart)))
 						{
 							return false;
 						}
@@ -246,6 +259,60 @@ namespace StageXml
 				}
 			}
 
+			/** Character data at the cursor, up to the next '<', into Node's text (bKeepText only). */
+			bool ReadText(FNode& Node)
+			{
+				FString Run;
+				while (Position < Text.Len() && Text[Position] != TEXT('<'))
+				{
+					if (Text[Position] == TEXT('&'))
+					{
+						if (!ReadReference(Run))
+						{
+							return false;
+						}
+					}
+					else
+					{
+						// White space is only kept while it is short: indentation must never refuse a file (AppendText).
+						if (!IsSpace(Text[Position]) || Node.Text.Len() + Run.Len() < Limits.MaxValueLength)
+						{
+							Run.AppendChar(Text[Position]);
+						}
+						Advance(1);
+					}
+					if (!AppendText(Node, Run))
+					{
+						return false;
+					}
+					Run.Reset();
+				}
+				return true;
+			}
+
+			/**
+			 * Text of an element with child elements is dropped: MVR and GDTF never mix text and elements. Text that is only white
+			 * space never breaks the cap; real text over it is refused.
+			 */
+			bool AppendText(FNode& Node, FStringView Run)
+			{
+				if (!Node.Children.IsEmpty() || Run.IsEmpty())
+				{
+					return true;
+				}
+				Node.Text += Run;
+				if (Node.Text.Len() > Limits.MaxValueLength)
+				{
+					if (Node.Text.TrimStartAndEnd().IsEmpty())
+					{
+						Node.Text.LeftInline(Limits.MaxValueLength);
+						return true;
+					}
+					return Fail(FString::Printf(TEXT("the text of <%s> is longer than %d characters"), *Node.Name, Limits.MaxValueLength));
+				}
+				return true;
+			}
+
 			/** Decodes "&name;" or "&#N;" / "&#xH;" at the cursor into Out. */
 			bool ReadReference(FString& Out)
 			{
@@ -324,7 +391,9 @@ namespace StageXml
 				Node.Parent = Open.IsEmpty() ? INDEX_NONE : Open.Last();
 				if (Node.Parent != INDEX_NONE)
 				{
-					Document.Nodes[Node.Parent].Children.Add(Index);
+					FNode& Parent = Document.Nodes[Node.Parent];
+					Parent.Children.Add(Index);
+					Parent.Text.Reset(); // White space before its first child element was kept as text; it has elements, so no text.
 				}
 
 				while (true)

@@ -54,6 +54,8 @@ private:
 	class UWidget* BuildMessage(const struct FStageAIMessage& Message, int32 MessageIndex);
 	class UStageChoiceButton* MakeButton(const FText& Label, const FText& Tip, int32 Index, void (UStageAIAssistantWidget::*Handler)(int32), bool bPrimary);
 	class UTextBlock* MakeText(const FText& Text, int32 Size, FName Typeface, const FLinearColor& Color) const;
+	/** A message body the user can select with the mouse and copy with Ctrl+C or the context menu; read-only, wraps. */
+	class UMultiLineEditableText* MakeSelectableText(const FText& Text, int32 Size, const FLinearColor& Color) const;
 	const class UStageCraftUITheme& GetTheme() const;
 	void StyleButton(class UStageChoiceButton& Button, bool bPrimary, bool bEnabled) const;
 

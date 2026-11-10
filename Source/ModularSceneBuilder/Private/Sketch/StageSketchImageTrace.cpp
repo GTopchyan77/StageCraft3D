@@ -488,6 +488,208 @@ namespace StageSketchImageTrace
 		return FVector2D((double(Height) * 0.5 - Pixel.Y) * Scale, (Pixel.X - double(Width) * 0.5) * Scale);
 	}
 
+	namespace
+	{
+		/** A drawing within this of the image axes is squared to them, not to its own slight tilt. */
+		constexpr double ImageAxesDegrees = 3.0;
+		/** Below this agreement of the edge angles (0..1) a drawing has no main direction; the image axes are used. */
+		constexpr double MinDirectionAgreement = 0.5;
+
+		enum class ESquareAxis : uint8 { None, U, V };
+
+		/**
+		 * The main direction of these edges in radians, in [-45, 45) degrees: angles are taken modulo 90 degrees (as 4 x angle on
+		 * the unit circle) and weighted by length. 0 when the edges disagree or lie within ImageAxesDegrees of the image axes.
+		 */
+		double FindMainDirection(TConstArrayView<const FStageSketchStroke*> Strokes)
+		{
+			// First all edges; then twice only the edges near the estimate, so a riser drawn at 30 degrees cannot tilt the stage's axes.
+			TOptional<double> Estimate;
+			for (int32 Pass = 0; Pass < 3; ++Pass)
+			{
+				FVector2D Sum = FVector2D::ZeroVector;
+				double Total = 0.0;
+				for (const FStageSketchStroke* Stroke : Strokes)
+				{
+					const int32 Num = Stroke->Points.Num();
+					const int32 Edges = Stroke->bClosed ? Num : Num - 1;
+					for (int32 Edge = 0; Edge < Edges; ++Edge)
+					{
+						const FVector2D Delta = Stroke->Points[(Edge + 1) % Num] - Stroke->Points[Edge];
+						const double Length = Delta.Size();
+						const double Angle = 4.0 * FMath::Atan2(Delta.Y, Delta.X);
+						// Edges whose 4 x angle is within 4 x 2 x tolerance of the estimate's.
+						const bool bNear = !Estimate.IsSet()
+							|| FMath::Cos(Angle - 4.0 * *Estimate) >= FMath::Cos(FMath::DegreesToRadians(8.0 * SquareToleranceDegrees));
+						if (Length > UE_KINDA_SMALL_NUMBER && bNear)
+						{
+							Sum += Length * FVector2D(FMath::Cos(Angle), FMath::Sin(Angle));
+							Total += Length;
+						}
+					}
+				}
+				if (!Estimate.IsSet() && (Total <= UE_KINDA_SMALL_NUMBER || Sum.Size() < MinDirectionAgreement * Total))
+				{
+					return 0.0; // no edges, or no main direction
+				}
+				if (Total <= UE_KINDA_SMALL_NUMBER)
+				{
+					break;
+				}
+				Estimate = 0.25 * FMath::Atan2(Sum.Y, Sum.X);
+			}
+			const double Direction = Estimate.Get(0.0);
+			return FMath::Abs(FMath::RadiansToDegrees(Direction)) < ImageAxesDegrees ? 0.0 : Direction;
+		}
+
+		/** Which axis of a frame turned by Direction a frame-space delta follows, within SquareToleranceDegrees. */
+		ESquareAxis FindAxis(const FVector2D& FrameDelta)
+		{
+			if (FrameDelta.SizeSquared() <= UE_KINDA_SMALL_NUMBER)
+			{
+				return ESquareAxis::None;
+			}
+			const double Degrees = FMath::RadiansToDegrees(FMath::Atan2(FMath::Abs(FrameDelta.Y), FMath::Abs(FrameDelta.X)));
+			return Degrees <= SquareToleranceDegrees ? ESquareAxis::U : Degrees >= 90.0 - SquareToleranceDegrees ? ESquareAxis::V : ESquareAxis::None;
+		}
+
+		/**
+		 * Squares a polyline to the frame turned by Direction: points between two edges along the same axis are dropped, then each
+		 * axis edge sits at the mean of its ends and every point takes the level of the axis edges it touches. With bRequireAll,
+		 * nothing changes (false) unless every edge follows an axis. Open lines keep their two ends.
+		 */
+		bool SquarePolyline(TArray<FVector2D>& Points, bool bClosed, double Direction, bool bRequireAll)
+		{
+			const FVector2D Turn(FMath::Cos(Direction), FMath::Sin(Direction));
+			const auto ToFrame = [Turn](const FVector2D& P) { return FVector2D(P.X * Turn.X + P.Y * Turn.Y, -P.X * Turn.Y + P.Y * Turn.X); };
+			const auto FromFrame = [Turn](const FVector2D& P) { return FVector2D(P.X * Turn.X - P.Y * Turn.Y, P.X * Turn.Y + P.Y * Turn.X); };
+
+			TArray<FVector2D> Frame;
+			Frame.Reserve(Points.Num());
+			for (const FVector2D& Point : Points)
+			{
+				Frame.Add(ToFrame(Point));
+			}
+			const auto EdgeAxis = [&Frame](int32 Edge) { return FindAxis(Frame[(Edge + 1) % Frame.Num()] - Frame[Edge]); };
+
+			// Drop points on a straight run (both neighbouring edges along the same axis); open ends stay.
+			for (bool bChanged = true; bChanged && Frame.Num() > (bClosed ? 3 : 2);)
+			{
+				bChanged = false;
+				const int32 Num = Frame.Num();
+				for (int32 Index = bClosed ? 0 : 1; Index < (bClosed ? Num : Num - 1); ++Index)
+				{
+					const ESquareAxis In = EdgeAxis((Index - 1 + Num) % Num);
+					if (In != ESquareAxis::None && In == EdgeAxis(Index) && Frame.Num() > (bClosed ? 4 : 2))
+					{
+						Frame.RemoveAt(Index);
+						bChanged = true;
+						break;
+					}
+				}
+			}
+
+			const int32 Num = Frame.Num();
+			const int32 Edges = bClosed ? Num : Num - 1;
+			TArray<ESquareAxis> Axes;
+			Axes.Reserve(Edges);
+			for (int32 Edge = 0; Edge < Edges; ++Edge)
+			{
+				Axes.Add(EdgeAxis(Edge));
+				if (bRequireAll && Axes.Last() == ESquareAxis::None)
+				{
+					return false;
+				}
+			}
+
+			// Each point's new level from the axis edges it touches, computed from the unmoved points.
+			TArray<FVector2D> Squared = Frame;
+			for (int32 Index = 0; Index < Num; ++Index)
+			{
+				double USum = 0.0, VSum = 0.0;
+				int32 UCount = 0, VCount = 0;
+				for (const int32 Edge : { (Index - 1 + Num) % Num, Index })
+				{
+					if (!Axes.IsValidIndex(Edge)) // an open line has no edge before its first point or after its last
+					{
+						continue;
+					}
+					const FVector2D& A = Frame[Edge];
+					const FVector2D& B = Frame[(Edge + 1) % Num];
+					if (Axes[Edge] == ESquareAxis::U)
+					{
+						VSum += 0.5 * (A.Y + B.Y);
+						++VCount;
+					}
+					else if (Axes[Edge] == ESquareAxis::V)
+					{
+						USum += 0.5 * (A.X + B.X);
+						++UCount;
+					}
+				}
+				Squared[Index].X = UCount ? USum / UCount : Frame[Index].X;
+				Squared[Index].Y = VCount ? VSum / VCount : Frame[Index].Y;
+			}
+
+			TArray<FVector2D> Result;
+			Result.Reserve(Num);
+			for (const FVector2D& Point : Squared)
+			{
+				Result.Add(FromFrame(Point));
+			}
+			Points = MoveTemp(Result);
+			return true;
+		}
+	}
+
+	void Regularize(TArray<FStageSketchStroke>& Strokes)
+	{
+		TArray<const FStageSketchStroke*> Lines;
+		for (const FStageSketchStroke& Stroke : Strokes)
+		{
+			if (Stroke.GetElement() == EStageSketchElement::Deck || Stroke.GetElement() == EStageSketchElement::Truss)
+			{
+				Lines.Add(&Stroke);
+			}
+		}
+		const double Direction = FindMainDirection(Lines);
+
+		for (FStageSketchStroke& Stroke : Strokes)
+		{
+			const EStageSketchElement Element = Stroke.GetElement();
+			if (Element == EStageSketchElement::Deck && Stroke.Points.Num() >= 3)
+			{
+				const double Area = FMath::Abs(StageDeckMath::GetSignedArea(Stroke.Points));
+				const auto KeepsArea = [Area](const TArray<FVector2D>& Outline)
+				{
+					return Outline.Num() >= 3 && FMath::Abs(StageDeckMath::GetSignedArea(Outline)) >= 0.5 * Area;
+				};
+				// The drawing's axes first; a riser drawn at its own angle is squared to that angle instead.
+				TArray<FVector2D> Outline = Stroke.Points;
+				bool bSquared = SquarePolyline(Outline, true, Direction, /*bRequireAll*/ true) && KeepsArea(Outline);
+				if (!bSquared)
+				{
+					Outline = Stroke.Points;
+					const FStageSketchStroke* Own[] = { &Stroke };
+					bSquared = SquarePolyline(Outline, true, FindMainDirection(Own), /*bRequireAll*/ true) && KeepsArea(Outline);
+				}
+				if (bSquared)
+				{
+					Stroke.Points = MoveTemp(Outline);
+				}
+			}
+			else if (Element == EStageSketchElement::Truss && Stroke.Points.Num() >= 2)
+			{
+				TArray<FVector2D> Run = Stroke.Points;
+				SquarePolyline(Run, Stroke.bClosed, Direction, /*bRequireAll*/ false);
+				if (Run.Num() >= (Stroke.bClosed ? 3 : 2))
+				{
+					Stroke.Points = MoveTemp(Run);
+				}
+			}
+		}
+	}
+
 	FStageSketchTraceResult Trace(const FStageSketchGrayImage& Source, const FStageSketchTraceOptions& Options)
 	{
 		FStageSketchTraceResult Result;
@@ -663,7 +865,10 @@ namespace StageSketchImageTrace
 		LineInk.Init(0, W * H);
 		for (int32 I = 0; I < Ink.Num(); ++I)
 		{
-			LineInk[I] = Ink[I] && InkLabels[I] && IsLine[InkLabels[I]] && !OutlineBand[I] ? 1 : 0;
+			// The band only strips a deck's own outline (a truss run drawn on from its edge keeps its tail). A separate line drawn
+			// on a deck (a truss over the stage) is not part of the outline and is kept whole (STATE.md #87).
+			const int32 Mark = InkLabels[I];
+			LineInk[I] = Ink[I] && Mark && IsLine[Mark] && !(IsOutline[Mark] && OutlineBand[I]) ? 1 : 0;
 		}
 		Thin(LineInk, W, H);
 		const double MinLine = FMath::Max(10.0, Side * MinLineFraction);
@@ -720,6 +925,7 @@ namespace StageSketchImageTrace
 			Stroke.Points.Add(ToPlan(Fixture));
 			++Result.FixtureCount;
 		}
+		Regularize(Result.Strokes);
 
 		if (Result.bInverted)
 		{

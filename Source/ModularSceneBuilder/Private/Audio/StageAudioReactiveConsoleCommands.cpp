@@ -20,7 +20,6 @@
 #include "HAL/IConsoleManager.h"
 #include "ModularSceneBuilder.h"
 #include "Player/ModularPlayerController.h"
-#include "Show/StageEffectTypes.h"
 #include "Subsystems/ShowControlSubsystem.h"
 #include "Subsystems/StageAudioReactiveSubsystem.h"
 
@@ -204,7 +203,7 @@ namespace StageAudioReactiveCommands
 	{
 		if (AModularPlayerController* Controller = GetController(World))
 		{
-			const TArray<FGuid> Ids = Controller->RequestStartEffects(StageEffectRules::MakeMusicLook(), FText::FromString(TEXT("Follow Music")));
+			const TArray<FGuid> Ids = Controller->RequestFollowMusic();
 			UE_LOG(LogStageCraft, Display, TEXT("StageCraft.Music.Follow: %s (%d effects)."), Ids.IsEmpty() ? TEXT("refused") : TEXT("started"), Ids.Num());
 		}
 	}

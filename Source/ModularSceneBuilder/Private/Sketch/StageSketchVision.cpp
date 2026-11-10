@@ -10,6 +10,7 @@
 #include "Serialization/JsonSerializer.h"
 #include "Serialization/JsonWriter.h"
 #include "Sketch/StageSketchImageTrace.h"
+#include "Sketch/StageSketchMath.h"
 
 #define LOCTEXT_NAMESPACE "StageSketchVision"
 
@@ -84,6 +85,13 @@ namespace StageSketchVision
 			Properties->SetObjectField(TEXT("truss"), MakeArray(MakeObjectSchema(TrussProperties, Names({ TEXT("points"), TEXT("closed") })),
 				TEXT("Truss runs: lines, double lines or ladder / zig-zag bands hung above the stage.")));
 			Properties->SetObjectField(TEXT("fixtures"), MakeArray(MakePointSchema(), TEXT("Lighting fixtures: small circles, dots or crosses, at their centre.")));
+			TSharedRef<FJsonObject> ScaleProperties = MakeShared<FJsonObject>();
+			ScaleProperties->SetObjectField(TEXT("from"), MakePointSchema());
+			ScaleProperties->SetObjectField(TEXT("to"), MakePointSchema());
+			ScaleProperties->SetObjectField(TEXT("length_cm"), MakeTyped(TEXT("number"), TEXT("The real length between from and to, in cm, as written on the drawing.")));
+			TSharedRef<FJsonObject> Scale = MakeObjectSchema(ScaleProperties, Names({ TEXT("from"), TEXT("to"), TEXT("length_cm") }));
+			Scale->SetStringField(TEXT("description"), TEXT("Only when the drawing states a length (a dimension line or a labelled side): its two ends and the length."));
+			Properties->SetObjectField(TEXT("scale"), Scale);
 			Properties->SetObjectField(TEXT("notes"), MakeTyped(TEXT("string"), TEXT("One short sentence on anything that could not be read.")));
 
 			TSharedRef<FJsonObject> Tool = MakeShared<FJsonObject>();
@@ -143,7 +151,7 @@ namespace StageSketchVision
 		/** The plan in the tool's input, with every element checked. False only when the input is not shaped like the tool. */
 		bool ReadPlan(const FJsonObject& Input, FStageSketchVisionResult& Result)
 		{
-			static const TCHAR* const KnownFields[] = { TEXT("decks"), TEXT("truss"), TEXT("fixtures"), TEXT("notes") };
+			static const TCHAR* const KnownFields[] = { TEXT("decks"), TEXT("truss"), TEXT("fixtures"), TEXT("scale"), TEXT("notes") };
 			for (const TPair<FString, TSharedPtr<FJsonValue>>& Field : Input.Values)
 			{
 				if (!Algo::FindByPredicate(KnownFields, [&Field](const TCHAR* Known) { return Field.Key == Known; }))
@@ -229,6 +237,26 @@ namespace StageSketchVision
 				Stroke.Kind = EStageSketchStrokeKind::Fixture;
 				Stroke.Points.Add(*Point);
 			});
+			// The stated length is optional; one that is malformed is left out like any other bad element (the plan keeps its width).
+			const TSharedPtr<FJsonObject>* Scale = nullptr;
+			if (Input.TryGetObjectField(TEXT("scale"), Scale) && Scale && Scale->IsValid())
+			{
+				const TSharedPtr<FJsonValue> FromValue = (*Scale)->TryGetField(TEXT("from"));
+				const TSharedPtr<FJsonValue> ToValue = (*Scale)->TryGetField(TEXT("to"));
+				const TOptional<FVector2D> From = ReadPoint(FromValue);
+				const TOptional<FVector2D> To = ReadPoint(ToValue);
+				double Length = 0.0;
+				if (From.IsSet() && To.IsSet() && (*Scale)->TryGetNumberField(TEXT("length_cm"), Length) && FMath::IsFinite(Length) && Length > 0.0)
+				{
+					Result.ScaleFrom = *From;
+					Result.ScaleTo = *To;
+					Result.ScaleLengthCm = Length;
+				}
+				else
+				{
+					++Result.Dropped;
+				}
+			}
 			Input.TryGetStringField(TEXT("notes"), Result.Text);
 			Result.Text = Result.Text.TrimStartAndEnd().Left(200);
 			return true;
@@ -255,6 +283,9 @@ namespace StageSketchVision
 			"- truss: truss runs, drawn as single or double lines or as ladder / zig-zag bands. Report the centre line, its ends and bends; "
 			"closed for a loop.\n"
 			"- fixtures: lighting fixtures, drawn as small circles, dots or crosses, at their centre.\n"
+			"- scale: only when the drawing states a length (a dimension line, or a side labelled like \"12 m\", \"1200\" or \"40 ft\"): "
+			"the two ends of that length and the length in cm. Prefer the longest stated length. Leave it out when no length is written.\n"
+			"Place corners and points exactly where the lines are drawn; keep straight lines straight and right angles square.\n"
 			"Coordinates are fractions of the image: x from its left edge (0) to its right edge (1), y from its top edge (0) to its bottom "
 			"edge (1). Read the drawing, not the paper: ignore text, dimensions, arrows, the table, shadows and the sheet's edges. Labels "
 			"may be in English or Armenian. Set height_cm only when the drawing states a deck's height. If the image is not a stage plan, "
@@ -381,7 +412,24 @@ namespace StageSketchVision
 				Point = StageSketchImageTrace::PixelToPlan(FVector2D(Point.X * Width, Point.Y * Height), Width, Height, WidthCm);
 			}
 		}
+		StageSketchImageTrace::Regularize(Strokes);
 		return Strokes;
+	}
+
+	double GetPlanWidthCm(const FStageSketchVisionResult& Result, int32 Width, int32 Height, double DefaultWidthCm)
+	{
+		if (Result.ScaleLengthCm <= 0.0 || !FMath::IsFinite(Result.ScaleLengthCm) || Width <= 0 || Height <= 0)
+		{
+			return DefaultWidthCm;
+		}
+		const double Pixels = ((Result.ScaleTo - Result.ScaleFrom) * FVector2D(Width, Height)).Size();
+		if (Pixels < MinScaleFraction * FMath::Max(Width, Height))
+		{
+			return DefaultWidthCm;
+		}
+		// Implausible results (a stage hundreds of metres wide, a "12" read as cm) keep the window's width instead.
+		const double PlanWidth = Result.ScaleLengthCm * double(Width) / Pixels;
+		return PlanWidth >= StageSketchMath::MinPhotoWidth && PlanWidth <= StageSketchMath::MaxPhotoWidth ? PlanWidth : DefaultWidthCm;
 	}
 }
 

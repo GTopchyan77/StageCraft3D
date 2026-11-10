@@ -85,6 +85,22 @@ namespace StageSketchImageTrace
 	/** A pixel position (x right, y down, in pixels) of a Width x Height image as a plan point in cm (see the namespace comment). */
 	MODULARSCENEBUILDER_API FVector2D PixelToPlan(const FVector2D& Pixel, int32 Width, int32 Height, double WidthCm);
 
-	/** The whole pipeline. Images larger than MaxTraceSide are scaled down first. */
+	/** Edges within this many degrees of the drawing's axes are squared to them. */
+	constexpr double SquareToleranceDegrees = 6.0;
+
+	/**
+	 * Squares what a hand or a model drew slightly off (STATE.md #87), in place, on plan strokes:
+	 *  - The drawing's main direction is found from the length-weighted angles of its deck and truss edges (modulo 90 degrees); a
+	 *    drawing within 3 degrees of the image axes uses them, so a straight scan stays on the plan's X and Y.
+	 *  - A deck whose edges are all within SquareToleranceDegrees of those axes (or, failing that, of its own main direction: a
+	 *    rotated riser) becomes exactly rectilinear: corners on a straight edge are removed and each edge sits at the mean of its
+	 *    two ends, so a wobbly rectangle becomes a rectangle of the same size and place.
+	 *  - Truss segments within the tolerance of the axes are made exactly straight along them; diagonal runs are kept as drawn.
+	 *  - Fixtures are not moved (the generator hangs them on the nearest truss).
+	 * Pure and deterministic. A deck that would lose its area is left as it was.
+	 */
+	MODULARSCENEBUILDER_API void Regularize(TArray<FStageSketchStroke>& Strokes);
+
+	/** The whole pipeline, Regularize included. Images larger than MaxTraceSide are scaled down first. */
 	MODULARSCENEBUILDER_API FStageSketchTraceResult Trace(const FStageSketchGrayImage& Image, const FStageSketchTraceOptions& Options);
 }

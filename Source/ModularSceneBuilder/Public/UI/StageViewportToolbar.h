@@ -9,9 +9,11 @@
 
 /**
  * The viewport header toolbar (Docs/ADR/0008-viewport-toolbar-projections-and-view-modes.md §4.6), shown in the viewport tab
- * above the 3D view, as one horizontal row of six sections separated by thin dividers with equal gaps: the projection dropdown,
- * the View menu button (an Unreal-style popup with the view modes and the Show > Grid toggle), grid snap (Off / 10 / 50 / 100 cm)
- * and angle snap (Off / 5 / 15 / 45 degrees) as toggling segments, Move / Rotate / Scale, and SKETCH / ASSIST (open the Sketch to Stage window, ADR 0015, and the AI Assistant, ADR 0016).
+ * above the 3D view, as one horizontal row of five dropdowns separated by thin dividers with equal gaps, as in the Unreal
+ * Editor's viewport bar (STATE.md #87): the projection dropdown; View (view modes, Show > Grid); Snap (grid snap Off / 10 / 50 /
+ * 100 cm, angle snap Off / 5 / 15 / 45 degrees, Snap to Items), whose label shows both steps; Transform (Move / Rotate /
+ * Scale), whose label shows the active tool; and Tools (Sketch to Stage, ADR 0015, and the AI Assistant, ADR 0016).
+ * Every option lives in a popup, so the bar stays one short row at any window width.
  * A « toggle at the left collapses the row to a thin strip with only a » expand button (Ctrl+Shift+T by default, as in the
  * Unreal Editor); the state is a per-machine preference owned by UStageViewportComponent (Docs/ADR/0018 §3).
  *
@@ -23,7 +25,7 @@
  *    and OnModeChanged, so changes from the keyboard (Space) or the console show here too.
  *  - Bound in NativeConstruct, unbound in NativeDestruct. No tick. Its buttons never take keyboard focus, so viewport
  *    shortcuts keep working after a click.
- *  - The View menu is built fresh on every open from the current state, so it holds no bindings and needs no redraw.
+ *  - The menus are built fresh on every open from the current state, so they hold no bindings and need no redraw.
  *
  * The tree is built in code from the theme; there is no Widget Blueprint. Created by UStageWorkspaceSubsystem for the local
  * controller.
@@ -48,7 +50,7 @@ private:
 	class UStageThemedComboBox* MakeCombo(FName Name, TConstArrayView<FText> Options, const FText& Tip);
 	class UWidget* MakeSegment(TConstArrayView<FText> Labels, TConstArrayView<FText> Tips, TArray<TObjectPtr<class UStageChoiceButton>>& OutButtons,
 		void (UStageViewportToolbar::*Handler)(int32));
-	class UWidget* MakeLabel(const FText& Text) const;
+	class UStageMenuButton* MakeMenuButton(FName Name, const FText& Tip, TSharedRef<class SWidget> (UStageViewportToolbar::*Builder)());
 	class UWidget* MakeSeparator() const;
 	class UTextBlock* MakeText(const FText& Text, int32 Size, FName Typeface, const FLinearColor& Color) const;
 	const class UStageCraftUITheme& GetTheme() const;
@@ -62,10 +64,15 @@ private:
 	/** The View menu's popup: the view modes (radio) and Show > Grid (toggle), from the viewport's state at this moment. */
 	TSharedRef<class SWidget> BuildViewMenu();
 
-	void HandleGizmoModePicked(int32 Index);
-	void HandleGridSnapPicked(int32 Index);
-	void HandleAngleSnapPicked(int32 Index);
-	void HandleToolWindowPicked(int32 Index);
+	/** Grid snap and angle snap presets (radio) and Snap to Items (toggle). */
+	TSharedRef<class SWidget> BuildSnapMenu();
+
+	/** Move / Rotate / Scale (radio). */
+	TSharedRef<class SWidget> BuildTransformMenu();
+
+	/** Opens (or brings forward) the Sketch to Stage and AI Assistant panels. */
+	TSharedRef<class SWidget> BuildToolsMenu();
+
 	void HandleCollapsePicked(int32 Index);
 
 	UFUNCTION()
@@ -86,26 +93,20 @@ private:
 	UPROPERTY(Transient)
 	TObjectPtr<class UStageMenuButton> ViewMenuButton = nullptr;
 
-	/** One button per StageViewMath::GetGridSnapPresets entry; the button index is the preset index. */
 	UPROPERTY(Transient)
-	TArray<TObjectPtr<class UStageChoiceButton>> GridSnapButtons;
-
-	/** One button per StageViewMath::GetAngleSnapPresets entry; the button index is the preset index. */
-	UPROPERTY(Transient)
-	TArray<TObjectPtr<class UStageChoiceButton>> AngleSnapButtons;
+	TObjectPtr<class UStageMenuButton> SnapMenuButton = nullptr;
 
 	UPROPERTY(Transient)
-	TArray<TObjectPtr<class UStageChoiceButton>> GizmoModeButtons;
+	TObjectPtr<class UStageMenuButton> TransformMenuButton = nullptr;
 
-	/** The SKETCH and ASSIST buttons (one segment, styled like the others). */
 	UPROPERTY(Transient)
-	TArray<TObjectPtr<class UStageChoiceButton>> ToolWindowButtons;
+	TObjectPtr<class UStageMenuButton> ToolsMenuButton = nullptr;
 
 	/** The collapse / expand toggle (a one-button segment). */
 	UPROPERTY(Transient)
 	TArray<TObjectPtr<class UStageChoiceButton>> CollapseButtons;
 
-	/** The six sections, hidden while the toolbar is collapsed. */
+	/** The five sections, hidden while the toolbar is collapsed. */
 	UPROPERTY(Transient)
 	TObjectPtr<class UHorizontalBox> Sections = nullptr;
 

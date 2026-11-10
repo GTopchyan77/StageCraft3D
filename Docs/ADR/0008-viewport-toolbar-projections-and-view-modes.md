@@ -139,3 +139,9 @@ Persisted per machine: grid snap, angle snap and grid visibility. Projection and
 - Every new piece is additive: the component, actor, modifier, toolbar, material and settings fields.
 - To revert the global grid, restore `ComputeLandingTransform` / `ComputeSnappedPoint` to the item rules, and restore the gizmo's distance snap.
 - Removing the toolbar callback restores the old viewport tab.
+
+## Amendment: dropdowns instead of segments (STATE.md #87, 2026-11-10)
+
+Gevor asked for the crowded viewport bar to fold into dropdowns like the Unreal Editor's. The bar is now five dropdowns: projection, View, **Snap** (grid step and angle step as radio entries, plus Snap to Items), **Transform** (Move / Rotate / Scale) and **Tools** (Sketch to Stage, AI Assistant). Each is a `UStageMenuButton` built fresh on every open from the owners' state, like the View menu, so nothing needs a binding. The labels show the state ("Snap 10 cm · 15°", "Rotate").
+
+The old segments' toggle click (pick the active step again to turn snapping off) does not apply in a menu: the Off entry is picked instead. `UStageSnappingComponent::PickGridSnap` / `PickAngleSnap` stay for keyboard and console use. The collapse toggle and Ctrl+Shift+T are unchanged.

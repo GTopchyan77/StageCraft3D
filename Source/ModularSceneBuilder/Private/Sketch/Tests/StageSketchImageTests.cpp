@@ -173,6 +173,23 @@ bool FStageSketchImageTraceTest::RunTest(const FString& Parameters)
 	TestTrue(TEXT("Map: the centre is the origin"), Plan(300, 200, W, H).Equals(FVector2D::ZeroVector));
 	TestTrue(TEXT("Map: image up is plan +X, image right plan +Y"), Plan(300, 0, W, H).Equals(FVector2D(200 * Scale, 0)) && Plan(600, 200, W, H).Equals(FVector2D(0, 300 * Scale)));
 
+	// --- A truss line drawn over a deck (STATE.md #87: the outline band used to erase it) ---
+	{
+		FSheet Sheet(W, H);
+		Sheet.Rect(100, 100, 500, 300);
+		Sheet.Line(FVector2D(180, 160), FVector2D(420, 162));
+		const FStageSketchTraceResult Result = TraceSheet(Sheet);
+		TestEqual(TEXT("Truss on a deck: the deck"), CountKind(Result, EStageSketchElement::Deck), 1);
+		TestEqual(TEXT("Truss on a deck: the line is kept"), CountKind(Result, EStageSketchElement::Truss), 1);
+		if (const FStageSketchStroke* Truss = FirstOf(Result, EStageSketchElement::Truss))
+		{
+			const double Length = FVector2D::Distance(Truss->Points[0], Truss->Points.Last());
+			TestTrue(FString::Printf(TEXT("Truss on a deck: about its drawn length (%.0f cm of 800)"), Length), Length > 700.0 && Length < 830.0);
+			TestTrue(TEXT("Truss on a deck: squared straight"), Truss->Points.Num() == 2
+				&& (FMath::IsNearlyEqual(Truss->Points[0].X, Truss->Points[1].X, 1.e-6) || FMath::IsNearlyEqual(Truss->Points[0].Y, Truss->Points[1].Y, 1.e-6)));
+		}
+	}
+
 	// --- One deck outline ---
 	{
 		FSheet Sheet(W, H);
@@ -616,6 +633,138 @@ bool FStageSketchImportWorldTest::RunTest(const FString& Parameters)
 	TestEqual(TEXT("Damaged: nothing added"), Sketch->GetStrokes().Num(), Before);
 
 	IFileManager::Get().DeleteDirectory(*Folder, /*RequireExists*/ false, /*Tree*/ true);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FStageSketchRegularizeTest, "StageCraft.Sketch.Image.Regularize", StageSketchImageTests::Flags)
+
+bool FStageSketchRegularizeTest::RunTest(const FString& Parameters)
+{
+	const auto Make = [](EStageSketchStrokeKind Kind, std::initializer_list<FVector2D> Points, bool bClosed)
+	{
+		FStageSketchStroke Stroke;
+		Stroke.Kind = Kind;
+		Stroke.bClosed = bClosed;
+		Stroke.Points = Points;
+		return Stroke;
+	};
+	const auto IsRectilinear = [](const FStageSketchStroke& Stroke)
+	{
+		const int32 Num = Stroke.Points.Num();
+		for (int32 Index = 0; Index < Num; ++Index)
+		{
+			const FVector2D Delta = Stroke.Points[(Index + 1) % Num] - Stroke.Points[Index];
+			if (!FMath::IsNearlyZero(Delta.X, 1.e-6) && !FMath::IsNearlyZero(Delta.Y, 1.e-6))
+			{
+				return false;
+			}
+		}
+		return true;
+	};
+	const auto HasRightAngles = [](const FStageSketchStroke& Stroke)
+	{
+		const int32 Num = Stroke.Points.Num();
+		for (int32 Index = 0; Index < Num; ++Index)
+		{
+			const FVector2D In = (Stroke.Points[Index] - Stroke.Points[(Index - 1 + Num) % Num]).GetSafeNormal();
+			const FVector2D Out = (Stroke.Points[(Index + 1) % Num] - Stroke.Points[Index]).GetSafeNormal();
+			if (!FMath::IsNearlyZero(In | Out, 1.e-6))
+			{
+				return false;
+			}
+		}
+		return true;
+	};
+	{
+		// A hand-drawn 10 x 6 m deck, a straight truss drawn wobbly, a diagonal truss, a fixture and a triangle deck.
+		TArray<FStageSketchStroke> Strokes;
+		Strokes.Add(Make(EStageSketchStrokeKind::Shape, { FVector2D(0, 0), FVector2D(1003, 8), FVector2D(995, 602), FVector2D(-6, 597) }, true));
+		Strokes.Add(Make(EStageSketchStrokeKind::Truss, { FVector2D(-100, -200), FVector2D(400, -185), FVector2D(1100, -210) }, false));
+		Strokes.Add(Make(EStageSketchStrokeKind::Truss, { FVector2D(0, 800), FVector2D(600, 1400) }, false));
+		Strokes.Add(Make(EStageSketchStrokeKind::Fixture, { FVector2D(503, -197) }, false));
+		Strokes.Add(Make(EStageSketchStrokeKind::Shape, { FVector2D(2000, 0), FVector2D(2600, 0), FVector2D(2300, 500) }, true));
+		const TArray<FStageSketchStroke> Before = Strokes;
+		StageSketchImageTrace::Regularize(Strokes);
+
+		TestTrue(TEXT("Deck: squared to the plan's axes"), Strokes[0].Points.Num() == 4 && IsRectilinear(Strokes[0]));
+		const double Area = FMath::Abs(StageDeckMath::GetSignedArea(Strokes[0].Points));
+		TestTrue(TEXT("Deck: same size, within 2%"), FMath::Abs(Area - 1000.0 * 600.0) < 0.02 * 1000.0 * 600.0);
+		TestTrue(TEXT("Deck: same place"), FBox2D(Strokes[0].Points).GetCenter().Equals(FBox2D(Before[0].Points).GetCenter(), 10.0));
+		TestTrue(TEXT("Truss: straight, its middle point dropped"), Strokes[1].Points.Num() == 2 && FMath::IsNearlyEqual(Strokes[1].Points[0].Y, Strokes[1].Points[1].Y, 1.e-6));
+		TestTrue(TEXT("Truss: ends kept along the run"), FMath::IsNearlyEqual(Strokes[1].Points[0].X, -100.0, 1.e-6) && FMath::IsNearlyEqual(Strokes[1].Points[1].X, 1100.0, 1.e-6));
+		TestTrue(TEXT("Truss: a diagonal is kept as drawn"), Strokes[2].Points == Before[2].Points);
+		TestTrue(TEXT("Fixture: not moved"), Strokes[3].Points == Before[3].Points);
+		TestTrue(TEXT("Deck: a triangle is kept as drawn"), Strokes[4].Points == Before[4].Points);
+
+		TArray<FStageSketchStroke> Again = Strokes;
+		StageSketchImageTrace::Regularize(Again);
+		bool bStable = true;
+		for (int32 Index = 0; Index < Again.Num(); ++Index)
+		{
+			bStable &= Again[Index].Points.Num() == Strokes[Index].Points.Num();
+			for (int32 Point = 0; bStable && Point < Again[Index].Points.Num(); ++Point)
+			{
+				bStable &= Again[Index].Points[Point].Equals(Strokes[Index].Points[Point], 1.e-6);
+			}
+		}
+		TestTrue(TEXT("Twice: nothing more changes"), bStable);
+	}
+	{
+		// An L-shaped deck with a corner on a straight edge, and a riser drawn at 30 degrees.
+		TArray<FStageSketchStroke> Strokes;
+		Strokes.Add(Make(EStageSketchStrokeKind::Shape, { FVector2D(0, 0), FVector2D(500, 4), FVector2D(1000, -3), FVector2D(1004, 400), FVector2D(498, 405),
+			FVector2D(502, 800), FVector2D(3, 796) }, true));
+		const FVector2D U(FMath::Cos(UE_DOUBLE_PI / 6.0), FMath::Sin(UE_DOUBLE_PI / 6.0));
+		const FVector2D V(-U.Y, U.X);
+		const FVector2D Origin(3000, 0);
+		Strokes.Add(Make(EStageSketchStrokeKind::Shape, { Origin, Origin + 400.0 * U + 6.0 * V, Origin + 405.0 * U + 300.0 * V, Origin - 4.0 * U + 296.0 * V }, true));
+		StageSketchImageTrace::Regularize(Strokes);
+		TestTrue(TEXT("L-shape: six corners, all square"), Strokes[0].Points.Num() == 6 && IsRectilinear(Strokes[0]));
+		TestTrue(TEXT("Rotated riser: square in its own direction"), Strokes[1].Points.Num() == 4 && HasRightAngles(Strokes[1]) && !IsRectilinear(Strokes[1]));
+	}
+	{
+		// A trapezoid (one side 18 degrees off) is left alone.
+		TArray<FStageSketchStroke> Strokes;
+		Strokes.Add(Make(EStageSketchStrokeKind::Shape, { FVector2D(0, 0), FVector2D(1000, 0), FVector2D(800, 600), FVector2D(0, 600) }, true));
+		const TArray<FStageSketchStroke> Before = Strokes;
+		StageSketchImageTrace::Regularize(Strokes);
+		TestTrue(TEXT("Skewed shape: kept as drawn"), Strokes[0].Points == Before[0].Points);
+		TArray<FStageSketchStroke> Empty;
+		StageSketchImageTrace::Regularize(Empty);
+		TestTrue(TEXT("Empty: nothing happens"), Empty.IsEmpty());
+	}
+
+	// The drawing's stated length sets the scale (StageSketchVision::GetPlanWidthCm).
+	{
+		FStageSketchVisionResult Result;
+		TestEqual(TEXT("Scale: none keeps the window's width"), StageSketchVision::GetPlanWidthCm(Result, 1000, 500, 2000.0), 2000.0);
+		Result.ScaleFrom = FVector2D(0.1, 0.5);
+		Result.ScaleTo = FVector2D(0.6, 0.5);
+		Result.ScaleLengthCm = 1200.0;
+		TestTrue(TEXT("Scale: 500 px = 12 m makes the image 24 m wide"), FMath::IsNearlyEqual(StageSketchVision::GetPlanWidthCm(Result, 1000, 500, 2000.0), 2400.0, 1.e-6));
+		Result.ScaleTo = FVector2D(0.1, 0.9);
+		TestTrue(TEXT("Scale: a vertical length uses the image's height"), FMath::IsNearlyEqual(StageSketchVision::GetPlanWidthCm(Result, 1000, 500, 2000.0), 6000.0, 1.e-6));
+		Result.ScaleTo = FVector2D(0.12, 0.5);
+		TestEqual(TEXT("Scale: too short a length is not used"), StageSketchVision::GetPlanWidthCm(Result, 1000, 500, 2000.0), 2000.0);
+		Result.ScaleTo = FVector2D(0.6, 0.5);
+		Result.ScaleLengthCm = 12.0;
+		TestEqual(TEXT("Scale: an implausible width is not used"), StageSketchVision::GetPlanWidthCm(Result, 1000, 500, 2000.0), 2000.0);
+	}
+	{
+		const auto Respond = [](const FString& Input)
+		{
+			return StageSketchVision::ParseResponseBody(200, FString::Printf(TEXT("{\"stop_reason\":\"tool_use\",\"content\":[")
+				TEXT("{\"type\":\"tool_use\",\"id\":\"t\",\"name\":\"sketch_plan\",\"input\":%s}]}"), *Input));
+		};
+		const FStageSketchVisionResult Scaled = Respond(TEXT("{\"decks\":[],\"truss\":[],\"fixtures\":[{\"x\":0.5,\"y\":0.5}],")
+			TEXT("\"scale\":{\"from\":{\"x\":0.1,\"y\":0.5},\"to\":{\"x\":0.6,\"y\":0.5},\"length_cm\":1200}}"));
+		TestTrue(TEXT("Scale: read from the reading"), Scaled.Status == FStageSketchVisionResult::EStatus::Plan && Scaled.ScaleLengthCm == 1200.0
+			&& Scaled.ScaleTo.Equals(FVector2D(0.6, 0.5)) && Scaled.Dropped == 0);
+		const FStageSketchVisionResult Bad = Respond(TEXT("{\"decks\":[],\"truss\":[],\"fixtures\":[],\"scale\":{\"from\":{\"x\":0.1,\"y\":0.5},\"to\":{\"x\":9,\"y\":0.5},\"length_cm\":-3}}"));
+		TestTrue(TEXT("Scale: a bad one is dropped, the plan kept"), Bad.Status == FStageSketchVisionResult::EStatus::Plan && Bad.ScaleLengthCm == 0.0 && Bad.Dropped == 1);
+		const FString Tool = StageSketchVision::MakeToolDefinitionJson();
+		TestTrue(TEXT("Scale: in the tool's schema, not required"), Tool.Contains(TEXT("\"scale\":{")) && Tool.Contains(TEXT("\"required\":[\"decks\",\"truss\",\"fixtures\"]")));
+	}
 	return true;
 }
 

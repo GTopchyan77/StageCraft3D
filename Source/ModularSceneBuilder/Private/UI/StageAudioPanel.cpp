@@ -21,7 +21,6 @@
 #include "Import/StageFileDialog.h"
 #include "Misc/Paths.h"
 #include "Player/ModularPlayerController.h"
-#include "Show/StageEffectTypes.h"
 #include "Subsystems/StageAudioReactiveSubsystem.h"
 #include "TimerManager.h"
 #include "UI/StageCraftUITheme.h"
@@ -557,7 +556,7 @@ UWidget* UStageAudioPanel::BuildLightsRow()
 		ButtonSlot->SetHorizontalAlignment(HAlign_Left);
 	}
 	// Listening alone moves nothing: say so where the music is chosen (STATE.md #86).
-	UTextBlock* Hint = MakeText(LOCTEXT("FollowMusicHint", "Music moves only the effects that follow it. Select fixtures, then FOLLOW MUSIC, or pick an audio effect in the Effects panel."),
+	UTextBlock* Hint = MakeText(LOCTEXT("FollowMusicHint", "Music moves only the effects that follow it. Select fixtures, then FOLLOW MUSIC (it listens to this PC's sound when no source is on), or pick an audio effect in the Effects panel."),
 		7, TEXT("Regular"), UITheme.TextDisabled);
 	Hint->SetAutoWrapText(true);
 	if (UVerticalBoxSlot* HintSlot = Block->AddChildToVerticalBox(Hint))
@@ -572,7 +571,7 @@ void UStageAudioPanel::HandleFollowMusicPicked(int32 Unused)
 	// A refusal (nothing selected, programmer full, External DMX) is reported on the status bar by the controller.
 	if (AModularPlayerController* Controller = GetStageController())
 	{
-		Controller->RequestStartEffects(StageEffectRules::MakeMusicLook(), LOCTEXT("FollowMusicStep", "Follow Music"));
+		Controller->RequestFollowMusic();
 	}
 }
 

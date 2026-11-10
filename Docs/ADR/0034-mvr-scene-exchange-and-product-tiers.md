@@ -115,3 +115,13 @@ Every phase ends with Editor, Game and Shipping builds at 0 warnings and the ful
 ## 13. Rollback
 
 MVR is additive: the import and export requests, the subsystem and the menu entries can be removed without touching existing scenes, except v13 files, which keep loading in a build that ignores `mvrId`.
+
+## 14. Amendment: MV1 as built (STATE.md #87, 2026-11-10)
+
+- **The XML reader keeps element text** when asked (`StageXml::FLimits::bKeepText`): MVR carries its data in the text of leaf elements (`Matrix`, `GDTFSpec`, `GDTFMode`, `Address`, `Focus`, `FixtureID`). Text around child elements is never kept, references are decoded, CDATA is kept as written, and the text is capped like an attribute value. GDTF leaves it off, so its parsing is unchanged.
+- **`StageMvr::Parse` / `ParseSceneDescription`** (`Private/Mvr/StageMvrParser.h`), pure, any thread. Caps: 64 MB archive, 512 entries, 32 MB scene file, 20,000 objects, 4,096 fixtures, object nesting 32, 1,024 layers, 256 GDTF files, 64 addresses per fixture. An entry in a folder refuses the file.
+- **Errors vs warnings.** Errors refuse the whole file and name the line: a bad `Matrix`, address, UUID or number, a duplicate UUID, a missing `Scene`, a major version other than 1, a cap. Warnings go to the report (at most 50, then a count): a fixture without GDTF or mode, a DMX break other than 0, a focus point, multipatch or symbol that is not in the file (the reference is cleared), a GDTF or geometry file missing from the archive, 3DS geometry, unknown elements.
+- **Tolerated:** UUIDs with or without dashes or braces; a `GDTFSpec` without `.gdtf` and a `Geometry3D` without extension (`.3ds`, as the spec says).
+- **World matrices** are resolved in the parser: object, then each parent object, then the layer (row vectors, mm). `StageMvrUnits::ToUnreal` / `FromUnreal` mirror Y and convert mm to cm; tested on offsets, a 90 degree turn and a round trip.
+- **MV0 probe:** `StageCraft.Mvr.Probe [folder or file]` (Development only, default `Saved/MVRCorpus`) logs each file's scene, report and parse time. It waits for a real corpus.
+- Not yet: MV2–MV5. M1–M4 are still open.

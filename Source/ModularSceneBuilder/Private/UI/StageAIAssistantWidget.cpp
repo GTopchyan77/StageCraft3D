@@ -12,6 +12,7 @@
 #include "Components/EditableTextBox.h"
 #include "Components/HorizontalBox.h"
 #include "Components/HorizontalBoxSlot.h"
+#include "Components/MultiLineEditableText.h"
 #include "Components/ScrollBox.h"
 #include "Components/SizeBox.h"
 #include "Components/Spacer.h"
@@ -85,6 +86,23 @@ UTextBlock* UStageAIAssistantWidget::MakeText(const FText& Text, int32 Size, FNa
 	Block->SetText(Text);
 	Block->SetFont(StageCraftWidgetStyle::MakeFont(Size, Typeface));
 	Block->SetColorAndOpacity(FSlateColor(Color));
+	return Block;
+}
+
+UMultiLineEditableText* UStageAIAssistantWidget::MakeSelectableText(const FText& Text, int32 Size, const FLinearColor& Color) const
+{
+	// Read-only editable text rather than a text block: Slate gives it mouse selection, Ctrl+C, Select All and a Copy context menu,
+	// so any word, sentence or code line of a reply can be copied; COPY still copies the whole reply.
+	UMultiLineEditableText* Block = WidgetTree->ConstructWidget<UMultiLineEditableText>(UMultiLineEditableText::StaticClass());
+	FTextBlockStyle Style;
+	Style.SetFont(StageCraftWidgetStyle::MakeFont(Size, TEXT("Regular")));
+	Style.SetColorAndOpacity(FSlateColor(Color));
+	Style.SetSelectedBackgroundColor(FSlateColor(GetTheme().AccentColor.CopyWithNewOpacity(0.35f)));
+	Block->SetWidgetStyle(Style);
+	Block->SetIsReadOnly(true);
+	Block->SetAutoWrapText(true);
+	Block->SetClearTextSelectionOnFocusLoss(true);
+	Block->SetText(Text);
 	return Block;
 }
 
@@ -310,8 +328,7 @@ UWidget* UStageAIAssistantWidget::BuildMessage(const FStageAIMessage& Message, i
 
 	UVerticalBox* Content = WidgetTree->ConstructWidget<UVerticalBox>(UVerticalBox::StaticClass());
 	Content->AddChildToVerticalBox(MakeText(Caption, 7, TEXT("Bold"), CaptionColor));
-	UTextBlock* Body = MakeText(Message.Text, 9, TEXT("Regular"), Palette.TextPrimary);
-	Body->SetAutoWrapText(true);
+	UMultiLineEditableText* Body = MakeSelectableText(Message.Text, 9, Palette.TextPrimary);
 	if (UVerticalBoxSlot* BodySlot = Content->AddChildToVerticalBox(Body))
 	{
 		BodySlot->SetPadding(FMargin(0.f, 2.f, 0.f, 0.f));

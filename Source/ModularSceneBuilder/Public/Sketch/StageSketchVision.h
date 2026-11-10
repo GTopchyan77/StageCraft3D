@@ -29,6 +29,14 @@ struct FStageSketchVisionResult
 	/** Elements or points the model gave that were out of range or over the limits, left out. */
 	int32 Dropped = 0;
 
+	/**
+	 * Plan: a length the drawing states (a dimension line or a labelled side), in image fractions, with its real length in cm.
+	 * ScaleLengthCm is 0 when the drawing states none; StageSketchVision::GetPlanWidthCm turns it into the plan's scale.
+	 */
+	FVector2D ScaleFrom = FVector2D::ZeroVector;
+	FVector2D ScaleTo = FVector2D::ZeroVector;
+	double ScaleLengthCm = 0.0;
+
 	FString Text;
 	FText Error;
 };
@@ -56,6 +64,16 @@ namespace StageSketchVision
 	/** Reads a response: status, error object, stop_reason, then one sketch_plan call (validated) or the text blocks. */
 	MODULARSCENEBUILDER_API FStageSketchVisionResult ParseResponseBody(int32 HttpStatus, const FString& Body);
 
-	/** Strokes from image fractions to plan cm, for a Width x Height image WidthCm wide; decks without a height get DeckHeight. */
+	/**
+	 * The real width of a Width x Height image in cm: from the stated length when the reading has a plausible one (its ends at least
+	 * MinScaleFraction of the image apart, the resulting width within StageSketchMath::MinPhotoWidth..MaxPhotoWidth), else
+	 * DefaultWidthCm (the Sketch window's PHOTO WIDTH).
+	 */
+	MODULARSCENEBUILDER_API double GetPlanWidthCm(const FStageSketchVisionResult& Result, int32 Width, int32 Height, double DefaultWidthCm);
+
+	/** A stated length shorter than this share of the image's longest side is too short to scale by. */
+	constexpr double MinScaleFraction = 0.05;
+
+	/** Strokes from image fractions to plan cm, for a Width x Height image WidthCm wide; decks without a height get DeckHeight. Regularized (StageSketchImageTrace::Regularize). */
 	MODULARSCENEBUILDER_API TArray<FStageSketchStroke> ToPlan(TConstArrayView<FStageSketchStroke> Fractions, int32 Width, int32 Height, double WidthCm, float DeckHeight);
 }

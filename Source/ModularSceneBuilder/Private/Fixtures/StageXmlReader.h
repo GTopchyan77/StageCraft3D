@@ -12,8 +12,9 @@
  * Development build. This reader returns an error with a line number instead, and enforces hard caps.
  *
  * What it reads: elements and their attributes, with both quote styles, the five predefined entities and numeric character
- * references. Declarations and processing instructions, comments and CDATA are skipped. Text content is ignored, because GDTF and
- * MVR carry their data in attributes. A DOCTYPE (and with it any entity definition) is refused, so nothing is ever expanded.
+ * references. Declarations, processing instructions and comments are skipped. Text content is ignored unless FLimits::bKeepText
+ * (GDTF carries its data in attributes, MVR in the text of leaf elements). A DOCTYPE (and with it any entity definition) is
+ * refused, so nothing is ever expanded.
  *
  * Pure: no files, no UObjects. Safe on any thread.
  */
@@ -25,7 +26,13 @@ namespace StageXml
 		int32 MaxNodes = 100000;
 		int32 MaxAttributesPerNode = 64;
 		int32 MaxNameLength = 128;
+		/** Longest attribute value, and longest element text when bKeepText. */
 		int32 MaxValueLength = 4096;
+		/**
+		 * Keep the text of elements without child elements in FNode::Text (MVR carries its data there: Matrix, GDTFSpec, Address;
+		 * STATE.md #87). Off for GDTF, which uses attributes only. Text around child elements (mixed content) is never kept.
+		 */
+		bool bKeepText = false;
 	};
 
 	/** One element. Its children are indices into FDocument::Nodes. */
@@ -37,6 +44,8 @@ namespace StageXml
 		int32 Parent = INDEX_NONE;
 		/** 1-based line of the start tag, for error messages. */
 		int32 Line = 0;
+		/** With FLimits::bKeepText, the element's text (references decoded, CDATA included, not trimmed) when it has no child elements. */
+		FString Text;
 
 		/** The value of AttributeName (case-sensitive, as in XML), or null. */
 		const FString* FindAttribute(FStringView AttributeName) const;

@@ -684,6 +684,14 @@ Gevor's choices: automation tests on a harness game instance (not AFunctionalTes
 - [x] Audio: FOLLOW MUSIC (bass intensity, mids colour, highs strobe), music strobe open in silence
 - [x] AI chat: COPY on every finished assistant reply
 - [ ] Ctrl+Click in the viewport: not reproducible (real OS clicks in -game Top/Perspective and the packaged Development build all multi-select); Gevor to give exact steps
-- [ ] MV0 spike on real .mvr files (corpus needed: Vectorworks, grandMA3, GDTF-Share samples)
-- [ ] MV1 parser, MV2 import, MV3 UI, MV4 export (Pro gate), MV5 re-import
+- [ ] MV0 spike on real .mvr files (corpus needed: Vectorworks, grandMA3, GDTF-Share samples); probe command StageCraft.Mvr.Probe ready (STATE.md #87)
+- [x] MV1 parser: StageMvr::Parse (archive rules, caps, matrices, addresses, UUIDs, layers, groups, focus, symdefs, report), StageMvrUnits, XML reader keeps element text (STATE.md #87)
+- [ ] MV2 import (review, fixtures through the GDTF library, one undo step), MV3 UI, MV4 export (Pro gate), MV5 re-import
+
+## Phase 38b - UX and quality pass before MV2 (requested by Gevor 2026-11-10; STATE.md #87)
+- [x] FOLLOW MUSIC starts the SYSTEM source (WASAPI loopback: YouTube, any player) when no source is listening (RequestFollowMusic)
+- [x] AI chat: reply text selectable (mouse selection, Ctrl+C, context menu), COPY kept
+- [x] Viewport toolbar: SNAP / ANGLE / MOVE-ROTATE-SCALE / SKETCH-ASSIST segments folded into Snap, Transform and Tools dropdowns (View menu pattern)
+- [x] Sketch import accuracy: Regularize squares near-rectilinear decks and straightens near-axis truss (both readers); Claude reports a written dimension (scale) that sets the plan's real width
+- [ ] Other crowded panels (Sketch window toolbar, Audio panel) for the same dropdown treatment, after Gevor's look at the viewport bar
 - [ ] Entitlement tags StageCraft.Entitlement.Pro.* and GameMode gates (open until Step 6 licensing)

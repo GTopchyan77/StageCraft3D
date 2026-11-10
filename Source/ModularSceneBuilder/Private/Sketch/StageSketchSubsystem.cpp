@@ -424,11 +424,26 @@ void UStageSketchSubsystem::HandleOnlineReading(const FStageSketchVisionResult& 
 		ApplyLocalReading(*Job, Reason);
 		return;
 	}
+	// A length written on the drawing sets the real scale; the reference image is stretched to the same width so it stays under the strokes.
+	const double PlanWidth = StageSketchVision::GetPlanWidthCm(Result, Job->VisionWidth, Job->VisionHeight, Job->Options.WidthCm);
+	const bool bScaledByDrawing = !FMath::IsNearlyEqual(PlanWidth, Job->Options.WidthCm, 1.0);
+	if (bScaledByDrawing && ReferenceImage && ReferenceBounds.bIsValid)
+	{
+		const double Ratio = PlanWidth / Job->Options.WidthCm;
+		ReferenceBounds = FBox2D(ReferenceBounds.Min * Ratio, ReferenceBounds.Max * Ratio);
+	}
 	const TArray<FStageSketchStroke> Added = AddImportedStrokes(StageSketchVision::ToPlan(Result.Strokes, Job->VisionWidth, Job->VisionHeight,
-		Job->Options.WidthCm, Job->Options.DeckHeight));
+		PlanWidth, Job->Options.DeckHeight));
 	const FText FileName = FText::FromString(FPaths::GetCleanFilename(Job->FilePath));
 	FText Message = FText::Format(LOCTEXT("ImportedOnline", "Claude read {0}: added {1}. Check them against the photo, then GENERATE 3D."), FileName,
 		StageSketchSubsystem::DescribeImported(Added));
+	if (bScaledByDrawing)
+	{
+		FNumberFormattingOptions Metres;
+		Metres.MaximumFractionalDigits = 1;
+		Message = FText::Format(LOCTEXT("ImportedOnlineScale", "{0} Scaled by the {1} m length written on the drawing (the plan is {2} m wide)."), Message,
+			FText::AsNumber(Result.ScaleLengthCm * 0.01, &Metres), FText::AsNumber(PlanWidth * 0.01, &Metres));
+	}
 	if (Result.Dropped > 0)
 	{
 		Message = FText::Format(LOCTEXT("ImportedOnlineDropped", "{0} {1} {1}|plural(one=element was,other=elements were) out of range and left out."), Message, FText::AsNumber(Result.Dropped));

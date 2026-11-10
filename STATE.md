@@ -8512,7 +8512,7 @@ All times in ms.
   - The assistant reply shows COPY. The clipboard content itself was not read back.
 - **Not verified:** a physical click on COPY, TRACE ANYWAY, USE COLOURS or FOLLOW MUSIC (the console drove the same requests); FOLLOW MUSIC with real music on real fixtures; the strobe's DMX OUT on a visualiser.
 
-**Commit:** uncommitted (working tree).
+**Commit:** `225cecd`.
 
 **Known issues / follow-ups**
 - Gevor: exact steps for the Ctrl+Click failure (which view, which items, imported models loaded or not, docked or floating viewport, whether a panel had focus before the click).
@@ -8520,3 +8520,83 @@ All times in ms.
 - The USE COLOURS undo step is named after its first write ("Color: Spot 101"), not "Colour look from <file>", because `EndEditTransaction` takes no name.
 - The photo threshold is calibrated on few real photos. Flat illustrations (0.06–0.08) still trace; graph paper may be refused (TRACE ANYWAY covers it).
 - High Strobe strobes whenever the highs are present; the flash limiter (3 Hz default) caps it. A strobe amount control for the look may be wanted.
+
+## #87 — FOLLOW MUSIC listens to this PC; selectable assistant replies; viewport toolbar as dropdowns; squared and scaled sketch imports, truss on a deck kept; MVR MV1 parser (2026-11-10)
+
+**What & why**
+- **Context.** Gevor asked (2026-11-10) for five things before and with Step 2: YouTube/system audio driving the lights, selectable text in the AI chat, the crowded viewport toolbar folded into dropdowns, more accurate image-to-sketch geometry, and MVR MV1–MV5. #86 now carries its commit `225cecd`.
+- **1. Audio from the PC (YouTube).** WASAPI loopback already existed as the SYSTEM source (ADR 0029 §3, G1). Measured: it works. The gap was that FOLLOW MUSIC with no source running listened to nothing.
+  - New `AModularPlayerController::RequestFollowMusic()`. It starts `MakeMusicLook` through `RequestStartEffects` (one undo step, as in #86). If the effects started and the source state is Off, it also requests SYSTEM through `RequestSetAudioSource`, which the GameMode judges.
+  - A source the user chose is never changed. The source is not part of the undo step.
+  - The Audio panel and `StageCraft.Music.Follow` call it. The LIGHTS hint says FOLLOW MUSIC listens to this PC's sound when no source is on. ADR 0029 §17.
+  - The mapping is unchanged from #86: bass → intensity, mids → colour walk speed (spread over the fixtures), highs → shutter strobe (flash-limited, open in silence).
+- **2. Selectable assistant replies.** The reply body is a read-only `UMultiLineEditableText` (`UStageAIAssistantWidget::MakeSelectableText`), styled like the old text block. It gives mouse selection, Ctrl+C, Select All and a Copy context menu, and wraps. COPY (whole reply) stays.
+- **3. Viewport toolbar as dropdowns** (ADR 0008 amendment). SNAP and ANGLE segments (10 buttons), MOVE/ROTATE/SCALE and SKETCH/ASSIST are replaced by three `UStageMenuButton` dropdowns, built like the View menu:
+  - **Snap** ("Snap 50 cm · 15°"): grid and angle steps as radio entries, plus Snap to Items. Set directly with `SetGridSnap` / `SetAngleSnap`.
+  - **Transform** ("Move"): Move, Rotate, Scale.
+  - **Tools**: Sketch to Stage, AI Assistant.
+  - The bar is one short row: Perspective | Lit | Snap | Move | Tools. Lambdas hold their owners weakly, and labels redraw from the existing delegates.
+- **4. Sketch import accuracy** (ADR 0017 amendment).
+  - **Root-cause bug fixed:** the band that strips a deck's own outline was grown from the whole deck interior, so a truss line drawn *on* a deck was erased. Now only the outline mark's ink is stripped. `plan_drawing.png` now traces to 1 deck, **1 truss line** and 2 fixtures; before (#86) it was 0 truss lines.
+  - **Regularize** (`StageSketchImageTrace::Regularize`), on both the local trace and Claude's reading:
+    - the drawing's main direction comes from length-weighted edge angles modulo 90°, refined twice, and snaps to the image axes within 3°;
+    - decks whose edges are all within 6° of those axes, or of their own direction, become exactly rectilinear at the same size and place;
+    - truss segments within 6° become exactly straight;
+    - diagonals, triangles, trapezoids and fixtures are kept as drawn.
+  - **Scale from the drawing:** the `sketch_plan` tool has an optional `scale` (two points and a length in cm), filled when a length is written on the plan. `StageSketchVision::GetPlanWidthCm` uses it when plausible (span ≥ 5% of the image, width 5–100 m). The reference image is stretched to match, and the status line names the scale.
+  - The system prompt also asks for exact corners and square angles.
+- **5. MVR MV1** (ADR 0034 §14):
+  - **XML reader:** `StageXml` can keep leaf element text (`FLimits::bKeepText`, off for GDTF so it is unchanged). References are decoded, CDATA is kept, text is capped, and whitespace never trips the cap.
+  - **Parser:** `StageMvr::Parse` / `ParseSceneDescription` (`Private/Mvr/`, pure, any thread):
+    - Archive: root-only files; `GeneralSceneDescription.xml`; major version 1.
+    - Scene: layers, nested ChildLists with world matrices (object × parents × layer, mm), fixtures (GDTFSpec/Mode, addresses `U.A` or absolute, FixtureID/Numeric, UnitNumber, CustomId, Focus, multipatch), Geometry3D/Symbol, AUXData Symdefs.
+    - Caps: 64 MB, 512 entries, 32 MB XML, 20,000 objects, 4,096 fixtures, depth 32, 1,024 layers, 256 GDTF files.
+    - Structural errors refuse the file with a line number. Semantic gaps become warnings (at most 50, then a count).
+  - **Units:** `StageMvrUnits::ToUnreal` / `FromUnreal` mirror Y and convert mm to cm.
+  - **Probe:** dev-only `StageCraft.Mvr.Probe [folder or file]` for the MV0 corpus.
+  - **Not done:** MV2–MV5 (import into the stage, UI, export, re-import). M1–M4 are unanswered and there is no real corpus yet.
+
+**Files changed**
+- New:
+  - `Source/ModularSceneBuilder/Private/Mvr/StageMvrTypes.h`, `StageMvrParser.h`, `StageMvrParser.cpp`, `StageMvrConsoleCommands.cpp`
+  - `Private/Mvr/Tests/StageMvrTests.cpp`
+- Changed:
+  - Audio:
+    - `Public/Player/ModularPlayerController.h`, `Private/Player/ModularPlayerControllerProgrammer.cpp` (RequestFollowMusic)
+    - `Private/UI/StageAudioPanel.cpp`, `Private/Audio/StageAudioReactiveConsoleCommands.cpp` (call it; unused StageEffectTypes include removed)
+  - Assistant: `Public/UI/StageAIAssistantWidget.h`, `Private/UI/StageAIAssistantWidget.cpp`.
+  - Toolbar: `Public/UI/StageViewportToolbar.h`, `Private/UI/StageViewportToolbar.cpp`.
+  - Sketch:
+    - `Public/Sketch/StageSketchImageTrace.h`, `Private/Sketch/StageSketchImageTrace.cpp` (Regularize, outline band fix)
+    - `Public/Sketch/StageSketchVision.h`, `Private/Sketch/StageSketchVision.cpp` (scale, GetPlanWidthCm, prompt)
+    - `Private/Sketch/StageSketchSubsystem.cpp` (drawing scale, reference stretch)
+    - `Private/Sketch/Tests/StageSketchImageTests.cpp` (truss-on-deck case, `StageCraft.Sketch.Image.Regularize`)
+  - XML: `Private/Fixtures/StageXmlReader.h/.cpp`.
+  - Docs: ADR 0008, 0017, 0029 and 0034 amendments; `tasks/todo.md` (Phase 38, 38b); `STATE.md`.
+- No content assets, input actions or maps changed.
+
+**Verification** (Claude, 2026-11-10)
+- Builds:
+  - Editor: succeeded, 0 warning or error lines.
+  - Game (Development) and Shipping: succeeded, 0 warning or error lines.
+  - The Shipping exe has neither `StageCraft.Mvr.Probe` nor `StageCraft.Music.Follow` (UTF-16 scan); the controls "Snap to Items" and "Tool Windows" are there.
+  - The machine is near its commit limit (about 125 of 133 GB, mostly RCClient/RCService and WSL). One compiler stalled for 13 min and that build was stopped; the rebuild went through.
+- Automation: **263/263 passed** (258 + `StageCraft.Mvr.XmlText`, `.Values`, `.Scene`, `.Archive` and `StageCraft.Sketch.Image.Regularize`, plus the new truss-on-deck case in `.Trace`). User data unchanged (127 files).
+  - The first run caught two real issues, both fixed: whitespace before a child element could trip the text cap, and a "skewed" test shape was really a rotated rectangle (it is now a trapezoid).
+- Scripted `-game` runs `Verify87` and `Verify87b` (logs and screenshots checked):
+  - ffplay played a 120 BPM beat as a separate process.
+  - FOLLOW MUSIC with no source: "no source was listening; starting SYSTEM". The status went from Off to SystemAudio Running (default playback device, 48 kHz) with signal and 12 onsets. Fixture 1: dimmer 0.15–0.94 on the beat, colour walking, shutter capped at about 0.105.
+  - With TEST running, FOLLOW MUSIC kept TEST.
+  - The toolbar screenshot shows Perspective | Lit | Snap 50 cm · 15° | Move | Tools.
+  - The assistant reply renders in the selectable body with COPY.
+  - The Sketch import is squared and includes the truss line.
+- **Not verified:** a dropdown opened by a physical click (the OS-click helper did not find the game window this time); mouse selection and Ctrl+C in a reply; Claude's `scale` on a real dimensioned plan (online); YouTube in a real browser (ffplay stood in for it); MVR on real files.
+
+**Commit:** uncommitted (working tree).
+
+**Known issues / follow-ups**
+- Gevor: answer ADR 0034 M1–M4 and provide real `.mvr` files (Vectorworks, grandMA3, GDTF-Share) for `StageCraft.Mvr.Probe`. Then MV2 (review and import as one undo step through the GDTF library), MV3 (File › Import MVR…), MV4 (export, Pro gate), MV5.
+- Gevor: Ctrl+Click repro steps and the D3–D8 wording are still open from #86.
+- Other crowded panels (the Sketch window's toolbar, the Audio panel) could get the same dropdown treatment once Gevor approves the viewport bar.
+- A focused read-only reply text takes keyboard focus until the user clicks the viewport. Viewport shortcuts wait for that click.
+- The local trace cannot read written dimensions; only Claude's reading sets the scale from the drawing.

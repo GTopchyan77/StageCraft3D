@@ -555,6 +555,14 @@ public:
 	TArray<FGuid> RequestStartEffects(TConstArrayView<FStageEffect> Effects, const FText& StepName);
 
 	/**
+	 * FOLLOW MUSIC (STATE.md #87): starts StageEffectRules::MakeMusicLook on the selected fixtures (RequestStartEffects), and when
+	 * no music source is listening it also starts the SYSTEM source (RequestSetAudioSource), so whatever this PC plays, YouTube in a
+	 * browser included, drives the lights at once. A running source is never changed. Returns the started effects (empty when
+	 * refused); a source that cannot start is reported on OnRequestRejected and leaves the effects running.
+	 */
+	TArray<FGuid> RequestFollowMusic();
+
+	/**
 	 * Changes a running effect at once without an undo step, while a control is dragged; the first preview remembers the effects as
 	 * they were, so the RequestUpdateEffect that ends the drag records one step from there.
 	 */

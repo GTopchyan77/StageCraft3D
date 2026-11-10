@@ -17,10 +17,12 @@
 #include "Interaction/StageParameterInterface.h"
 #include "Misc/Paths.h"
 #include "ModularSceneBuilder.h"
+#include "Show/StageEffectTypes.h"
 #include "Show/StageImageLookReader.h"
 #include "Show/StageImagePalette.h"
 #include "Show/StageShowMix.h"
 #include "Subsystems/ShowControlSubsystem.h"
+#include "Subsystems/StageAudioReactiveSubsystem.h"
 #include "Subsystems/StageProgrammerSubsystem.h"
 #include "Subsystems/StageSessionSubsystem.h"
 #include "Subsystems/StageShowLibrarySubsystem.h"
@@ -592,6 +594,20 @@ TArray<FGuid> AModularPlayerController::RequestStartEffects(TConstArrayView<FSta
 	const FText Description = !StepName.IsEmpty() ? StepName
 		: FText::Format(LOCTEXT("StartEffect", "Start Effect: {0}"), First ? First->Effect.Name : FText::GetEmpty());
 	RecordEffectsStep(Description, MoveTemp(Before), *Programmer);
+	return Ids;
+}
+
+TArray<FGuid> AModularPlayerController::RequestFollowMusic()
+{
+	const TArray<FGuid> Ids = RequestStartEffects(StageEffectRules::MakeMusicLook(), LOCTEXT("FollowMusicStep", "Follow Music"));
+	// Effects that follow music do nothing without a source. Starting SYSTEM is a request like the panel's SOURCE buttons (judged
+	// by the GameMode); a source the user chose is left alone. Not part of the undo step: the source is a setting, not show data.
+	const UStageAudioReactiveSubsystem* Audio = UWorld::GetSubsystem<UStageAudioReactiveSubsystem>(GetWorld());
+	if (!Ids.IsEmpty() && Audio && Audio->GetState() == EStageAudioSourceState::Off)
+	{
+		UE_LOG(LogStageCraft, Log, TEXT("Follow Music: no source was listening; starting SYSTEM (this PC's sound)."));
+		RequestSetAudioSource(EStageAudioSource::SystemAudio);
+	}
 	return Ids;
 }
 
