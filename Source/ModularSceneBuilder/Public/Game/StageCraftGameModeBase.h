@@ -84,6 +84,13 @@ public:
 	FStageEconomyResultInfo EvaluateMvrImport(const APlayerController* Player) const;
 
 	/**
+	 * May Player use online fixture sources: sign in to GDTF Share, load its list, download files for review (Docs/ADR/0033 §18)?
+	 * Off when SessionRules.bAllowOnlineFixtureSources or bAllowFixtureImport is false, since every download ends in a fixture import.
+	 */
+	UFUNCTION(BlueprintNativeEvent, BlueprintCallable, Category = "StageCraft|Rules")
+	FStageEconomyResultInfo EvaluateOnlineFixtureSource(const APlayerController* Player) const;
+
+	/**
 	 * May Player export the stage as an MVR scene (Docs/ADR/0034 §7, MV4)? Off when SessionRules.bAllowMvrExport is false. Step 6 adds
 	 * the Pro entitlement (StageCraft.Entitlement.Pro.MvrExport, §2.1) here, as for remote control.
 	 */

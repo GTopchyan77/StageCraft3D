@@ -31,15 +31,30 @@ struct FStagePackageManifest
 	 * Manifest version 2; a version 1 package reads as false. Never permits republishing.
 	 */
 	bool bAllowExport = false;
+	/**
+	 * The GDTF fixture types whose files travel in the FIXT section, ascending (StagePackage::IsFixtureOrderLess): exactly the
+	 * device-library types the scene's items use (Docs/ADR/0033 §9). Manifest version 3; older manifests read as empty.
+	 */
+	TArray<FGuid> FixtureTypes;
 };
 
-/** A complete package in memory: manifest, scene, optional thumbnail. Plain value type, safe on any thread. */
+/** One GDTF file a package carries for a device-library fixture type its scene uses (Docs/ADR/0033 §9). */
+struct FStagePackageFixtureFile
+{
+	FGuid FixtureTypeId;
+	/** The whole .gdtf file, unchanged. The package checks only its size and ZIP signature; the library validates it (ADR 0033 §8). */
+	TArray<uint8> Bytes;
+};
+
+/** A complete package in memory: manifest, scene, optional thumbnail, GDTF files. Plain value type, safe on any thread. */
 struct FStagePackage
 {
 	FStagePackageManifest Manifest;
 	FStageSceneDocument Scene;
 	/** PNG bytes, or empty. */
 	TArray<uint8> ThumbnailPng;
+	/** One per entry of Manifest.FixtureTypes, in the same order. */
+	TArray<FStagePackageFixtureFile> FixtureFiles;
 };
 
 /**
@@ -57,9 +72,19 @@ namespace StagePackage
 	inline constexpr TCHAR FileExtension[] = TEXT(".stage");
 
 	inline constexpr uint32 ContainerVersion = 1;
-	/** 2 added allowExport (ADR 0022 §11.1). Older manifests are still read. */
-	inline constexpr int32 ManifestVersion = 2;
+	/** 2 added allowExport (ADR 0022 §11.1), 3 added fixtureTypes and the FIXT section (ADR 0033 §9). Older manifests are still read. */
+	inline constexpr int32 ManifestVersion = 3;
 	inline constexpr int32 FirstManifestVersionWithExportFlag = 2;
+	inline constexpr int32 FirstManifestVersionWithFixtureTypes = 3;
+
+	/** FIXT caps (ADR 0033 §9): files per package, bytes per file and in total. */
+	inline constexpr int32 MaxFixtureFiles = 64;
+	inline constexpr int64 MaxFixtureFileBytes = 16ll * 1024 * 1024;
+	inline constexpr int64 MaxFixtureTotalBytes = 32ll * 1024 * 1024;
+	/** The smallest file that can be a ZIP archive (an empty end-of-central-directory record). */
+	inline constexpr int64 MinFixtureFileBytes = 22;
+	/** FIXT payload cap: the count, an id and a size per entry, and the files. */
+	inline constexpr int64 MaxFixtureSectionBytes = MaxFixtureTotalBytes + 4 + MaxFixtureFiles * 20;
 	inline constexpr int32 MaxSections = 8;
 	inline constexpr int64 MaxManifestBytes = 256 * 1024;
 	inline constexpr int64 MaxSceneBytes = 64ll * 1024 * 1024;
@@ -85,8 +110,20 @@ namespace StagePackage
 	/** Success, or InvalidRequest when a field is out of its rules (§2.2). Call after NormalizeManifest. */
 	EStageMarketplaceResult ValidateManifest(const FStagePackageManifest& Manifest);
 
-	/** False when the scene contains items made from imported models or device-library fixtures (they exist only where they were imported; GDTF files travel with packages from step 4 of Docs/ADR/0033 §9). */
+	/**
+	 * False when the scene contains items made from imported models: they exist only where they were imported. Device-library
+	 * fixtures are portable because their GDTF files travel in the package (CollectFixtureTypes, Docs/ADR/0033 §9).
+	 */
 	bool IsPortable(const FStageSceneDocument& Scene);
+
+	/** The device-library fixture types the scene's items use, ascending by IsFixtureOrderLess. */
+	TArray<FGuid> CollectFixtureTypes(const FStageSceneDocument& Scene);
+
+	/** The FIXT order: A, B, C, then D, each compared as an unsigned number. Strictly ascending also means no repeats. */
+	bool IsFixtureOrderLess(const FGuid& Left, const FGuid& Right);
+
+	/** The ascending order Write requires of the manifest's fixture types and files. */
+	void SortFixtureFiles(TArray<FStagePackageFixtureFile>& Files);
 
 	/** Distinct catalog paths of the scene's items, sorted. */
 	TArray<FString> CollectRequiredItems(const FStageSceneDocument& Scene);
@@ -96,8 +133,10 @@ namespace StagePackage
 
 	/**
 	 * Writes Package to OutBytes. The manifest's counts and required items must describe the scene (ItemCount, CueCount,
-	 * RequiredItems), the manifest must validate and the thumbnail must be valid; otherwise InvalidRequest. TooLarge when a
-	 * section or the whole package is over its cap.
+	 * RequiredItems), the manifest must validate and the thumbnail must be valid; otherwise InvalidRequest. The manifest's
+	 * FixtureTypes must equal CollectFixtureTypes(Scene) and FixtureFiles must carry them in that order, each within
+	 * MinFixtureFileBytes..MaxFixtureFileBytes and starting with a ZIP signature; otherwise InvalidRequest. TooLarge when a
+	 * section, the fixture files together or the whole package are over their caps.
 	 */
 	EStageMarketplaceResult Write(const FStagePackage& Package, TArray<uint8>& OutBytes);
 
@@ -106,7 +145,9 @@ namespace StagePackage
 
 	/**
 	 * Reads and verifies the whole package. The scene must parse with no dropped items and must match the manifest's counts;
-	 * RequiredItems is recomputed from the scene.
+	 * RequiredItems is recomputed from the scene. The FIXT section must be present exactly when the manifest names fixture types,
+	 * carry exactly those ids in order within the caps, and the types must be exactly the ones the scene uses (a used type
+	 * missing: NotPortable; anything else: Corrupt). The GDTF files themselves are not parsed here.
 	 */
 	EStageMarketplaceResult Read(TConstArrayView<uint8> Bytes, FStagePackage& OutPackage);
 

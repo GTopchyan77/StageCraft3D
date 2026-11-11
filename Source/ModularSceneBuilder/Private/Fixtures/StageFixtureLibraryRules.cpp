@@ -160,6 +160,17 @@ namespace StageFixtureLibrary
 		return true;
 	}
 
+	bool ParseFixtureItemPath(const FString& PackageName, FGuid& OutFixtureTypeId)
+	{
+		OutFixtureTypeId.Invalidate();
+		if (!IsFixtureItemPath(PackageName))
+		{
+			return false;
+		}
+		const FString Digits = PackageName.Mid(FCString::Strlen(PackageRoot), GuidDigits);
+		return FGuid::ParseExact(Digits, EGuidFormats::Digits, OutFixtureTypeId) && OutFixtureTypeId.IsValid();
+	}
+
 	FStageFixtureTypeRef MakeTypeRef(const ULightingFixtureData& Fixture)
 	{
 		FStageFixtureTypeRef Ref;

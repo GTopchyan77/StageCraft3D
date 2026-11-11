@@ -181,6 +181,19 @@ FStageEconomyResultInfo AStageCraftGameModeBase::EvaluateMvrImport_Implementatio
 	return FStageEconomyResultInfo::Ok();
 }
 
+FStageEconomyResultInfo AStageCraftGameModeBase::EvaluateOnlineFixtureSource_Implementation(const APlayerController* Player) const
+{
+	if (!Player)
+	{
+		return FStageEconomyResultInfo::Fail(EStageEconomyResult::InvalidRequest, LOCTEXT("CannotUseGdtfShare", "Online fixture sources are not available."));
+	}
+	if (!SessionRules.bAllowOnlineFixtureSources || !SessionRules.bAllowFixtureImport)
+	{
+		return FStageEconomyResultInfo::Fail(EStageEconomyResult::SessionRuleViolation, LOCTEXT("GdtfShareDisabled", "Online fixture sources are switched off for this session."));
+	}
+	return FStageEconomyResultInfo::Ok();
+}
+
 FStageEconomyResultInfo AStageCraftGameModeBase::EvaluateMvrExport_Implementation(const APlayerController* Player) const
 {
 	if (!Player)

@@ -728,3 +728,17 @@ Gevor's choices: automation tests on a harness game instance (not AFunctionalTes
 - [ ] Real meshes for trusses and set pieces instead of boxes (DCC bridge exporter per item; M3 follow-up)
 - [ ] Step 6: Pro entitlement StageCraft.Entitlement.Pro.MvrExport in EvaluateMvrExport
 - [ ] MV5: re-import differences, preserved unknown nodes
+
+## Phase 41 - Step 4: GDTF Share downloads, download manager, package FIXT section (requested by Gevor 2026-11-11; STATE.md #91; ADR 0033 section 18)
+- [x] GDTF Share API terms checked (per-user accounts, 2 h session, 120 min list refresh, 24 h cache, uploader shown, attribution); ADR 0033 section 18.1
+- [x] StageGdtfShare protocol (pure): login body, result flag, capped list parsing, cookies, search, GDTF Share file names
+- [x] UStageGdtfShareSubsystem: sign-in (https only, password never kept), list cache, download manager (4 at once, progress, cancel), bytes into the fixture import review
+- [x] UStageFixtureLibrarySubsystem::RequestImportBytes and CanAddParsedFile
+- [x] Request bridge: RequestGdtfShareSignIn/SignOut/Refresh/Download/CancelDownload; GameMode EvaluateOnlineFixtureSource; SessionRules.bAllowOnlineFixtureSources
+- [x] GDTF Share panel (DA_Panel_GdtfShare), File > Get Fixtures from GDTF Share..., help gdtf-share EN/HY, Powered by GDTF
+- [x] Package manifest v3 and FIXT section (ADR 0033 section 9): write, read, publish with the sharing confirmation, acquire adds the types; publish form GDTF FIXTURE FILES
+- [x] Cloud server: FIXT section and caps; scene format 12 accepted (it refused every current package before)
+- [ ] Gevor: sign in with a real GDTF Share account and download a few fixtures (no real account was used in tests)
+- [ ] GDTF logo next to Powered by GDTF (required by the API terms before release)
+- [ ] Remember the GDTF Share user name between runs (password never); optional sync server (BaseUrl)
+- [ ] Decide whether marketplace packages may carry GDTF files at all (publisher confirmation is built; terms do not address redistribution)

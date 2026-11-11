@@ -7,7 +7,7 @@
 
 namespace StageZip
 {
-	namespace
+	namespace WriterFormat
 	{
 		constexpr uint32 LocalHeaderSignature = 0x04034b50;
 		constexpr uint32 DirectoryEntrySignature = 0x02014b50;
@@ -78,13 +78,13 @@ namespace StageZip
 		Entry.Crc32 = StageZip::Crc32(Data);
 
 		TArray<uint8> Compressed;
-		const bool bDeflated = Store == EStore::Deflate && Data.Num() > 0 && Deflate(Data, Compressed) && Compressed.Num() < Data.Num();
+		const bool bDeflated = Store == EStore::Deflate && Data.Num() > 0 && WriterFormat::Deflate(Data, Compressed) && Compressed.Num() < Data.Num();
 		const TConstArrayView<uint8> Payload = bDeflated ? TConstArrayView<uint8>(Compressed) : Data;
-		Entry.Method = bDeflated ? MethodDeflate : MethodStored;
+		Entry.Method = bDeflated ? WriterFormat::MethodDeflate : WriterFormat::MethodStored;
 
-		const int64 Added = LocalHeaderSize + Entry.NameUtf8.Num() + Payload.Num();
-		const int64 EntryDirectoryBytes = DirectoryEntrySize + Entry.NameUtf8.Num();
-		const int64 DirectoryAfter = DirectoryBytes + EntryDirectoryBytes + EndOfDirectorySize;
+		const int64 Added = WriterFormat::LocalHeaderSize + Entry.NameUtf8.Num() + Payload.Num();
+		const int64 EntryDirectoryBytes = WriterFormat::DirectoryEntrySize + Entry.NameUtf8.Num();
+		const int64 DirectoryAfter = DirectoryBytes + EntryDirectoryBytes + WriterFormat::EndOfDirectorySize;
 		if (int64(Data.Num()) > MaxBytes || int64(Bytes.Num()) + Added + DirectoryAfter > MaxBytes || int64(Bytes.Num()) + Added > MAX_int32)
 		{
 			OutError = FString::Printf(TEXT("\"%s\" would make the archive larger than a ZIP without ZIP64 can be."), *Name);
@@ -95,17 +95,17 @@ namespace StageZip
 		Entry.LocalHeaderOffset = uint32(Bytes.Num());
 
 		Bytes.Reserve(Bytes.Num() + int32(Added));
-		Write32(Bytes, LocalHeaderSignature);
-		Write16(Bytes, VersionNeeded);
-		Write16(Bytes, FlagUtf8Names);
-		Write16(Bytes, Entry.Method);
-		Write16(Bytes, DosTime);
-		Write16(Bytes, DosDate);
-		Write32(Bytes, Entry.Crc32);
-		Write32(Bytes, Entry.CompressedSize);
-		Write32(Bytes, Entry.UncompressedSize);
-		Write16(Bytes, uint16(Entry.NameUtf8.Num()));
-		Write16(Bytes, 0);
+		WriterFormat::Write32(Bytes, WriterFormat::LocalHeaderSignature);
+		WriterFormat::Write16(Bytes, WriterFormat::VersionNeeded);
+		WriterFormat::Write16(Bytes, WriterFormat::FlagUtf8Names);
+		WriterFormat::Write16(Bytes, Entry.Method);
+		WriterFormat::Write16(Bytes, WriterFormat::DosTime);
+		WriterFormat::Write16(Bytes, WriterFormat::DosDate);
+		WriterFormat::Write32(Bytes, Entry.Crc32);
+		WriterFormat::Write32(Bytes, Entry.CompressedSize);
+		WriterFormat::Write32(Bytes, Entry.UncompressedSize);
+		WriterFormat::Write16(Bytes, uint16(Entry.NameUtf8.Num()));
+		WriterFormat::Write16(Bytes, 0);
 		Bytes.Append(Entry.NameUtf8);
 		Bytes.Append(Payload.GetData(), Payload.Num());
 		DirectoryBytes += EntryDirectoryBytes;
@@ -118,34 +118,34 @@ namespace StageZip
 		const uint32 DirectoryOffset = uint32(Bytes.Num());
 		for (const FWritten& Entry : Entries)
 		{
-			Write32(Bytes, DirectoryEntrySignature);
-			Write16(Bytes, VersionNeeded);
-			Write16(Bytes, VersionNeeded);
-			Write16(Bytes, FlagUtf8Names);
-			Write16(Bytes, Entry.Method);
-			Write16(Bytes, DosTime);
-			Write16(Bytes, DosDate);
-			Write32(Bytes, Entry.Crc32);
-			Write32(Bytes, Entry.CompressedSize);
-			Write32(Bytes, Entry.UncompressedSize);
-			Write16(Bytes, uint16(Entry.NameUtf8.Num()));
-			Write16(Bytes, 0);
-			Write16(Bytes, 0);
-			Write16(Bytes, 0);
-			Write16(Bytes, 0);
-			Write32(Bytes, 0);
-			Write32(Bytes, Entry.LocalHeaderOffset);
+			WriterFormat::Write32(Bytes, WriterFormat::DirectoryEntrySignature);
+			WriterFormat::Write16(Bytes, WriterFormat::VersionNeeded);
+			WriterFormat::Write16(Bytes, WriterFormat::VersionNeeded);
+			WriterFormat::Write16(Bytes, WriterFormat::FlagUtf8Names);
+			WriterFormat::Write16(Bytes, Entry.Method);
+			WriterFormat::Write16(Bytes, WriterFormat::DosTime);
+			WriterFormat::Write16(Bytes, WriterFormat::DosDate);
+			WriterFormat::Write32(Bytes, Entry.Crc32);
+			WriterFormat::Write32(Bytes, Entry.CompressedSize);
+			WriterFormat::Write32(Bytes, Entry.UncompressedSize);
+			WriterFormat::Write16(Bytes, uint16(Entry.NameUtf8.Num()));
+			WriterFormat::Write16(Bytes, 0);
+			WriterFormat::Write16(Bytes, 0);
+			WriterFormat::Write16(Bytes, 0);
+			WriterFormat::Write16(Bytes, 0);
+			WriterFormat::Write32(Bytes, 0);
+			WriterFormat::Write32(Bytes, Entry.LocalHeaderOffset);
 			Bytes.Append(Entry.NameUtf8);
 		}
 		const uint32 DirectorySize = uint32(Bytes.Num()) - DirectoryOffset;
-		Write32(Bytes, EndOfDirectorySignature);
-		Write16(Bytes, 0);
-		Write16(Bytes, 0);
-		Write16(Bytes, uint16(Entries.Num()));
-		Write16(Bytes, uint16(Entries.Num()));
-		Write32(Bytes, DirectorySize);
-		Write32(Bytes, DirectoryOffset);
-		Write16(Bytes, 0);
+		WriterFormat::Write32(Bytes, WriterFormat::EndOfDirectorySignature);
+		WriterFormat::Write16(Bytes, 0);
+		WriterFormat::Write16(Bytes, 0);
+		WriterFormat::Write16(Bytes, uint16(Entries.Num()));
+		WriterFormat::Write16(Bytes, uint16(Entries.Num()));
+		WriterFormat::Write32(Bytes, DirectorySize);
+		WriterFormat::Write32(Bytes, DirectoryOffset);
+		WriterFormat::Write16(Bytes, 0);
 
 		Entries.Reset();
 		DirectoryBytes = 0;

@@ -340,7 +340,7 @@ bool FStageMarketplaceManifestTest::RunTest(const FString& Parameters)
 	FStagePackageManifest Parsed;
 	TestEqual(TEXT("Serialized manifest parses"), Str(StagePackage::ParseManifest(Json, Parsed)), Str(EStageMarketplaceResult::Success));
 	TestEqual(TEXT("Unknown kind"), Str(StagePackage::ParseManifest(Json.Replace(TEXT("\"LightingRig\""), TEXT("\"Hologram\"")), Parsed)), Str(EStageMarketplaceResult::Corrupt));
-	TestEqual(TEXT("Newer manifest"), Str(StagePackage::ParseManifest(Json.Replace(TEXT("\"version\":2"), TEXT("\"version\":3")), Parsed)), Str(EStageMarketplaceResult::VersionMismatch));
+	TestEqual(TEXT("Newer manifest"), Str(StagePackage::ParseManifest(Json.Replace(TEXT("\"version\":3"), TEXT("\"version\":4")), Parsed)), Str(EStageMarketplaceResult::VersionMismatch));
 	TestEqual(TEXT("Unknown category parses"), Str(StagePackage::ParseManifest(Json.Replace(TEXT("Category.Festival"), TEXT("Category.Circus")), Parsed)), Str(EStageMarketplaceResult::Success));
 	TestEqual(TEXT("... as Other"), Parsed.Category, StageCraftTags::Marketplace_Category_Other.GetTag());
 	TestEqual(TEXT("Not JSON"), Str(StagePackage::ParseManifest(TEXT("{"), Parsed)), Str(EStageMarketplaceResult::Corrupt));
@@ -487,7 +487,7 @@ bool FStageMarketplaceExportFlagTest::RunTest(const FString& Parameters)
 	Allowing.bAllowExport = true;
 	const FString Json = StagePackage::SerializeManifest(Allowing);
 	FStagePackageManifest Parsed;
-	TestEqual(TEXT("A version 2 manifest parses"), Str(StagePackage::ParseManifest(Json, Parsed)), Str(EStageMarketplaceResult::Success));
+	TestEqual(TEXT("A version 3 manifest parses"), Str(StagePackage::ParseManifest(Json, Parsed)), Str(EStageMarketplaceResult::Success));
 	TestTrue(TEXT("... with the publisher's flag"), Parsed.bAllowExport);
 	TestTrue(TEXT("The listing shows it"), StagePackage::ToListing(Parsed, false, 0, 0).bAllowsExport);
 
@@ -495,7 +495,7 @@ bool FStageMarketplaceExportFlagTest::RunTest(const FString& Parameters)
 	TestFalse(TEXT("... as off"), Parsed.bAllowExport);
 
 	// A version 1 package predates the flag: it never allows export, whatever extra field it carries.
-	const FString Version1 = Json.Replace(TEXT("\"version\":2"), TEXT("\"version\":1"));
+	const FString Version1 = Json.Replace(TEXT("\"version\":3"), TEXT("\"version\":1"));
 	TestEqual(TEXT("A version 1 manifest still parses"), Str(StagePackage::ParseManifest(Version1, Parsed)), Str(EStageMarketplaceResult::Success));
 	TestFalse(TEXT("... and never allows export"), Parsed.bAllowExport);
 

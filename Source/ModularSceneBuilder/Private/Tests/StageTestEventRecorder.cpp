@@ -4,6 +4,7 @@
 
 #include "Bridge/StageBridgeSubsystem.h"
 #include "Engine/GameInstance.h"
+#include "Fixtures/StageGdtfShareSubsystem.h"
 #include "Marketplace/StageAcquireDispatchSubsystem.h"
 #include "Marketplace/StageMarketplaceSubsystem.h"
 #include "Services/StageAIToolSubsystem.h"
@@ -40,6 +41,10 @@ void UStageTestEventRecorder::Bind(UGameInstance& GameInstance)
 	{
 		Tools->OnJobCompleted.AddUniqueDynamic(this, &ThisClass::HandleToolJob);
 	}
+	if (UStageGdtfShareSubsystem* Share = GameInstance.GetSubsystem<UStageGdtfShareSubsystem>())
+	{
+		Share->OnRequestFinished.AddUniqueDynamic(this, &ThisClass::HandleGdtfShare);
+	}
 }
 
 void UStageTestEventRecorder::Unbind()
@@ -74,6 +79,10 @@ void UStageTestEventRecorder::Unbind()
 	if (UStageAIToolSubsystem* Tools = GameInstance->GetSubsystem<UStageAIToolSubsystem>())
 	{
 		Tools->OnJobCompleted.RemoveDynamic(this, &ThisClass::HandleToolJob);
+	}
+	if (UStageGdtfShareSubsystem* Share = GameInstance->GetSubsystem<UStageGdtfShareSubsystem>())
+	{
+		Share->OnRequestFinished.RemoveDynamic(this, &ThisClass::HandleGdtfShare);
 	}
 }
 
@@ -125,4 +134,9 @@ void UStageTestEventRecorder::HandleSend(const FStageBridgeResultInfo& Result)
 void UStageTestEventRecorder::HandleToolJob(const FStageAIToolResultInfo& Result)
 {
 	ToolJobs.Add(Result);
+}
+
+void UStageTestEventRecorder::HandleGdtfShare(const FStageGdtfShareResultInfo& Result)
+{
+	GdtfShareResults.Add(Result);
 }

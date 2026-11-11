@@ -27,6 +27,7 @@ namespace StageCraftTags
 	UE_DEFINE_GAMEPLAY_TAG_COMMENT(Panel_Problems,	"StageCraft.Panel.Problems",	"Problems: what keeps the show from looking or working as intended (patch, DMX in and out, masters, cues, music), worst first; a click goes to the fix (ADR 0030).");
 	UE_DEFINE_GAMEPLAY_TAG_COMMENT(Panel_VisionInspector,	"StageCraft.Panel.VisionInspector",	"Vision Inspector: a photo of a real stage read into a bill of materials, matched to the catalog and built in one undo step (ADR 0032 §8).");
 	UE_DEFINE_GAMEPLAY_TAG_COMMENT(Panel_Support,	"StageCraft.Panel.Support",	"Support and bug report: send a report with optional log and screenshot to StageCraft Cloud, or save it on disk (ADR 0032 §7).");
+	UE_DEFINE_GAMEPLAY_TAG_COMMENT(Panel_GdtfShare,	"StageCraft.Panel.GdtfShare",	"GDTF Share: sign in with your own account, search the fixture list and download files into the fixture import review (ADR 0033 §18).");
 	UE_DEFINE_GAMEPLAY_TAG_COMMENT(Panel_Preferences,	"StageCraft.Panel.Preferences",	"Preferences: keyboard shortcuts, camera look, viewport and audio.");
 	UE_DEFINE_GAMEPLAY_TAG_COMMENT(Panel_Sketch,		"StageCraft.Panel.Sketch",		"Sketch to Stage: draw decks, truss lines and fixtures in 2D and generate them in 3D.");
 	UE_DEFINE_GAMEPLAY_TAG_COMMENT(Panel_Assistant,	"StageCraft.Panel.Assistant",	"AI Assistant: ask about the stage and request safe, undoable changes in plain language.");

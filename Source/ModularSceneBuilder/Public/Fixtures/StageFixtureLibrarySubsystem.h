@@ -145,6 +145,20 @@ public:
 	/** Reads and checks GDTF bytes taken out of another file (SourceName names it in reports). Any thread; nothing is registered. */
 	static TSharedRef<FParsedFile> ParseEmbeddedFile(TArray<uint8> Bytes, const FString& SourceName);
 
+	/**
+	 * True when File was read and parsed, its report allows adding it, and its FixtureTypeID is ExpectedTypeId: what a package's
+	 * FIXT file must pass before its scene is accepted (Docs/ADR/0033 §9). Any thread.
+	 */
+	static bool CanAddParsedFile(const FParsedFile& File, const FGuid& ExpectedTypeId);
+
+	/**
+	 * Reads GDTF bytes that did not come from a file the user picked (a GDTF Share download) for review, like RequestImport: the
+	 * bytes are parsed on a worker and become a review (OnReviewsChanged), or report through OnImportFinished when they are too
+	 * large. SourceName names the file in the review and becomes the library's source file name. Refused at once (and returned) when
+	 * SourceName is not a .gdtf name, is already being read or reviewed, or MaxReviews files are waiting; Success means accepted.
+	 */
+	FStageFixtureImportOutcome RequestImportBytes(TArray<uint8> Bytes, const FString& SourceName);
+
 	/** What the import report shows for a parsed file: type, modes, warnings, errors, and whether the library has that type. */
 	FStageFixtureImportReview DescribeParsedFile(const FParsedFile& File) const { return MakeReview(File); }
 

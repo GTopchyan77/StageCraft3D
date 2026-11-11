@@ -146,7 +146,7 @@ export function sceneItem(path = '/Game/StageCraft/Items/DA_Truss.DA_Truss', id:
 }
 
 export function sceneJson(items: unknown[] = [sceneItem()], extra: Record<string, unknown> = {}): Record<string, unknown> {
-  return { format: 'StageCraftScene', version: 11, name: 'Test', level: 'L_Test', savedAt: '2026-11-01T00:00:00.000Z', items, cues: [], ...extra };
+  return { format: 'StageCraftScene', version: 12, name: 'Test', level: 'L_Test', savedAt: '2026-11-01T00:00:00.000Z', items, cues: [], ...extra };
 }
 
 export function manifestJson(fields: ManifestFields = {}, scene: Record<string, unknown> = sceneJson()): ManifestFields {
@@ -164,7 +164,7 @@ export function manifestJson(fields: ManifestFields = {}, scene: Record<string, 
     keywords: ['arena'],
     price: { credits: 0, realMoney: { amount: 0, currency: '' } },
     createdAt: '2026-11-02T13:43:11.360Z',
-    sceneVersion: 11,
+    sceneVersion: 12,
     stats: { items: items.length, fixtures: 0, cues: Array.isArray(scene.cues) ? scene.cues.length : 0 },
     requiredItems: required,
     allowExport: false,
@@ -222,7 +222,15 @@ export const PNG_1x1 = Buffer.from(
 );
 
 export function writePackage(
-  options: { manifest?: ManifestFields; scene?: Record<string, unknown>; thumbnail?: Buffer | null; manifestRaw?: string; sceneRaw?: string } = {},
+  options: {
+    manifest?: ManifestFields;
+    scene?: Record<string, unknown>;
+    thumbnail?: Buffer | null;
+    manifestRaw?: string;
+    sceneRaw?: string;
+    /** Raw FIXT payload (see fixtureSection), written as its own section when given. */
+    fixtures?: Buffer;
+  } = {},
 ): { bytes: Buffer; id: string } {
   const scene = options.scene ?? sceneJson();
   const manifest = options.manifest ?? manifestJson({}, scene);
@@ -234,7 +242,60 @@ export function writePackage(
   if (thumbnail) {
     sections.push({ tag: 'THMB', raw: thumbnail });
   }
+  if (options.fixtures) {
+    sections.push({ tag: 'FIXT', raw: options.fixtures });
+  }
   return { bytes: writeContainer(sections), id: String(manifest.id) };
+}
+
+// ---------- device-library fixtures (ADR 0033 §9) ----------
+
+/** The four u32 words (FGuid A, B, C, D) of canonical GUID text. */
+export function guidWords(id: string): [number, number, number, number] {
+  const hex = id.replace(/-/g, '');
+  return [0, 8, 16, 24].map((at) => parseInt(hex.slice(at, at + 8), 16)) as [number, number, number, number];
+}
+
+/** A library mode's item path: /Temp/StageCraftFixtures/<FGuid Digits>/<slug>.<slug>. */
+export function fixturePath(typeId: string, slug = 'Mode_1'): string {
+  return `/Temp/StageCraftFixtures/${typeId.replace(/-/g, '')}/${slug}.${slug}`;
+}
+
+/** A v12 item of a library mode with its "fixtureType" reference, as FStageSceneStore::Serialize writes it. */
+export function fixtureItem(typeId: string, slug = 'Mode_1'): Record<string, unknown> {
+  return { ...sceneItem(fixturePath(typeId, slug)), fixtureType: { id: typeId, manufacturer: 'StageCraft', name: 'Test Spot', mode: slug } };
+}
+
+/** Bytes that pass the reader's .gdtf check: the ZIP local header magic, padded to size. */
+export function gdtfBytes(size = 64, fill = 0x41): Buffer {
+  const bytes = Buffer.alloc(size, fill);
+  Buffer.from([0x50, 0x4b, 0x03, 0x04]).copy(bytes, 0, 0, Math.min(4, size));
+  return bytes;
+}
+
+export interface FixtureEntrySpec {
+  id: string | [number, number, number, number];
+  /** File bytes; when size is also given only the header claims it (hostile tests). */
+  data?: Buffer;
+  size?: number;
+}
+
+/** A raw FIXT payload: u32 count, then per entry four u32 id words, a u32 size and the bytes, all little-endian. */
+export function fixtureSection(entries: FixtureEntrySpec[], options: { count?: number; trailing?: Buffer } = {}): Buffer {
+  const parts: Buffer[] = [];
+  const count = Buffer.alloc(4);
+  count.writeUInt32LE(options.count ?? entries.length, 0);
+  parts.push(count);
+  for (const entry of entries) {
+    const data = entry.data ?? gdtfBytes();
+    const header = Buffer.alloc(20);
+    const words = typeof entry.id === 'string' ? guidWords(entry.id) : entry.id;
+    words.forEach((word, index) => header.writeUInt32LE(word >>> 0, index * 4));
+    header.writeUInt32LE(entry.size ?? data.length, 16);
+    parts.push(header, data);
+  }
+  parts.push(options.trailing ?? Buffer.alloc(0));
+  return Buffer.concat(parts);
 }
 
 // ---------- webhooks ----------

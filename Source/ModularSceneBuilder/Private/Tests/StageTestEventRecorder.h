@@ -5,6 +5,7 @@
 #include "CoreMinimal.h"
 #include "Bridge/StageBridgeTypes.h"
 #include "Economy/StageEconomyTypes.h"
+#include "Fixtures/StageGdtfShareTypes.h"
 #include "Marketplace/StageDispatchTypes.h"
 #include "Marketplace/StageMarketplaceTypes.h"
 #include "Services/StageAIToolTypes.h"
@@ -42,6 +43,7 @@ public:
 	TArray<FStageOrderResultInfo> Orders;
 	TArray<FStageBridgeResultInfo> Sends;
 	TArray<FStageAIToolResultInfo> ToolJobs;
+	TArray<FStageGdtfShareResultInfo> GdtfShareResults;
 
 private:
 	UFUNCTION()
@@ -64,6 +66,8 @@ private:
 	void HandleSend(const FStageBridgeResultInfo& Result);
 	UFUNCTION()
 	void HandleToolJob(const FStageAIToolResultInfo& Result);
+	UFUNCTION()
+	void HandleGdtfShare(const FStageGdtfShareResultInfo& Result);
 
 	TWeakObjectPtr<class UGameInstance> Bound;
 };

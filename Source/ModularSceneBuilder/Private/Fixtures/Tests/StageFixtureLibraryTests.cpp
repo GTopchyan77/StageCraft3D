@@ -461,7 +461,8 @@ bool FStageSceneFixtureTypesTest::RunTest(const FString& Parameters)
 	TestTrue(TEXT("Type reference kept"), Fixture.FixtureType.Id == SpotId && Fixture.FixtureType.Manufacturer == TEXT("StageCraft")
 		&& Fixture.FixtureType.Name == TEXT("Test Spot") && Fixture.FixtureType.Mode == TEXT("Standard"));
 	TestFalse(TEXT("Content items name no type"), Parsed.Items[1].FixtureType.IsSet());
-	TestFalse(TEXT("Library fixtures make a scene not portable"), StagePackage::IsPortable(Parsed));
+	TestTrue(TEXT("Library fixtures are portable: their GDTF files travel in the package"), StagePackage::IsPortable(Parsed));
+	TestTrue(TEXT("and the package names their type"), StagePackage::CollectFixtureTypes(Parsed) == TArray<FGuid>({ SpotId }));
 	TestEqual(TEXT("Nothing dropped"), Report.InvalidItems, 0);
 
 	AddInfo(TEXT("Kept items (not placed on this PC) are saved back with their type."));

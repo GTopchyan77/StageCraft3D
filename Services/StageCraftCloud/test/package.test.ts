@@ -145,7 +145,9 @@ test('manifest rules mirror ParseManifest / NormalizeManifest / ValidateManifest
   corrupt({ version: 0 });
   corrupt({ version: 1.5 });
   corrupt({ version: '2' });
-  refused(() => parse({ version: 3 }), 'VersionMismatch');
+  refused(() => parse({ version: 4 }), 'VersionMismatch');
+  corrupt({ version: 3 });
+  assert.deepEqual(parse({ version: 3, fixtureTypes: [] }).fixtureTypes, []);
   corrupt({ id: 'nope' });
   corrupt({ id: '00000000-0000-0000-0000-000000000000' });
   corrupt({ title: 5 });
@@ -219,7 +221,7 @@ test('validateManifest names the broken rule', () => {
 
 test('scene checks: version, items, ids, portability, origin, cues, counts', () => {
   const pkg = (scene: Record<string, unknown>, manifestFields: Record<string, unknown> = {}) => writePackage({ scene, manifest: manifestJson(manifestFields, scene) }).bytes;
-  refused(() => readPackage(pkg(sceneJson([], { version: 12 }))), 'VersionMismatch');
+  refused(() => readPackage(pkg(sceneJson([], { version: 13 }))), 'VersionMismatch');
   refused(() => readPackage(pkg(sceneJson([], { version: 0 }))), 'VersionMismatch');
   refused(() => readPackage(pkg(sceneJson([], { format: 'Nope' }))), 'Corrupt');
   refused(() => readPackage(writePackage({ sceneRaw: '{bad' }).bytes), 'Corrupt');

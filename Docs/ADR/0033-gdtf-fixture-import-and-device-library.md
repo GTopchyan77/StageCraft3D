@@ -249,7 +249,7 @@ A `.gdtf` is untrusted input.
   - The same text goes to the log under `LogStageCraft`. Nothing from the file is logged beyond names and counts.
 - **Licensing.** GDTF is an open specification; this code is clean-room from the public spec, with no third-party GDTF libraries. Manufacturer files are the user's own downloads (G1).
 
-## 9. Packages and portability (built in step 4)
+## 9. Packages and portability (built in step 4: see §18.3)
 
 - **Until step 4,** scenes with GDTF fixtures are `NotPortable` for publishing, like scenes with imported models. The reason text names the fixtures.
 - **Step 4 design.**
@@ -439,3 +439,89 @@ GD4 was built on 2026-11-09 (STATE.md #83). Where it settles a detail of §7 and
   - Armenian is served through the help article and the assistant.
 - **Not in GD4.**
   - The Patch panel's Mode column; the inspector's Type covers the swap, as one undo step.
+
+## 18. Step 4 as built: GDTF Share downloads and the package FIXT section (2026-11-11, STATE.md #91)
+
+Gevor asked (2026-11-11) for roadmap Step 4: online GDTF-Share fixture downloads, the download manager, and the `.stage` FIXT section of §9.
+
+### 18.1 G1 revisited: the GDTF Share API terms
+
+G1 (§2) chose user import only "until the GDTF Share terms are checked". The terms on the public API page (gdtf-share.com, Developer Documentation › GDTF Share API, read 2026-11-11) say:
+- A client that connects directly must let **each user sign in with their own GDTF Share account**. A sync server would authenticate once for everyone; it is recommended but not required.
+- The session cookie expires after **two hours** without a request.
+- Clients should refresh the list about every **120 minutes**, not more often.
+- Temporary caching of GDTF files is allowed for at most **24 hours**.
+- Listings must show the **uploader** (manufacturer or user), and search must cover the name.
+- **Attribution:** "Powered by GDTF" with the GDTF logo, in the manual, About screen or documentation.
+- Redistribution of the files is not addressed.
+
+So G1 (b) is built as a **direct client with per-user accounts**. No StageCraft server and no shared account are involved. G1 (c), a StageCraft cloud library that redistributes files, stays out.
+
+### 18.2 The client
+
+- **Protocol** (`StageGdtfShare`, `Private/Fixtures/StageGdtfShareProtocol`, pure).
+  - Login body, result flag, list parsing, Set-Cookie to Cookie, search, file names.
+  - The list is untrusted remote input:
+    - answer caps: login 64 KB, list 64 MB, file 50 MB (the library's own limit);
+    - at most 200,000 entries, 256 characters per text and 64 modes per entry;
+    - entries without a positive integer rid, a manufacturer or a fixture name are skipped and counted, as are repeated rids;
+    - dates are accepted as numbers or numeric strings, because the API page shows both.
+  - Cookies are taken name=value only, from headers the HTTP layer may have merged with commas.
+- **`UStageGdtfShareSubsystem`** (GameInstance, `Config=Game`).
+  - States: SignedOut, SigningIn, SignedIn.
+  - **Credentials:**
+    - The password is sent once, over https only (`IsSafeBaseUrl`; a configured http root is refused before anything is sent).
+    - The password is never stored, logged or kept after the request. The panel clears its field when the request goes out.
+    - Only the session cookie is kept, in memory, for the run.
+    - A 401 ends the session (SessionExpired). The user signs in again; there is no silent re-login, because nothing to re-login with is kept.
+  - **List:** fetched after sign-in and parsed on a worker. Fetched again only when older than 120 minutes, unless forced (REFRESH).
+  - **Downloads** (the download manager):
+    - at most 4 at once; rows show progress, a cancel and failures; 32 rows are kept;
+    - the bytes go to `UStageFixtureLibrarySubsystem::RequestImportBytes`, so every file passes the §8 validation and the import report;
+    - nothing reaches the library before ADD;
+    - nothing is written to disk before ADD, so the 24-hour cache rule never applies. A file the user adds is their library copy, like a file they downloaded themselves.
+    - The library keeps it under GDTF Share's own name, `Manufacturer@Fixture@Revision.gdtf`.
+  - Answers carry serials: one from an older session, list request or cancelled download is dropped.
+  - `BaseUrl` (config) can point at a sync server later.
+- **Request bridge:** `AModularPlayerController::RequestGdtfShareSignIn`, `RequestGdtfShareSignOut`, `RequestGdtfShareRefresh`, `RequestGdtfShareDownload`, `RequestGdtfShareCancelDownload`.
+  - The GameMode decides with `EvaluateOnlineFixtureSource`, governed by `SessionRules.bAllowOnlineFixtureSources` (default on).
+  - Downloads also need `bAllowFixtureImport`, because each one ends in a fixture import.
+  - Sign-out and cancel are always allowed.
+- **UI:**
+  - The **GDTF Share** panel (`UStageGdtfSharePanel`, `StageCraft.Panel.GdtfShare`, `DA_Panel_GdtfShare`): sign in, search, the uploader filter (ALL, MANUFACTURER FILES, USER FILES), result rows with uploader, modes, GDTF version and size, and IN YOUR LIBRARY for known types, plus GET, DOWNLOADS and "Powered by GDTF".
+  - At most 100 rows are built; typing narrows the search.
+  - Opened from File › Library › Get Fixtures from GDTF Share....
+  - Help article `gdtf-share` (EN/HY).
+- **Not built:**
+  - The GDTF logo next to the attribution (an image asset; text attribution only for now). It is required by the terms before release.
+  - Searching LongName: the list API has no LongName field. The full file's LongName is shown in the import report.
+  - Remembering the user name between runs.
+  - A sync server.
+
+### 18.3 The FIXT section (§9 built)
+
+- **Manifest version 3** adds `fixtureTypes`:
+  - required in v3 and absent in v1/v2;
+  - at most 64 ids in `DigitsWithHyphens` form, ascending by (A, B, C, D) as unsigned numbers;
+  - exactly the device-library types the scene's items use.
+- **The FIXT section** (raw payload, little-endian), hash-checked like every section:
+  - `u32 count` (1..64), then per file: the FGuid's four `u32` words, a `u32 size` (22 B..16 MB, starting with a ZIP local header), then the bytes.
+  - At most 32 MB in total.
+  - Present exactly when `fixtureTypes` is not empty.
+  - Same ids, same order, nothing after the last file.
+- **Read:**
+  - A used type that is not carried is `NotPortable`.
+  - A carried type no item uses, or any structural fault, is `Corrupt`.
+  - An item path in the library root whose type id is zero is not portable: it can never be carried.
+  - Library fixtures are no longer `NotPortable`; imported models still are.
+- **Publish:**
+  - The worker reads each used type's library file.
+  - A type without a file (session-only, deleted) is `NotPortable`.
+  - The publisher must confirm `FStageMarketplacePublishRequest::bConfirmFixtureSharing` (the publish form's GDTF FIXTURE FILES › I MAY SHARE THEM, off by default); otherwise the result is `SharingNotConfirmed`. The confirmation is the publisher's statement and is not stored in the package.
+- **Acquire:**
+  - The worker parses each carried file with the §8 reader. A file that fails, or whose FixtureTypeID is not the id it is carried for, refuses the whole package (`Corrupt`) before the scene is written.
+  - On the game thread `AddEmbeddedFile` adds the missing types. A type the library already has is kept (the library's copy wins, as for MVR).
+  - A full library is reported in the acquire message; the scene is still added, and its fixtures are reported missing on load (§7.1).
+- **Server** (`Services/StageCraftCloud/src/package`): the same section, caps, order and cross-checks.
+  - The server also accepted only scene format 11, so it refused **every package from a current client** (v12 since GD2). It now reads v12 and checks the `fixtureType` reference.
+  - It is stricter than the client on a malformed reference (it treats one as a repair), which the client's writer never produces.

@@ -520,6 +520,13 @@ UWidget* UStageMarketplaceWidget::BuildPublishPage()
 		"Buyers can also send the stage to Blender, 3ds Max, Cinema 4D or Maya, hand it to AI tools, and save it as a .glb file. Nobody can republish it."));
 	Add(BuildLabeled(LOCTEXT("PublishExport", "WHERE BUYERS MAY USE IT"), ExportSegment));
 
+	UWidget* SharingSegment = BuildSegment({ LOCTEXT("PublishNoSharing", "DON'T SHARE"), LOCTEXT("PublishSharing", "I MAY SHARE THEM") },
+		PublishSharingButtons, &ThisClass::HandlePublishSharingPicked);
+	PublishSharingButtons[0]->SetToolTipText(LOCTEXT("PublishNoSharingTip", "A stage that uses fixtures imported from GDTF files is not published."));
+	PublishSharingButtons[1]->SetToolTipText(LOCTEXT("PublishSharingTip",
+		"The GDTF files of the imported fixtures this stage uses travel with it, so buyers see the same fixtures. Choose this only if their licence lets you share them."));
+	Add(BuildLabeled(LOCTEXT("PublishSharing", "GDTF FIXTURE FILES"), SharingSegment));
+
 	PublishButton = MakeButton(LOCTEXT("Publish", "PUBLISH"), LOCTEXT("PublishTip", "Package the saved scene and publish it to the community folder."), 0, &ThisClass::HandlePublishPicked);
 	StyleChoice(*PublishButton, true);
 	PublishStatusText = MakeText(FText::GetEmpty(), 8, TEXT("Regular"), Palette.TextSecondary);
@@ -535,6 +542,7 @@ UWidget* UStageMarketplaceWidget::BuildPublishPage()
 	Add(Footer);
 	HandlePublishKindPicked(0);
 	HandlePublishExportPicked(0);
+	HandlePublishSharingPicked(0);
 	return Page;
 }
 
@@ -1447,6 +1455,15 @@ void UStageMarketplaceWidget::HandlePublishExportPicked(int32 Index)
 	}
 }
 
+void UStageMarketplaceWidget::HandlePublishSharingPicked(int32 Index)
+{
+	bPublishFixtureSharing = Index == 1;
+	for (int32 Button = 0; Button < PublishSharingButtons.Num(); ++Button)
+	{
+		StyleChoice(*PublishSharingButtons[Button], Button == Index);
+	}
+}
+
 void UStageMarketplaceWidget::HandlePublishPicked(int32 Unused)
 {
 	AModularPlayerController* Controller = GetStageController();
@@ -1474,6 +1491,7 @@ void UStageMarketplaceWidget::HandlePublishPicked(int32 Unused)
 	Request.Category = Categories.IsValidIndex(CategoryIndex) ? Categories[CategoryIndex] : StageCraftTags::Marketplace_Category_Other.GetTag();
 	Request.Price.Credits = FMath::Max<int64>(0, FMath::RoundToInt64(PriceField->GetValue()));
 	Request.bAllowExport = bPublishAllowExport;
+	Request.bConfirmFixtureSharing = bPublishFixtureSharing;
 
 	if (Controller->RequestMarketplacePublish(Request))
 	{

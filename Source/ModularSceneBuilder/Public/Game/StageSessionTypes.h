@@ -54,6 +54,14 @@ struct MODULARSCENEBUILDER_API FStageSessionRules
 	bool bAllowMvrExport = true;
 
 	/**
+	 * Users may sign in to online fixture sources (GDTF Share, Docs/ADR/0033 §18) and download fixture files from them for review. A
+	 * downloaded file is added to the library only through the fixture import review, so bAllowFixtureImport must also be on. Off
+	 * for curated or offline sessions.
+	 */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Session")
+	bool bAllowOnlineFixtureSources = true;
+
+	/**
 	 * MIDI and OSC controllers may run the desk's live controls (Docs/ADR/0035 §4): cue GO / BACK, playbacks, masters. Each command is
 	 * still judged by EvaluateCueRequest. Off for curated sessions. Pro in the tiers (ADR 0034 §2); the entitlement check comes with Step 6.
 	 */

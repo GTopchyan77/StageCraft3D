@@ -6,6 +6,8 @@
 #include "Async/Async.h"
 #include "Data/BaseItemData.h"
 #include "Engine/GameInstance.h"
+#include "Fixtures/StageFixtureLibraryRules.h"
+#include "Fixtures/StageFixtureLibrarySubsystem.h"
 #include "HAL/FileManager.h"
 #include "Dom/JsonObject.h"
 #include "IO/StageAtomicFile.h"
@@ -30,6 +32,10 @@
 
 namespace StageMarketplace
 {
+	using FStageMarketplaceFixtureFiles = TArray<TSharedRef<UStageFixtureLibrarySubsystem::FParsedFile>>;
+
+	FText AddCarriedFixtures(UGameInstance* GameInstance, const FStageMarketplaceFixtureFiles& Files);
+
 	/** User-facing text for each result, so every refusal and failure says what happened. */
 	FText Describe(EStageMarketplaceResult Result)
 	{
@@ -43,7 +49,7 @@ namespace StageMarketplace
 		case EStageMarketplaceResult::TooLarge: return LOCTEXT("Result_TooLarge", "The package is too large.");
 		case EStageMarketplaceResult::HashMismatch: return LOCTEXT("Result_HashMismatch", "The package was damaged in transit or on disk.");
 		case EStageMarketplaceResult::AlreadyExists: return LOCTEXT("Result_AlreadyExists", "This package is already published.");
-		case EStageMarketplaceResult::NotPortable: return LOCTEXT("Result_NotPortable", "The stage contains imported models or GDTF fixture types, which exist only on this computer.");
+		case EStageMarketplaceResult::NotPortable: return LOCTEXT("Result_NotPortable", "The stage contains imported models, which exist only on this computer, or GDTF fixture types whose files are no longer in your Library.");
 		case EStageMarketplaceResult::WriteFailed: return LOCTEXT("Result_WriteFailed", "The file could not be written.");
 		case EStageMarketplaceResult::Busy: return LOCTEXT("Result_Busy", "This is already in progress.");
 		case EStageMarketplaceResult::BackendUnavailable: return LOCTEXT("Result_BackendUnavailable", "The marketplace is not available.");
@@ -55,6 +61,7 @@ namespace StageMarketplace
 		case EStageMarketplaceResult::NotYours: return LOCTEXT("Result_NotYours", "Only listings published from this computer can be unpublished here.");
 		case EStageMarketplaceResult::InUse: return LOCTEXT("Result_InUse", "This listing is being downloaded or delivered right now; try again when that has finished.");
 		case EStageMarketplaceResult::SignInRequired: return LOCTEXT("Result_SignInRequired", "Sign in to StageCraft Cloud first (Account menu).");
+		case EStageMarketplaceResult::SharingNotConfirmed: return LOCTEXT("Result_SharingNotConfirmed", "This stage uses GDTF fixtures, and their files travel with it. Confirm that you may share them, then publish again.");
 		}
 		return FText::GetEmpty();
 	}
@@ -65,8 +72,9 @@ namespace StageMarketplace
 	}
 
 	/** Verifies a fetched package and writes its scene into the scenes folder under a fresh name. Runs on the work pipe. */
-	EStageMarketplaceResult ImportPackage(const TArray<uint8>& Bytes, const FGuid& ListingId, FString& OutSceneName)
+	EStageMarketplaceResult ImportPackage(const TArray<uint8>& Bytes, const FGuid& ListingId, FString& OutSceneName, FStageMarketplaceFixtureFiles& OutFixtureFiles)
 	{
+		OutFixtureFiles.Reset();
 		FStagePackage Package;
 		EStageMarketplaceResult Result = StagePackage::Read(Bytes, Package);
 		if (Result != EStageMarketplaceResult::Success)
@@ -77,6 +85,18 @@ namespace StageMarketplace
 		if (Package.Manifest.PackageId != ListingId)
 		{
 			return EStageMarketplaceResult::Corrupt;
+		}
+		for (FStagePackageFixtureFile& Carried : Package.FixtureFiles)
+		{
+			TSharedRef<UStageFixtureLibrarySubsystem::FParsedFile> File = UStageFixtureLibrarySubsystem::ParseEmbeddedFile(MoveTemp(Carried.Bytes),
+				Carried.FixtureTypeId.ToString(EGuidFormats::Digits) + TEXT(".gdtf"));
+			if (!UStageFixtureLibrarySubsystem::CanAddParsedFile(*File, Carried.FixtureTypeId))
+			{
+				UE_LOG(LogStageCraft, Warning, TEXT("Marketplace: %s carries a GDTF file for %s that cannot be used; the package is refused."), *ListingId.ToString(), *Carried.FixtureTypeId.ToString());
+				OutFixtureFiles.Reset();
+				return EStageMarketplaceResult::Corrupt;
+			}
+			OutFixtureFiles.Add(File);
 		}
 
 		const FStageSceneStore Scenes(FStageSceneStore::GetDefaultDirectory());
@@ -106,7 +126,7 @@ namespace StageMarketplace
 
 	/** Loads the saved scene, checks it can travel and writes the package. Runs on the work pipe. */
 	EStageMarketplaceResult BuildPackage(FStagePackageManifest Manifest, const FString& SceneName, const TSet<FSoftObjectPath>& LightItems,
-		TArray<uint8> ThumbnailPng, TArray<uint8>& OutBytes)
+		TArray<uint8> ThumbnailPng, bool bFixtureSharingConfirmed, TArray<uint8>& OutBytes)
 	{
 		const FStageSceneStore Scenes(FStageSceneStore::GetDefaultDirectory());
 		FStagePackage Package;
@@ -142,6 +162,27 @@ namespace StageMarketplace
 		Manifest.CueCount = Package.Scene.Cues.Num();
 		Manifest.FixtureCount = Algo::CountIf(Package.Scene.Items, [&LightItems](const FStageItemSnapshot& Item) { return LightItems.Contains(Item.Item.ToSoftObjectPath()); });
 		Manifest.RequiredItems = StagePackage::CollectRequiredItems(Package.Scene);
+		Manifest.FixtureTypes = StagePackage::CollectFixtureTypes(Package.Scene);
+		if (!Manifest.FixtureTypes.IsEmpty() && !bFixtureSharingConfirmed)
+		{
+			return EStageMarketplaceResult::SharingNotConfirmed;
+		}
+		for (const FGuid& TypeId : Manifest.FixtureTypes)
+		{
+			const FString Path = StageFixtureLibrary::GetLibraryFilePath(TypeId);
+			const int64 Size = IFileManager::Get().FileSize(*Path);
+			if (Size > StagePackage::MaxFixtureFileBytes)
+			{
+				return EStageMarketplaceResult::TooLarge;
+			}
+			FStagePackageFixtureFile& File = Package.FixtureFiles.AddDefaulted_GetRef();
+			File.FixtureTypeId = TypeId;
+			if (Size < 0 || !FFileHelper::LoadFileToArray(File.Bytes, *Path, FILEREAD_Silent))
+			{
+				UE_LOG(LogStageCraft, Warning, TEXT("Marketplace: the GDTF file of fixture type %s is not in the Library (%s); the stage cannot be published."), *TypeId.ToString(), *Path);
+				return EStageMarketplaceResult::NotPortable;
+			}
+		}
 		Package.Manifest = MoveTemp(Manifest);
 		Package.ThumbnailPng = MoveTemp(ThumbnailPng);
 		return StagePackage::Write(Package, OutBytes);
@@ -451,24 +492,64 @@ void UStageMarketplaceSubsystem::HandlePackageFetched(EStageMarketplaceResult Re
 	WorkPipe.Launch(UE_SOURCE_LOCATION, [WeakThis = TWeakObjectPtr<ThisClass>(this), Bytes, ListingId]()
 	{
 		FString SceneName;
-		const EStageMarketplaceResult ImportResult = StageMarketplace::ImportPackage(*Bytes, ListingId, SceneName);
-		AsyncTask(ENamedThreads::GameThread, [WeakThis, ImportResult, ListingId, SceneName = MoveTemp(SceneName)]()
+		StageMarketplace::FStageMarketplaceFixtureFiles FixtureFiles;
+		const EStageMarketplaceResult ImportResult = StageMarketplace::ImportPackage(*Bytes, ListingId, SceneName, FixtureFiles);
+		AsyncTask(ENamedThreads::GameThread, [WeakThis, ImportResult, ListingId, SceneName = MoveTemp(SceneName), FixtureFiles = MoveTemp(FixtureFiles)]()
 		{
 			if (ThisClass* This = WeakThis.Get())
 			{
-				This->FinishAcquire(ListingId, StageMarketplace::Info(ImportResult), SceneName);
+				const FText Note = ImportResult == EStageMarketplaceResult::Success ? StageMarketplace::AddCarriedFixtures(This->GetGameInstance(), FixtureFiles) : FText::GetEmpty();
+				This->FinishAcquire(ListingId, StageMarketplace::Info(ImportResult), SceneName, Note);
 			}
 		});
 	});
 }
 
-void UStageMarketplaceSubsystem::FinishAcquire(const FGuid& ListingId, const FStageMarketplaceResultInfo& Result, const FString& SceneName)
+FText StageMarketplace::AddCarriedFixtures(UGameInstance* GameInstance, const FStageMarketplaceFixtureFiles& Files)
+{
+	UStageFixtureLibrarySubsystem* Library = GameInstance ? GameInstance->GetSubsystem<UStageFixtureLibrarySubsystem>() : nullptr;
+	if (Files.IsEmpty())
+	{
+		return FText::GetEmpty();
+	}
+	if (!Library)
+	{
+		return LOCTEXT("NoFixtureLibrary", "Its GDTF fixtures could not be added: the fixture Library is not available.");
+	}
+	int32 Added = 0;
+	TArray<FText> Failures;
+	for (const TSharedRef<UStageFixtureLibrarySubsystem::FParsedFile>& File : Files)
+	{
+		const FStageFixtureImportOutcome Outcome = Library->AddEmbeddedFile(*File);
+		if (Outcome.IsSuccess())
+		{
+			++Added;
+		}
+		else if (Outcome.Result != EStageFixtureImportResult::AlreadyInLibrary)
+		{
+			Failures.Add(Outcome.Message);
+		}
+	}
+	if (!Failures.IsEmpty())
+	{
+		return FText::Format(LOCTEXT("CarriedFixturesFailed", "{0} of its GDTF fixture types could not be added: {1}"), FText::AsNumber(Failures.Num()), Failures[0]);
+	}
+	return Added > 0
+		? FText::Format(LOCTEXT("CarriedFixturesAdded", "Added {0} GDTF fixture {0}|plural(one=type,other=types) to your Library."), FText::AsNumber(Added))
+		: FText::GetEmpty();
+}
+
+void UStageMarketplaceSubsystem::FinishAcquire(const FGuid& ListingId, const FStageMarketplaceResultInfo& Result, const FString& SceneName, const FText& Note)
 {
 	PendingAcquires.Remove(ListingId);
 	FStageMarketplaceResultInfo Final = Result;
 	if (Final.IsSuccess())
 	{
 		Final.Message = FText::Format(LOCTEXT("Imported", "Added to your scenes as \"{0}\"."), FText::FromString(SceneName));
+		if (!Note.IsEmpty())
+		{
+			Final.Message = FText::Format(LOCTEXT("ImportedWithNote", "{0} {1}"), Final.Message, Note);
+		}
 	}
 	UE_LOG(LogStageCraft, Log, TEXT("Marketplace acquire %s: %s %s"), *ListingId.ToString(), *UEnum::GetValueAsString(Final.Code), *Final.Message.ToString());
 	if (Final.IsSuccess())
@@ -615,10 +696,10 @@ FStageMarketplaceResultInfo UStageMarketplaceSubsystem::RequestPublish(const FSt
 
 	bPublishing = true;
 	WorkPipe.Launch(UE_SOURCE_LOCATION, [WeakThis = TWeakObjectPtr<ThisClass>(this), Manifest = MoveTemp(Manifest), SceneName = Request.SceneName,
-		LightItems = MoveTemp(LightItems), Thumbnail = Request.ThumbnailPng]() mutable
+		LightItems = MoveTemp(LightItems), Thumbnail = Request.ThumbnailPng, bConfirmFixtureSharing = Request.bConfirmFixtureSharing]() mutable
 	{
 		const TSharedRef<TArray<uint8>, ESPMode::ThreadSafe> Bytes = MakeShared<TArray<uint8>, ESPMode::ThreadSafe>();
-		const EStageMarketplaceResult Result = StageMarketplace::BuildPackage(MoveTemp(Manifest), SceneName, LightItems, MoveTemp(Thumbnail), *Bytes);
+		const EStageMarketplaceResult Result = StageMarketplace::BuildPackage(MoveTemp(Manifest), SceneName, LightItems, MoveTemp(Thumbnail), bConfirmFixtureSharing, *Bytes);
 		AsyncTask(ENamedThreads::GameThread, [WeakThis, Result, Bytes]()
 		{
 			if (ThisClass* This = WeakThis.Get())

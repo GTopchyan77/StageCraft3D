@@ -26,7 +26,7 @@ enum class EStageMarketplaceResult : uint8
 	HashMismatch,
 	/** A listing with this id is already published. */
 	AlreadyExists,
-	/** The scene contains items made from imported models or GDTF fixture types, which exist only on the machine that imported them. */
+	/** The scene contains items made from imported models (which exist only on the machine that imported them), or GDTF fixture types whose files are no longer in the device library. */
 	NotPortable,
 	WriteFailed,
 	/** The same operation is still running for this listing (or another publish is running). */
@@ -49,6 +49,8 @@ enum class EStageMarketplaceResult : uint8
 	InUse,
 	/** StageCraft Cloud needs the user to sign in first (ADR 0032 §5). */
 	SignInRequired,
+	/** The stage uses GDTF fixture types whose files would travel in the package, and the publisher has not confirmed they may share them (Docs/ADR/0033 §9). */
+	SharingNotConfirmed,
 };
 
 /** Result of a marketplace request. Message is user-facing; Code is for logic. */
@@ -292,6 +294,13 @@ struct MODULARSCENEBUILDER_API FStageMarketplacePublishRequest
 	/** Let buyers send the stage to 3D apps and save it as a file. Off by default; never allows republishing. */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Marketplace")
 	bool bAllowExport = false;
+
+	/**
+	 * The publisher confirms they may share the GDTF files of the device-library fixtures the stage uses: those files travel in
+	 * the package (Docs/ADR/0033 §9). Required only when the stage uses such fixtures; otherwise the publish ends SharingNotConfirmed.
+	 */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Marketplace")
+	bool bConfirmFixtureSharing = false;
 };
 
 namespace StageCraftTags

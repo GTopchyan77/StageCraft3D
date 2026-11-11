@@ -8880,7 +8880,7 @@ All times in ms.
   - User data restored.
 - **Not verified:** the file opened in Vectorworks, grandMA3, Capture or an MVR viewer (Gevor, ADR 0034 §10); the save dialog clicked by hand.
 
-**Commit:** uncommitted (working tree).
+**Commit:** `165a54e`.
 
 **Known issues / follow-ups**
 - **Gevor:**
@@ -8891,3 +8891,121 @@ All times in ms.
 - UUID text is FGuid's `DigitsWithHyphens`. For ids StageCraft made itself, the version and variant digits are not where RFC 4122 puts them; the text is still unique and round-trips. To be checked against the third-party readers.
 - Step 6: Pro entitlement in `EvaluateMvrExport`. MV5: re-import differences, preserved unknown nodes.
 - Still open from #88: `RunGameScripted.ps1` does not back up `Saved/StageCraft/Fixtures` (this run imported nothing).
+
+## #91 — Step 4: GDTF Share downloads, download manager, package FIXT section (ADR 0033 §18) (2026-11-11)
+
+**What & why**
+- **Context.** Gevor asked (2026-11-11) for roadmap Step 4: online GDTF-Share fixture downloads with a download manager, and the `.stage` package `FIXT` section of ADR 0033 §9.
+- **Housekeeping first.** #90 said "uncommitted"; it now carries `165a54e`.
+- **Terms checked first (G1).** ADR 0033 G1 had deferred any GDTF Share integration until its API terms were read. They allow a client that connects directly, provided:
+  - each user signs in with their own account;
+  - the client respects the 2-hour session and refreshes the list about every 120 minutes;
+  - cached files are at most 24 hours old;
+  - the uploader is shown;
+  - "Powered by GDTF" appears with the logo.
+  Recorded in ADR 0033 §18.1. Redistribution is not addressed by the terms.
+- **GDTF Share client:**
+  - **`StageGdtfShare` protocol** (`Private/Fixtures/StageGdtfShareProtocol`, pure): login body, result flag, capped list parsing (untrusted input: size, entry, text and mode caps; bad and repeated rids skipped and counted), Set-Cookie to Cookie, search, file names `Manufacturer@Fixture@Revision.gdtf`.
+  - **`UStageGdtfShareSubsystem`** (GameInstance):
+    - **Sign-in:** the password is sent once and only over https (an http root is refused before sending). It is never stored or logged; only the session cookie is kept, in memory. A 401 ends the session.
+    - **List:** parsed on a worker, cached in memory for 120 minutes, REFRESH forces it.
+    - **Download manager:** at most 4 downloads, with progress, cancel and failures. The bytes go to the fixture import review through the new `UStageFixtureLibrarySubsystem::RequestImportBytes`, so the ADR 0033 §8 validation and the report apply. Nothing is written to disk before ADD.
+    - Answers are matched by serial; late ones are dropped.
+  - **Request bridge:** `AModularPlayerController::RequestGdtfShareSignIn/SignOut/Refresh/Download/CancelDownload` (`Private/Player/ModularPlayerControllerGdtfShare.cpp`), decided by the new GameMode `EvaluateOnlineFixtureSource` (`SessionRules.bAllowOnlineFixtureSources`, default on; also needs `bAllowFixtureImport`).
+  - **UI:**
+    - The GDTF Share panel (`UStageGdtfSharePanel`, `StageCraft.Panel.GdtfShare`, `DA_Panel_GdtfShare` from the new `Scripts/Content/create_gdtf_share_content.py`): sign in, search, uploader filter, rows with uploader, modes, GDTF version, size and IN YOUR LIBRARY, GET / GET AGAIN, DOWNLOADS with CANCEL and CLEAR FINISHED, "Powered by GDTF".
+    - File › Library › Get Fixtures from GDTF Share....
+    - Help `gdtf-share` (EN/HY).
+- **Package manifest v3 and the FIXT section** (ADR 0033 §9, §18.3):
+  - **Format:** `fixtureTypes` in the manifest (exactly the library types the scene uses, ascending). FIXT carries each type's `.gdtf`: 22 B to 16 MB each, 32 MB in total, at most 64, hash-checked like every section.
+  - **Library fixtures are now portable;** imported models still are not.
+  - **Publish:** the worker reads each used type's library file. The publisher must confirm sharing (`FStageMarketplacePublishRequest::bConfirmFixtureSharing`, the publish form's new GDTF FIXTURE FILES segment, off by default); otherwise the new result `SharingNotConfirmed`.
+  - **Acquire:** every carried file is parsed with the §8 reader on the worker, and its FixtureTypeID must match. Any failure refuses the whole package before the scene is written. Missing types are then added to the library; types the library already has are kept. The acquire message says how many were added.
+- **Cloud server** (delegated to a subagent, then checked here):
+  - The same FIXT section, caps and cross-checks in `Services/StageCraftCloud/src/package`.
+  - **Bug found and fixed:** the server read scene format 11 at most, but the client has written 12 since GD2, so the server refused every package from a current client. It now reads v12 and checks the `fixtureType` reference, more strictly than the client (a malformed reference is a repair, so Corrupt; the client's writer never produces one).
+- **Fixed on the way:** with the new files the unity build put `StageZipReader.cpp` and `StageZipWriter.cpp` (MV4) together, and their anonymous-namespace constants clashed (C2374). The writer's helpers are now in `StageZip::WriterFormat` and qualified.
+- **Also in this change:** `StageFixtureLibrary::ParseFixtureItemPath`; `StagePackage::CollectFixtureTypes`, `IsFixtureOrderLess`, `SortFixtureFiles`; `UStageMarketplaceSubsystem::FinishAcquire` takes a note; the test event recorder records GDTF Share results.
+- **Source files:** no comments in the new `.cpp` files (Gevor's directive); the contracts are documented in the headers.
+
+**Files changed**
+- New:
+  - `Source/ModularSceneBuilder/Public/Fixtures/StageGdtfShareTypes.h`, `Public/Fixtures/StageGdtfShareSubsystem.h`, `Private/Fixtures/StageGdtfShareSubsystem.cpp`
+  - `Private/Fixtures/StageGdtfShareProtocol.h/.cpp`, `Private/Player/ModularPlayerControllerGdtfShare.cpp`
+  - `Public/UI/StageGdtfSharePanel.h`, `Private/UI/StageGdtfSharePanel.cpp`
+  - Tests: `Private/Fixtures/Tests/StageGdtfShareTests.cpp`, `Private/Marketplace/Tests/StagePackageFixtureTests.cpp`
+  - `Content/StageCraft/UI/Panels/DA_Panel_GdtfShare.uasset`, `Scripts/Content/create_gdtf_share_content.py`
+  - `Content/StageCraft/Help/en/gdtf-share.md`, `Content/StageCraft/Help/hy/gdtf-share.md`
+  - `Services/StageCraftCloud/test/package-fixtures.test.ts`
+- Changed:
+  - `Private/Marketplace/StagePackage.h/.cpp` (manifest v3, FIXT), `Private/Marketplace/StageMarketplaceSubsystem.cpp`, `Public/Marketplace/StageMarketplaceSubsystem.h`, `Public/Marketplace/StageMarketplaceTypes.h` (`SharingNotConfirmed`, `bConfirmFixtureSharing`)
+  - `Private/Fixtures/StageFixtureLibraryRules.h/.cpp`, `Public/Fixtures/StageFixtureLibrarySubsystem.h`, `Private/Fixtures/StageFixtureLibrarySubsystem.cpp` (`RequestImportBytes`, `CanAddParsedFile`), `Private/Fixtures/StageZipWriter.cpp`
+  - `Public/Game/StageCraftGameModeBase.h`, `Private/Game/StageCraftGameModeBase.cpp`, `Public/Game/StageSessionTypes.h`, `Public/Player/ModularPlayerController.h`
+  - `Public/UI/StageMarketplaceWidget.h`, `Private/UI/StageMarketplaceWidget.cpp` (GDTF FIXTURE FILES segment)
+  - `Public/Workspace/StageWorkspaceTypes.h`, `Private/Workspace/StageWorkspaceTypes.cpp`, `Private/Workspace/StageWorkspaceShell.cpp`, `Private/Workspace/SStageWorkspaceMenuBar.cpp`
+  - Tests: `Private/Fixtures/Tests/StageFixtureLibraryTests.cpp` (library fixtures are portable now), `Private/Marketplace/Tests/StageMarketplaceTests.cpp` (manifest version 3), `Private/Tests/StageTestEventRecorder.h/.cpp`
+  - `Services/StageCraftCloud/src/package/stagePackage.ts`, `sceneCheck.ts`, `test/helpers.ts`, `test/package.test.ts`
+  - `Docs/ADR/0033-gdtf-fixture-import-and-device-library.md` (§18, §9 pointer), `tasks/todo.md` (Phase 41), `STATE.md` (#90 commit, this entry)
+
+**Verification**
+- **Builds:** Editor, Game and Shipping, 0 warnings. Shipping contains the menu entry, "Powered by GDTF" and the publish form's I MAY SHARE THEM (UTF-16 scan). No dev console commands were added.
+- **Tests:** full suite **283/283** passed (278 + 5 new), user data unchanged (127 files). New tests:
+  - `StageCraft.Fixtures.GdtfShare.Protocol`:
+    - safe API roots;
+    - login body escaping;
+    - result flags;
+    - the list (numeric-string dates, uploader mapping, rating cap, a bad uuid, 5 kinds of skipped entries, hostile caps);
+    - cookies (merged headers with Expires, deleted/unsafe/quoted values, repeated names);
+    - search (all words, case, uploader filter, sort, cap);
+    - GDTF Share file names and labels; ZIP detection.
+  - `StageCraft.Fixtures.GdtfShare.Session` (real test game instance, fake server through the test transport):
+    - refusals before sign-in send nothing;
+    - wrong password gives BadCredentials;
+    - sign-in gives the session cookie from merged Set-Cookie headers;
+    - the list loads on a worker;
+    - the password appears only in the login body;
+    - the 120-minute cache, forced refresh and busy;
+    - not listed / over the size cap;
+    - a good file becomes a review under `StageCraft@Test Spot@Rev A.gdtf` and is added with that name;
+    - 404, a JSON refusal in a 200, a non-ZIP;
+    - busy, cancel, and a late answer dropped;
+    - a 401 ends the session, but the list stays;
+    - sign-out cancels running downloads; clear finished.
+  - `StageCraft.Fixtures.GdtfShare.Rules`: an http API root refuses the sign-in and sends nothing. The GameMode refuses a null player, then allows; it refuses when the session rule is off and when fixture import is off.
+  - `StageCraft.Marketplace.PackageFixtures`:
+    - unsigned id order;
+    - a FIXT round trip byte for byte; browsing; v3 JSON;
+    - plain packages; v2 still reads;
+    - manifest refusals (no fixtureTypes in v3, unsorted, braced id, not an array);
+    - Write refusals (types or file missing, not a ZIP, over 16 MB, repeated type);
+    - Read on crafted, re-hashed packages: no FIXT, count 0, count too large, trailing byte, not a ZIP, too small, id mismatch, declared size over 16 MB, unsorted entries, a used type not carried (NotPortable), FIXT without types, a carried type unused;
+    - zero-id paths are not portable.
+  - `StageCraft.Marketplace.FixtureFlow`:
+    - `RequestImportBytes` refusals; review and add;
+    - publish without the confirmation gives SharingNotConfirmed;
+    - confirmed, the package carries the library file;
+    - the type removed, then acquire adds it back ("Added 1 GDTF fixture type"), its library copy is written and the scene's mode resolves;
+    - acquiring again keeps the library's copy.
+- **Changed tests:** library fixtures are now portable; manifest version 3 in the version tests.
+- **Cloud server:** `npm test` **78/78** (71 before), run here as well as by the subagent.
+- **Scripted `-game` run R91b (Claude):**
+  - The GDTF Share panel docked in the workspace shows the signed-out view: the user name and password fields, SIGN IN, the password note, DOWNLOADS and "Powered by GDTF". The panel asset was created by `create_gdtf_share_content.py` and its tag read back.
+  - User data was restored.
+  - Notes from the runs:
+    - R91 opened the panel mid-run with `OpenPanel`, which stalls scripted runs (known, memory J). The docked layout was used instead.
+    - The first docked try failed because the shell's working directory was inside `Saved/`. The runner's restore stopped halfway and was finished by hand from its backup; the workspace, settings, imports and marketplace were checked equal.
+- **Not verified:**
+  - a real GDTF Share account against gdtf-share.com (no credentials; every request went to the fake server);
+  - signing in, GET and the publish form's new segment clicked by hand;
+  - the panel's signed-in view in a running game.
+
+**Commit:** uncommitted (working tree).
+
+**Known issues / follow-ups**
+- **Gevor:**
+  - sign in with a real GDTF Share account and download a few fixtures. No real account was used; every test runs against a fake server through the test transport.
+  - decide whether marketplace packages may carry manufacturers' GDTF files at all. The publisher confirmation is built and off by default; the GDTF Share terms do not address redistribution.
+  - still open from #89/#90: D7, the MIDI map, opening an exported `.mvr` in a third-party app, the box geometry.
+- **Required by the API terms before release:** the GDTF logo next to "Powered by GDTF" (an image asset; only the text is shown now).
+- Not built: remembering the user name between runs (never the password), a sync server (`BaseUrl` is configurable), searching LongName (the list API has no such field).
+- `RunGameScripted.ps1` still does not back up `Saved/StageCraft/Fixtures` (#88).

@@ -198,7 +198,8 @@ private:
 
 	void StartDownload(const FGuid& ListingId);
 	void HandlePackageFetched(EStageMarketplaceResult Result, const FStageMarketplacePackageBytes& Bytes, FGuid ListingId, uint32 Serial);
-	void FinishAcquire(const FGuid& ListingId, const FStageMarketplaceResultInfo& Result, const FString& SceneName);
+	/** Note, when set, follows the success message (what happened to the GDTF fixture types the package carried). */
+	void FinishAcquire(const FGuid& ListingId, const FStageMarketplaceResultInfo& Result, const FString& SceneName, const FText& Note = FText::GetEmpty());
 
 	void HandlePreviewFetched(EStageMarketplaceResult Result, const FStageMarketplacePackageBytes& Bytes, FGuid ListingId, uint32 Serial);
 	void FinishPreview(const FGuid& ListingId, const FStageMarketplaceResultInfo& Result, const FStageMarketplacePreviewScene& Scene, uint32 Serial);

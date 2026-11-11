@@ -61,6 +61,9 @@ namespace StageFixtureLibrary
 	/** True only for a package a library mode could have: the root, 32 hex digits, then one slug. Untrusted input. */
 	bool IsFixtureItemPath(const FString& PackageName);
 
+	/** The type a library mode's package belongs to. False (and OutFixtureTypeId reset) for anything IsFixtureItemPath refuses. Untrusted input. */
+	bool ParseFixtureItemPath(const FString& PackageName, FGuid& OutFixtureTypeId);
+
 	/** The reference a scene writes for a placed fixture of this data; unset for built-in fixtures. Game thread. */
 	FStageFixtureTypeRef MakeTypeRef(const ULightingFixtureData& Fixture);
 

@@ -8,12 +8,21 @@ import { inflateSync } from 'node:zlib';
 import { checkScene, type SceneSummary } from './sceneCheck.ts';
 
 export const ContainerVersion = 1;
-export const ManifestVersion = 2;
+export const ManifestVersion = 3;
 export const FirstManifestVersionWithExportFlag = 2;
+export const FirstManifestVersionWithFixtureTypes = 3;
 export const MaxSections = 8;
 export const MaxManifestBytes = 256 * 1024;
 export const MaxSceneBytes = 64 * 1024 * 1024;
 export const MaxThumbnailBytes = 2 * 1024 * 1024;
+/** ADR 0033 §9: the .gdtf files a package carries. */
+export const MaxFixtureFiles = 64;
+export const MaxFixtureFileBytes = 16 * 1024 * 1024;
+export const MaxFixtureTotalBytes = 32 * 1024 * 1024;
+/** Count, then per file a 16-byte id and a u32 size, around at most MaxFixtureTotalBytes of files. */
+export const MaxFixtureSectionBytes = MaxFixtureTotalBytes + 4 + MaxFixtureFiles * 20;
+/** The smallest ZIP archive: an empty one is a 22-byte end-of-central-directory record. */
+export const MinFixtureFileBytes = 22;
 export const MaxPackageBytes = 96 * 1024 * 1024;
 export const MaxTitleLength = 80;
 export const MaxDescriptionLength = 2000;
@@ -36,6 +45,7 @@ export function makeTag(text: string): number {
 export const ManifestTag = makeTag('MNFT');
 export const SceneTag = makeTag('SCEN');
 export const ThumbnailTag = makeTag('THMB');
+export const FixtureTag = makeTag('FIXT');
 
 export const CODEC_STORED = 0;
 export const CODEC_ZLIB = 1;
@@ -53,6 +63,7 @@ export const CATEGORIES = ['Concert', 'Festival', 'Theatre', 'Corporate', 'Club'
 export const CATEGORY_OTHER = `${CATEGORY_ROOT}.Other`;
 
 const PNG_SIGNATURE = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+const ZIP_LOCAL_HEADER = Buffer.from([0x50, 0x4b, 0x03, 0x04]);
 
 /** The EStageMarketplaceResult values a read can produce. */
 export type PackageResult = 'Corrupt' | 'VersionMismatch' | 'TooLarge' | 'HashMismatch' | 'NotPortable';
@@ -88,6 +99,8 @@ export interface StageManifest {
   cueCount: number;
   requiredItems: string[];
   allowExport: boolean;
+  /** Fixture types whose .gdtf files the FIXT section carries, canonical GUID text, strictly ascending. Empty before version 3. */
+  fixtureTypes: string[];
   manifestVersion: number;
 }
 
@@ -108,6 +121,8 @@ function maxRawSize(tag: number): number {
       return MaxSceneBytes;
     case ThumbnailTag:
       return MaxThumbnailBytes;
+    case FixtureTag:
+      return MaxFixtureSectionBytes;
     default:
       return 0;
   }
@@ -222,6 +237,8 @@ const GUID_FORMS = [
   /^([0-9A-Fa-f]{8})-([0-9A-Fa-f]{8})-([0-9A-Fa-f]{8})-([0-9A-Fa-f]{8})$/,
 ];
 
+const DIGITS_WITH_HYPHENS = /^[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}$/;
+
 /** FGuid::Parse for the formats UE writes; returns the canonical upper-case 8-4-4-4-12 form, or null. A zero GUID parses. */
 export function parseGuid(text: string): string | null {
   for (const form of GUID_FORMS) {
@@ -327,7 +344,16 @@ export function validateManifest(manifest: StageManifest): string | null {
   if (!isInt(manifest.cueCount, 0, MaxSceneCues)) return 'cues';
   if (!isInt(manifest.fixtureCount, 0, manifest.itemCount)) return 'fixtures';
   if (manifest.requiredItems.length > manifest.itemCount) return 'requiredItems';
+  if (!isValidFixtureTypeList(manifest.fixtureTypes)) return 'fixtureTypes';
   return null;
+}
+
+/**
+ * At most MaxFixtureFiles valid ids, strictly ascending as (A, B, C, D) unsigned, which also rules out duplicates. Canonical GUID
+ * text is fixed-width upper-case hex in A, B, C, D order, so comparing the strings compares the numbers.
+ */
+function isValidFixtureTypeList(ids: string[]): boolean {
+  return ids.length <= MaxFixtureFiles && ids.every((id, index) => isValidGuid(id) && (index === 0 || ids[index - 1]! < id));
 }
 
 /** StagePackage::ParseManifest: Corrupt for anything malformed or invalid, VersionMismatch for a newer manifest. */
@@ -407,6 +433,20 @@ export function parseManifest(json: string): StageManifest {
     allowExport = root.allowExport;
   }
 
+  // Version 3 must list the included fixture types, even when there are none; older manifests predate them and include none.
+  let fixtureTypes: string[] = [];
+  if (version >= FirstManifestVersionWithFixtureTypes) {
+    const texts = readStringArray(root.fixtureTypes);
+    if (texts === null || texts.length > MaxFixtureFiles) {
+      refuse('Corrupt', 'fixtureTypes must be an array of at most 64 strings');
+    }
+    // FGuid::ParseExact(DigitsWithHyphens): only the 8-4-4-4-12 layout the writer uses, unlike the lenient FGuid::Parse of "id".
+    if (!texts.every((text) => DIGITS_WITH_HYPHENS.test(text))) {
+      refuse('Corrupt', 'fixtureTypes holds an id that is not 8-4-4-4-12 hex');
+    }
+    fixtureTypes = texts.map((text) => parseGuid(text)!);
+  }
+
   const manifest = normalizeManifest({
     packageId,
     title: root.title,
@@ -425,6 +465,7 @@ export function parseManifest(json: string): StageManifest {
     cueCount: stats.cues,
     requiredItems,
     allowExport,
+    fixtureTypes,
     manifestVersion: version,
   });
   const broken = validateManifest(manifest);
@@ -438,11 +479,89 @@ export function isValidThumbnail(png: Buffer): boolean {
   return png.length === 0 || (png.length <= MaxThumbnailBytes && png.length > PNG_SIGNATURE.length && png.subarray(0, 8).equals(PNG_SIGNATURE));
 }
 
+/** One .gdtf file of the FIXT section. */
+export interface FixtureFile {
+  /** Canonical GUID text of the fixture type. */
+  id: string;
+  size: number;
+  /** The file's bytes, a view into the inflated section. */
+  data: Buffer;
+}
+
+function guidFromWords(a: number, b: number, c: number, d: number): string {
+  const hex = [a, b, c, d].map((word) => word.toString(16).toUpperCase().padStart(8, '0')).join('');
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
+}
+
+/**
+ * The raw FIXT payload (ADR 0033 §9): u32 Count (1..64), then Count entries of a 16-byte FGuid (A, B, C, D as u32 LE), a u32 Size
+ * and Size bytes of .gdtf, all little-endian, and nothing after the last entry. Sizes are checked as they are declared, before the
+ * bytes they claim are looked at, so a declared total over the cap is TooLarge even when the payload is cut short. Ids must be
+ * non-zero and strictly ascending as (A, B, C, D) unsigned. Only the ZIP magic is checked here: the client opens each file with
+ * its own GDTF validation (ADR 0033 §8) when it imports it.
+ */
+export function parseFixtureSection(raw: Buffer): FixtureFile[] {
+  if (raw.length < 4) {
+    refuse('Corrupt', 'fixture section is shorter than its count');
+  }
+  const count = raw.readUInt32LE(0);
+  if (count < 1 || count > MaxFixtureFiles) {
+    refuse('Corrupt', `fixture file count ${count}`);
+  }
+  const files: FixtureFile[] = [];
+  let offset = 4;
+  let total = 0;
+  for (let index = 0; index < count; index++) {
+    if (raw.length - offset < 20) {
+      refuse('Corrupt', 'fixture entry header runs past the end');
+    }
+    const id = guidFromWords(raw.readUInt32LE(offset), raw.readUInt32LE(offset + 4), raw.readUInt32LE(offset + 8), raw.readUInt32LE(offset + 12));
+    const size = raw.readUInt32LE(offset + 16);
+    offset += 20;
+    // Same order as StagePackageFormat::DecodeFixtureFiles, so a package with several faults gets the client's answer.
+    if (size > MaxFixtureFileBytes) {
+      refuse('TooLarge', 'fixture file is over 16 MiB');
+    }
+    total += size;
+    if (total > MaxFixtureTotalBytes) {
+      refuse('TooLarge', 'fixture files are over 32 MiB in total');
+    }
+    if (size < MinFixtureFileBytes) {
+      refuse('Corrupt', 'fixture file is too small to be a ZIP archive');
+    }
+    if (raw.length - offset < size) {
+      refuse('Corrupt', 'fixture file runs past the end');
+    }
+    const data = raw.subarray(offset, offset + size);
+    if (!isValidGuid(id)) {
+      refuse('Corrupt', 'fixture type id is zero');
+    }
+    if (!data.subarray(0, 4).equals(ZIP_LOCAL_HEADER)) {
+      refuse('Corrupt', 'fixture file is not a ZIP archive');
+    }
+    if (index > 0 && files[index - 1]!.id >= id) {
+      refuse('Corrupt', 'fixture type ids are not strictly ascending');
+    }
+    files.push({ id, size, data });
+    offset += size;
+  }
+  if (offset !== raw.length) {
+    refuse('Corrupt', 'bytes after the last fixture file');
+  }
+  return files;
+}
+
 export interface ReadPackage {
   manifest: StageManifest;
   scene: SceneSummary;
   /** PNG bytes, or empty. */
   thumbnail: Buffer;
+  /** The .gdtf files of the FIXT section, in manifest.fixtureTypes order; empty when the package includes none. */
+  fixtures: FixtureFile[];
+}
+
+function sameList(left: string[], right: string[]): boolean {
+  return left.length === right.length && left.every((value, index) => value === right[index]);
 }
 
 function findSection(sections: SectionView[], tag: number): SectionView | undefined {
@@ -466,7 +585,28 @@ export function readPackage(bytes: Buffer): ReadPackage {
   if (!scene.portable) {
     refuse('NotPortable', 'scene contains imported models');
   }
+  // Library fixtures travel with their .gdtf files: a type the scene uses but the package lacks cannot be shown to a buyer, and a
+  // type the package carries but no item uses is not what the writer produces. Decided before the files are inflated.
+  const included = new Set(manifest.fixtureTypes);
+  if (scene.fixtureTypes.some((id) => !included.has(id))) {
+    refuse('NotPortable', 'scene uses device-library fixtures whose files the package does not include');
+  }
+  if (!sameList(scene.fixtureTypes, manifest.fixtureTypes)) {
+    refuse('Corrupt', 'package includes fixture files no item uses');
+  }
   manifest.requiredItems = scene.requiredItems;
+
+  let fixtures: FixtureFile[] = [];
+  const fixtureSection = findSection(sections, FixtureTag);
+  if ((fixtureSection !== undefined) !== (manifest.fixtureTypes.length > 0)) {
+    refuse('Corrupt', 'fixture section and manifest fixtureTypes disagree');
+  }
+  if (fixtureSection) {
+    fixtures = parseFixtureSection(readSection(bytes, fixtureSection));
+    if (!sameList(fixtures.map((file) => file.id), manifest.fixtureTypes)) {
+      refuse('Corrupt', 'fixture section ids differ from manifest fixtureTypes');
+    }
+  }
 
   let thumbnail = Buffer.alloc(0);
   const thumbnailSection = findSection(sections, ThumbnailTag);
@@ -476,5 +616,5 @@ export function readPackage(bytes: Buffer): ReadPackage {
       refuse('Corrupt', 'thumbnail is not a PNG');
     }
   }
-  return { manifest, scene, thumbnail };
+  return { manifest, scene, thumbnail, fixtures };
 }

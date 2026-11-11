@@ -735,6 +735,30 @@ public:
 	/** Lets the user pick where to save the .mvr file in the operating system's dialog, then exports as RequestExportMvr does. */
 	bool RequestBrowseMvrExport();
 
+	// --- Online fixture sources: GDTF Share (Docs/ADR/0033 §18) ---
+
+	/**
+	 * Signs in to GDTF Share with the user's own account (UStageGdtfShareSubsystem::SignIn). The GameMode decides
+	 * (EvaluateOnlineFixtureSource); refusals are reported on OnRequestRejected. True when the sign-in was sent; the outcome arrives on
+	 * UStageGdtfShareSubsystem::OnRequestFinished. The password is passed through and never kept.
+	 */
+	bool RequestGdtfShareSignIn(const FString& UserName, const FString& Password);
+
+	/** Ends the GDTF Share session and cancels its downloads. Always allowed: it only stops things. */
+	void RequestGdtfShareSignOut();
+
+	/** Fetches the GDTF Share list again when it is older than the API terms allow, or always when bForce. Same rules as sign-in. */
+	bool RequestGdtfShareRefresh(bool bForce);
+
+	/**
+	 * Downloads one GDTF Share file for the fixture import review. The GameMode decides (EvaluateOnlineFixtureSource); refusals are
+	 * reported on OnRequestRejected. True when the download started. Nothing is added before RequestConfirmFixtureImport.
+	 */
+	bool RequestGdtfShareDownload(int32 RevisionId);
+
+	/** Stops a running GDTF Share download. Always allowed. False when it was not running. */
+	bool RequestGdtfShareCancelDownload(int32 RevisionId);
+
 	/**
 	 * Replaces this PC's MIDI and OSC settings (Preferences › Remote control, Docs/ADR/0035 §4): sanitized, saved, and the inputs reopen
 	 * with them. Switching an input on asks the GameMode (EvaluateRemoteControl); switching off is always allowed. A port or device that

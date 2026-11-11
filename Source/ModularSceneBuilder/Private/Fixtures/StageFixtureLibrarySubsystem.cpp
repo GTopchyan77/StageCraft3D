@@ -201,6 +201,58 @@ TSharedRef<UStageFixtureLibrarySubsystem::FParsedFile> UStageFixtureLibrarySubsy
 	return File;
 }
 
+bool UStageFixtureLibrarySubsystem::CanAddParsedFile(const FParsedFile& File, const FGuid& ExpectedTypeId)
+{
+	return File.bRead && File.Parsed.IsOk() && File.Report.bCanImport && ExpectedTypeId.IsValid() && File.Parsed.Type.FixtureTypeId == ExpectedTypeId;
+}
+
+FStageFixtureImportOutcome UStageFixtureLibrarySubsystem::RequestImportBytes(TArray<uint8> Bytes, const FString& SourceName)
+{
+	using namespace StageFixtureLibraryPrivate;
+
+	FStageFixtureImportOutcome Outcome;
+	Outcome.SourceFile = SourceName;
+	const bool bWaiting = Pending.FindKey(SourceName) != nullptr
+		|| Reviews.ContainsByPredicate([&SourceName](const FStageFixtureImportReview& Review) { return Review.SourceFile == SourceName; });
+	if (!IsFixtureFile(SourceName) || FPaths::GetCleanFilename(SourceName) != SourceName)
+	{
+		Outcome.Result = EStageFixtureImportResult::UnsupportedFormat;
+		Outcome.Message = FText::Format(LOCTEXT("BytesNotGdtf", "{0} is not a GDTF fixture file (.gdtf)."), FText::FromString(SourceName));
+	}
+	else if (bWaiting)
+	{
+		Outcome.Result = EStageFixtureImportResult::AlreadyInLibrary;
+		Outcome.Message = FText::Format(LOCTEXT("BytesImporting", "{0} is already being imported."), FText::FromString(SourceName));
+	}
+	else if (Pending.Num() + Reviews.Num() >= MaxReviews)
+	{
+		Outcome.Result = EStageFixtureImportResult::Refused;
+		Outcome.Message = FText::Format(LOCTEXT("BytesTooManyWaiting", "{0} was not read: {1} fixture files are already waiting. Add or cancel them first."),
+			FText::FromString(SourceName), FText::AsNumber(MaxReviews));
+	}
+	else
+	{
+		const uint64 Serial = ++NextSerial;
+		Pending.Add(Serial, SourceName);
+		UE::Tasks::Launch(UE_SOURCE_LOCATION, [WeakThis = TWeakObjectPtr<UStageFixtureLibrarySubsystem>(this), Serial, SourceName, Bytes = MoveTemp(Bytes)]() mutable
+		{
+			TSharedPtr<FParsedFile> File = ParseEmbeddedFile(MoveTemp(Bytes), SourceName);
+			File->Origin = EStageFixtureImportOrigin::User;
+			AsyncTask(ENamedThreads::GameThread, [WeakThis, Serial, File = MoveTemp(File)]() mutable
+			{
+				if (UStageFixtureLibrarySubsystem* Self = WeakThis.Get())
+				{
+					Self->FinishImport(Serial, MoveTemp(File));
+				}
+			});
+		});
+		Outcome.Result = EStageFixtureImportResult::Success;
+		return Outcome;
+	}
+	UE_LOG(LogStageCraft, Log, TEXT("Fixture library: refused %s (%s)."), *SourceName, *UEnum::GetValueAsString(Outcome.Result));
+	return Outcome;
+}
+
 FStageFixtureImportOutcome UStageFixtureLibrarySubsystem::AddEmbeddedFile(FParsedFile& File)
 {
 	using namespace StageFixtureLibraryPrivate;

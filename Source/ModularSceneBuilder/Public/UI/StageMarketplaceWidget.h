@@ -104,6 +104,7 @@ private:
 	void HandlePagesPicked(int32 Index);
 	void HandlePublishKindPicked(int32 Index);
 	void HandlePublishExportPicked(int32 Index);
+	void HandlePublishSharingPicked(int32 Index);
 	void HandlePublishPicked(int32 Index);
 
 	void ShowStatus(const FText& Message, bool bWarning);
@@ -223,6 +224,9 @@ private:
 	/** Keep in StageCraft / allow 3D apps and files (the manifest's allowExport). */
 	UPROPERTY(Transient)
 	TArray<TObjectPtr<class UStageChoiceButton>> PublishExportButtons;
+	/** Don't share / may share the GDTF files of the stage's imported fixtures (Docs/ADR/0033 §9). */
+	UPROPERTY(Transient)
+	TArray<TObjectPtr<class UStageChoiceButton>> PublishSharingButtons;
 	UPROPERTY(Transient)
 	TObjectPtr<class UStageChoiceButton> PublishButton = nullptr;
 
@@ -265,4 +269,6 @@ private:
 	EStagePackageKind PublishKind = EStagePackageKind::StageDesign;
 	/** Off by default: a publisher opts in to letting buyers export (ADR 0022 §11.1). */
 	bool bPublishAllowExport = false;
+	/** Off by default: the publisher confirms they may share the stage's GDTF files (FStageMarketplacePublishRequest::bConfirmFixtureSharing). */
+	bool bPublishFixtureSharing = false;
 };

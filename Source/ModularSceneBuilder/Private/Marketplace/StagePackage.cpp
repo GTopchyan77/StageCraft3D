@@ -28,6 +28,7 @@ namespace StagePackageFormat
 	constexpr uint32 ManifestTag = MakeTag('M', 'N', 'F', 'T');
 	constexpr uint32 SceneTag = MakeTag('S', 'C', 'E', 'N');
 	constexpr uint32 ThumbnailTag = MakeTag('T', 'H', 'M', 'B');
+	constexpr uint32 FixtureTag = MakeTag('F', 'I', 'X', 'T');
 
 	enum class ECodec : uint32
 	{
@@ -65,6 +66,7 @@ namespace StagePackageFormat
 		const TCHAR* Cues = TEXT("cues");
 		const TCHAR* RequiredItems = TEXT("requiredItems");
 		const TCHAR* AllowExport = TEXT("allowExport");
+		const TCHAR* FixtureTypes = TEXT("fixtureTypes");
 	}
 
 	struct FSectionHeader
@@ -91,6 +93,7 @@ namespace StagePackageFormat
 		case ManifestTag: return StagePackage::MaxManifestBytes;
 		case SceneTag: return StagePackage::MaxSceneBytes;
 		case ThumbnailTag: return StagePackage::MaxThumbnailBytes;
+		case FixtureTag: return StagePackage::MaxFixtureSectionBytes;
 		default: return 0;
 		}
 	}
@@ -306,6 +309,163 @@ namespace StagePackageFormat
 		}
 		return Array;
 	}
+
+	bool IsAscendingFixtureList(TConstArrayView<FGuid> Ids)
+	{
+		for (int32 Index = 0; Index < Ids.Num(); ++Index)
+		{
+			if (!Ids[Index].IsValid() || (Index > 0 && !StagePackage::IsFixtureOrderLess(Ids[Index - 1], Ids[Index])))
+			{
+				return false;
+			}
+		}
+		return true;
+	}
+
+	bool IsZipSignature(TConstArrayView<uint8> Bytes)
+	{
+		static constexpr uint8 Signature[4] = { 0x50, 0x4B, 0x03, 0x04 };
+		return Bytes.Num() >= static_cast<int32>(sizeof(Signature)) && FMemory::Memcmp(Bytes.GetData(), Signature, sizeof(Signature)) == 0;
+	}
+
+	EStageMarketplaceResult CheckFixtureFiles(const FStagePackageManifest& Manifest, const TArray<FStagePackageFixtureFile>& Files)
+	{
+		if (Files.Num() != Manifest.FixtureTypes.Num())
+		{
+			return EStageMarketplaceResult::InvalidRequest;
+		}
+		int64 Total = 0;
+		for (int32 Index = 0; Index < Files.Num(); ++Index)
+		{
+			const FStagePackageFixtureFile& File = Files[Index];
+			if (File.FixtureTypeId != Manifest.FixtureTypes[Index] || File.Bytes.Num() < StagePackage::MinFixtureFileBytes || !IsZipSignature(File.Bytes))
+			{
+				return EStageMarketplaceResult::InvalidRequest;
+			}
+			if (File.Bytes.Num() > StagePackage::MaxFixtureFileBytes)
+			{
+				return EStageMarketplaceResult::TooLarge;
+			}
+			Total += File.Bytes.Num();
+		}
+		return Total > StagePackage::MaxFixtureTotalBytes ? EStageMarketplaceResult::TooLarge : EStageMarketplaceResult::Success;
+	}
+
+	TArray<uint8> EncodeFixtureFiles(const TArray<FStagePackageFixtureFile>& Files)
+	{
+		int64 Size = sizeof(uint32);
+		for (const FStagePackageFixtureFile& File : Files)
+		{
+			Size += 5 * sizeof(uint32) + File.Bytes.Num();
+		}
+		TArray<uint8> Raw;
+		Raw.Reserve(static_cast<int32>(Size));
+		FMemoryWriter Writer(Raw);
+		uint32 Count = Files.Num();
+		Writer << Count;
+		for (const FStagePackageFixtureFile& File : Files)
+		{
+			uint32 Words[4] = { File.FixtureTypeId.A, File.FixtureTypeId.B, File.FixtureTypeId.C, File.FixtureTypeId.D };
+			for (uint32& Word : Words)
+			{
+				Writer << Word;
+			}
+			uint32 FileSize = File.Bytes.Num();
+			Writer << FileSize;
+			Writer.Serialize(const_cast<uint8*>(File.Bytes.GetData()), File.Bytes.Num());
+		}
+		return Raw;
+	}
+
+	EStageMarketplaceResult DecodeFixtureFiles(TConstArrayView<uint8> Raw, TArray<FStagePackageFixtureFile>& OutFiles)
+	{
+		OutFiles.Reset();
+		FMemoryReaderView Reader(MakeMemoryView(Raw.GetData(), Raw.Num()));
+		uint32 Count = 0;
+		Reader << Count;
+		if (Reader.IsError() || Count == 0 || Count > static_cast<uint32>(StagePackage::MaxFixtureFiles))
+		{
+			return EStageMarketplaceResult::Corrupt;
+		}
+		int64 Total = 0;
+		OutFiles.Reserve(Count);
+		for (uint32 Index = 0; Index < Count; ++Index)
+		{
+			uint32 Words[4] = {};
+			for (uint32& Word : Words)
+			{
+				Reader << Word;
+			}
+			uint32 FileSize = 0;
+			Reader << FileSize;
+			if (Reader.IsError())
+			{
+				return EStageMarketplaceResult::Corrupt;
+			}
+			if (FileSize > static_cast<uint32>(StagePackage::MaxFixtureFileBytes))
+			{
+				return EStageMarketplaceResult::TooLarge;
+			}
+			Total += FileSize;
+			if (Total > StagePackage::MaxFixtureTotalBytes)
+			{
+				return EStageMarketplaceResult::TooLarge;
+			}
+			const int64 Offset = Reader.Tell();
+			if (FileSize < StagePackage::MinFixtureFileBytes || static_cast<int64>(FileSize) > Raw.Num() - Offset)
+			{
+				return EStageMarketplaceResult::Corrupt;
+			}
+			FStagePackageFixtureFile& File = OutFiles.AddDefaulted_GetRef();
+			File.FixtureTypeId = FGuid(Words[0], Words[1], Words[2], Words[3]);
+			File.Bytes = TArray<uint8>(Raw.GetData() + Offset, static_cast<int32>(FileSize));
+			Reader.Seek(Offset + FileSize);
+			if (!File.FixtureTypeId.IsValid() || !IsZipSignature(File.Bytes)
+				|| (Index > 0 && !StagePackage::IsFixtureOrderLess(OutFiles[Index - 1].FixtureTypeId, File.FixtureTypeId)))
+			{
+				return EStageMarketplaceResult::Corrupt;
+			}
+		}
+		return Reader.Tell() == Raw.Num() ? EStageMarketplaceResult::Success : EStageMarketplaceResult::Corrupt;
+	}
+}
+
+bool StagePackage::IsFixtureOrderLess(const FGuid& Left, const FGuid& Right)
+{
+	if (Left.A != Right.A)
+	{
+		return Left.A < Right.A;
+	}
+	if (Left.B != Right.B)
+	{
+		return Left.B < Right.B;
+	}
+	if (Left.C != Right.C)
+	{
+		return Left.C < Right.C;
+	}
+	return Left.D < Right.D;
+}
+
+void StagePackage::SortFixtureFiles(TArray<FStagePackageFixtureFile>& Files)
+{
+	Files.Sort([](const FStagePackageFixtureFile& Left, const FStagePackageFixtureFile& Right) { return IsFixtureOrderLess(Left.FixtureTypeId, Right.FixtureTypeId); });
+}
+
+TArray<FGuid> StagePackage::CollectFixtureTypes(const FStageSceneDocument& Scene)
+{
+	TSet<FGuid> Types;
+	for (const FStageItemSnapshot& Item : Scene.Items)
+	{
+		FGuid TypeId;
+		if (StageFixtureLibrary::ParseFixtureItemPath(Item.Item.ToSoftObjectPath().GetLongPackageName(), TypeId))
+		{
+			Types.Add(TypeId);
+		}
+	}
+	TArray<FGuid> Sorted = Types.Array();
+	Sorted.Sort([](const FGuid& Left, const FGuid& Right) { return IsFixtureOrderLess(Left, Right); });
+	return Sorted;
 }
 
 void StagePackage::NormalizeManifest(FStagePackageManifest& Manifest)
@@ -364,7 +524,9 @@ EStageMarketplaceResult StagePackage::ValidateManifest(const FStagePackageManife
 		&& Manifest.FixtureCount >= 0 && Manifest.FixtureCount <= Manifest.ItemCount
 		&& Manifest.RequiredItems.Num() <= Manifest.ItemCount;
 
-	return bTextValid && bCategoryValid && bPriceValid && bStatsValid ? EStageMarketplaceResult::Success : EStageMarketplaceResult::InvalidRequest;
+	const bool bFixturesValid = Manifest.FixtureTypes.Num() <= MaxFixtureFiles && StagePackageFormat::IsAscendingFixtureList(Manifest.FixtureTypes);
+
+	return bTextValid && bCategoryValid && bPriceValid && bStatsValid && bFixturesValid ? EStageMarketplaceResult::Success : EStageMarketplaceResult::InvalidRequest;
 }
 
 bool StagePackage::IsPortable(const FStageSceneDocument& Scene)
@@ -372,7 +534,8 @@ bool StagePackage::IsPortable(const FStageSceneDocument& Scene)
 	return !Scene.Items.ContainsByPredicate([](const FStageItemSnapshot& Item)
 	{
 		const FString Package = Item.Item.ToSoftObjectPath().GetLongPackageName();
-		return StageMeshImport::IsImportedItemPath(Package) || StageFixtureLibrary::IsFixtureItemPath(Package);
+		FGuid TypeId;
+		return StageMeshImport::IsImportedItemPath(Package) || (StageFixtureLibrary::IsFixtureItemPath(Package) && !StageFixtureLibrary::ParseFixtureItemPath(Package, TypeId));
 	});
 }
 
@@ -429,6 +592,13 @@ FString StagePackage::SerializeManifest(const FStagePackageManifest& Manifest)
 	Root->SetObjectField(Field::Stats, Stats);
 	Root->SetArrayField(Field::RequiredItems, ToJsonStrings(Manifest.RequiredItems));
 	Root->SetBoolField(Field::AllowExport, Manifest.bAllowExport);
+	TArray<FString> FixtureTypes;
+	FixtureTypes.Reserve(Manifest.FixtureTypes.Num());
+	for (const FGuid& TypeId : Manifest.FixtureTypes)
+	{
+		FixtureTypes.Add(TypeId.ToString(EGuidFormats::DigitsWithHyphens));
+	}
+	Root->SetArrayField(Field::FixtureTypes, ToJsonStrings(FixtureTypes));
 
 	FString Json;
 	const TSharedRef<TJsonWriter<TCHAR, TCondensedJsonPrintPolicy<TCHAR>>> Writer = TJsonWriterFactory<TCHAR, TCondensedJsonPrintPolicy<TCHAR>>::Create(&Json);
@@ -532,6 +702,28 @@ EStageMarketplaceResult StagePackage::ParseManifest(const FString& Json, FStageP
 		OutManifest.bAllowExport = AllowExport->AsBool();
 	}
 
+	if (Version >= FirstManifestVersionWithFixtureTypes)
+	{
+		TArray<FString> FixtureTypes;
+		if (!Root->HasTypedField<EJson::Array>(Field::FixtureTypes) || !ReadStringArray(*Root, Field::FixtureTypes, FixtureTypes) || FixtureTypes.Num() > MaxFixtureFiles)
+		{
+			return EStageMarketplaceResult::Corrupt;
+		}
+		for (const FString& Text : FixtureTypes)
+		{
+			FGuid TypeId;
+			if (!FGuid::ParseExact(Text, EGuidFormats::DigitsWithHyphens, TypeId))
+			{
+				return EStageMarketplaceResult::Corrupt;
+			}
+			OutManifest.FixtureTypes.Add(TypeId);
+		}
+		if (!IsAscendingFixtureList(OutManifest.FixtureTypes))
+		{
+			return EStageMarketplaceResult::Corrupt;
+		}
+	}
+
 	NormalizeManifest(OutManifest);
 	return ValidateManifest(OutManifest) == EStageMarketplaceResult::Success ? EStageMarketplaceResult::Success : EStageMarketplaceResult::Corrupt;
 }
@@ -552,18 +744,31 @@ EStageMarketplaceResult StagePackage::Write(const FStagePackage& Package, TArray
 	{
 		return EStageMarketplaceResult::NotPortable;
 	}
+	if (Manifest.FixtureTypes != CollectFixtureTypes(Package.Scene))
+	{
+		return EStageMarketplaceResult::InvalidRequest;
+	}
+	const EStageMarketplaceResult FixtureResult = CheckFixtureFiles(Manifest, Package.FixtureFiles);
+	if (FixtureResult != EStageMarketplaceResult::Success)
+	{
+		return FixtureResult;
+	}
 
 	struct FPendingSection
 	{
 		uint32 Tag = 0;
 		TArray<uint8> Raw;
 	};
-	TArray<FPendingSection, TInlineAllocator<3>> Sections;
+	TArray<FPendingSection, TInlineAllocator<4>> Sections;
 	Sections.Add({ ManifestTag, ToUtf8(SerializeManifest(Manifest)) });
 	Sections.Add({ SceneTag, ToUtf8(FStageSceneStore::Serialize(Package.Scene)) });
 	if (!Package.ThumbnailPng.IsEmpty())
 	{
 		Sections.Add({ ThumbnailTag, Package.ThumbnailPng });
+	}
+	if (!Package.FixtureFiles.IsEmpty())
+	{
+		Sections.Add({ FixtureTag, EncodeFixtureFiles(Package.FixtureFiles) });
 	}
 
 	TArray<FSectionHeader> Headers;
@@ -698,7 +903,45 @@ EStageMarketplaceResult StagePackage::Read(TConstArrayView<uint8> Bytes, FStageP
 	{
 		return EStageMarketplaceResult::NotPortable;
 	}
+	const TArray<FGuid> UsedTypes = CollectFixtureTypes(OutPackage.Scene);
+	if (UsedTypes.ContainsByPredicate([&Manifest](const FGuid& TypeId) { return !Manifest.FixtureTypes.Contains(TypeId); }))
+	{
+		return EStageMarketplaceResult::NotPortable;
+	}
+	if (UsedTypes != Manifest.FixtureTypes)
+	{
+		return EStageMarketplaceResult::Corrupt;
+	}
 	Manifest.RequiredItems = CollectRequiredItems(OutPackage.Scene);
+
+	const FSectionView* FixtureSection = FindSection(Sections, FixtureTag);
+	if ((FixtureSection != nullptr) != !Manifest.FixtureTypes.IsEmpty())
+	{
+		return EStageMarketplaceResult::Corrupt;
+	}
+	if (FixtureSection)
+	{
+		Result = ReadSection(Bytes, *FixtureSection, Raw);
+		if (Result == EStageMarketplaceResult::Success)
+		{
+			Result = DecodeFixtureFiles(Raw, OutPackage.FixtureFiles);
+		}
+		if (Result != EStageMarketplaceResult::Success)
+		{
+			OutPackage.FixtureFiles.Reset();
+			return Result;
+		}
+		bool bSameIds = OutPackage.FixtureFiles.Num() == Manifest.FixtureTypes.Num();
+		for (int32 Index = 0; bSameIds && Index < OutPackage.FixtureFiles.Num(); ++Index)
+		{
+			bSameIds = OutPackage.FixtureFiles[Index].FixtureTypeId == Manifest.FixtureTypes[Index];
+		}
+		if (!bSameIds)
+		{
+			OutPackage.FixtureFiles.Reset();
+			return EStageMarketplaceResult::Corrupt;
+		}
+	}
 
 	if (const FSectionView* Thumbnail = FindSection(Sections, ThumbnailTag))
 	{
