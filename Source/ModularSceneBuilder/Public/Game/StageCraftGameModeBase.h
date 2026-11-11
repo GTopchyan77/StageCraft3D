@@ -84,6 +84,13 @@ public:
 	FStageEconomyResultInfo EvaluateMvrImport(const APlayerController* Player) const;
 
 	/**
+	 * May Player export the stage as an MVR scene (Docs/ADR/0034 §7, MV4)? Off when SessionRules.bAllowMvrExport is false. Step 6 adds
+	 * the Pro entitlement (StageCraft.Entitlement.Pro.MvrExport, §2.1) here, as for remote control.
+	 */
+	UFUNCTION(BlueprintNativeEvent, BlueprintCallable, Category = "StageCraft|Rules")
+	FStageEconomyResultInfo EvaluateMvrExport(const APlayerController* Player) const;
+
+	/**
 	 * May Player's MIDI and OSC controllers drive the desk (Docs/ADR/0035 §4)? Asked when the inputs are switched on and before every
 	 * remote command, which EvaluateCueRequest then judges like a click. Off when SessionRules.bAllowRemoteControl is false. Step 6
 	 * adds the Pro entitlement (StageCraft.Entitlement.Pro.MidiOsc) here.

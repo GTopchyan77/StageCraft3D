@@ -33,4 +33,11 @@ namespace StageMvrGeometry
 
 	/** By extension (.glb, .gltf, .3ds; case-insensitive). False for any other file, with OutError. */
 	bool ReadBounds(const FString& FileName, TConstArrayView<uint8> Bytes, FBox& OutBounds, FString& OutError);
+
+	/**
+	 * Docs/ADR/0034 §7 (MV4): a binary glTF 2.0 file holding one box mesh, Bounds (MVR mm, Z up) converted with the inverse of the
+	 * mapping above, so ReadGltfBounds gives Bounds back. 8 positions and 12 outward-facing triangles; Name names its node and mesh.
+	 * Bounds must be valid.
+	 */
+	TArray<uint8> WriteBoxGlb(const FBox& Bounds, const FString& Name);
 }

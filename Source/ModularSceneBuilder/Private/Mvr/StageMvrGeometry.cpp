@@ -397,4 +397,75 @@ namespace StageMvrGeometry
 		OutError = FString::Printf(TEXT("\"%s\" files are not read"), *Extension);
 		return false;
 	}
+
+	TArray<uint8> WriteBoxGlb(const FBox& Bounds, const FString& Name)
+	{
+		const FVector3f Min(float(Bounds.Min.X / 1000.0), float(Bounds.Min.Z / 1000.0), float(-Bounds.Max.Y / 1000.0));
+		const FVector3f Max(float(Bounds.Max.X / 1000.0), float(Bounds.Max.Z / 1000.0), float(-Bounds.Min.Y / 1000.0));
+		constexpr uint16 Indices[36] = { 0, 4, 6, 0, 6, 2, 1, 3, 7, 1, 7, 5, 0, 1, 5, 0, 5, 4, 2, 6, 7, 2, 7, 3, 0, 2, 3, 0, 3, 1, 4, 5, 7, 4, 7, 6 };
+
+		TArray<uint8> Binary;
+		const auto Append = [&Binary](const void* Data, int32 Size) { Binary.Append(static_cast<const uint8*>(Data), Size); };
+		for (int32 Corner = 0; Corner < 8; ++Corner)
+		{
+			const float Position[3] = { (Corner & 1) ? Max.X : Min.X, (Corner & 2) ? Max.Y : Min.Y, (Corner & 4) ? Max.Z : Min.Z };
+			Append(Position, sizeof(Position));
+		}
+		const int32 PositionBytes = Binary.Num();
+		Append(Indices, sizeof(Indices));
+		const int32 IndexBytes = Binary.Num() - PositionBytes;
+		while (Binary.Num() % 4 != 0)
+		{
+			Binary.Add(0);
+		}
+
+		FString SafeName;
+		for (const TCHAR Character : Name)
+		{
+			if (Character == TEXT('"') || Character == TEXT('\\'))
+			{
+				SafeName.AppendChar(TEXT('\\'));
+				SafeName.AppendChar(Character);
+			}
+			else if (Character >= 0x20)
+			{
+				SafeName.AppendChar(Character);
+			}
+		}
+		const auto Number = [](float Value) { return FString::Printf(TEXT("%.9g"), double(Value)); };
+		const FString Json = FString::Printf(
+			TEXT("{\"asset\":{\"version\":\"2.0\",\"generator\":\"StageCraft\"},\"scene\":0,\"scenes\":[{\"nodes\":[0]}],")
+			TEXT("\"nodes\":[{\"mesh\":0,\"name\":\"%s\"}],\"meshes\":[{\"name\":\"%s\",\"primitives\":[{\"attributes\":{\"POSITION\":0},\"indices\":1}]}],")
+			TEXT("\"accessors\":[{\"bufferView\":0,\"componentType\":5126,\"count\":8,\"type\":\"VEC3\",\"min\":[%s,%s,%s],\"max\":[%s,%s,%s]},")
+			TEXT("{\"bufferView\":1,\"componentType\":5123,\"count\":36,\"type\":\"SCALAR\"}],")
+			TEXT("\"bufferViews\":[{\"buffer\":0,\"byteOffset\":0,\"byteLength\":%d,\"target\":34962},{\"buffer\":0,\"byteOffset\":%d,\"byteLength\":%d,\"target\":34963}],")
+			TEXT("\"buffers\":[{\"byteLength\":%d}]}"),
+			*SafeName, *SafeName, *Number(Min.X), *Number(Min.Y), *Number(Min.Z), *Number(Max.X), *Number(Max.Y), *Number(Max.Z),
+			PositionBytes, PositionBytes, IndexBytes, Binary.Num());
+		const FTCHARToUTF8 JsonUtf8(*Json);
+		TArray<uint8> JsonChunk(reinterpret_cast<const uint8*>(JsonUtf8.Get()), JsonUtf8.Length());
+		while (JsonChunk.Num() % 4 != 0)
+		{
+			JsonChunk.Add(uint8(' '));
+		}
+
+		TArray<uint8> Glb;
+		const auto Write32 = [&Glb](uint32 Value)
+		{
+			for (int32 Shift = 0; Shift < 32; Shift += 8)
+			{
+				Glb.Add(uint8((Value >> Shift) & 0xFF));
+			}
+		};
+		Write32(0x46546C67);
+		Write32(2);
+		Write32(uint32(12 + 8 + JsonChunk.Num() + 8 + Binary.Num()));
+		Write32(uint32(JsonChunk.Num()));
+		Write32(0x4E4F534A);
+		Glb.Append(JsonChunk);
+		Write32(uint32(Binary.Num()));
+		Write32(0x004E4942);
+		Glb.Append(Binary);
+		return Glb;
+	}
 }

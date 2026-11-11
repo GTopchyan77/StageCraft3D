@@ -47,6 +47,13 @@ struct MODULARSCENEBUILDER_API FStageSessionRules
 	bool bAllowMvrImport = true;
 
 	/**
+	 * Users may export the stage as an MVR scene (Docs/ADR/0034 §7): fixtures with their GDTF files, patch and IDs, trusses and
+	 * other items as boxes. Pro in the tiers (ADR 0034 §2); the entitlement check comes with Step 6. Off for curated sessions.
+	 */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Session")
+	bool bAllowMvrExport = true;
+
+	/**
 	 * MIDI and OSC controllers may run the desk's live controls (Docs/ADR/0035 §4): cue GO / BACK, playbacks, masters. Each command is
 	 * still judged by EvaluateCueRequest. Off for curated sessions. Pro in the tiers (ADR 0034 §2); the entitlement check comes with Step 6.
 	 */

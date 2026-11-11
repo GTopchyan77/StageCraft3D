@@ -701,7 +701,7 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "StageCraft|Requests")
 	int32 RequestBrowseFixtureFiles();
 
-	// --- MVR scenes (Docs/ADR/0034 §6, MV2 and MV3) ---
+	// --- MVR scenes (Docs/ADR/0034 §6–§7, MV2 to MV4) ---
 
 	/**
 	 * Reads an .mvr file for review (UStageMvrImportSubsystem::RequestRead). The GameMode decides (EvaluateMvrImport); a refusal
@@ -723,6 +723,17 @@ public:
 
 	/** Drops the MVR file under review (the review's CANCEL). Always allowed: it changes nothing. */
 	void RequestCancelMvrImport(const FGuid& ReviewId);
+
+	/**
+	 * Writes the stage to FilePath (absolute, .mvr) as an MVR scene (Docs/ADR/0034 §7, MV4) through UStageMvrExportSubsystem. The
+	 * GameMode decides (EvaluateMvrExport); a refusal, a bad path, an empty stage or an export already running is reported on
+	 * OnRequestRejected. True when writing started; the result arrives on UStageMvrExportSubsystem::OnExportFinished. The stage
+	 * itself does not change.
+	 */
+	bool RequestExportMvr(const FString& FilePath);
+
+	/** Lets the user pick where to save the .mvr file in the operating system's dialog, then exports as RequestExportMvr does. */
+	bool RequestBrowseMvrExport();
 
 	/**
 	 * Replaces this PC's MIDI and OSC settings (Preferences › Remote control, Docs/ADR/0035 §4): sanitized, saved, and the inputs reopen

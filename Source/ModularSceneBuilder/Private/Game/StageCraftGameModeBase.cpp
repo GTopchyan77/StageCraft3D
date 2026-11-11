@@ -181,6 +181,19 @@ FStageEconomyResultInfo AStageCraftGameModeBase::EvaluateMvrImport_Implementatio
 	return FStageEconomyResultInfo::Ok();
 }
 
+FStageEconomyResultInfo AStageCraftGameModeBase::EvaluateMvrExport_Implementation(const APlayerController* Player) const
+{
+	if (!Player)
+	{
+		return FStageEconomyResultInfo::Fail(EStageEconomyResult::InvalidRequest, LOCTEXT("CannotExportMvr", "MVR export is not available."));
+	}
+	if (!SessionRules.bAllowMvrExport)
+	{
+		return FStageEconomyResultInfo::Fail(EStageEconomyResult::SessionRuleViolation, LOCTEXT("MvrExportDisabled", "Exporting MVR scenes is switched off for this session."));
+	}
+	return FStageEconomyResultInfo::Ok();
+}
+
 FStageEconomyResultInfo AStageCraftGameModeBase::EvaluateRemoteControl_Implementation(const APlayerController* Player) const
 {
 	if (!Player)

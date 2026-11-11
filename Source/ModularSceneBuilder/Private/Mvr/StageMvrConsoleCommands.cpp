@@ -1,6 +1,6 @@
 // Copyright Epic Games, Inc. All Rights Reserved.
 
-// MV0 probe and the MV2 import commands for scripted runs. MV0 probe (Docs/ADR/0034 §10): reads every .mvr file in a folder with the MV1 parser and logs what it found, the report and the
+// MV0 probe, the MV2 import commands and the MV4 export command for scripted runs. MV0 probe (Docs/ADR/0034 §10): reads every .mvr file in a folder with the MV1 parser and logs what it found, the report and the
 // time, so a corpus of real files (Vectorworks, grandMA3, GDTF-Share samples) can be checked without importing anything.
 // Development only: compiled out of Shipping.
 
@@ -171,6 +171,19 @@ namespace StageMvrConsoleCommands
 		UE_LOG(LogStageCraft, Display, TEXT("StageCraft.Mvr.Status: %d imported items on the stage."), Imported);
 	}
 
+	/** "Export <path>": writes the stage as an .mvr file through the player's request, as File > Export MVR Scene does. */
+	void Export(const TArray<FString>& Args, UWorld* World)
+	{
+		AModularPlayerController* Controller = FindController(World);
+		if (!Controller || Args.IsEmpty())
+		{
+			UE_LOG(LogStageCraft, Display, TEXT("Usage: StageCraft.Mvr.Export <absolute path to .mvr>   (needs a StageCraft player)"));
+			return;
+		}
+		const FString Path = FString::Join(Args, TEXT(" "));
+		UE_LOG(LogStageCraft, Display, TEXT("StageCraft.Mvr.Export %s: %s"), *Path, Controller->RequestExportMvr(Path) ? TEXT("writing") : TEXT("refused"));
+	}
+
 	FAutoConsoleCommandWithWorldAndArgs ImportCommand(TEXT("StageCraft.Mvr.Import"),
 		TEXT("Reads an .mvr file for review through the player's request: StageCraft.Mvr.Import <path>. Then StageCraft.Mvr.Confirm or StageCraft.Mvr.Cancel."),
 		FConsoleCommandWithWorldAndArgsDelegate::CreateStatic(&Import));
@@ -178,6 +191,9 @@ namespace StageMvrConsoleCommands
 		FConsoleCommandWithWorldDelegate::CreateLambda([](UWorld* World) { Answer(World, true); }));
 	FAutoConsoleCommandWithWorld CancelCommand(TEXT("StageCraft.Mvr.Cancel"), TEXT("Drops the MVR file under review (the review's CANCEL)."),
 		FConsoleCommandWithWorldDelegate::CreateLambda([](UWorld* World) { Answer(World, false); }));
+	FAutoConsoleCommandWithWorldAndArgs ExportCommand(TEXT("StageCraft.Mvr.Export"),
+		TEXT("Writes the stage as an .mvr file through the player's request: StageCraft.Mvr.Export <absolute path>. The result is logged and shown in the status bar."),
+		FConsoleCommandWithWorldAndArgsDelegate::CreateStatic(&Export));
 	FAutoConsoleCommandWithWorldAndArgs StatusCommand(TEXT("StageCraft.Mvr.Status"), TEXT("Logs the MVR importer's state and every imported item on the stage."),
 		FConsoleCommandWithWorldAndArgsDelegate::CreateStatic(&Status));
 }

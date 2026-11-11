@@ -8788,7 +8788,7 @@ All times in ms.
   - a tablet on the LAN (Network mode, the firewall prompt) and TouchOSC itself;
   - MIDI learn end to end on hardware.
 
-**Commit:** uncommitted (working tree).
+**Commit:** `9044bfd`.
 
 **Known issues / follow-ups**
 - **Gevor:**
@@ -8801,3 +8801,93 @@ All times in ms.
 - A remote GO that the show cannot do shows "Cue GO: nothing to do." in the status line; the specific reason is on the status bar.
 - `FindMidiInputs` (Preferences) re-initializes PortMidi each time the panel is built (engine behaviour); the engine reopens open inputs by name.
 - Scripted runs: a `-game` started from PowerShell `Start-Job` stalls at frame 0, so start the game in the foreground.
+
+## #90 — Step 2 MV4: MVR export (ADR 0034 §16) (2026-11-11)
+
+**What & why**
+- **Context.** After Step 3 (#89, committed as `9044bfd`), Gevor asked (2026-11-11) to continue with either MV4 (MVR export) or Step 4 (Download Manager / GDTF-Share). MV4 was chosen: ADR 0034 §7 had already decided it and it needs no outside service. GDTF-Share needs an account and a decision on how its credentials are stored.
+- **Housekeeping first.** #89 said "uncommitted"; it now carries `9044bfd`.
+- **What an export writes** (an `.mvr`, MVR 1.6):
+  - **Fixtures:** position, label, fixture ID (`FixtureID` and `FixtureIDNumeric`), patch (an absolute `break="0"` address).
+    - A fixture of a GDTF library type also gets its `.gdtf` file, stored unchanged under the name it was imported as (made safe and unique), and its DMX mode.
+    - Built-in fixtures and session-only types are written without `GDTFSpec`.
+    - The pose is the exact inverse of the import's hanging rest pose (`StageMvrExport::FixtureMatrix` against `StageMvrImport::FixtureTransform`).
+  - **Trusses:** every item in the truss category (`StageCraft.Category.Truss` and below). A span becomes one `Truss` per straight leg; any other truss piece becomes one `Truss` the size of its bounds.
+  - **Other items:** each becomes a `SceneObject` the size of its local bounds times its scale. Items with no bounds are left out and counted.
+  - **Geometry:** box `.glb` files (`StageMvrGeometry::WriteBoxGlb`, glTF 2.0, the inverse of the import's axis mapping); equal boxes share one file.
+  - **Layers:** one per fixture group with a fixture on the stage, named after it; a fixture goes to its first group. Everything else is on a "StageCraft" layer.
+  - **Ids:** an imported item's `MvrId`, else its StageCraft instance id (kept by scene files), so exporting the same stage again writes the same UUIDs. A truss's later legs get derived ids.
+- **Architecture:**
+  - **`StageZip::FWriter`** (`Private/Fixtures/StageZipWriter`), the counterpart of the reader:
+    - stored or raw-deflate entries (engine zlib, window -15), stored when deflate does not help;
+    - UTF-8 names, no ZIP64 or extra fields; unsafe and repeated names refused;
+    - entries dated 1980-01-01, so the same stage gives the same bytes.
+  - **`StageMvrExport::Write`** (`Private/Mvr/StageMvrWriter`), pure, any thread: plain values in, archive bytes out. Refuses an empty scene, repeated or invalid ids, missing layers and boxes without bounds. A GDTF file that is not available is noted, and its fixtures are written without a type.
+  - **`StageMvrExportGather::Gather`** (`Private/Mvr/StageMvrExportGather`), game thread: reads the session's placed items, the fixture library and the show library's groups into those values. It took 0.05–0.07 ms for a 6-item stage.
+  - **`UStageMvrExportSubsystem`** (`UWorldSubsystem`, Game/PIE, like the bill of materials):
+    - `StartExport(Path)` gathers, then a worker loads the GDTF library files, builds the archive and writes it with `StageAtomicFile`;
+    - the result returns to the game thread by weak pointer and serial, and `OnExportFinished` carries the reports' `FStageReportExportResult`, so the status bar shows it with its existing handler;
+    - one export at a time; paths must be absolute and end in `.mvr`.
+  - **Request bridge:** `AModularPlayerController::RequestExportMvr(Path)` and `RequestBrowseMvrExport()` (the OS save dialog). Both ask the GameMode first: the new BlueprintNativeEvent `EvaluateMvrExport`, governed by the new `SessionRules.bAllowMvrExport` (default true). Refusals go to `OnRequestRejected`.
+  - **The Pro gate is not enforced yet** (`StageCraft.Entitlement.Pro.MvrExport`, ADR 0034 §2.1). No product grants Pro tags until Step 6, so enforcing it would make the feature unusable. The same choice was made for MIDI/OSC (#89).
+- **UI:** File › 3D Apps › Export MVR Scene… (disabled while an export runs). Status bar: "Exported X.mvr: N fixtures, N trusses, N other items." plus the first note.
+- **Dev console** (compiled out of Shipping): `StageCraft.Mvr.Export <absolute path>`.
+- **Help:** new article `mvr-export` (EN/HY).
+- **Deviation from ADR 0034 M3 (for Gevor):**
+  - M3 asked for real `.glb` meshes from the DCC bridge exporter; trusses and set pieces are written as **boxes** instead.
+  - The reason: that exporter writes a whole saved scene through a temporary world over many frames (ADR 0022 §12), and one mesh per item is a separate piece of work.
+  - Real meshes are a follow-up; ADR 0034 §16 records the deviation.
+- **Found by the scripted run and fixed:** a truss piece that is not a span (the scene's `DA_Truss_Test`) was first written as a `SceneObject`. The truss category alone now decides.
+- **Gotcha (for memory):** a bash heredoc turned `TEXT('\\')` into `TEXT('\')` (C2001). Write C++ with the Write/Edit tools, not heredocs.
+
+**Files changed**
+- New:
+  - `Source/ModularSceneBuilder/Private/Fixtures/StageZipWriter.h/.cpp`
+  - `Private/Mvr/StageMvrWriter.h/.cpp`, `Private/Mvr/StageMvrExportGather.h/.cpp`, `Private/Mvr/StageMvrExportSubsystem.cpp`
+  - `Public/Mvr/StageMvrExportSubsystem.h`
+  - `Private/Mvr/Tests/StageMvrExportTests.cpp`
+  - `Content/StageCraft/Help/en/mvr-export.md`, `Content/StageCraft/Help/hy/mvr-export.md`
+- Changed:
+  - `Private/Mvr/StageMvrGeometry.h/.cpp` (`WriteBoxGlb`), `Private/Mvr/StageMvrConsoleCommands.cpp` (`StageCraft.Mvr.Export`)
+  - `Public/Game/StageCraftGameModeBase.h`, `Private/Game/StageCraftGameModeBase.cpp` (`EvaluateMvrExport`); `Public/Game/StageSessionTypes.h` (`bAllowMvrExport`)
+  - `Public/Player/ModularPlayerController.h`, `Private/Player/ModularPlayerControllerMvr.cpp` (`RequestExportMvr`, `RequestBrowseMvrExport`)
+  - `Private/Workspace/SStageWorkspaceMenuBar.cpp` (menu entry)
+  - `Public/UI/StageStatusBarWidget.h`, `Private/UI/StageStatusBarWidget.cpp` (export result)
+  - `Docs/ADR/0034-mvr-scene-exchange-and-product-tiers.md` (§16), `tasks/todo.md` (Phase 40), `STATE.md` (#89 commit, this entry)
+
+**Verification**
+- Builds: Editor, Game and Shipping, 0 warnings. Shipping contains the menu text but not the `StageCraft.Mvr.Export` dev command (UTF-16 scan).
+- **Tests:** full suite **278/278** passed (275 + 3 new; rerun after the truss fix), user data unchanged (127 files). New tests:
+  - `StageCraft.Mvr.ZipWriter`: deflate and store read back by the reader with CRC; deterministic bytes; unsafe, drive, backslash and repeated names refused.
+  - `StageCraft.Mvr.Writer`:
+    - the box `.glb` reads back as its box;
+    - XML escaping and GDTF file names;
+    - the fixture matrix inverts the import transform for 105 poses;
+    - a 2-layer scene read back by `StageMvrArchive::Read`: layers, UUIDs, GDTF file and mode, patch 1.010 and 3.512, IDs, poses, the risers' shared box without scale in the matrix, the missing GDTF noted;
+    - the truss planned back by `StageMvrImport::Build` at the same place, 4 m in 4 sections;
+    - refusals; stable leg ids.
+  - `StageCraft.Mvr.Export`:
+    - a real stage (test game instance with the library) holding two library spots in two modes, one grouped, and a 3 m truss on a span;
+    - exported through the subsystem, read back and planned: same modes, IDs, patch, poses, instance ids as UUIDs, truss place, direction and sections;
+    - the group becomes a layer, and an empty group does not;
+    - refusals: an empty stage, a relative path, a non-.mvr path, a second export while one runs;
+    - GameMode: a null player, allowed by default, refused when the session rule is off.
+- **Scripted `-game` run R90 (Claude):**
+  - Loaded scene `R38 Cues`, then ran `StageCraft.Mvr.Export`.
+  - Wrote 2 fixtures, 1 truss and 3 other items in 46 ms. `StageCraft.Mvr.Probe` read the file back: "MVR 1.6 from StageCraft: 1 layer; 3 scene objects, 2 fixtures, 1 trusses".
+  - The screenshot shows the status bar message "Exported R90b.mvr: 2 fixtures, 1 truss, 3 other items."
+  - The three non-fixture items share one box because their test data all use the engine's 1 m cube.
+  - User data restored.
+- **Not verified:** the file opened in Vectorworks, grandMA3, Capture or an MVR viewer (Gevor, ADR 0034 §10); the save dialog clicked by hand.
+
+**Commit:** uncommitted (working tree).
+
+**Known issues / follow-ups**
+- **Gevor:**
+  - open an exported `.mvr` in a third-party application;
+  - accept or reject the box geometry (M3 deviation).
+- Real meshes for trusses and set pieces (DCC bridge exporter per item).
+- Not written: focus points, pan and tilt, video screens and projectors, multipatch.
+- UUID text is FGuid's `DigitsWithHyphens`. For ids StageCraft made itself, the version and variant digits are not where RFC 4122 puts them; the text is still unique and round-trips. To be checked against the third-party readers.
+- Step 6: Pro entitlement in `EvaluateMvrExport`. MV5: re-import differences, preserved unknown nodes.
+- Still open from #88: `RunGameScripted.ps1` does not back up `Saved/StageCraft/Fixtures` (this run imported nothing).

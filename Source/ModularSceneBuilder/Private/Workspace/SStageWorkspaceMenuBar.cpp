@@ -15,6 +15,7 @@
 #include "History/StageEditHistoryComponent.h"
 #include "History/StageEditHistorySubsystem.h"
 #include "Input/StageInputPreferencesSubsystem.h"
+#include "Mvr/StageMvrExportSubsystem.h"
 #include "Placement/StagePlacementToolComponent.h"
 #include "Placement/StageSnappingComponent.h"
 #include "Player/ModularPlayerController.h"
@@ -175,6 +176,15 @@ void SStageWorkspaceMenuBar::FillFileMenu(FMenuBuilder& MenuBuilder)
 	MenuBuilder.AddMenuEntry(LOCTEXT("SendTo3DApp", "Send to 3D App..."),
 		LOCTEXT("SendTo3DAppTip", "Send a saved stage to Blender, 3ds Max or Cinema 4D on this computer, or save it as a .glb file (ADR 0022)."),
 		FSlateIcon(), FUIAction(FExecuteAction::CreateSP(this, &SStageWorkspaceMenuBar::ShowPanel, FGameplayTag(StageCraftTags::Panel_SendTo))));
+	if (AModularPlayerController::CanBrowseModelFiles())
+	{
+		const UStageMvrExportSubsystem* MvrExport = WeakController.IsValid() ? UWorld::GetSubsystem<UStageMvrExportSubsystem>(WeakController->GetWorld()) : nullptr;
+		MenuBuilder.AddMenuEntry(LOCTEXT("ExportMvr", "Export MVR Scene..."),
+			LOCTEXT("ExportMvrTip", "Save the stage as an .mvr file for Vectorworks, grandMA3, Capture or another MVR application: fixtures with their GDTF types, patch and IDs, one layer per fixture group, trusses and other items as boxes."),
+			FSlateIcon(), FUIAction(
+				FExecuteAction::CreateLambda([WeakController]() { if (WeakController.IsValid()) { WeakController->RequestBrowseMvrExport(); } }),
+				FCanExecuteAction::CreateLambda([bCanExport = MvrExport && !MvrExport->IsExporting()]() { return bCanExport; })));
+	}
 	MenuBuilder.EndSection();
 
 	FillReportSection(MenuBuilder, WeakController);

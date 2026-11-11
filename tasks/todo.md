@@ -717,3 +717,14 @@ Gevor's choices: automation tests on a harness game instance (not AFunctionalTes
 - [ ] Gevor: confirm the default MIDI map (Korg nanoKONTROL2) or name your controller; check with real hardware
 - [ ] MR2: MIDI mapping editor with LEARN in Preferences; MIDI output feedback (motor faders, LEDs)
 - [ ] MR3 (Step 6): Pro entitlement StageCraft.Entitlement.Pro.MidiOsc in EvaluateRemoteControl
+
+## Phase 40 - Step 2 MV4: MVR export (requested by Gevor 2026-11-11; STATE.md #90; ADR 0034 section 16)
+- [x] StageZip::FWriter (stored / raw deflate, UTF-8 names, deterministic) checked against the reader
+- [x] StageMvrExport::Write (pure): layers, fixtures (pose, GDTF file and mode, patch, IDs), trusses per leg and other items as box .glb; StageMvrGeometry::WriteBoxGlb
+- [x] StageMvrExportGather (stage to plain values, ids from MvrId or instance id, layers from fixture groups) and UStageMvrExportSubsystem (worker, atomic write)
+- [x] Request bridge: RequestExportMvr / RequestBrowseMvrExport, GameMode EvaluateMvrExport, SessionRules.bAllowMvrExport; File > 3D Apps > Export MVR Scene...; status bar; StageCraft.Mvr.Export; help mvr-export EN/HY
+- [x] Round-trip tests (writer read back by the import; a stage exported through the subsystem read back item by item)
+- [ ] Gevor: open an exported .mvr in Vectorworks, grandMA3 or an MVR viewer (ADR 0034 section 10)
+- [ ] Real meshes for trusses and set pieces instead of boxes (DCC bridge exporter per item; M3 follow-up)
+- [ ] Step 6: Pro entitlement StageCraft.Entitlement.Pro.MvrExport in EvaluateMvrExport
+- [ ] MV5: re-import differences, preserved unknown nodes

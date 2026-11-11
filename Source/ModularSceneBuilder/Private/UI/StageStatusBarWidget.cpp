@@ -18,6 +18,7 @@
 #include "History/StageEditHistorySubsystem.h"
 #include "Engine/LocalPlayer.h"
 #include "Fixtures/StageFixtureLibrarySubsystem.h"
+#include "Mvr/StageMvrExportSubsystem.h"
 #include "Mvr/StageMvrImportSubsystem.h"
 #include "Import/StageMeshImportSubsystem.h"
 #include "Input/StageInputPreferencesSubsystem.h"
@@ -353,6 +354,11 @@ void UStageStatusBarWidget::BindSources()
 		PatchSheet = PatchSheetSubsystem;
 		PatchSheetSubsystem->OnExportFinished.AddUniqueDynamic(this, &ThisClass::HandleReportExportFinished);
 	}
+	if (UStageMvrExportSubsystem* MvrExportSubsystem = UWorld::GetSubsystem<UStageMvrExportSubsystem>(GetWorld()))
+	{
+		MvrExporter = MvrExportSubsystem;
+		MvrExportSubsystem->OnExportFinished.AddUniqueDynamic(this, &ThisClass::HandleReportExportFinished);
+	}
 	if (UStageAudioReactiveSubsystem* AudioSubsystem = UWorld::GetSubsystem<UStageAudioReactiveSubsystem>(GetWorld()); AudioSubsystem && !AudioStatusHandle.IsValid())
 	{
 		AudioReactive = AudioSubsystem;
@@ -457,6 +463,10 @@ void UStageStatusBarWidget::UnbindSources()
 	{
 		PatchSheetSubsystem->OnExportFinished.RemoveDynamic(this, &ThisClass::HandleReportExportFinished);
 	}
+	if (UStageMvrExportSubsystem* MvrExportSubsystem = MvrExporter.Get())
+	{
+		MvrExportSubsystem->OnExportFinished.RemoveDynamic(this, &ThisClass::HandleReportExportFinished);
+	}
 	if (UStageCableScheduleSubsystem* CableScheduleSubsystem = CableSchedule.Get())
 	{
 		CableScheduleSubsystem->OnExportFinished.RemoveDynamic(this, &ThisClass::HandleReportExportFinished);
@@ -493,6 +503,7 @@ void UStageStatusBarWidget::UnbindSources()
 	SpanTool.Reset();
 	BillOfMaterials.Reset();
 	PatchSheet.Reset();
+	MvrExporter.Reset();
 	CableSchedule.Reset();
 	Importer.Reset();
 }

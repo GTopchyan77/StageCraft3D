@@ -1,6 +1,6 @@
 // Copyright Epic Games, Inc. All Rights Reserved.
 
-// AModularPlayerController: the MVR scene import requests (Docs/ADR/0034 §6, MV2 and MV3), kept apart from the main file.
+// AModularPlayerController: the MVR scene import and export requests (Docs/ADR/0034 §6–§7, MV2–MV4), kept apart from the main file.
 
 #include "Player/ModularPlayerController.h"
 
@@ -15,6 +15,7 @@
 #include "Import/StageFileDialog.h"
 #include "Misc/Paths.h"
 #include "ModularSceneBuilder.h"
+#include "Mvr/StageMvrExportSubsystem.h"
 #include "Mvr/StageMvrImportSubsystem.h"
 #include "Sketch/StageSketchSubsystem.h"
 #include "Subsystems/ShowControlSubsystem.h"
@@ -153,6 +154,58 @@ void AModularPlayerController::RequestCancelMvrImport(const FGuid& ReviewId)
 	{
 		Importer->CancelReview(ReviewId);
 	}
+}
+
+bool AModularPlayerController::RequestExportMvr(const FString& FilePath)
+{
+	const AStageCraftGameModeBase* GameMode = GetStageGameMode();
+	UStageMvrExportSubsystem* Exporter = UWorld::GetSubsystem<UStageMvrExportSubsystem>(GetWorld());
+	FStageEconomyResultInfo Verdict = GameMode && Exporter
+		? GameMode->EvaluateMvrExport(this)
+		: FStageEconomyResultInfo::Fail(EStageEconomyResult::InvalidRequest, LOCTEXT("NoMvrExport", "MVR export needs the StageCraft game mode."));
+	FText Reason;
+	if (Verdict.IsSuccess() && !Exporter->StartExport(FilePath, Reason))
+	{
+		Verdict = FStageEconomyResultInfo::Fail(EStageEconomyResult::InvalidRequest, Reason);
+	}
+	if (!Verdict.IsSuccess())
+	{
+		ReportRejection(Verdict);
+		return false;
+	}
+	return true;
+}
+
+bool AModularPlayerController::RequestBrowseMvrExport()
+{
+	if (!CanBrowseModelFiles())
+	{
+		ReportRejection(FStageEconomyResultInfo::Fail(EStageEconomyResult::InvalidRequest, LOCTEXT("NoMvrSaveDialog", "This build has no file dialog to choose where the .mvr goes.")));
+		return false;
+	}
+	const AStageCraftGameModeBase* GameMode = GetStageGameMode();
+	const FStageEconomyResultInfo Verdict = GameMode ? GameMode->EvaluateMvrExport(this)
+		: FStageEconomyResultInfo::Fail(EStageEconomyResult::InvalidRequest, LOCTEXT("NoMvrExportMode", "MVR export needs the StageCraft game mode."));
+	if (!Verdict.IsSuccess())
+	{
+		ReportRejection(Verdict);
+		return false;
+	}
+	const UStageSessionSubsystem* Session = UWorld::GetSubsystem<UStageSessionSubsystem>(GetWorld());
+	const FString SceneName = Session ? Session->GetSceneName() : FString();
+	const FString DefaultName = (SceneName.IsEmpty() ? FString(TEXT("Stage")) : SceneName) + TEXT(".mvr");
+	FString File;
+	const FString Filter = LOCTEXT("MvrExportFilter", "MVR scenes (*.mvr)").ToString() + TEXT("|*.mvr");
+	if (!StageFileDialog::SaveFile(LOCTEXT("ExportMvrTitle", "Export an MVR Scene"), LastImportDirectory, DefaultName, Filter, File) || File.IsEmpty())
+	{
+		return false;
+	}
+	if (!File.EndsWith(TEXT(".mvr"), ESearchCase::IgnoreCase))
+	{
+		File += TEXT(".mvr");
+	}
+	LastImportDirectory = FPaths::GetPath(File);
+	return RequestExportMvr(File);
 }
 
 int32 AModularPlayerController::RecordMvrImport(TConstArrayView<AModularBaseActor*> Items, const TArray<TPair<FString, TArray<int32>>>& LayerGroups, const FText& StepName)
