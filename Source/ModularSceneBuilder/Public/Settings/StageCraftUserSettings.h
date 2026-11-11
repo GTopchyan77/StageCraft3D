@@ -6,6 +6,7 @@
 #include "GameFramework/GameUserSettings.h"
 #include "Audio/StageAudioReactiveTypes.h"
 #include "Input/StageKeyBindings.h"
+#include "Remote/StageRemoteControlTypes.h"
 #include "Render/StageRenderTypes.h"
 #include "Show/StageDMXNetworkTypes.h"
 #include "StageCraftUserSettings.generated.h"
@@ -137,6 +138,12 @@ public:
 	/** Sanitized (StageDMXOutput::Sanitize); the stored Cid is kept. Returns true if the stored value changed. Does not save. */
 	bool SetDMXOutputSettings(const FStageDMXOutputSettings& Settings);
 
+	/** MIDI and OSC remote control of this PC (UStageRemoteControlSubsystem is the only writer), always sanitized. */
+	const FStageRemoteSettings& GetRemoteSettings() const { return RemoteControl; }
+
+	/** Sanitized (StageRemote::Sanitize). Returns true if the stored value changed. Does not save. */
+	bool SetRemoteSettings(const FStageRemoteSettings& Settings);
+
 	/** Audio-reactive lighting of this PC (UStageAudioReactiveSubsystem is the only writer), always sanitized. */
 	const FStageAudioReactiveSettings& GetAudioReactiveSettings() const { return AudioReactive; }
 
@@ -203,6 +210,9 @@ private:
 
 	UPROPERTY(Config)
 	FStageDMXOutputSettings DMXOutput;
+
+	UPROPERTY(Config)
+	FStageRemoteSettings RemoteControl;
 
 	/** Sanitizes DMXOutput and gives it a Cid when it has none; a reset to defaults keeps the Cid (the same sACN source). */
 	void SanitizeDMXOutput();

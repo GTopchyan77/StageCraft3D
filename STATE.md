@@ -8664,7 +8664,7 @@ All times in ms.
 - Cleanup: the scripted import added the Test Spot to the real fixture library (`Saved/StageCraft/Fixtures`, which was empty: "0 of 0 fixture types restored"); its two files were removed again. `RunGameScripted.ps1` protects imports, scenes, profile and marketplace but not the fixture library (follow-up below). User data check: 127 files.
 - **Not verified:** real `.mvr` files (Vectorworks, grandMA3): the glTF axis mapping and the hanging rest pose are assumptions from the specs; the dialog clicked with a real mouse; a 2,000-fixture rig (the per-item cost suggests about 2.3 s of placing spread over ~300 frames, not measured); the assistant panel's rebuild time (now logged at Verbose).
 
-**Commit:** uncommitted (working tree).
+**Commit:** `45da93f`.
 
 **Known issues / follow-ups**
 - Gevor: answer ADR 0034 M1–M4 (M1 and the truss part of M2 are applied as recommended) and supply a real `.mvr` corpus for `StageCraft.Mvr.Probe` and an import check.
@@ -8673,3 +8673,131 @@ All times in ms.
 - A refused confirm (for example "everything is already on the stage") keeps the review open until CANCEL.
 - `Scripts/Tests/RunGameScripted.ps1` should also save and restore `Saved/StageCraft/Fixtures`, so a scripted MVR or GDTF import cannot leave types in the user's library.
 - The sample's floor fixture is placed hanging at floor level, as its identity matrix says; real files rotate floor fixtures.
+
+## #89 — Step 3: MIDI and OSC remote control (MR1), ADR 0035 (2026-11-10)
+
+**What & why**
+- **Context.** Gevor asked (2026-11-10) to start Step 3 of the roadmap (D8: GDTF → MVR → **MIDI/OSC** → Download Manager → Web Remote → Stripe) with the engine's own MIDIDevice and OSC plugins. D7 (scope and security of the control protocols) was locked without its wording recorded, so ADR 0035 follows the safest reading and lists what Gevor must confirm.
+- **What a remote can do.** Only the desk's live controls, which are not undoable today: cue GO / BACK / go to cue, the ten playbacks (level, flash, GO, release), Grand Master, Blackout, Audio master (`EStageRemoteAction`). No edits (store, record, effects).
+- **OSC.** A fixed, case-insensitive address space under `/stagecraft/…` (ADR 0035 §3).
+  - Buttons fire on a press (no argument or ≥ 0.5) and ignore the release; flash and blackout follow the value; levels need a finite value.
+  - The first argument is read from float, int32/64, double or bool.
+  - Ignored and counted: other argument types, NaN, infinity, addresses over 128 characters, playbacks outside 1–10.
+- **OSC feedback.** The desk's state goes to the last sender on port 9000, so a tablet's faders follow the desk.
+  - Triggered by `OnCueStarted` / `OnDeskStateChanged`; sent once per frame, only the values that changed. A new sender gets the whole state once.
+  - Addresses: `/stagecraft/cue/active`, the playback levels, the masters.
+- **MIDI.**
+  - One input device, chosen by name and reopened by name, so a controller on another USB port still matches.
+  - A binding: Note or CC, channel (0 = any), number, action, playback or cue. Note On with velocity 0 is a release; CC ≥ 64 is a press. System messages (clock) are dropped without counting.
+  - Default map: the Korg nanoKONTROL2 factory CC layout — faders 0–7 → playback levels, S flash, M GO, R release, knob 1 GM, knob 2 Audio, ▶ GO, ◀◀ BACK, ● Blackout. An assumption, not tested on the hardware.
+  - MIDI learn (`StartMidiLearn`): the next press is bound and saved, replacing any binding of the same control.
+- **Architecture.**
+  - **Pure layer** `StageRemote` (`Private/Remote/StageRemoteMapping`):
+    - `ParseOsc`, `ResolveMidi`, `LearnFromMidi`, `Sanitize`, `DefaultMidiBindings`, `OscAddressFor`.
+    - `Enqueue`: one entry per continuous target (the latest value wins, in its first place), triggers kept in order, at most 256 per frame.
+  - **`UStageRemoteControlSubsystem`** (`UWorldSubsystem`, Game/PIE, like the DMX network subsystem, no tick):
+    - Owns the `UOSCServer`, the feedback `UOSCClient` and the `UMIDIDeviceInputController`. Reopens from the saved settings in `OnWorldBeginPlay`; closes in `Deinitialize`.
+    - Both plugins deliver on the game thread (MIDI from its module tick, OSC from its core-ticker pump), so no thread or lock was added.
+    - Commands are flushed on the next tick (`SetTimerForNextTick`); status counters reach listeners at most every 0.25 s.
+  - **Request bridge:**
+    - The local `AModularPlayerController` binds itself as the subsystem's command handler in `BeginPlay`, and in `EndPlay` unbinds only its own binding.
+    - `RequestRemoteCommand` asks the GameMode silently (`EvaluateRemoteControl`, then `EvaluateCueRequest` with the desk's request kind; a flash release is always allowed), then calls the desk's own request (`RequestCueGo`, `RequestSetPlaybackLevel`, …).
+    - A refusal is reported on `OnRequestRejected` only when its reason differs from the last one, so a refused fader does not raise a message per move.
+    - `RequestSetRemoteControl`: switching an input on asks the GameMode; switching off is always allowed. Also `RequestMidiLearn`.
+  - **Rules:** new `SessionRules.bAllowRemoteControl` (default true) and the BlueprintNativeEvent `EvaluateRemoteControl`. MIDI/OSC is Pro (ADR 0034 §2); Step 6 adds `StageCraft.Entitlement.Pro.MidiOsc` there. Until then the gate is written and open.
+  - **Settings:** `FStageRemoteSettings` in `UStageCraftUserSettings` (Config, per PC): OSC Off by default, port 8000, feedback 9000, MIDI device name, map. Sanitized on load and on every set; the subsystem is the only writer.
+- **Security finding (engine).** UE 5.8's `UOSCServer` cannot bind loopback.
+  - `FServerReceiver::InitSocket` replaces 127.0.0.1 with this PC's LAN address (`SetAsLocalHostIfLoopback`). A "127.0.0.1" server therefore receives nothing from 127.0.0.1 and is reachable from the LAN.
+  - So the socket listens on 0.0.0.0, and **This PC** turns on the server's allow-list with only 127.0.0.1 (filtered at the game-thread pump, before dispatch).
+  - **Network** has no allow-list, and OSC has no authentication (D7 question for Gevor).
+- **UI.** Preferences › REMOTE CONTROL. Written through `RequestSetRemoteControl`, re-read on `OnStatusChanged`.
+  - OSC: Off / This PC / Network.
+  - MIDI input: Off plus up to three devices found when the panel is built; "No MIDI input found" otherwise.
+  - Status line: where OSC listens, counters, the last input, the last refusal in normal text, open problems in the warning colour.
+- **Dev console (compiled out of Shipping):**
+  - `StageCraft.Remote.Status [Map] [Devices]`
+  - `StageCraft.Remote.Settings Off|Local|Network [Port=] [Feedback=] [Midi=] [Map=Default]`
+  - `StageCraft.Remote.Learn <Action> [Playback] [Cue] | Cancel`
+  - `StageCraft.Remote.Send <address> [value] [Now]`
+  - `StageCraft.Remote.SendMidi <type> <ch> <d1> <d2>`
+- **Help:** `remote-control` article (EN/HY), panel Preferences.
+
+**Files changed**
+- New:
+  - `Public/Remote/StageRemoteControlTypes.h`, `Public/Remote/StageRemoteControlSubsystem.h`, `Private/Remote/StageRemoteControlSubsystem.cpp`
+  - `Private/Remote/StageRemoteMapping.h/.cpp`, `Private/Remote/StageRemoteConsoleCommands.cpp`, `Private/Remote/Tests/StageRemoteControlTests.cpp`
+  - `Private/Player/ModularPlayerControllerRemote.cpp`
+  - `Content/StageCraft/Help/en/remote-control.md`, `Content/StageCraft/Help/hy/remote-control.md`
+  - `Docs/ADR/0035-midi-and-osc-remote-control.md`
+- Changed:
+  - `ModularSceneBuilder.uproject` (MIDIDevice and OSC plugins enabled), `ModularSceneBuilder.Build.cs` (private dependencies MIDIDevice, OSC)
+  - `Public/Settings/StageCraftUserSettings.h`, `Private/Settings/StageCraftUserSettings.cpp` (`RemoteControl`, `Get/SetRemoteSettings`, sanitized on load)
+  - `Public/Game/StageSessionTypes.h` (`bAllowRemoteControl`), `Public/Game/StageCraftGameModeBase.h`, `Private/Game/StageCraftGameModeBase.cpp` (`EvaluateRemoteControl`)
+  - `Public/Player/ModularPlayerController.h`, `Private/Player/ModularPlayerController.cpp` (requests; handler bound in BeginPlay, unbound in EndPlay)
+  - `Public/UI/StagePreferencesPanel.h`, `Private/UI/StagePreferencesPanel.cpp` (REMOTE CONTROL section)
+  - `tasks/todo.md` (Phase 39)
+- No content assets, input actions or maps changed. `GameUserSettings.ini` gains a `RemoteControl=` line with the defaults the first time the engine saves it.
+
+**Verification** (Claude, 2026-11-10)
+- **Builds:** Editor, Game (Development) and Shipping succeeded with 0 warning or error lines.
+  - Shipping (UTF-16 scan): no `StageCraft.Remote.Status` / `.Send` / `.Learn`. The panel text, the OSC addresses and the GameMode refusal are there.
+- **Automation: 275/275 passed** (268 + 7 new), user data unchanged.
+  - `StageCraft.Remote.Osc`:
+    - triggers and releases, case, go to cue;
+    - playback numbering: 1–10 accepted; 0, 11, 123, x and -1 refused;
+    - NaN, infinity, malformed and over-long addresses;
+    - every action's address parses back to it.
+  - `.Midi`:
+    - the default map: 37 bindings, all valid, no control bound twice;
+    - faders on any channel, press and release of CC buttons, notes on a channel, velocity 0, two bindings on one control;
+    - refused: malformed data, pitch bend, program change, an invalid binding;
+    - learn of a CC and a note; releases cannot be learned.
+  - `.Queue`: coalescing in order, triggers and flashes kept, the 256 limit, a queued fader still updating when the queue is full.
+  - `.Settings`:
+    - an unknown scope, privileged and out-of-range ports;
+    - feedback port 0 kept, the device name trimmed and cut;
+    - invalid bindings dropped, the later binding of one control winning;
+    - a stable second pass, a custom empty map.
+  - `.Subsystem` (with a test handler):
+    - with no handler, a command is refused and counted;
+    - one frame: a fader burst coalesced, GO kept in place, knob 1 → GM, an unknown address ignored, MIDI clock not counted;
+    - a GameMode refusal counted with its reason;
+    - a flood: 256 carried out, 44 dropped;
+    - learn refused without MIDI;
+    - a stranger cannot clear the handler.
+  - `.Rules`: no player refused, allowed by default, `bAllowRemoteControl = false` refused as a session rule.
+  - `.OscLoopback` (latent; real sockets on ports 48765/48766):
+    - messages from a `UOSCClient` carried out, with float and int arguments;
+    - the new sender got the whole desk state once (14 values), and no feedback was sent when nothing changed;
+    - a message sent from this PC's LAN address was **not** dispatched in This PC mode;
+    - the test sets the remote settings in memory only and restores them, so the user's ini is not written.
+- **Scripted `-game` run `Verify89`:** real UDP OSC sent from PowerShell, a listener on port 9000 standing in for the tablet, the real controller and GameMode path.
+  - `StageCraft.Remote.Settings Local` → "OSC listening on port 8000, this PC only".
+  - 13 messages sent: playback 1 level 0.5, GM 0.4, Blackout on, playback 2 flash, GO, an unknown address, and a 7-step fader on playback 3.
+    - Result: 11 applied, 1 ignored, 1 refused (GO: "There are no cues yet. Store one first." on the status bar).
+    - `StageCraft.Show.Playback List`: "Grand Master 0.40, blackout on"; after Blackout 0, "blackout off".
+  - Feedback on port 9000: first the full state (cue −1, ten levels at 0, GM 1, blackout 0, audio 1), then only the changes (level 1 0.5, GM 0.4, blackout 1, playback 3 0.1…0.7, blackout 0, level 1 0.25).
+  - Preferences screenshot: REMOTE CONTROL with This PC selected, the status lines, and "No MIDI input found…" (this PC has no MIDI device).
+  - `Settings Off` closed the port. The runner restored the user's GameUserSettings.ini, profile, scenes, marketplace and imports.
+- **Found and fixed while verifying:**
+  - the engine's OSC loopback bind (above);
+  - the loopback test first failed because automation tests run inside the core ticker, where a nested tick pumps nothing; it is now a latent test;
+  - a refused command made the whole status line red; refusals are now shown as information, separate from open problems.
+- **Not verified:**
+  - a real MIDI controller: none on this PC, so MIDI is covered by injected events and the pure tests;
+  - a tablet on the LAN (Network mode, the firewall prompt) and TouchOSC itself;
+  - MIDI learn end to end on hardware.
+
+**Commit:** uncommitted (working tree).
+
+**Known issues / follow-ups**
+- **Gevor:**
+  - D7: is an opt-in, unauthenticated OSC listener on the LAN acceptable, or should Network require an allow-list of tablet addresses (the engine server supports one)?
+  - Confirm the default MIDI map (nanoKONTROL2), or name the controller to target.
+- **MR2:**
+  - a MIDI mapping editor with LEARN in Preferences; learn is console-only in MR1, so a Shipping user has the default map only;
+  - MIDI output feedback (motor faders, LEDs).
+- **MR3 / Step 6:** the Pro entitlement in `EvaluateRemoteControl`.
+- A remote GO that the show cannot do shows "Cue GO: nothing to do." in the status line; the specific reason is on the status bar.
+- `FindMidiInputs` (Preferences) re-initializes PortMidi each time the panel is built (engine behaviour); the engine reopens open inputs by name.
+- Scripted runs: a `-game` started from PowerShell `Start-Job` stalls at frame 0, so start the game in the foreground.

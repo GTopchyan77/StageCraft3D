@@ -5,6 +5,7 @@
 #include "Audio/StageAudioTypes.h"
 #include "Engine/Engine.h"
 #include "Player/StageCameraNavigation.h"
+#include "Remote/StageRemoteMapping.h"
 #include "Viewport/StageViewMath.h"
 
 #include UE_INLINE_GENERATED_CPP_BY_NAME(StageCraftUserSettings)
@@ -55,6 +56,7 @@ void UStageCraftUserSettings::LoadSettings(bool bForceReload)
 	RenderSettings = StageRender::Sanitize(RenderSettings);
 	DMXInput = StageDMXInput::Sanitize(DMXInput);
 	SanitizeDMXOutput();
+	StageRemote::Sanitize(RemoteControl);
 	AudioReactive = StageAudioReactive::Sanitize(AudioReactive);
 	// A hand-edited ini can only select a toolbar preset; anything else falls back to the default.
 	GridSnapCm = StageViewMath::SanitizeGridSnap(GridSnapCm);
@@ -238,6 +240,15 @@ bool UStageCraftUserSettings::SetDMXInputSettings(const FStageDMXInputSettings& 
 	const FStageDMXInputSettings Sanitized = StageDMXInput::Sanitize(Settings);
 	const bool bChanged = !(DMXInput == Sanitized);
 	DMXInput = Sanitized;
+	return bChanged;
+}
+
+bool UStageCraftUserSettings::SetRemoteSettings(const FStageRemoteSettings& Settings)
+{
+	FStageRemoteSettings Sanitized = Settings;
+	StageRemote::Sanitize(Sanitized);
+	const bool bChanged = !(RemoteControl == Sanitized);
+	RemoteControl = MoveTemp(Sanitized);
 	return bChanged;
 }
 

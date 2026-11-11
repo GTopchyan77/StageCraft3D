@@ -15,6 +15,7 @@
 #include "Marketplace/StageDispatchTypes.h"
 #include "Marketplace/StageMarketplaceTypes.h"
 #include "Placement/StagePlacementTypes.h"
+#include "Remote/StageRemoteControlTypes.h"
 #include "Scene/StageSceneTypes.h"
 #include "Show/ShowControlTypes.h"
 #include "Sketch/StageSketchTypes.h"
@@ -724,6 +725,27 @@ public:
 	void RequestCancelMvrImport(const FGuid& ReviewId);
 
 	/**
+	 * Replaces this PC's MIDI and OSC settings (Preferences › Remote control, Docs/ADR/0035 §4): sanitized, saved, and the inputs reopen
+	 * with them. Switching an input on asks the GameMode (EvaluateRemoteControl); switching off is always allowed. A port or device that
+	 * cannot open is reported on OnRequestRejected; the settings are kept, so the next stage tries again.
+	 */
+	FStageEconomyResultInfo RequestSetRemoteControl(const struct FStageRemoteSettings& Settings);
+
+	/**
+	 * Carries out one command from a MIDI or OSC controller (UStageRemoteControlSubsystem calls this once per frame per command). The
+	 * GameMode judges it (EvaluateRemoteControl, then EvaluateCueRequest as for the desk) and it runs through the desk's own request
+	 * (RequestCueGo, RequestSetPlaybackLevel, …), so it is never undoable. A refusal is returned; it is reported on OnRequestRejected
+	 * only when its reason differs from the last remote refusal, so a fader sending 60 messages a second raises one message.
+	 */
+	FStageEconomyResultInfo RequestRemoteCommand(const struct FStageRemoteCommand& Command);
+
+	/**
+	 * MIDI learn (Docs/ADR/0035 §5): the next control pressed on the MIDI input is bound to Action (PlaybackNumber 1–10 for playback
+	 * actions, CueNumber for CueGoTo) and saved. Action None cancels. Refused while MIDI is off or the GameMode refuses remote control.
+	 */
+	FStageEconomyResultInfo RequestMidiLearn(EStageRemoteAction Action, int32 PlaybackNumber, float CueNumber);
+
+	/**
 	 * Lets the user pick model or GDTF fixture files in the operating system's file dialog, then imports them as RequestImportFiles does.
 	 * The dialog is modal. Returns how many files were queued (0 when cancelled or when this build has no file dialog).
 	 */
@@ -1216,6 +1238,13 @@ private:
 
 	/** Folder the import dialog opens in: where the user last picked models, this session. */
 	FString LastImportDirectory;
+
+	/** The last remote refusal reported (RequestRemoteCommand): the same reason is not reported again until a command succeeds. */
+	FString LastRemoteRefusal;
+
+	/** Makes this controller the one MIDI and OSC commands go to (BeginPlay), and stops it (EndPlay). */
+	void BindRemoteControl();
+	void UnbindRemoteControl();
 
 #if !UE_BUILD_SHIPPING
 	TOptional<FVector2D> SimulatedCursor;

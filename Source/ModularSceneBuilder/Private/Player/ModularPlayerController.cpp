@@ -191,6 +191,9 @@ void AModularPlayerController::BeginPlay()
 		Economy->OnPurchaseCompleted.AddUniqueDynamic(this, &ThisClass::HandlePurchaseCompleted);
 	}
 
+	// MIDI and OSC controllers drive the desk through this controller's requests (Docs/ADR/0035).
+	BindRemoteControl();
+
 	// Both happen after the selection binding, so panels that read the current selection in NativeConstruct see a ready controller.
 	// In the dockable workspace (Standalone/packaged) the panels live in dock tabs. The fixed HUD holds only those same panels today,
 	// so it is not shown there. It returns as the viewport-overlay layer in Phase 1.
@@ -227,6 +230,7 @@ void AModularPlayerController::EndPlay(const EEndPlayReason::Type EndPlayReason)
 		ShortcutProcessor.Reset();
 	}
 	CameraNavigation->CancelAll();
+	UnbindRemoteControl();
 
 	UnbindPreviewRefreshSources();
 	GetWorldTimerManager().ClearAllTimersForObject(this);

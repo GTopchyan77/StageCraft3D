@@ -19,6 +19,7 @@
 #include "Input/StageInputPreferencesSubsystem.h"
 #include "Placement/StageSnappingComponent.h"
 #include "Player/ModularPlayerController.h"
+#include "Remote/StageRemoteControlSubsystem.h"
 #include "Settings/StageCraftUserSettings.h"
 #include "UI/StageCraftUITheme.h"
 #include "UI/StageCraftWidgetStyle.h"
@@ -172,7 +173,47 @@ void UStagePreferencesPanel::BuildTree()
 	Add(BuildChoiceRow(LOCTEXT("Mute", "Mute all"), LOCTEXT("MuteTip", "Silence every sound; the volumes are kept for when you unmute."),
 		{ LOCTEXT("Off", "Off"), LOCTEXT("On", "On") }, MuteButtons, &ThisClass::HandleMutePicked), SectionGap);
 
+	Add(BuildRemoteSection(), SectionGap);
+
 	Add(BuildShortcutSection());
+}
+
+UWidget* UStagePreferencesPanel::BuildRemoteSection()
+{
+	using namespace StagePreferencesPanel;
+	const UStageCraftUITheme& Palette = GetTheme();
+
+	UVerticalBox* Section = WidgetTree->ConstructWidget<UVerticalBox>(UVerticalBox::StaticClass(), TEXT("RemoteSection"));
+	const auto Add = [Section](UWidget* Widget)
+	{
+		if (UVerticalBoxSlot* WidgetSlot = Section->AddChildToVerticalBox(Widget))
+		{
+			WidgetSlot->SetPadding(FMargin(0.f, 0.f, 0.f, RowGap));
+		}
+	};
+
+	Add(BuildSectionTitle(LOCTEXT("Remote", "REMOTE CONTROL  (MIDI and OSC)")));
+	Add(BuildChoiceRow(LOCTEXT("Osc", "OSC"),
+		LOCTEXT("OscTip", "Run cues, playbacks and masters from an OSC app (TouchOSC, Open Stage Control) on port 8000.\nThis PC: only apps on this computer.\nNetwork: tablets on your network too. OSC has no password: anyone on the network who knows the port can run the show."),
+		{ LOCTEXT("Off", "Off"), LOCTEXT("OscThisPC", "This PC"), LOCTEXT("OscNetwork", "Network") }, OscButtons, &ThisClass::HandleOscPicked));
+
+	// The inputs found now; a controller plugged in later appears when Preferences opens again.
+	MidiInputNames = UStageRemoteControlSubsystem::FindMidiInputs();
+	constexpr int32 MaxShownMidiInputs = 3;
+	TArray<FText> MidiChoices = { LOCTEXT("Off", "Off") };
+	for (int32 Index = 0; Index < FMath::Min(MidiInputNames.Num(), MaxShownMidiInputs); ++Index)
+	{
+		MidiChoices.Add(FText::FromString(MidiInputNames[Index]));
+	}
+	MidiInputNames.SetNum(MidiChoices.Num() - 1);
+	Add(BuildChoiceRow(LOCTEXT("Midi", "MIDI input"),
+		LOCTEXT("MidiTip", "A MIDI fader box or pad controller. The default map follows the Korg nanoKONTROL2: faders 1–8 are playbacks 1–8, ▶ is GO, ◀◀ is BACK, ● is Blackout, knob 1 the Grand Master.\nPlug the controller in before opening Preferences."),
+		MidiChoices, MidiButtons, &ThisClass::HandleMidiPicked));
+
+	RemoteStatusText = MakeText(FText::GetEmpty(), 7, TEXT("Regular"), Palette.TextSecondary);
+	RemoteStatusText->SetAutoWrapText(true);
+	Add(RemoteStatusText);
+	return Section;
 }
 
 UWidget* UStagePreferencesPanel::BuildHeader()
@@ -419,6 +460,11 @@ void UStagePreferencesPanel::NativeConstruct()
 		BoundViewport = Viewport;
 		Viewport->OnViewChanged.AddUniqueDynamic(this, &ThisClass::HandlePreferencesChanged);
 	}
+	if (UStageRemoteControlSubsystem* Remote = UWorld::GetSubsystem<UStageRemoteControlSubsystem>(GetWorld()))
+	{
+		BoundRemote = Remote;
+		RemoteStatusHandle = Remote->OnStatusChanged.AddUObject(this, &ThisClass::RefreshRemote);
+	}
 	SetNotice(LOCTEXT("Intro", "Click a shortcut to change it. Fly keys work only while the right mouse button is held, so they may share a key with a tool (W: Move tool and fly forward)."), false);
 	Refresh();
 }
@@ -442,6 +488,12 @@ void UStagePreferencesPanel::NativeDestruct()
 	{
 		Viewport->OnViewChanged.RemoveDynamic(this, &ThisClass::HandlePreferencesChanged);
 	}
+	if (UStageRemoteControlSubsystem* Remote = BoundRemote.Get())
+	{
+		Remote->OnStatusChanged.Remove(RemoteStatusHandle);
+	}
+	RemoteStatusHandle.Reset();
+	BoundRemote.Reset();
 	BoundPreferences.Reset();
 	BoundAudio.Reset();
 	BoundSnapping.Reset();
@@ -550,6 +602,8 @@ void UStagePreferencesPanel::Refresh()
 	ShowSlider(ESlider::MasterVolume, Master, FText::AsPercent(Master), Audio != nullptr);
 	StyleRow(MuteButtons, Audio && Audio->IsMuted() ? 1 : 0, Audio != nullptr);
 
+	RefreshRemote();
+
 	const FStageKeyBindings Bindings = Preferences ? Preferences->GetKeyBindings() : FStageKeyBindings::MakeDefaults();
 	for (const FStageInputCommandInfo& Info : StageKeyBindings::GetCommands())
 	{
@@ -627,6 +681,108 @@ void UStagePreferencesPanel::HandleMutePicked(int32 Index)
 	{
 		Audio->SetMuted(Index == 1);
 	}
+}
+
+void UStagePreferencesPanel::HandleOscPicked(int32 Index)
+{
+	const UStageRemoteControlSubsystem* Remote = BoundRemote.Get();
+	if (!Remote || Index < 0 || Index > static_cast<int32>(EStageOscScope::Network))
+	{
+		return;
+	}
+	FStageRemoteSettings Settings = Remote->GetSettings();
+	Settings.OscScope = static_cast<EStageOscScope>(Index);
+	ApplyRemoteSettings(Settings);
+}
+
+void UStagePreferencesPanel::HandleMidiPicked(int32 Index)
+{
+	const UStageRemoteControlSubsystem* Remote = BoundRemote.Get();
+	if (!Remote)
+	{
+		return;
+	}
+	FStageRemoteSettings Settings = Remote->GetSettings();
+	Settings.MidiInputName = MidiInputNames.IsValidIndex(Index - 1) ? MidiInputNames[Index - 1] : FString();
+	ApplyRemoteSettings(Settings);
+}
+
+void UStagePreferencesPanel::ApplyRemoteSettings(const FStageRemoteSettings& Settings)
+{
+	// The request bridge: the GameMode may refuse switching on; the panel re-reads what was stored either way.
+	if (AModularPlayerController* Controller = Cast<AModularPlayerController>(GetOwningPlayer()))
+	{
+		Controller->RequestSetRemoteControl(Settings);
+	}
+	RefreshRemote();
+}
+
+void UStagePreferencesPanel::RefreshRemote()
+{
+	const UStageRemoteControlSubsystem* Remote = BoundRemote.Get();
+	const FStageRemoteSettings Settings = Remote ? Remote->GetSettings() : FStageRemoteSettings();
+
+	const auto StyleRow = [this](const TArray<TObjectPtr<UStageChoiceButton>>& Buttons, int32 Selected, bool bEnabled)
+	{
+		for (UStageChoiceButton* Button : Buttons)
+		{
+			if (Button)
+			{
+				StyleChoice(*Button, Button->GetChoiceIndex() == Selected);
+				Button->SetIsEnabled(bEnabled);
+			}
+		}
+	};
+	StyleRow(OscButtons, static_cast<int32>(Settings.OscScope), Remote != nullptr);
+	const int32 MidiIndex = Settings.MidiInputName.IsEmpty() ? 0 : MidiInputNames.IndexOfByKey(Settings.MidiInputName) + 1;
+	StyleRow(MidiButtons, MidiIndex, Remote != nullptr);
+
+	if (!RemoteStatusText)
+	{
+		return;
+	}
+	if (!Remote)
+	{
+		RemoteStatusText->SetText(LOCTEXT("RemoteUnavailable", "MIDI and OSC control is available on a stage."));
+		return;
+	}
+
+	const FStageRemoteStatus& Status = Remote->GetStatus();
+	TArray<FText> Lines;
+	if (Status.bOscListening)
+	{
+		Lines.Add(FText::Format(LOCTEXT("OscListening", "OSC listening on {0}; addresses start with /stagecraft (see Help: MIDI and OSC)."), FText::FromString(Status.OscEndpoint)));
+	}
+	if (Status.bMidiOpen)
+	{
+		Lines.Add(Status.Learning != EStageRemoteAction::None
+			? LOCTEXT("MidiLearning", "MIDI learn: move or press the control to use.")
+			: FText::Format(LOCTEXT("MidiOpen", "MIDI: {0}."), FText::FromString(Status.MidiDevice)));
+	}
+	else if (!Settings.MidiInputName.IsEmpty() && MidiIndex == 0)
+	{
+		Lines.Add(FText::Format(LOCTEXT("MidiSavedMissing", "MIDI: \"{0}\" is not connected."), FText::FromString(Settings.MidiInputName)));
+	}
+	else if (MidiInputNames.IsEmpty())
+	{
+		Lines.Add(LOCTEXT("NoMidiInputs", "No MIDI input found. Plug a controller in, then open Preferences again."));
+	}
+	if (Status.Received > 0)
+	{
+		Lines.Add(FText::Format(LOCTEXT("RemoteCounts", "{0} received · {1} done · {2} refused · {3} ignored. Last: {4}"),
+			FText::AsNumber(Status.Received), FText::AsNumber(Status.Applied), FText::AsNumber(Status.Refused), FText::AsNumber(Status.Ignored),
+			FText::FromString(Status.LastInput)));
+	}
+	if (!Status.LastRefusal.IsEmpty())
+	{
+		Lines.Add(FText::Format(LOCTEXT("LastRefusal", "Last refused: {0}"), Status.LastRefusal));
+	}
+	if (!Status.LastProblem.IsEmpty())
+	{
+		Lines.Add(Status.LastProblem);
+	}
+	RemoteStatusText->SetText(Lines.IsEmpty() ? LOCTEXT("RemoteOff", "Off. Nothing listens until you choose an input.") : FText::Join(FText::FromString(TEXT("\n")), Lines));
+	RemoteStatusText->SetColorAndOpacity(FSlateColor(Status.LastProblem.IsEmpty() ? GetTheme().TextSecondary : GetTheme().WarningColor));
 }
 
 void UStagePreferencesPanel::HandleSliderMoved(int32 SliderIndex, float Value)

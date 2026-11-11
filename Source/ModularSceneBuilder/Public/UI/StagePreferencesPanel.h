@@ -72,6 +72,13 @@ private:
 	void HandleMutePicked(int32 Index);
 	void HandleSliderMoved(int32 SliderIndex, float Value);
 
+	/** REMOTE CONTROL (Docs/ADR/0035): OSC scope, MIDI input and the status line. Written through the controller's request. */
+	class UWidget* BuildRemoteSection();
+	void HandleOscPicked(int32 Index);
+	void HandleMidiPicked(int32 Index);
+	void ApplyRemoteSettings(const struct FStageRemoteSettings& Settings);
+	void RefreshRemote();
+
 	/** A binding button: Index = command * 2 + slot. Arms capture for that slot (or disarms it when it is already armed). */
 	void HandleBindingPicked(int32 Index);
 	void HandleResetPicked(int32 CommandIndex);
@@ -133,4 +140,19 @@ private:
 	TWeakObjectPtr<class UStageAudioSubsystem> BoundAudio;
 	TWeakObjectPtr<class UStageSnappingComponent> BoundSnapping;
 	TWeakObjectPtr<class UStageViewportComponent> BoundViewport;
+
+	UPROPERTY(Transient)
+	TArray<TObjectPtr<class UStageChoiceButton>> OscButtons;
+
+	/** Off, then one per MIDI input found when the panel was built (MidiInputNames). */
+	UPROPERTY(Transient)
+	TArray<TObjectPtr<class UStageChoiceButton>> MidiButtons;
+
+	TArray<FString> MidiInputNames;
+
+	UPROPERTY(Transient)
+	TObjectPtr<class UTextBlock> RemoteStatusText = nullptr;
+
+	TWeakObjectPtr<class UStageRemoteControlSubsystem> BoundRemote;
+	FDelegateHandle RemoteStatusHandle;
 };

@@ -80,6 +80,9 @@ public class ModularSceneBuilder : ModuleRules
 
 		// The DMX Engine plugin is deliberately not a dependency: StageCraft reads Art-Net and sACN itself (ADR 0019 section 3).
 
+		// ADR 0035: MIDI and OSC remote control through the engine's MIDIDevice (PortMidi) and OSC plugins.
+		PrivateDependencyModuleNames.AddRange(new string[] { "MIDIDevice", "OSC" });
+
 		// Uncomment if you are using online features
 		// PrivateDependencyModuleNames.Add("OnlineSubsystem");
 

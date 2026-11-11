@@ -84,6 +84,14 @@ public:
 	FStageEconomyResultInfo EvaluateMvrImport(const APlayerController* Player) const;
 
 	/**
+	 * May Player's MIDI and OSC controllers drive the desk (Docs/ADR/0035 §4)? Asked when the inputs are switched on and before every
+	 * remote command, which EvaluateCueRequest then judges like a click. Off when SessionRules.bAllowRemoteControl is false. Step 6
+	 * adds the Pro entitlement (StageCraft.Entitlement.Pro.MidiOsc) here.
+	 */
+	UFUNCTION(BlueprintNativeEvent, BlueprintCallable, Category = "StageCraft|Rules")
+	FStageEconomyResultInfo EvaluateRemoteControl(const APlayerController* Player) const;
+
+	/**
 	 * May Player change the audio-reactive source, file, transport or settings (Docs/ADR/0029 §5)? Allowed for any player by
 	 * default; a mode that must not listen to the PC's audio refuses here. Without a GameMode every audio request is refused.
 	 */

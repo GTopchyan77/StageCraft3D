@@ -706,3 +706,14 @@ Gevor's choices: automation tests on a harness game instance (not AFunctionalTes
 - [x] UI: menu-button labels skip identical text; assistant panel reuses unchanged message rows; MVR review redraws only when its notes change
 - [ ] Gevor: a real .mvr corpus (Saved/MVRCorpus) to check glTF axis/units and fixture orientation against Vectorworks / grandMA3 exports
 - [ ] Gevor: manual check of File > Import MVR Scene... with a real plot
+
+## Phase 39 - Step 3 MIDI and OSC remote control, MR1 (requested by Gevor 2026-11-10; STATE.md #89; ADR 0035)
+- [x] Engine MIDIDevice and OSC plugins; pure StageRemote layer (OSC address space, MIDI resolve and learn, frame queue, settings sanitize)
+- [x] UStageRemoteControlSubsystem (world): OSC server, OSC feedback to the last sender, MIDI input by name, coalesced per-frame dispatch
+- [x] Request bridge: AModularPlayerController::RequestRemoteCommand / RequestSetRemoteControl / RequestMidiLearn; GameMode EvaluateRemoteControl; SessionRules.bAllowRemoteControl
+- [x] Preferences > REMOTE CONTROL (OSC Off / This PC / Network, MIDI input, status line); help article remote-control EN/HY; dev console StageCraft.Remote.*
+- [x] "This PC" enforced by the OSC allow-list (the engine server cannot bind loopback; ADR 0035 §4)
+- [ ] Gevor: D7 - is an unauthenticated opt-in OSC listener on the LAN acceptable, or should Network require an allow-list of tablets?
+- [ ] Gevor: confirm the default MIDI map (Korg nanoKONTROL2) or name your controller; check with real hardware
+- [ ] MR2: MIDI mapping editor with LEARN in Preferences; MIDI output feedback (motor faders, LEDs)
+- [ ] MR3 (Step 6): Pro entitlement StageCraft.Entitlement.Pro.MidiOsc in EvaluateRemoteControl

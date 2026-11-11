@@ -181,6 +181,19 @@ FStageEconomyResultInfo AStageCraftGameModeBase::EvaluateMvrImport_Implementatio
 	return FStageEconomyResultInfo::Ok();
 }
 
+FStageEconomyResultInfo AStageCraftGameModeBase::EvaluateRemoteControl_Implementation(const APlayerController* Player) const
+{
+	if (!Player)
+	{
+		return FStageEconomyResultInfo::Fail(EStageEconomyResult::InvalidRequest, LOCTEXT("NoRemotePlayer", "MIDI and OSC control is not available."));
+	}
+	if (!SessionRules.bAllowRemoteControl)
+	{
+		return FStageEconomyResultInfo::Fail(EStageEconomyResult::SessionRuleViolation, LOCTEXT("RemoteDisabled", "MIDI and OSC control is switched off for this session."));
+	}
+	return FStageEconomyResultInfo::Ok();
+}
+
 FStageEconomyResultInfo AStageCraftGameModeBase::EvaluateAudioRequest_Implementation(const APlayerController* Player, EStageAudioRequest Request) const
 {
 	if (!Player)

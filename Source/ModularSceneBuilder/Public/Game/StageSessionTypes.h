@@ -45,6 +45,13 @@ struct MODULARSCENEBUILDER_API FStageSessionRules
 	 */
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Session")
 	bool bAllowMvrImport = true;
+
+	/**
+	 * MIDI and OSC controllers may run the desk's live controls (Docs/ADR/0035 §4): cue GO / BACK, playbacks, masters. Each command is
+	 * still judged by EvaluateCueRequest. Off for curated sessions. Pro in the tiers (ADR 0034 §2); the entitlement check comes with Step 6.
+	 */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Session")
+	bool bAllowRemoteControl = true;
 };
 
 /** Live totals of the stage, recomputed whenever an item is added, removed or changes type. */
