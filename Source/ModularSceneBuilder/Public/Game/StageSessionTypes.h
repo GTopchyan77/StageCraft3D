@@ -67,6 +67,13 @@ struct MODULARSCENEBUILDER_API FStageSessionRules
 	 */
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Session")
 	bool bAllowRemoteControl = true;
+
+	/**
+	 * May the Web Remote serve its page and run the desk's live controls from phones and tablets (Docs/ADR/0036)? Each command is
+	 * still judged by EvaluateCueRequest. Off for curated sessions. Pro in the tiers (ADR 0034 §2); the entitlement check comes with Step 6.
+	 */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Session")
+	bool bAllowWebRemote = true;
 };
 
 /** Live totals of the stage, recomputed whenever an item is added, removed or changes type. */

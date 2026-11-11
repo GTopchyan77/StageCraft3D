@@ -767,12 +767,25 @@ public:
 	FStageEconomyResultInfo RequestSetRemoteControl(const struct FStageRemoteSettings& Settings);
 
 	/**
-	 * Carries out one command from a MIDI or OSC controller (UStageRemoteControlSubsystem calls this once per frame per command). The
-	 * GameMode judges it (EvaluateRemoteControl, then EvaluateCueRequest as for the desk) and it runs through the desk's own request
+	 * Carries out one command from a MIDI or OSC controller or a Web Remote page (their subsystems call this once per frame per command). The
+	 * GameMode judges it (EvaluateRemoteControl, or EvaluateWebRemote for a Web Remote command, then EvaluateCueRequest as for the desk) and it runs through the desk's own request
 	 * (RequestCueGo, RequestSetPlaybackLevel, …), so it is never undoable. A refusal is returned; it is reported on OnRequestRejected
 	 * only when its reason differs from the last remote refusal, so a fader sending 60 messages a second raises one message.
 	 */
 	FStageEconomyResultInfo RequestRemoteCommand(const struct FStageRemoteCommand& Command);
+
+	/**
+	 * Replaces this PC's Web Remote settings (Preferences › Web Remote, Docs/ADR/0036 §6): sanitized, saved, and the server restarts
+	 * with a new PIN and no paired devices. Switching it on asks the GameMode (EvaluateWebRemote); switching off is always allowed. A
+	 * port that cannot open is reported on OnRequestRejected; the settings are kept.
+	 */
+	FStageEconomyResultInfo RequestSetWebRemote(const struct FStageWebRemoteSettings& Settings);
+
+	/** Makes a new Web Remote PIN; paired devices stay. Always allowed (it only takes access away). False while the server is off. */
+	bool RequestWebRemoteNewPin();
+
+	/** Forgets every paired Web Remote device and makes a new PIN. Always allowed. False while the server is off. */
+	bool RequestWebRemoteUnpairAll();
 
 	/**
 	 * MIDI learn (Docs/ADR/0035 §5): the next control pressed on the MIDI input is bound to Action (PlaybackNumber 1–10 for playback
@@ -1277,7 +1290,7 @@ private:
 	/** The last remote refusal reported (RequestRemoteCommand): the same reason is not reported again until a command succeeds. */
 	FString LastRemoteRefusal;
 
-	/** Makes this controller the one MIDI and OSC commands go to (BeginPlay), and stops it (EndPlay). */
+	/** Makes this controller the one MIDI, OSC and Web Remote commands go to (BeginPlay), and stops it (EndPlay). */
 	void BindRemoteControl();
 	void UnbindRemoteControl();
 

@@ -131,10 +131,20 @@ struct FStageRemoteSettings
 	}
 };
 
-/** One thing a remote asked for, resolved from an OSC message or a MIDI event. Plain data, any thread. */
+/** Which remote a command came from: the GameMode judges each kind with its own rule (Docs/ADR/0036 §2). */
+enum class EStageRemoteSource : uint8
+{
+	/** MIDI or OSC (EvaluateRemoteControl). */
+	Controller,
+	/** A Web Remote page or HTTP client (EvaluateWebRemote). */
+	Web,
+};
+
+/** One thing a remote asked for, resolved from an OSC message, a MIDI event or a Web Remote command. Plain data, any thread. */
 struct FStageRemoteCommand
 {
 	EStageRemoteAction Action = EStageRemoteAction::None;
+	EStageRemoteSource Source = EStageRemoteSource::Controller;
 	/** 0-based playback index (playback actions). */
 	int32 Playback = 0;
 	/** Level 0…1, or a press value (>= 0.5 is down). */
@@ -146,7 +156,7 @@ struct FStageRemoteCommand
 
 	bool operator==(const FStageRemoteCommand& Other) const
 	{
-		return Action == Other.Action && Playback == Other.Playback && Value == Other.Value && CueNumber == Other.CueNumber;
+		return Action == Other.Action && Source == Other.Source && Playback == Other.Playback && Value == Other.Value && CueNumber == Other.CueNumber;
 	}
 };
 

@@ -8999,7 +8999,7 @@ All times in ms.
   - signing in, GET and the publish form's new segment clicked by hand;
   - the panel's signed-in view in a running game.
 
-**Commit:** uncommitted (working tree).
+**Commit:** `e2828fa`.
 
 **Known issues / follow-ups**
 - **Gevor:**
@@ -9009,3 +9009,145 @@ All times in ms.
 - **Required by the API terms before release:** the GDTF logo next to "Powered by GDTF" (an image asset; only the text is shown now).
 - Not built: remembering the user name between runs (never the password), a sync server (`BaseUrl` is configurable), searching LongName (the list API has no such field).
 - `RunGameScripted.ps1` still does not back up `Saved/StageCraft/Fixtures` (#88).
+
+## #92 — Step 5: Web Remote WR1 (ADR 0036) (2026-11-11)
+
+**What & why**
+- **Context.** Gevor asked (2026-11-11) for roadmap Step 5 (D8: GDTF → MVR → MIDI/OSC → Download Manager → **Web Remote** → Stripe): a local HTTP/WebSocket server with PIN pairing and request-path command routing, so a phone or tablet browser can run the desk with no app installed.
+- **Housekeeping first.** #91 said "uncommitted"; it now carries `e2828fa`.
+- **Decision (ADR 0036).** Our own small server on the engine's TCP sockets, built like the DCC bridge server (one worker thread, a locked event queue, game-thread drains).
+  - The engine's `HTTPServer` has no WebSocket server, and `WebSocketNetworking` is an experimental libwebsockets plugin; neither gives the Host/Origin checks or the limits.
+  - The Remote Control API plugin was rejected because it bypasses the GameMode.
+- **Commands are the OSC address space** (ADR 0035 §3). A page sends `{"type":"command","path":"/stagecraft/playback/3/level","value":0.5}` and `StageRemote::ParseOsc` resolves it exactly as an OSC message. Web, OSC and MIDI reach the same desk actions and nothing else.
+- **Pure layer `StageWebRemote`** (`Private/Remote/StageWebRemoteProtocol`):
+  - **HTTP/1.1 reader** (incremental, capped): head 8 KB, 64 headers, path 256, body 4 KB.
+    - Refused: Transfer-Encoding (501), POST without Content-Length (411), duplicate or malformed Content-Length (400), NUL in the head (400).
+  - **Routes** by method and path. Anything else is 404 / 405, and every answer is `Connection: close`.
+    - `GET /`: the page, with CSP, `X-Frame-Options: DENY` and `no-store`.
+    - `POST /api/pair`.
+    - `POST /api/command`: Bearer token, answers 202.
+    - `GET /api/state`: Bearer token.
+    - `GET /ws`: the WebSocket.
+  - **Host and Origin:** `Host` must be an IP literal or `localhost`, otherwise 421 (this blocks DNS rebinding). An `Origin` must match the host, otherwise 403.
+  - **RFC 6455 WebSocket:**
+    - accept key from `FSHA1` + `FBase64`;
+    - masked, final text frames only, at most 4 KB; control frames at most 125 bytes;
+    - close codes 1002 / 1003 / 1007 / 1009; UTF-8 validation.
+  - **JSON messages:** client `hello` and `command`; server `welcome`, `state`, `cues`, `refused`, `bye`. Written by hand, with escaping and 3-decimal numbers.
+  - **`FPairing`:**
+    - a 6-digit PIN from `FGuid::NewGuid`; 64-hex-character tokens compared in constant time;
+    - at most 8 devices; a ninth evicts the oldest;
+    - 5 wrong PINs lock that address out for 30 s;
+    - 20 wrong PINs from all addresses together replace the PIN.
+  - **`Sanitize`** for `FStageWebRemoteSettings`: scope, and port 1024–65535.
+- **`FStageWebRemoteServer`** (`Private/Remote/StageWebRemoteServer`). A worker thread owns every socket.
+  - **Limits:** 16 connections, at most 4 unauthenticated per address, 8 open pages, 256 KB unsent per connection, 4096 queued events (dropped ones are counted).
+  - **Timers:** a request within 10 s, the hello within 5 s, a ping every 20 s, an idle page closed after 60 s.
+  - **Closing:** a closing connection is shut down for writing and closed after at most 5 s.
+  - **Pushes:** the state and cue list go to each page only when their version changed.
+  - **Unpairing or eviction** closes the page with `bye` and close code 1008.
+  - The page file is read on the worker at the first request.
+- **`UStageWebRemoteSubsystem`** (world subsystem, Game/PIE; `Public/Remote/StageWebRemoteSubsystem.h`):
+  - opens from the saved settings in `OnWorldBeginPlay` and stops in `Deinitialize`;
+  - drains server events with a weak `AsyncTask`;
+  - commands go through `StageRemote::Enqueue` (coalesced, at most 256 per frame) to the command handler, with `Source = Web`;
+  - binds to the show (`OnDeskStateChanged`, `OnCueStarted`, `OnPlaybacksChanged`, `OnCueListChanged`) and posts the state at most 30 times a second;
+  - sends each refusal reason to the pages once;
+  - keeps a status for the panel: addresses, PIN, paired devices, open pages, counters, lock, problem.
+- **Request bridge:**
+  - New `FStageRemoteCommand::Source` (`EStageRemoteSource::Controller` / `Web`).
+  - `AModularPlayerController::RequestRemoteCommand` asks the new GameMode `EvaluateWebRemote` for web commands, then `EvaluateCueRequest` as for the desk.
+  - `RequestSetWebRemote`: switching on asks `EvaluateWebRemote`.
+  - `RequestWebRemoteNewPin` and `RequestWebRemoteUnpairAll` are always allowed, because they only take access away.
+  - `SessionRules.bAllowWebRemote` (default on). Step 6 adds `StageCraft.Entitlement.Pro.WebRemote`.
+- **Settings:** `FStageWebRemoteSettings` in `UStageCraftUserSettings` (`GetWebRemoteSettings` / `SetWebRemoteSettings`, sanitized on load). The subsystem is the only writer.
+  - `Scope`: Off / This computer (127.0.0.1) / Network.
+  - `Port`: 8080.
+- **UI:** Preferences › WEB REMOTE:
+  - scope Off / This PC / Network;
+  - Pairing: NEW PIN / UNPAIR ALL;
+  - status lines: "Open http://… on a phone and enter PIN 123 456.", paired and open counts, counters, last refusal, lock, problems.
+- **The page** (`Source/ModularSceneBuilder/Resources/WebRemote/index.html`, 26 KB):
+  - staged with the module as a UFS runtime dependency;
+  - written by a subagent from ADR 0036 and smoke-tested in headless Chrome against a mock server;
+  - pairing screen; Cues (GO, BACK, the cue list with go-to); 10 playbacks (fader, FLASH hold, GO, REL); masters (Grand, Audio, BLACKOUT);
+  - reconnects with backoff; the token lives in localStorage, never in a URL;
+  - no innerHTML and no external resources.
+- **Dev console** (`#if !UE_BUILD_SHIPPING`): `StageCraft.WebRemote.Status [Pin]`, `.Settings Off|Local|Network [Port=n]`, `.NewPin`, `.UnpairAll`.
+  - `Status Pin` is the only place the PIN is logged (development builds only, for scripted runs).
+- **Code review by a subagent.** It found no memory-safety bug and no way around authentication. Its findings were fixed before verification:
+  - Closing connections had no deadline, so a peer that stopped reading held a slot forever.
+  - The PIN lockout was global, so any host on the LAN could keep the real phone from pairing. It is now per address, plus the global PIN renewal.
+  - Unauthenticated WebSockets counted toward the page cap.
+  - An evicted device's open page stayed connected.
+  - Responses could be lost to a TCP reset. The server now shuts down writing, then drains the socket.
+  - The event queue had no cap.
+- Help `web-remote` (EN/HY). `tasks/todo.md` Phase 42.
+
+**Files changed**
+- **New:**
+  - `Docs/ADR/0036-web-remote.md`;
+  - `Public/Remote/StageWebRemoteTypes.h`, `Public/Remote/StageWebRemoteSubsystem.h`;
+  - `Private/Remote/StageWebRemoteProtocol.h/.cpp`, `StageWebRemoteServer.h/.cpp`, `StageWebRemoteSubsystem.cpp`, `StageWebRemoteConsoleCommands.cpp`, `Tests/StageWebRemoteTests.cpp`;
+  - `Resources/WebRemote/index.html`;
+  - `Content/StageCraft/Help/en|hy/web-remote.md`.
+- **Modified:**
+  - `ModularSceneBuilder.Build.cs` (the page as a runtime dependency);
+  - `Public/Remote/StageRemoteControlTypes.h` (`EStageRemoteSource`, `FStageRemoteCommand::Source`);
+  - `Private/Remote/StageRemoteMapping.h/.cpp` (coalescing also by source);
+  - `Public/Game/StageCraftGameModeBase.h`, `Private/Game/StageCraftGameModeBase.cpp` (`EvaluateWebRemote`);
+  - `Public/Game/StageSessionTypes.h` (`bAllowWebRemote`);
+  - `Public/Player/ModularPlayerController.h`, `Private/Player/ModularPlayerControllerRemote.cpp`;
+  - `Public/Settings/StageCraftUserSettings.h`, `Private/Settings/StageCraftUserSettings.cpp`;
+  - `Public/UI/StagePreferencesPanel.h`, `Private/UI/StagePreferencesPanel.cpp`;
+  - `tasks/todo.md`;
+  - `STATE.md` (#91 commit).
+- No content assets, maps or input actions changed.
+
+**Verification**
+- **Builds (Claude):** Editor, Game and Shipping, 0 warnings.
+  - Shipping binary (UTF-16 scan): `StageCraft.WebRemote.Status` and `StageCraft.WebRemote.Pin` are absent; "WEB REMOTE  (phones and tablets)" and the wrong-PIN message are present.
+- **Automation (Claude):** `StageCraft.WebRemote.*` 7/7 (Http, WebSocket, Messages, Pairing, Rules, Subsystem, Loopback). Full suite **290/290** (283 + 7), user data unchanged (127 files).
+  - The Loopback test uses real sockets on 127.0.0.1:48781 and checks:
+    - **HTTP:** the page; 421 for a name in Host; 403 for a foreign Origin; 404 / 405 / 400.
+    - **Pairing and tokens:** wrong PIN 403; pairing; 401 without a token or with a wrong one; a 202 command; `/api/state`.
+    - **This PC mode:** the network address does not answer.
+    - **WebSocket:**
+      - the handshake with the RFC accept key;
+      - hello → welcome → cues → state, and pong;
+      - a command carried with `Source = Web`;
+      - the GameMode's refusal reaching the page.
+    - **Unpairing:** UNPAIR ALL closes the page with 1008; the dead token is refused.
+    - **Lockout:** 5 wrong PINs give 429 with Retry-After, even for the right PIN, and the panel sees the lock.
+- **Scripted `-game` run R92b (Claude),** with PowerShell standing in for the phone:
+  - `Settings Local Port=48790` → listening.
+  - **HTTP:**
+    - `GET /` 200 with CSP; wrong PIN 403; pairing 200 (64-character token); no token 401.
+    - HTTP `master/grand 0.4` 202, and `/api/state` showed `grand 0.4`.
+  - **Real WebSocket** (.NET ClientWebSocket):
+    - welcome, cues and state arrived;
+    - then playback 1 level 0.5, blackout 1, cue GO, an unknown path and blackout 0;
+    - cue GO was refused ("Cue GO: nothing to do.", pushed to the page); the unknown path was ignored.
+  - **Result:** status "1 paired, 1 open; received 6, applied 4, refused 1, ignored 1"; `Show.Playback List` "Grand Master 0.40, blackout off".
+  - `Settings Off` closed the page with 1001 "StageCraft stopped the Web Remote".
+  - **Preferences screenshot** (R92 `Window_180456.png`): WEB REMOTE with This PC selected, NEW PIN / UNPAIR ALL, the address and PIN, the counters and the refusal.
+  - The runner restored profile, scenes, marketplace and imports. The temporary docked `Session.json` was removed afterwards.
+- **Notes:**
+  - R92 (the first try) lost its socket early. The PowerShell driver started a second `ReceiveAsync` while one was pending. This was a driver bug, fixed for R92b; the server was fine.
+  - `GameUserSettings.ini` gained one line, `WebRemote=(Scope=Off,Port=8080)`. The engine writes new Config defaults once (memory G1). Nothing else differs from the R91b backup.
+- **Not verified:**
+  - a real phone over Wi-Fi (Network scope, and the Windows firewall prompt);
+  - Safari / iOS;
+  - the page against the real game in a browser (the page was tested against a mock server; the game was driven by PowerShell).
+
+**Commit:** uncommitted (working tree).
+
+**Known issues / follow-ups**
+- **Gevor:**
+  - open the page on a real phone (Preferences › WEB REMOTE › Network) and run a show;
+  - D7: is plain HTTP with PIN pairing on the LAN acceptable (ADR 0036 §9), and should pairings survive a restart?
+- WR2: QR code with the address and PIN; remembered devices; page layout options.
+- WR3: the Pro gate in `EvaluateWebRemote` (Step 6).
+- Pairings live in the world subsystem, so a new stage world means pairing again.
+- The port can only be changed in the ini or the dev console. Preferences shows it in the address.
+- Still open from #89–#91: D7 for OSC, the MIDI map, checking an exported `.mvr` in a third-party app, the GDTF logo, and `RunGameScripted.ps1` not backing up `Saved/StageCraft/Fixtures`.

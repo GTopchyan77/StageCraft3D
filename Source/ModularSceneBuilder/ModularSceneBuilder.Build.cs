@@ -37,6 +37,9 @@ public class ModularSceneBuilder : ModuleRules
 		RuntimeDependencies.Add(Path.Combine(ModuleDirectory, "Resources", "Fonts", "NotoSansArmenian-Bold.ttf"), StagedFileType.UFS);
 		RuntimeDependencies.Add(Path.Combine(ModuleDirectory, "Resources", "Fonts", "OFL.txt"), StagedFileType.UFS);
 
+		// ADR 0036: the Web Remote's page, served to phones by UStageWebRemoteSubsystem's own HTTP/WebSocket server (Sockets above).
+		RuntimeDependencies.Add(Path.Combine(ModuleDirectory, "Resources", "WebRemote", "index.html"), StagedFileType.UFS);
+
 		// Runtime model import (ADR 0006): Interchange translates .glb/.gltf/.obj (and .fbx in builds with editor code) and builds
 		// static meshes at runtime. InterchangePipelines is the Interchange plugin's generic pipeline, configured in code.
 		PrivateDependencyModuleNames.AddRange(new string[] { "InterchangeCore", "InterchangeEngine", "InterchangePipelines" });

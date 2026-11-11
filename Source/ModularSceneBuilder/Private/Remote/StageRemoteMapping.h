@@ -83,7 +83,7 @@ namespace StageRemote
 	bool Sanitize(FStageRemoteSettings& Settings);
 
 	/**
-	 * Adds Command to one frame's queue. A continuous command replaces the queued one with the same action and playback (the latest
+	 * Adds Command to one frame's queue. A continuous command replaces the queued one with the same action, source and playback (the latest
 	 * value wins, in its original place); everything else keeps its order. Returns false, and drops it, when the queue already holds
 	 * MaxCommandsPerFrame.
 	 */

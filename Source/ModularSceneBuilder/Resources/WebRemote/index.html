@@ -1,0 +1,592 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#121316">
+<meta name="color-scheme" content="dark">
+<title>StageCraft Remote</title>
+<style>
+:root{--bg:#121316;--panel:#1c1e23;--panel2:#262930;--line:#30333a;--text:#e8e8ea;--dim:#9a9ca3;--amber:#f2a33a;--red:#e5484d;--green:#46c46a;--knob:28px;color-scheme:dark}
+*{box-sizing:border-box}
+html,body{margin:0;height:100%;background:var(--bg);color:var(--text);font:15px/1.35 system-ui,-apple-system,"Segoe UI",Roboto,"Helvetica Neue",Arial,sans-serif;-webkit-text-size-adjust:100%}
+body{display:flex;flex-direction:column;height:100vh;height:100dvh;overflow:hidden;padding:env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left);-webkit-tap-highlight-color:transparent}
+[hidden]{display:none!important}
+header{display:flex;align-items:center;gap:10px;padding:6px 12px;background:var(--panel);border-bottom:1px solid var(--line);flex:0 0 auto}
+h1{font-size:17px;margin:0;flex:1;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.conn{display:flex;align-items:center;gap:6px;color:var(--dim);font-size:13px;white-space:nowrap}
+.dot{width:10px;height:10px;border-radius:50%;background:#5b5e66}
+.conn[data-s=connected] .dot{background:var(--green)}
+.conn[data-s=reconnecting] .dot,.conn[data-s=connecting] .dot{background:var(--amber)}
+.conn[data-s=offline] .dot{background:var(--red)}
+button{font:inherit;color:inherit;background:var(--panel2);border:1px solid var(--line);border-radius:10px;min-height:44px;min-width:44px;padding:0 12px;cursor:pointer;touch-action:manipulation;user-select:none;-webkit-user-select:none;-webkit-touch-callout:none}
+button:active,button.down{filter:brightness(1.35)}
+button:disabled{opacity:.5;cursor:default}
+button:focus-visible,.track:focus-visible,input:focus-visible{outline:2px solid var(--amber);outline-offset:2px}
+.small{min-height:36px;font-size:13px;color:var(--dim);background:transparent}
+/* Pairing */
+#pair{flex:1;display:flex;align-items:center;justify-content:center;padding:16px;overflow:auto}
+.card{width:100%;max-width:380px;background:var(--panel);border:1px solid var(--line);border-radius:16px;padding:20px;display:flex;flex-direction:column;gap:12px}
+.card h2{margin:0;font-size:20px}
+label{font-size:13px;color:var(--dim);display:flex;flex-direction:column;gap:6px}
+input{font:inherit;color:var(--text);background:#0e0f12;border:1px solid var(--line);border-radius:10px;min-height:48px;padding:0 12px;width:100%}
+#pin{font-size:34px;letter-spacing:.35em;text-align:center;font-variant-numeric:tabular-nums;padding-left:.35em}
+.primary{background:var(--amber);color:#1a1205;border-color:var(--amber);font-weight:700;min-height:52px}
+.err{color:#ff8a8d;min-height:1.3em;font-size:14px;margin:0}
+.hint{color:var(--dim);font-size:13px;margin:0}
+/* Control */
+#ctl{flex:1;display:flex;flex-direction:column;min-height:0}
+nav{display:flex;gap:6px;padding:6px 10px;background:var(--panel);border-bottom:1px solid var(--line)}
+nav button{flex:1;background:transparent;border-color:transparent;color:var(--dim);font-weight:600}
+nav button.on{background:var(--panel2);color:var(--text);border-color:var(--line)}
+main{flex:1;min-height:0;display:flex;padding:8px;gap:8px}
+.pane{display:none;flex:1;flex-direction:column;min-height:0;min-width:0;gap:8px}
+.pane.on{display:flex}
+body.nc main{opacity:.55}
+.box{background:var(--panel);border:1px solid var(--line);border-radius:14px}
+/* Cues */
+.cuehead{padding:10px 14px;display:flex;align-items:baseline;gap:12px;min-width:0}
+.cuenum{font-size:44px;font-weight:700;color:var(--amber);font-variant-numeric:tabular-nums;line-height:1.1}
+.cuelbl{font-size:20px;flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.cuehead.none .cuenum{color:var(--dim)}
+.cuehead.none .cuelbl{color:var(--dim);font-size:17px}
+.gorow{display:flex;gap:8px}
+#back{flex:1;min-height:72px;font-size:18px;font-weight:700}
+#go{flex:2;min-height:72px;font-size:30px;font-weight:800;background:var(--amber);color:#1a1205;border-color:var(--amber);letter-spacing:.06em}
+.list{flex:1;min-height:0;overflow-y:auto;padding:4px;-webkit-overflow-scrolling:touch;overscroll-behavior:contain}
+.list button{display:flex;width:100%;align-items:center;gap:12px;text-align:left;margin:2px 0;background:transparent;border-color:transparent}
+.list button .n{min-width:3.2em;color:var(--dim);font-variant-numeric:tabular-nums;font-weight:600}
+.list button .l{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.list button.act{background:rgba(242,163,58,.16);border-color:var(--amber)}
+.list button.act .n{color:var(--amber)}
+.empty{color:var(--dim);padding:14px;text-align:center}
+/* Faders */
+.fader{flex:1;min-height:0;display:flex;flex-direction:column;align-items:center;gap:4px}
+.track{position:relative;flex:1;min-height:120px;width:56px;border-radius:10px;background:#0c0d0f;border:1px solid var(--line);touch-action:none;overflow:hidden;cursor:ns-resize;--v:0}
+.fill{position:absolute;left:0;right:0;bottom:0;height:calc(var(--v) * 100%);background:linear-gradient(to top,rgba(242,163,58,.25),rgba(242,163,58,.6))}
+.knob{position:absolute;left:3px;right:3px;height:var(--knob);bottom:calc((100% - var(--knob)) * var(--v));background:#d9dadf;border-radius:6px;box-shadow:0 1px 4px #000}
+.knob::after{content:"";position:absolute;left:8px;right:8px;top:50%;height:2px;background:#555;margin-top:-1px}
+.fader.held .knob{background:var(--amber)}
+.pct{font-size:13px;color:var(--dim);font-variant-numeric:tabular-nums;min-height:1.2em}
+/* Playbacks */
+.strips{flex:1;min-height:0;display:flex;gap:8px;overflow-x:auto;overflow-y:hidden;-webkit-overflow-scrolling:touch;overscroll-behavior-x:contain;padding-bottom:2px}
+.strip{flex:0 0 88px;display:flex;flex-direction:column;gap:6px;padding:8px 6px;min-height:0}
+.strip .name{font-size:13px;font-weight:600;text-align:center;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;padding:2px 0;border-radius:6px}
+.strip.active .name{background:var(--amber);color:#1a1205}
+.strip.empty{opacity:.45}
+.strip button{min-height:44px;padding:0 4px;font-size:13px;font-weight:700}
+.strip .fl.on{background:var(--amber);color:#1a1205;border-color:var(--amber)}
+.strip .pgo{color:var(--amber)}
+/* Masters */
+.masters{flex:1;min-height:0;display:flex;gap:10px}
+.mstrip{flex:0 0 96px;display:flex;flex-direction:column;gap:6px;padding:8px 6px;min-height:0}
+.mstrip .name{font-size:13px;font-weight:600;text-align:center}
+.bocol{flex:1;display:flex;flex-direction:column;gap:8px;min-width:110px}
+#bo{flex:1;max-height:220px;font-size:22px;font-weight:800;letter-spacing:.05em}
+#bo.on{background:var(--red);border-color:var(--red);color:#fff}
+.bostate{text-align:center;color:var(--dim);font-size:13px}
+/* Toast */
+#toast{position:fixed;left:50%;bottom:calc(16px + env(safe-area-inset-bottom));transform:translateX(-50%);max-width:calc(100% - 32px);background:#2b1517;border:1px solid var(--red);color:#ffd6d7;padding:10px 16px;border-radius:12px;font-size:14px;box-shadow:0 4px 16px #000;z-index:5;pointer-events:none}
+/* Tablet / landscape: show everything side by side */
+@media (min-width:900px) and (min-height:480px){
+ nav{display:none}
+ .pane{display:flex}
+ #pCues{flex:0 0 300px}
+ #pMasters{flex:0 0 auto}
+ .strips{overflow-x:auto}
+}
+@media (max-height:480px){.cuenum{font-size:30px}#go,#back{min-height:54px}}
+</style>
+</head>
+<body>
+<header>
+ <h1>StageCraft Remote</h1>
+ <div class="conn" id="conn" data-s="offline"><span class="dot"></span><span id="connTxt">Offline</span></div>
+ <button class="small" id="unpair" type="button" hidden>Unpair</button>
+</header>
+
+<section id="pair" hidden>
+ <form class="card" id="pairForm" autocomplete="off" novalidate>
+  <h2>Pair this device</h2>
+  <label>PIN
+   <input id="pin" inputmode="numeric" pattern="[0-9]*" maxlength="6" autocomplete="one-time-code" placeholder="000000" aria-label="6-digit PIN">
+  </label>
+  <label>Device name (optional)
+   <input id="devName" maxlength="40" autocomplete="off" spellcheck="false">
+  </label>
+  <button class="primary" id="pairBtn" type="submit">Pair</button>
+  <p class="err" id="pairErr" role="alert"></p>
+  <p class="hint">The PIN is in StageCraft › Preferences › Web Remote.</p>
+ </form>
+</section>
+
+<section id="ctl" hidden>
+ <nav id="tabs">
+  <button type="button" data-tab="pCues">Cues</button>
+  <button type="button" data-tab="pPlaybacks">Playbacks</button>
+  <button type="button" data-tab="pMasters">Masters</button>
+ </nav>
+ <main>
+  <div class="pane" id="pCues">
+   <div class="box cuehead none" id="cueHead"><span class="cuenum" id="cueNum">–</span><span class="cuelbl" id="cueLbl">No cue running</span></div>
+   <div class="gorow"><button type="button" id="back">BACK</button><button type="button" id="go">GO</button></div>
+   <div class="box list" id="cueList"><div class="empty">No cues yet.</div></div>
+  </div>
+  <div class="pane" id="pPlaybacks"><div class="strips" id="strips"></div></div>
+  <div class="pane" id="pMasters"><div class="masters" id="masters">
+   <div class="bocol"><button type="button" id="bo">BLACKOUT</button><div class="bostate" id="boState">Off</div></div>
+  </div></div>
+ </main>
+</section>
+
+<div id="toast" role="status" hidden></div>
+
+<script>
+'use strict';
+(function () {
+  const TOKEN_KEY = 'stagecraft.webremote.token';
+  const TAB_KEY = 'stagecraft.webremote.tab';
+  const PLAYBACKS = 10;
+  const MAX_CUES = 200;
+  const $ = (id) => document.getElementById(id);
+
+  // ---- helpers -------------------------------------------------------------
+  function load(k) { try { return localStorage.getItem(k); } catch (e) { return null; } }
+  function store(k, v) {
+    try { if (v === null) localStorage.removeItem(k); else localStorage.setItem(k, v); } catch (e) { /* private mode */ }
+  }
+  const isNum = (v) => typeof v === 'number' && isFinite(v);
+  const clamp01 = (v) => (isNum(v) ? Math.min(1, Math.max(0, v)) : 0);
+  const str = (v, max) => (typeof v === 'string' ? v.slice(0, max) : '');
+  const fmtNum = (n) => (Number.isInteger(n) ? String(n) : String(Math.round(n * 1000) / 1000));
+  function el(tag, cls, text) {
+    const e = document.createElement(tag);
+    if (cls) e.className = cls;
+    if (text !== undefined) e.textContent = text;
+    return e;
+  }
+  function button(cls, text) { const b = el('button', cls, text); b.type = 'button'; return b; }
+
+  let toastTimer = 0;
+  function toast(msg) {
+    const t = $('toast');
+    t.textContent = msg;
+    t.hidden = false;
+    clearTimeout(toastTimer);
+    toastTimer = setTimeout(() => { t.hidden = true; }, 3000);
+  }
+
+  // ---- connection state ----------------------------------------------------
+  let token = load(TOKEN_KEY);
+  if (token !== null && !/^[A-Za-z0-9_-]{8,256}$/.test(token)) { token = null; store(TOKEN_KEY, null); }
+  let ws = null;
+  let welcomed = false;
+  let retryTimer = 0;
+  let retryDelay = 1000;
+  let hiddenAt = 0;
+  const CONN_TEXT = { connected: 'Connected', connecting: 'Connecting…', reconnecting: 'Reconnecting…', offline: 'Offline' };
+
+  function setConn(s) {
+    $('conn').dataset.s = s;
+    $('connTxt').textContent = CONN_TEXT[s] || s;
+    document.body.classList.toggle('nc', s !== 'connected');
+  }
+
+  function send(path, value) {
+    if (!ws || ws.readyState !== 1 || !welcomed) return false;
+    const msg = { type: 'command', path: path };
+    if (value !== undefined) msg.value = value;
+    try { ws.send(JSON.stringify(msg)); return true; } catch (e) { return false; }
+  }
+
+  function closeSocket() {
+    const s = ws;
+    ws = null;
+    welcomed = false;
+    if (s) { try { s.close(1000); } catch (e) { /* ignore */ } }
+  }
+
+  function scheduleRetry() {
+    clearTimeout(retryTimer);
+    retryTimer = 0;
+    if (!token) return;
+    // Hidden pages and lost networks wait for visibilitychange / online instead of spinning.
+    if (document.hidden || navigator.onLine === false) { setConn('offline'); return; }
+    setConn('reconnecting');
+    retryTimer = setTimeout(connect, retryDelay);
+    retryDelay = Math.min(retryDelay * 2, 10000);
+  }
+
+  function connect() {
+    clearTimeout(retryTimer);
+    retryTimer = 0;
+    if (!token) return;
+    closeSocket();
+    setConn(retryDelay > 1000 ? 'reconnecting' : 'connecting');
+    let s;
+    try { s = new WebSocket(`ws://${location.host}/ws`); } catch (e) { scheduleRetry(); return; }
+    ws = s;
+    let byeReason = '';
+    let authFailed = false;
+    s.addEventListener('open', () => {
+      if (ws !== s) return;
+      s.send(JSON.stringify({ type: 'hello', token: token }));
+    });
+    s.addEventListener('message', (e) => {
+      if (ws !== s) return;
+      const m = parse(e.data);
+      if (!m) return;
+      if (m.type === 'bye') {
+        byeReason = str(m.reason, 200);
+        // A bye before welcome answers the hello: the token is not (or no longer) valid.
+        if (!welcomed) authFailed = true;
+        return;
+      }
+      handle(m);
+    });
+    s.addEventListener('close', (e) => {
+      if (ws !== s) return;
+      ws = null;
+      welcomed = false;
+      releaseHeld();
+      if (authFailed || e.code === 1008) {
+        forget(byeReason || 'This device is no longer paired. Enter the PIN again.');
+        return;
+      }
+      if (byeReason) toast(byeReason);
+      scheduleRetry();
+    });
+  }
+
+  function parse(data) {
+    if (typeof data !== 'string' || data.length > 262144) return null;
+    let m;
+    try { m = JSON.parse(data); } catch (e) { return null; }
+    return m && typeof m === 'object' && !Array.isArray(m) && typeof m.type === 'string' ? m : null;
+  }
+
+  function handle(m) {
+    switch (m.type) {
+      case 'welcome':
+        welcomed = true;
+        retryDelay = 1000;
+        setConn('connected');
+        break;
+      case 'state': applyState(m); break;
+      case 'cues': applyCues(m); break;
+      case 'refused': toast(str(m.message, 200) || 'Refused by StageCraft.'); break;
+      default: break; // unknown types are ignored
+    }
+  }
+
+  // ---- screens -------------------------------------------------------------
+  function showPair(reason) {
+    $('ctl').hidden = true;
+    $('unpair').hidden = true;
+    $('pair').hidden = false;
+    $('pairErr').textContent = reason || '';
+    setConn('offline');
+    $('pin').value = '';
+    setTimeout(() => { try { $('pin').focus(); } catch (e) { /* ignore */ } }, 50);
+  }
+
+  function showControl() {
+    $('pair').hidden = true;
+    $('ctl').hidden = false;
+    $('unpair').hidden = false;
+    retryDelay = 1000;
+    connect();
+  }
+
+  function forget(reason) {
+    token = null;
+    store(TOKEN_KEY, null);
+    clearTimeout(retryTimer);
+    retryTimer = 0;
+    closeSocket();
+    releaseHeld();
+    showPair(reason);
+  }
+
+  // ---- pairing -------------------------------------------------------------
+  function guessDeviceName() {
+    const ua = navigator.userAgent || '';
+    if (/iPad/.test(ua) || (/Macintosh/.test(ua) && navigator.maxTouchPoints > 1)) return 'iPad';
+    if (/iPhone/.test(ua)) return 'iPhone';
+    if (/Android/.test(ua)) return /Mobile/.test(ua) ? 'Android phone' : 'Android tablet';
+    return 'Browser';
+  }
+
+  let pairing = false;
+  async function pair(ev) {
+    ev.preventDefault();
+    if (pairing) return;
+    const pin = $('pin').value.replace(/\D/g, '');
+    if (pin.length !== 6) { $('pairErr').textContent = 'Enter the 6-digit PIN.'; return; }
+    const name = $('devName').value.trim().slice(0, 40) || guessDeviceName();
+    pairing = true;
+    $('pairBtn').disabled = true;
+    $('pairErr').textContent = '';
+    try {
+      const r = await fetch('/api/pair', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ pin: pin, name: name }),
+        cache: 'no-store',
+        credentials: 'omit'
+      });
+      let body = null;
+      try { body = await r.json(); } catch (e) { body = null; }
+      const t = body && typeof body.token === 'string' ? body.token : '';
+      if (r.ok && /^[A-Za-z0-9_-]{8,256}$/.test(t)) {
+        token = t;
+        store(TOKEN_KEY, t);
+        showControl();
+        return;
+      }
+      const err = body && typeof body.error === 'string' ? body.error.slice(0, 200) : '';
+      $('pairErr').textContent = err ||
+        (r.status === 403 ? 'Wrong PIN.' : r.status === 429 ? 'Too many wrong PINs. Wait and try again.' : `Pairing failed (HTTP ${r.status}).`);
+      $('pin').value = '';
+    } catch (e) {
+      $('pairErr').textContent = 'Cannot reach StageCraft. Check the address and that Web Remote is on.';
+    } finally {
+      pairing = false;
+      $('pairBtn').disabled = false;
+    }
+  }
+
+  // ---- fader (vertical, 0 bottom .. 1 top, relative drag) -------------------
+  function makeFader(path, title) {
+    const root = el('div', 'fader');
+    const track = el('div', 'track');
+    const pct = el('div', 'pct', '0%');
+    track.append(el('div', 'fill'), el('div', 'knob'));
+    root.append(track, pct);
+    track.tabIndex = 0;
+    track.setAttribute('role', 'slider');
+    track.setAttribute('aria-label', title);
+    track.setAttribute('aria-valuemin', '0');
+    track.setAttribute('aria-valuemax', '100');
+
+    let value = 0, held = null, startY = 0, startV = 0, raf = 0, dirty = false, quietUntil = 0;
+
+    function draw(v) {
+      value = v;
+      track.style.setProperty('--v', String(v));
+      const p = Math.round(v * 100);
+      pct.textContent = p + '%';
+      track.setAttribute('aria-valuenow', String(p));
+    }
+    function flush() {
+      if (dirty && send(path, Math.round(value * 10000) / 10000)) dirty = false;
+    }
+    function queue() {
+      dirty = true;
+      if (!raf) raf = requestAnimationFrame(() => { raf = 0; flush(); });
+    }
+    function end(e) {
+      if (held === null || (e && e.pointerId !== held)) return;
+      held = null;
+      root.classList.remove('held');
+      if (raf) { cancelAnimationFrame(raf); raf = 0; }
+      flush(); // the final value is always sent on release
+      quietUntil = performance.now() + 350; // let the desk catch up before following it again
+    }
+
+    track.addEventListener('pointerdown', (e) => {
+      if (held !== null) return;
+      held = e.pointerId;
+      try { track.setPointerCapture(e.pointerId); } catch (x) { /* ignore */ }
+      startY = e.clientY;
+      startV = value;
+      root.classList.add('held');
+      e.preventDefault();
+    });
+    track.addEventListener('pointermove', (e) => {
+      if (e.pointerId !== held) return;
+      const range = Math.max(1, track.clientHeight - 28);
+      const v = clamp01(startV + (startY - e.clientY) / range);
+      if (v !== value) { draw(v); queue(); }
+    });
+    ['pointerup', 'pointercancel', 'lostpointercapture'].forEach((t) => track.addEventListener(t, end));
+    track.addEventListener('keydown', (e) => {
+      const step = { ArrowUp: 0.05, ArrowRight: 0.05, ArrowDown: -0.05, ArrowLeft: -0.05, PageUp: 0.25, PageDown: -0.25, Home: -1, End: 1 }[e.key];
+      if (step === undefined) return;
+      e.preventDefault();
+      draw(clamp01(value + step));
+      dirty = true;
+      flush();
+      quietUntil = performance.now() + 350;
+    });
+
+    return {
+      el: root,
+      set(v) { if (held === null && performance.now() >= quietUntil) draw(clamp01(v)); },
+      release() { if (held !== null) end({ pointerId: held }); }
+    };
+  }
+
+  // Hold button: 1 on press, 0 on release; a release is always sent.
+  function makeHold(btn, path) {
+    let down = null;
+    btn.addEventListener('pointerdown', (e) => {
+      if (down !== null) return;
+      down = e.pointerId;
+      try { btn.setPointerCapture(e.pointerId); } catch (x) { /* ignore */ }
+      btn.classList.add('down');
+      send(path, 1);
+      e.preventDefault();
+    });
+    function up(e) {
+      if (down === null || (e && e.pointerId !== down)) return;
+      down = null;
+      btn.classList.remove('down');
+      send(path, 0);
+    }
+    ['pointerup', 'pointercancel', 'pointerleave', 'lostpointercapture'].forEach((t) => btn.addEventListener(t, up));
+    return () => up(null);
+  }
+
+  const releasers = [];
+  function releaseHeld() { releasers.forEach((r) => r()); }
+
+  // ---- build controls ------------------------------------------------------
+  const strips = [];
+  for (let i = 0; i < PLAYBACKS; i++) {
+    const n = i + 1;
+    const base = `/stagecraft/playback/${n}/`;
+    const box = el('div', 'box strip empty');
+    const name = el('div', 'name', `PB ${n}`);
+    const fader = makeFader(base + 'level', `Playback ${n} level`);
+    const fl = button('fl', 'FLASH');
+    const go = button('pgo', 'GO');
+    const rel = button('', 'REL');
+    box.append(name, fader.el, fl, go, rel);
+    $('strips').append(box);
+    releasers.push(makeHold(fl, base + 'flash'), fader.release);
+    go.addEventListener('click', () => send(base + 'go'));
+    rel.addEventListener('click', () => send(base + 'release'));
+    strips.push({ box: box, name: name, fader: fader, fl: fl });
+  }
+
+  function masterStrip(label, path) {
+    const box = el('div', 'box mstrip');
+    const f = makeFader(path, label);
+    box.append(el('div', 'name', label), f.el);
+    $('masters').insertBefore(box, $('masters').lastElementChild);
+    releasers.push(f.release);
+    return f;
+  }
+  const grand = masterStrip('Grand', '/stagecraft/master/grand');
+  const audio = masterStrip('Audio', '/stagecraft/master/audio');
+
+  let blackout = false;
+  function drawBlackout() {
+    $('bo').classList.toggle('on', blackout);
+    $('bo').setAttribute('aria-pressed', String(blackout));
+    $('boState').textContent = blackout ? 'BLACKOUT ON' : 'Off';
+  }
+  $('bo').addEventListener('click', () => { send('/stagecraft/master/blackout', blackout ? 0 : 1); });
+  $('go').addEventListener('click', () => send('/stagecraft/cue/go'));
+  $('back').addEventListener('click', () => send('/stagecraft/cue/back'));
+
+  // ---- cues ----------------------------------------------------------------
+  let activeCue = -1;
+  let cueButtons = [];
+  function applyCues(m) {
+    if (!Array.isArray(m.cues)) return;
+    const list = $('cueList');
+    list.textContent = '';
+    cueButtons = [];
+    m.cues.slice(0, MAX_CUES).forEach((c) => {
+      if (!c || typeof c !== 'object' || !isNum(c.number)) return;
+      const b = button('');
+      b.append(el('span', 'n', fmtNum(c.number)), el('span', 'l', str(c.label, 64)));
+      const num = c.number;
+      b.addEventListener('click', () => send('/stagecraft/cue/goto', num));
+      list.append(b);
+      cueButtons.push({ b: b, n: num });
+    });
+    if (!cueButtons.length) list.append(el('div', 'empty', 'No cues in this show.'));
+    markActive(true);
+  }
+  function markActive(scroll) {
+    cueButtons.forEach((c) => {
+      const on = activeCue >= 0 && Math.abs(c.n - activeCue) < 1e-6;
+      c.b.classList.toggle('act', on);
+      if (on && scroll) { try { c.b.scrollIntoView({ block: 'nearest' }); } catch (e) { /* ignore */ } }
+    });
+  }
+
+  // ---- state ---------------------------------------------------------------
+  function applyState(m) {
+    if (m.cue && typeof m.cue === 'object') {
+      const a = isNum(m.cue.active) ? m.cue.active : -1;
+      const changed = a !== activeCue;
+      activeCue = a;
+      const none = a < 0;
+      $('cueHead').classList.toggle('none', none);
+      $('cueNum').textContent = none ? '–' : fmtNum(a);
+      $('cueLbl').textContent = none ? 'No cue running' : str(m.cue.label, 64);
+      markActive(changed);
+    }
+    if (Array.isArray(m.playbacks)) {
+      for (let i = 0; i < PLAYBACKS && i < m.playbacks.length; i++) {
+        const p = m.playbacks[i];
+        if (!p || typeof p !== 'object') continue;
+        const s = strips[i];
+        s.name.textContent = str(p.name, 64).trim() || `PB ${i + 1}`;
+        s.box.classList.toggle('empty', p.empty === true);
+        s.box.classList.toggle('active', p.active === true);
+        s.fl.classList.toggle('on', p.flash === true);
+        if (isNum(p.level)) s.fader.set(p.level);
+      }
+    }
+    if (isNum(m.grand)) grand.set(m.grand);
+    if (isNum(m.audio)) audio.set(m.audio);
+    if (typeof m.blackout === 'boolean') { blackout = m.blackout; drawBlackout(); }
+  }
+
+  // ---- tabs ----------------------------------------------------------------
+  function selectTab(id) {
+    if (!$(id)) id = 'pCues';
+    document.querySelectorAll('.pane').forEach((p) => p.classList.toggle('on', p.id === id));
+    document.querySelectorAll('#tabs button').forEach((b) => b.classList.toggle('on', b.dataset.tab === id));
+    store(TAB_KEY, id);
+  }
+  document.querySelectorAll('#tabs button').forEach((b) => b.addEventListener('click', () => selectTab(b.dataset.tab)));
+
+  // ---- page lifecycle ------------------------------------------------------
+  document.addEventListener('visibilitychange', () => {
+    if (document.hidden) { hiddenAt = Date.now(); releaseHeld(); return; }
+    if (!token) return;
+    retryDelay = 1000;
+    // Mobile browsers freeze background sockets; after a long pause reconnect to get a fresh welcome, cues and state.
+    if (!ws || ws.readyState > 1 || Date.now() - hiddenAt > 5000) connect();
+  });
+  window.addEventListener('pageshow', (e) => { if (e.persisted && token) { retryDelay = 1000; connect(); } });
+  window.addEventListener('offline', () => { if (token && !welcomed) setConn('offline'); });
+  window.addEventListener('online', () => { if (token && (!ws || ws.readyState > 1)) { retryDelay = 1000; connect(); } });
+  window.addEventListener('blur', releaseHeld);
+  document.addEventListener('contextmenu', (e) => {
+    if (e.target instanceof Element && e.target.closest('button,.track')) e.preventDefault();
+  });
+
+  $('pin').addEventListener('input', () => {
+    const v = $('pin').value.replace(/\D/g, '').slice(0, 6);
+    if (v !== $('pin').value) $('pin').value = v;
+  });
+  $('pairForm').addEventListener('submit', pair);
+  $('devName').value = guessDeviceName();
+  $('unpair').addEventListener('click', () => {
+    if (window.confirm('Unpair this device? You will need the PIN to pair it again.')) forget('');
+  });
+
+  drawBlackout();
+  selectTab(load(TAB_KEY) || 'pCues');
+  if (token) showControl(); else showPair('');
+})();
+</script>
+</body>
+</html>

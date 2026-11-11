@@ -1,6 +1,6 @@
 // Copyright Epic Games, Inc. All Rights Reserved.
 
-// AModularPlayerController: MIDI and OSC remote control requests (Docs/ADR/0035), kept apart from the main file.
+// AModularPlayerController: MIDI, OSC and Web Remote requests (Docs/ADR/0035, 0036), kept apart from the main file.
 
 #include "Player/ModularPlayerController.h"
 
@@ -8,6 +8,7 @@
 #include "Game/StageCraftGameModeBase.h"
 #include "Remote/StageRemoteControlSubsystem.h"
 #include "Remote/StageRemoteMapping.h"
+#include "Remote/StageWebRemoteSubsystem.h"
 
 #define LOCTEXT_NAMESPACE "StageCraftRemote"
 
@@ -49,6 +50,10 @@ void AModularPlayerController::BindRemoteControl()
 	{
 		Remote->SetCommandHandler(UStageRemoteControlSubsystem::FCommandHandler::CreateUObject(this, &ThisClass::RequestRemoteCommand));
 	}
+	if (UStageWebRemoteSubsystem* Web = UWorld::GetSubsystem<UStageWebRemoteSubsystem>(GetWorld()))
+	{
+		Web->SetCommandHandler(UStageWebRemoteSubsystem::FCommandHandler::CreateUObject(this, &ThisClass::RequestRemoteCommand));
+	}
 }
 
 void AModularPlayerController::UnbindRemoteControl()
@@ -57,6 +62,54 @@ void AModularPlayerController::UnbindRemoteControl()
 	{
 		Remote->ClearCommandHandler(this);
 	}
+	if (UStageWebRemoteSubsystem* Web = UWorld::GetSubsystem<UStageWebRemoteSubsystem>(GetWorld()))
+	{
+		Web->ClearCommandHandler(this);
+	}
+}
+
+FStageEconomyResultInfo AModularPlayerController::RequestSetWebRemote(const FStageWebRemoteSettings& Settings)
+{
+	UStageWebRemoteSubsystem* Web = UWorld::GetSubsystem<UStageWebRemoteSubsystem>(GetWorld());
+	if (!Web)
+	{
+		const FStageEconomyResultInfo Refusal = FStageEconomyResultInfo::Fail(EStageEconomyResult::InvalidRequest, LOCTEXT("NoWebRemote", "The Web Remote is not available here."));
+		ReportRejection(Refusal);
+		return Refusal;
+	}
+
+	if (Settings.Scope != EStageWebRemoteScope::Off)
+	{
+		const AStageCraftGameModeBase* GameMode = GetStageGameMode();
+		const FStageEconomyResultInfo Verdict = GameMode ? GameMode->EvaluateWebRemote(this)
+			: FStageEconomyResultInfo::Fail(EStageEconomyResult::InvalidRequest, LOCTEXT("NoWebRules", "The Web Remote is not available here."));
+		if (!Verdict.IsSuccess())
+		{
+			ReportRejection(Verdict);
+			return Verdict;
+		}
+	}
+
+	FText Error;
+	if (!Web->ApplySettings(Settings, Error))
+	{
+		const FStageEconomyResultInfo Refusal = FStageEconomyResultInfo::Fail(EStageEconomyResult::InvalidRequest, Error);
+		ReportRejection(Refusal);
+		return Refusal;
+	}
+	return FStageEconomyResultInfo::Ok();
+}
+
+bool AModularPlayerController::RequestWebRemoteNewPin()
+{
+	UStageWebRemoteSubsystem* Web = UWorld::GetSubsystem<UStageWebRemoteSubsystem>(GetWorld());
+	return Web && Web->RenewPin();
+}
+
+bool AModularPlayerController::RequestWebRemoteUnpairAll()
+{
+	UStageWebRemoteSubsystem* Web = UWorld::GetSubsystem<UStageWebRemoteSubsystem>(GetWorld());
+	return Web && Web->UnpairAll();
 }
 
 FStageEconomyResultInfo AModularPlayerController::RequestSetRemoteControl(const FStageRemoteSettings& Settings)
@@ -96,8 +149,9 @@ FStageEconomyResultInfo AModularPlayerController::RequestSetRemoteControl(const 
 FStageEconomyResultInfo AModularPlayerController::RequestRemoteCommand(const FStageRemoteCommand& Command)
 {
 	const AStageCraftGameModeBase* GameMode = GetStageGameMode();
-	FStageEconomyResultInfo Verdict = GameMode ? GameMode->EvaluateRemoteControl(this)
-		: FStageEconomyResultInfo::Fail(EStageEconomyResult::InvalidRequest, LOCTEXT("NoStage", "There is no stage to control here."));
+	FStageEconomyResultInfo Verdict = !GameMode
+		? FStageEconomyResultInfo::Fail(EStageEconomyResult::InvalidRequest, LOCTEXT("NoStage", "There is no stage to control here."))
+		: Command.Source == EStageRemoteSource::Web ? GameMode->EvaluateWebRemote(this) : GameMode->EvaluateRemoteControl(this);
 
 	// Judged silently first, as the desk would be, so a refused fader does not raise a message per move. Letting go of a flash is
 	// always allowed (RequestPlaybackFlash), so a refusal can never leave a playback stuck at full.

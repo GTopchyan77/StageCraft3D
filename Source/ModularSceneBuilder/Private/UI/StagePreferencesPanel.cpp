@@ -20,6 +20,7 @@
 #include "Placement/StageSnappingComponent.h"
 #include "Player/ModularPlayerController.h"
 #include "Remote/StageRemoteControlSubsystem.h"
+#include "Remote/StageWebRemoteSubsystem.h"
 #include "Settings/StageCraftUserSettings.h"
 #include "UI/StageCraftUITheme.h"
 #include "UI/StageCraftWidgetStyle.h"
@@ -174,6 +175,7 @@ void UStagePreferencesPanel::BuildTree()
 		{ LOCTEXT("Off", "Off"), LOCTEXT("On", "On") }, MuteButtons, &ThisClass::HandleMutePicked), SectionGap);
 
 	Add(BuildRemoteSection(), SectionGap);
+	Add(BuildWebRemoteSection(), SectionGap);
 
 	Add(BuildShortcutSection());
 }
@@ -465,6 +467,11 @@ void UStagePreferencesPanel::NativeConstruct()
 		BoundRemote = Remote;
 		RemoteStatusHandle = Remote->OnStatusChanged.AddUObject(this, &ThisClass::RefreshRemote);
 	}
+	if (UStageWebRemoteSubsystem* Web = UWorld::GetSubsystem<UStageWebRemoteSubsystem>(GetWorld()))
+	{
+		BoundWebRemote = Web;
+		WebStatusHandle = Web->OnStatusChanged.AddUObject(this, &ThisClass::RefreshWebRemote);
+	}
 	SetNotice(LOCTEXT("Intro", "Click a shortcut to change it. Fly keys work only while the right mouse button is held, so they may share a key with a tool (W: Move tool and fly forward)."), false);
 	Refresh();
 }
@@ -494,6 +501,12 @@ void UStagePreferencesPanel::NativeDestruct()
 	}
 	RemoteStatusHandle.Reset();
 	BoundRemote.Reset();
+	if (UStageWebRemoteSubsystem* Web = BoundWebRemote.Get())
+	{
+		Web->OnStatusChanged.Remove(WebStatusHandle);
+	}
+	WebStatusHandle.Reset();
+	BoundWebRemote.Reset();
 	BoundPreferences.Reset();
 	BoundAudio.Reset();
 	BoundSnapping.Reset();
@@ -603,6 +616,7 @@ void UStagePreferencesPanel::Refresh()
 	StyleRow(MuteButtons, Audio && Audio->IsMuted() ? 1 : 0, Audio != nullptr);
 
 	RefreshRemote();
+	RefreshWebRemote();
 
 	const FStageKeyBindings Bindings = Preferences ? Preferences->GetKeyBindings() : FStageKeyBindings::MakeDefaults();
 	for (const FStageInputCommandInfo& Info : StageKeyBindings::GetCommands())
@@ -715,6 +729,135 @@ void UStagePreferencesPanel::ApplyRemoteSettings(const FStageRemoteSettings& Set
 		Controller->RequestSetRemoteControl(Settings);
 	}
 	RefreshRemote();
+}
+
+UWidget* UStagePreferencesPanel::BuildWebRemoteSection()
+{
+	using namespace StagePreferencesPanel;
+	const UStageCraftUITheme& Palette = GetTheme();
+
+	UVerticalBox* Section = WidgetTree->ConstructWidget<UVerticalBox>(UVerticalBox::StaticClass(), TEXT("WebRemoteSection"));
+	const auto Add = [Section](UWidget* Widget)
+	{
+		if (UVerticalBoxSlot* WidgetSlot = Section->AddChildToVerticalBox(Widget))
+		{
+			WidgetSlot->SetPadding(FMargin(0.f, 0.f, 0.f, RowGap));
+		}
+	};
+
+	Add(BuildSectionTitle(LOCTEXT("WebRemote", "WEB REMOTE  (phones and tablets)")));
+	Add(BuildChoiceRow(LOCTEXT("WebRemoteScope", "Web Remote"),
+		LOCTEXT("WebRemoteScopeTip", "Run cues, playbacks and masters from a phone or tablet browser: no app to install.\nThis PC: only a browser on this computer.\nNetwork: phones on your network open the address below and enter the PIN. The connection is not encrypted; use it on a network you trust."),
+		{ LOCTEXT("Off", "Off"), LOCTEXT("WebThisPC", "This PC"), LOCTEXT("WebNetwork", "Network") }, WebScopeButtons, &ThisClass::HandleWebScopePicked));
+	Add(BuildChoiceRow(LOCTEXT("WebPairing", "Pairing"),
+		LOCTEXT("WebPairingTip", "NEW PIN: phones already paired stay paired; new ones need the new PIN.\nUNPAIR ALL: every phone is disconnected and must pair again with a new PIN."),
+		{ LOCTEXT("WebNewPin", "NEW PIN"), LOCTEXT("WebUnpairAll", "UNPAIR ALL") }, WebPairingButtons, &ThisClass::HandleWebPairingPicked));
+
+	WebStatusText = MakeText(FText::GetEmpty(), 7, TEXT("Regular"), Palette.TextSecondary);
+	WebStatusText->SetAutoWrapText(true);
+	Add(WebStatusText);
+	return Section;
+}
+
+void UStagePreferencesPanel::HandleWebScopePicked(int32 Index)
+{
+	const UStageWebRemoteSubsystem* Web = BoundWebRemote.Get();
+	if (!Web || Index < 0 || Index > static_cast<int32>(EStageWebRemoteScope::Network))
+	{
+		return;
+	}
+	FStageWebRemoteSettings Settings = Web->GetSettings();
+	Settings.Scope = static_cast<EStageWebRemoteScope>(Index);
+	if (AModularPlayerController* Controller = Cast<AModularPlayerController>(GetOwningPlayer()))
+	{
+		Controller->RequestSetWebRemote(Settings);
+	}
+	RefreshWebRemote();
+}
+
+void UStagePreferencesPanel::HandleWebPairingPicked(int32 Index)
+{
+	AModularPlayerController* Controller = Cast<AModularPlayerController>(GetOwningPlayer());
+	if (!Controller)
+	{
+		return;
+	}
+	if (Index == 0)
+	{
+		Controller->RequestWebRemoteNewPin();
+	}
+	else
+	{
+		Controller->RequestWebRemoteUnpairAll();
+	}
+	RefreshWebRemote();
+}
+
+void UStagePreferencesPanel::RefreshWebRemote()
+{
+	const UStageWebRemoteSubsystem* Web = BoundWebRemote.Get();
+	const FStageWebRemoteSettings Settings = Web ? Web->GetSettings() : FStageWebRemoteSettings();
+	const bool bListening = Web && Web->GetStatus().bListening;
+	for (UStageChoiceButton* Button : WebScopeButtons)
+	{
+		if (Button)
+		{
+			StyleChoice(*Button, Button->GetChoiceIndex() == static_cast<int32>(Settings.Scope));
+			Button->SetIsEnabled(Web != nullptr);
+		}
+	}
+	for (UStageChoiceButton* Button : WebPairingButtons)
+	{
+		if (Button)
+		{
+			StyleChoice(*Button, false);
+			Button->SetIsEnabled(bListening);
+		}
+	}
+
+	if (!WebStatusText)
+	{
+		return;
+	}
+	if (!Web)
+	{
+		WebStatusText->SetText(LOCTEXT("WebUnavailable", "The Web Remote is available on a stage."));
+		return;
+	}
+
+	const FStageWebRemoteStatus& Status = Web->GetStatus();
+	TArray<FText> Lines;
+	if (Status.bListening)
+	{
+		FString Pin = Status.Pin;
+		if (Pin.Len() == 6)
+		{
+			Pin.InsertAt(3, TEXT(' '));
+		}
+		Lines.Add(FText::Format(LOCTEXT("WebOpen", "Open {0} on a phone and enter PIN {1}."),
+			FText::FromString(FString::Join(Status.Addresses, TEXT("  or  "))), FText::FromString(Pin)));
+		Lines.Add(FText::Format(LOCTEXT("WebDevices", "{0} paired · {1} open."), FText::AsNumber(Status.PairedDevices), FText::AsNumber(Status.ConnectedPages)));
+		if (Status.PairingLockedUntil > 0.0)
+		{
+			Lines.Add(LOCTEXT("WebLocked", "A device entered five wrong PINs; it must wait 30 seconds before trying again."));
+		}
+	}
+	if (Status.Received > 0)
+	{
+		Lines.Add(FText::Format(LOCTEXT("WebCounts", "{0} received · {1} done · {2} refused · {3} ignored. Last: {4}"),
+			FText::AsNumber(Status.Received), FText::AsNumber(Status.Applied), FText::AsNumber(Status.Refused), FText::AsNumber(Status.Ignored),
+			FText::FromString(Status.LastInput)));
+	}
+	if (!Status.LastRefusal.IsEmpty())
+	{
+		Lines.Add(FText::Format(LOCTEXT("WebLastRefusal", "Last refused: {0}"), Status.LastRefusal));
+	}
+	if (!Status.LastProblem.IsEmpty())
+	{
+		Lines.Add(Status.LastProblem);
+	}
+	WebStatusText->SetText(Lines.IsEmpty() ? LOCTEXT("WebOff", "Off. Nothing is served until you choose This PC or Network.") : FText::Join(FText::FromString(TEXT("\n")), Lines));
+	WebStatusText->SetColorAndOpacity(FSlateColor(Status.LastProblem.IsEmpty() ? GetTheme().TextSecondary : GetTheme().WarningColor));
 }
 
 void UStagePreferencesPanel::RefreshRemote()

@@ -79,6 +79,15 @@ private:
 	void ApplyRemoteSettings(const struct FStageRemoteSettings& Settings);
 	void RefreshRemote();
 
+	/**
+	 * WEB REMOTE (Docs/ADR/0036): scope, NEW PIN and UNPAIR ALL, and a status line with the addresses and the PIN. Written through the
+	 * controller's requests.
+	 */
+	class UWidget* BuildWebRemoteSection();
+	void HandleWebScopePicked(int32 Index);
+	void HandleWebPairingPicked(int32 Index);
+	void RefreshWebRemote();
+
 	/** A binding button: Index = command * 2 + slot. Arms capture for that slot (or disarms it when it is already armed). */
 	void HandleBindingPicked(int32 Index);
 	void HandleResetPicked(int32 CommandIndex);
@@ -155,4 +164,18 @@ private:
 
 	TWeakObjectPtr<class UStageRemoteControlSubsystem> BoundRemote;
 	FDelegateHandle RemoteStatusHandle;
+
+	/** Off, This PC, Network. */
+	UPROPERTY(Transient)
+	TArray<TObjectPtr<class UStageChoiceButton>> WebScopeButtons;
+
+	/** NEW PIN, UNPAIR ALL: actions, never shown as selected. */
+	UPROPERTY(Transient)
+	TArray<TObjectPtr<class UStageChoiceButton>> WebPairingButtons;
+
+	UPROPERTY(Transient)
+	TObjectPtr<class UTextBlock> WebStatusText = nullptr;
+
+	TWeakObjectPtr<class UStageWebRemoteSubsystem> BoundWebRemote;
+	FDelegateHandle WebStatusHandle;
 };

@@ -7,6 +7,7 @@
 #include "Audio/StageAudioReactiveTypes.h"
 #include "Input/StageKeyBindings.h"
 #include "Remote/StageRemoteControlTypes.h"
+#include "Remote/StageWebRemoteTypes.h"
 #include "Render/StageRenderTypes.h"
 #include "Show/StageDMXNetworkTypes.h"
 #include "StageCraftUserSettings.generated.h"
@@ -144,6 +145,12 @@ public:
 	/** Sanitized (StageRemote::Sanitize). Returns true if the stored value changed. Does not save. */
 	bool SetRemoteSettings(const FStageRemoteSettings& Settings);
 
+	/** The Web Remote of this PC (UStageWebRemoteSubsystem is the only writer), always sanitized. */
+	const FStageWebRemoteSettings& GetWebRemoteSettings() const { return WebRemote; }
+
+	/** Sanitized (StageWebRemote::Sanitize). Returns true if the stored value changed. Does not save. */
+	bool SetWebRemoteSettings(const FStageWebRemoteSettings& Settings);
+
 	/** Audio-reactive lighting of this PC (UStageAudioReactiveSubsystem is the only writer), always sanitized. */
 	const FStageAudioReactiveSettings& GetAudioReactiveSettings() const { return AudioReactive; }
 
@@ -213,6 +220,9 @@ private:
 
 	UPROPERTY(Config)
 	FStageRemoteSettings RemoteControl;
+
+	UPROPERTY(Config)
+	FStageWebRemoteSettings WebRemote;
 
 	/** Sanitizes DMXOutput and gives it a Cid when it has none; a reset to defaults keeps the Cid (the same sACN source). */
 	void SanitizeDMXOutput();

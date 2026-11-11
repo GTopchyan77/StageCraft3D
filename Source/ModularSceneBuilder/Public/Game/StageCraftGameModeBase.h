@@ -106,6 +106,14 @@ public:
 	FStageEconomyResultInfo EvaluateRemoteControl(const APlayerController* Player) const;
 
 	/**
+	 * May Player's Web Remote serve phones and tablets and drive the desk (Docs/ADR/0036 §6)? Asked when the server is switched on and
+	 * before every web command, which EvaluateCueRequest then judges like a click. Off when SessionRules.bAllowWebRemote is false.
+	 * Step 6 adds the Pro entitlement (StageCraft.Entitlement.Pro.WebRemote) here.
+	 */
+	UFUNCTION(BlueprintNativeEvent, BlueprintCallable, Category = "StageCraft|Rules")
+	FStageEconomyResultInfo EvaluateWebRemote(const APlayerController* Player) const;
+
+	/**
 	 * May Player change the audio-reactive source, file, transport or settings (Docs/ADR/0029 §5)? Allowed for any player by
 	 * default; a mode that must not listen to the PC's audio refuses here. Without a GameMode every audio request is refused.
 	 */

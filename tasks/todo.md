@@ -742,3 +742,16 @@ Gevor's choices: automation tests on a harness game instance (not AFunctionalTes
 - [ ] GDTF logo next to Powered by GDTF (required by the API terms before release)
 - [ ] Remember the GDTF Share user name between runs (password never); optional sync server (BaseUrl)
 - [ ] Decide whether marketplace packages may carry GDTF files at all (publisher confirmation is built; terms do not address redistribution)
+
+## Phase 42 - Step 5: Web Remote WR1 (requested by Gevor 2026-11-11; STATE.md #92; ADR 0036)
+- [x] ADR 0036: own HTTP/WebSocket server, routes, pairing, limits, D7 questions
+- [x] StageWebRemote protocol (pure): capped HTTP reader, routes, Host/Origin checks, WebSocket handshake and frames, UTF-8, JSON messages, PIN pairing with lockout, settings sanitize
+- [x] FStageWebRemoteServer: worker thread, 16 connections, 8 WebSockets, hello within 5 s, ping/idle, state and cue list pushed by version
+- [x] UStageWebRemoteSubsystem: settings in UStageCraftUserSettings, commands through StageRemote::ParseOsc and the frame queue, state pushed at most 30 Hz, refusals sent once per reason
+- [x] Request bridge: RequestSetWebRemote, RequestWebRemoteNewPin, RequestWebRemoteUnpairAll; RequestRemoteCommand judges web commands with GameMode EvaluateWebRemote; SessionRules.bAllowWebRemote
+- [x] The page (Resources/WebRemote/index.html, staged with the module): pairing, cues, playbacks, masters
+- [x] Preferences WEB REMOTE section, dev console StageCraft.WebRemote.*, help web-remote EN/HY
+- [ ] Gevor: open the page on a real phone over Wi-Fi (scope Network) and run a show
+- [ ] D7: plain HTTP with PIN pairing on the LAN acceptable? Pairings across restarts?
+- [ ] WR2: QR code with address and PIN, remembered devices, page layout options
+- [ ] WR3: Pro gate StageCraft.Entitlement.Pro.WebRemote in EvaluateWebRemote (Step 6)

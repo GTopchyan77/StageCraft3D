@@ -220,6 +220,19 @@ FStageEconomyResultInfo AStageCraftGameModeBase::EvaluateRemoteControl_Implement
 	return FStageEconomyResultInfo::Ok();
 }
 
+FStageEconomyResultInfo AStageCraftGameModeBase::EvaluateWebRemote_Implementation(const APlayerController* Player) const
+{
+	if (!Player)
+	{
+		return FStageEconomyResultInfo::Fail(EStageEconomyResult::InvalidRequest, LOCTEXT("NoWebRemotePlayer", "The Web Remote is not available."));
+	}
+	if (!SessionRules.bAllowWebRemote)
+	{
+		return FStageEconomyResultInfo::Fail(EStageEconomyResult::SessionRuleViolation, LOCTEXT("WebRemoteDisabled", "The Web Remote is switched off for this session."));
+	}
+	return FStageEconomyResultInfo::Ok();
+}
+
 FStageEconomyResultInfo AStageCraftGameModeBase::EvaluateAudioRequest_Implementation(const APlayerController* Player, EStageAudioRequest Request) const
 {
 	if (!Player)

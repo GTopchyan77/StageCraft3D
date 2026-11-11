@@ -394,7 +394,7 @@ namespace StageRemote
 		{
 			for (FStageRemoteCommand& Queued : Pending)
 			{
-				if (Queued.Action == Command.Action && Queued.Playback == Command.Playback)
+				if (Queued.Action == Command.Action && Queued.Source == Command.Source && Queued.Playback == Command.Playback)
 				{
 					Queued.Value = Command.Value;
 					return true;
