@@ -697,7 +697,7 @@ Gevor's choices: automation tests on a harness game instance (not AFunctionalTes
 - [x] Viewport toolbar: SNAP / ANGLE / MOVE-ROTATE-SCALE / SKETCH-ASSIST segments folded into Snap, Transform and Tools dropdowns (View menu pattern)
 - [x] Sketch import accuracy: Regularize squares near-rectilinear decks and straightens near-axis truss (both readers); Claude reports a written dimension (scale) that sets the plan's real width
 - [ ] Other crowded panels (Sketch window toolbar, Audio panel) for the same dropdown treatment, after Gevor's look at the viewport bar
-- [ ] Entitlement tags StageCraft.Entitlement.Pro.* and GameMode gates (open until Step 6 licensing)
+- [x] Entitlement tags StageCraft.Entitlement.Pro.* and GameMode gates (Step 6, STATE.md #93)
 
 ## Phase 38c - MV2-MV3 with performance and memory work (requested by Gevor 2026-11-10; STATE.md #88)
 - [x] MVR read on a worker: archive released before the game thread, scene XML bytes freed before the XML tree, only truss geometry extracted, GDTF bytes moved into the library
@@ -716,7 +716,7 @@ Gevor's choices: automation tests on a harness game instance (not AFunctionalTes
 - [ ] Gevor: D7 - is an unauthenticated opt-in OSC listener on the LAN acceptable, or should Network require an allow-list of tablets?
 - [ ] Gevor: confirm the default MIDI map (Korg nanoKONTROL2) or name your controller; check with real hardware
 - [ ] MR2: MIDI mapping editor with LEARN in Preferences; MIDI output feedback (motor faders, LEDs)
-- [ ] MR3 (Step 6): Pro entitlement StageCraft.Entitlement.Pro.MidiOsc in EvaluateRemoteControl
+- [x] MR3 (Step 6): Pro entitlement StageCraft.Entitlement.Pro.MidiOsc in EvaluateRemoteControl (STATE.md #93)
 
 ## Phase 40 - Step 2 MV4: MVR export (requested by Gevor 2026-11-11; STATE.md #90; ADR 0034 section 16)
 - [x] StageZip::FWriter (stored / raw deflate, UTF-8 names, deterministic) checked against the reader
@@ -726,7 +726,7 @@ Gevor's choices: automation tests on a harness game instance (not AFunctionalTes
 - [x] Round-trip tests (writer read back by the import; a stage exported through the subsystem read back item by item)
 - [ ] Gevor: open an exported .mvr in Vectorworks, grandMA3 or an MVR viewer (ADR 0034 section 10)
 - [ ] Real meshes for trusses and set pieces instead of boxes (DCC bridge exporter per item; M3 follow-up)
-- [ ] Step 6: Pro entitlement StageCraft.Entitlement.Pro.MvrExport in EvaluateMvrExport
+- [x] Step 6: Pro entitlement StageCraft.Entitlement.Pro.MvrExport in EvaluateMvrExport (STATE.md #93)
 - [ ] MV5: re-import differences, preserved unknown nodes
 
 ## Phase 41 - Step 4: GDTF Share downloads, download manager, package FIXT section (requested by Gevor 2026-11-11; STATE.md #91; ADR 0033 section 18)
@@ -764,4 +764,10 @@ Gevor's choices: automation tests on a harness game instance (not AFunctionalTes
 - [x] Preferences STAGECRAFT PRO, Patch panel held universes, help pro-licence EN/HY and Pro lines in five articles
 - [ ] Gevor: generate the production key pair (scripts/make-licence-key.ts), store the private key, paste the public key into StageLicenceToken.cpp
 - [ ] Gevor: create the Pro Prices and configure the Customer Portal in Stripe; subscribe the webhook to customer.subscription.*
-- [ ] Gevor: end-to-end with the dev cloud server (StageCraft.Licence.DevAssumePro 0, sign in, subscribe on the fake page, see Pro, cancel in the fake portal, REFRESH)
+- [x] End-to-end with the dev cloud server, automated: Scripts/Tests/RunLicenceEndToEnd.ps1 (STATE.md #94)
+
+## Phase 44 - Pro end to end (requested by Gevor 2026-11-16; STATE.md #94)
+- [x] Dev-only StageCraft.Licence.Status/Refresh/Subscribe/Manage/Release console commands (compiled out of Shipping)
+- [x] Scripts/Tests/RunLicenceEndToEnd.ps1: online subscribe, offline restart, portal cancel and refresh, DMX IN and OUT limits live, server records, no tokens in logs
+- [ ] Gevor: look at Preferences STAGECRAFT PRO and the Patch panel held-universe line in a -game run
+- [ ] Gevor: real Stripe test-mode subscription once the Prices and portal exist

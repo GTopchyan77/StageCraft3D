@@ -9261,7 +9261,7 @@ All times in ms.
   - a `-game` run with the Preferences section and the Patch panel held-universe line on screen;
   - the controller's limit push in a live stage (covered by reading and the subsystem tests, not by an integration test).
 
-**Commit:** uncommitted (working tree).
+**Commit:** `95df568`.
 
 **Known issues / follow-ups**
 - **Release blocker, Gevor:** generate the production key pair (`node Services/StageCraftCloud/scripts/make-licence-key.ts <id>`), put the private key in the secret store and the printed line into `StageLicenceToken.cpp` `AddProductionKeys`. Until then Shipping trusts no key and every Shipping user is Free.
@@ -9270,3 +9270,59 @@ All times in ms.
 - **Deterrent-only limits** (ADR 0034 §17.4): registry-based machine id, editable high-water mark, about 2× machines briefly after releases; Development/Test packages assume Pro.
 - **Remote servers on Free:** OSC, MIDI and the Web Remote still open from saved settings on a Free licence; every command is refused (reported once). Closing them on a lapse is a possible follow-up.
 - **Tests:** the existing `StageCraft.Remote.Rules`, `StageCraft.WebRemote.Rules` and the MVR export rule test assert "allowed by default" and rely on `DevAssumePro=1` from `DefaultEngine.ini`; the Free path is covered by `StageCraft.Licence.Gates`.
+
+---
+
+## #94 — StageCraft Pro end to end against a real cloud server: RunLicenceEndToEnd.ps1 and dev-only StageCraft.Licence commands (2026-11-16)
+
+**What & why**
+- **Context.** Gevor asked (2026-11-16) for end-to-end verification and follow-ups after Step 6.
+  - #93 listed as "not verified": the controller's live limit push, the flow against a real server, and the offline restart. Those were covered only by a fake transport in the automation tests.
+  - A real Stripe test-mode run needs Gevor's Stripe keys and Prices, and a hardware MIDI check needs his controller. Neither can be done from here, so this entry automates everything short of them.
+- **Housekeeping first.** #93 said "uncommitted"; it now carries `95df568`. Stale todo items closed: "Entitlement tags StageCraft.Entitlement.Pro.*", MR3 and the MvrExport Pro gate (all done in #93).
+- **`Scripts/Tests/RunLicenceEndToEnd.ps1` (new).** It runs the real server (`Services/StageCraftCloud`, development mode: SQLite, dev sign-in, fake payment provider, development signing key) in a fresh temporary folder, then three scripted `-game` runs (`RunGameScripted.ps1`, Editor binaries). The script plays the browser from the game's log (`StageCraft.Cloud.LogBrowserUrls 1`), as `RunCloudEndToEnd.ps1` does for the marketplace.
+  - **Run A, online.**
+    - The game starts with `StageCraft.Licence.DevAssumePro 0`. It opens the Concert template and moves fixture 1 to universe 2. DMX OUT is unicast to 127.0.0.1, so nothing goes onto the LAN.
+    - On Free, DMX IN is refused ("needs StageCraft Pro") and DMX OUT sends `[1]` and holds `[2]`.
+    - The game signs in through the device flow and stays Free (subscription `none`).
+    - `StageCraft.Licence.Subscribe Monthly` opens the checkout. The script presses Subscribe on the fake checkout, which delivers signed `customer.subscription.created` and `checkout.session.completed` webhooks.
+    - The game's long poll sees the subscription, fetches a licence and turns Pro by itself: all five entitlements, DMX IN allowed, DMX OUT sends `[1, 2]` with nothing held. `Licence.json` is stored.
+  - **Run B, server stopped.**
+    - The game starts Pro from the stored signed licence, and DMX IN is allowed.
+    - The stored session stays `SignedIn`. That is by design: `Offline` means "no cloud configured", and a session lasts until the server answers 401. So the sign-in refresh runs and fails to connect, and the licence is kept with "StageCraft Cloud cannot be reached".
+  - **Run C, server back on the same database.**
+    - The session comes back from the vault, the game is Pro, and DMX IN is turned on.
+    - `StageCraft.Licence.Manage` opens the fake portal, and the script cancels there (`customer.subscription.deleted`).
+    - `StageCraft.Licence.Refresh` gets `NoActiveSubscription`: the game goes Free at once and the file is deleted. DMX IN is stopped by the limits push and refused again.
+  - **Server records:** one monthly subscription, `canceled`, and one machine.
+  - **Logs:** no licence token (`SC1.…`) and no session token (`scs_…`) appear in any game log. Each run's user data (profile, scenes, marketplace, imports) is restored, and the script checks the harness's "Restored:" line.
+  - **Restored afterwards:** the user's own `%LOCALAPPDATA%\StageCraft\Licence.json` and the cloud session in the vault are backed up first and put back after.
+- **`Private/Licence/StageLicenceConsoleCommands.cpp` (new, `#if !UE_BUILD_SHIPPING`).** `StageCraft.Licence.Status` logs status, plan, expiry, the Pro entitlements held, the subscription, the dev override and the message; it never logs the token. `StageCraft.Licence.Refresh`, `.Subscribe Monthly|Yearly`, `.Manage` and `.Release` call the same subsystem functions as the Preferences buttons. They exist so a scripted run can press those buttons.
+- **`StageCraft.DMX.Output` status** now also lists "held by the licence [..]" (`FStageDMXOutputStatus::HeldUniverses`, already shown by the Patch panel). The command file is development-only.
+- **Two findings while writing the test, both expected behaviour and not changed:**
+  - While DMX IN is on, the show is External and DMX OUT sends nothing. A first draft checked OUT right after turning IN on and saw `[]`.
+  - A stored session with the server down reports `SignedIn` with an empty account name (see Run B).
+
+**Files changed**
+- `Scripts/Tests/RunLicenceEndToEnd.ps1` (new)
+- `Source/ModularSceneBuilder/Private/Licence/StageLicenceConsoleCommands.cpp` (new)
+- `Source/ModularSceneBuilder/Private/Show/StageDMXConsoleCommands.cpp` (output status adds the held universes)
+- `tasks/todo.md`, `STATE.md`
+- No `.uasset`, maps, input actions or server code changed.
+
+**Verification**
+- **End to end (Claude):** `powershell -ExecutionPolicy Bypass -File Scripts\Tests\RunLicenceEndToEnd.ps1` gives **PASS**: 25 checks plus 3 "user data restored" checks. Run twice, the second time with the restore checks.
+- **Builds (Claude):** Editor, Game Development and Game Shipping succeeded.
+- **Shipping binary scan (UTF-16 and ASCII):** `StageCraft.Licence.Status`, `StageCraft.Licence.Subscribe`, `StageCraft.Licence.DevAssumePro` and "held by the licence" are absent. The controls "needs StageCraft Pro" and "STAGECRAFT PRO" are present.
+- **Automation suite:** not rerun. The change is a new dev-only command file and one log line; no runtime code changed.
+- **Still not verified:** a real Stripe test-mode subscription (Gevor's keys and Prices), the Preferences STAGECRAFT PRO section and the Patch panel line looked at on screen, and the remaining follow-ups below.
+
+**Commit:** uncommitted (working tree).
+
+**Known issues / follow-ups**
+- Everything open in #93 stays open: the production key pair (release blocker), the Stripe Prices, the Customer Portal and the webhook events.
+- **Gevor:** a look at Preferences › STAGECRAFT PRO and the Patch panel's held-universe line in a `-game` run. The flow itself is now covered by the script.
+- **Next candidates from tasks/todo.md:**
+  - WR2: a QR code with the address and PIN for the Web Remote;
+  - MR2: MIDI learn editor and feedback;
+  - the remote servers on Free closing on a lapse instead of refusing every command.

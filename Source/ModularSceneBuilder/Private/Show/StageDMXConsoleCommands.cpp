@@ -149,9 +149,9 @@ namespace StageDMXCommands
 	{
 		const FStageDMXOutputStatus Status = Network.GetOutputStatus();
 		const FStageDMXOutputSettings Settings = Network.GetOutputSettings();
-		UE_LOG(LogStageCraft, Display, TEXT("StageCraft.DMX.Output: %s%s%s; Art-Net %lld, sACN %lld, send errors %lld; sending universes [%s], muted [%s]."),
+		UE_LOG(LogStageCraft, Display, TEXT("StageCraft.DMX.Output: %s%s%s; Art-Net %lld, sACN %lld, send errors %lld; sending universes [%s], muted [%s], held by the licence [%s]."),
 			*UEnum::GetValueAsString(Status.State), Status.Target.IsEmpty() ? TEXT("") : TEXT(", "), *Status.Target, Status.ArtNetPackets,
-			Status.SACNPackets, Status.SendErrors, *JoinUniverses(Status.Universes), *JoinUniverses(Settings.MutedUniverses));
+			Status.SACNPackets, Status.SendErrors, *JoinUniverses(Status.Universes), *JoinUniverses(Settings.MutedUniverses), *JoinUniverses(Status.HeldUniverses));
 		if (!Status.Error.IsEmpty())
 		{
 			UE_LOG(LogStageCraft, Display, TEXT("StageCraft.DMX.Output: %s"), *Status.Error.ToString());
