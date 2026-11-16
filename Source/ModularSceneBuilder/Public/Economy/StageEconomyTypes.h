@@ -200,4 +200,15 @@ namespace StageCraftTags
 	MODULARSCENEBUILDER_API UE_DECLARE_GAMEPLAY_TAG_EXTERN(Entitlement);
 	MODULARSCENEBUILDER_API UE_DECLARE_GAMEPLAY_TAG_EXTERN(Entitlement_Item);
 	MODULARSCENEBUILDER_API UE_DECLARE_GAMEPLAY_TAG_EXTERN(Entitlement_Feature);
+
+	/**
+	 * StageCraft Pro (Docs/ADR/0034 §2.1, §17). Granted only by UStageLicenceSubsystem from a server-signed licence token, never by a
+	 * catalog product or the saved profile, and checked exactly by the GameMode's evaluators.
+	 */
+	MODULARSCENEBUILDER_API UE_DECLARE_GAMEPLAY_TAG_EXTERN(Entitlement_Pro);
+	MODULARSCENEBUILDER_API UE_DECLARE_GAMEPLAY_TAG_EXTERN(Entitlement_Pro_DmxUniverses);
+	MODULARSCENEBUILDER_API UE_DECLARE_GAMEPLAY_TAG_EXTERN(Entitlement_Pro_DmxIn);
+	MODULARSCENEBUILDER_API UE_DECLARE_GAMEPLAY_TAG_EXTERN(Entitlement_Pro_MidiOsc);
+	MODULARSCENEBUILDER_API UE_DECLARE_GAMEPLAY_TAG_EXTERN(Entitlement_Pro_WebRemote);
+	MODULARSCENEBUILDER_API UE_DECLARE_GAMEPLAY_TAG_EXTERN(Entitlement_Pro_MvrExport);
 }

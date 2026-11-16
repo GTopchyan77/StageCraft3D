@@ -10,3 +10,4 @@ While External:
 - effects hold, and DMX OUT pauses so the show does not echo the console back.
 
 Switch the Cues panel back to INTERNAL to run your own cues. Windows may ask to allow StageCraft on the network the first time.
+- DMX IN is part of StageCraft Pro. Without a licence it stays off, and your choice is kept for when Pro returns (Help: StageCraft Pro).

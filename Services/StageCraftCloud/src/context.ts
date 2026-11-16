@@ -7,6 +7,7 @@ import type { Database } from './db/driver.ts';
 import type { RateLimiter } from './http/rateLimit.ts';
 import type { Logger } from './log.ts';
 import type { PaymentProvider } from './payments/provider.ts';
+import type { LicenceSigner } from './licence/token.ts';
 
 export interface Clock {
   now(): number;
@@ -15,7 +16,8 @@ export interface Clock {
 export const systemClock: Clock = { now: () => Date.now() };
 
 /**
- * Wakes long polls of GET /v1/orders/{id} when this process commits a change to that order. A change committed by another replica
+ * Wakes long polls of GET /v1/orders/{id} (keyed by order id) and GET /v1/me/subscription (keyed by subscriptionNotifyKey) when this
+ * process commits a change to that order or subscription. A change committed by another replica
  * is picked up by the poll's periodic re-read instead (see routes/orders.ts).
  */
 export class OrderNotifier {
@@ -58,4 +60,6 @@ export interface AppContext {
   /** Null in AUTH_MODE=dev. */
   oidc: OidcClient | null;
   limiter: RateLimiter;
+  /** Signs StageCraft Pro licence tokens with LICENCE_SIGNING_KEY (ADR 0034 §17.2). */
+  signer: LicenceSigner;
 }

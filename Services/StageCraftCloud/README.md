@@ -52,7 +52,7 @@ npm start                      # http://localhost:8080 with SQLite (./data), dev
 
 Development conveniences (refused when `NODE_ENV=production`):
 - **Sign-in:** `POST /v1/auth/device`, open the returned `verificationUriComplete`, type any user name, then poll `/v1/auth/device/token`.
-- **Payments:** the checkout URL is `/dev/fake-checkout/{session}`; its *Pay* button sends a signed `checkout.session.completed` through the real webhook path. `/dev/fake-onboarding/{account}` enables a seller's payouts.
+- **Payments:** the checkout URL is `/dev/fake-checkout/{session}`; its *Pay* button sends a signed `checkout.session.completed` through the real webhook path. `/dev/fake-onboarding/{account}` enables a seller's payouts. A StageCraft Pro checkout opens `/dev/fake-subscription/{session}` (*Subscribe* sends signed `customer.subscription.created` and `checkout.session.completed`); the billing portal is `/dev/fake-portal/{customer}` (*Cancel* sends `customer.subscription.deleted`). Licences are signed with the public development key `dev-1`, which only non-Shipping clients trust.
 - **Admin:** `node src/cli.ts grant-admin <accountId>` (roles live only in the database).
 
 To run against Stripe test mode locally, see "Stripe test mode" in `docs/RUNBOOK.md`.

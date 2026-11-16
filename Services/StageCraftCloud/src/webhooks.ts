@@ -17,6 +17,7 @@ import {
 import { apportionRefund } from './money.ts';
 import { applyTransition, findOrderBy, getOrder, IllegalTransitionError, refundedTotal, type Order } from './orders.ts';
 import { verifyStripeSignature } from './payments/webhookSignature.ts';
+import { isSubscriptionCheckout, onSubscriptionCheckout, onSubscriptionEvent } from './subscriptions.ts';
 
 export type WebhookStatus = 'processed' | 'ignored' | 'needs_attention';
 
@@ -30,6 +31,8 @@ interface HandlerResult {
   status: WebhookStatus;
   detail: string;
   orderIds?: string[];
+  /** Long-poll keys to wake after the commit besides the orders (a subscription's account). */
+  notifyKeys?: string[];
 }
 
 type StripeObject = Record<string, unknown>;
@@ -37,6 +40,8 @@ type StripeObject = Record<string, unknown>;
 interface StripeEvent {
   id: string;
   type: string;
+  /** Stripe's event time in Unix seconds, or 0 when missing; orders subscription snapshots (subscriptions.ts). */
+  created: number;
   object: StripeObject;
 }
 
@@ -61,7 +66,8 @@ function parseEvent(rawBody: Buffer): StripeEvent {
   ) {
     throw new ApiError('InvalidRequest', 'webhook body is not a Stripe event');
   }
-  return { id: record.id, type: record.type, object: data.object as StripeObject };
+  const created = typeof record.created === 'number' && Number.isSafeInteger(record.created) && record.created > 0 ? record.created : 0;
+  return { id: record.id, type: record.type, created, object: data.object as StripeObject };
 }
 
 function text(object: StripeObject, field: string): string | null {
@@ -380,13 +386,26 @@ async function dispatch(ctx: AppContext, tx: Queryable, event: StripeEvent, at: 
   try {
     switch (event.type) {
       case 'checkout.session.completed':
-        return await onCheckoutCompleted(ctx, tx, event.object, at);
+        return isSubscriptionCheckout(event.object)
+          ? await onSubscriptionCheckout(tx, event.object, 'Completed', at)
+          : await onCheckoutCompleted(ctx, tx, event.object, at);
       case 'checkout.session.async_payment_succeeded':
-        return await onAsyncPayment(ctx, tx, event.object, true, at);
+        return isSubscriptionCheckout(event.object)
+          ? await onSubscriptionCheckout(tx, event.object, 'Completed', at)
+          : await onAsyncPayment(ctx, tx, event.object, true, at);
       case 'checkout.session.async_payment_failed':
-        return await onAsyncPayment(ctx, tx, event.object, false, at);
+        return isSubscriptionCheckout(event.object)
+          ? await onSubscriptionCheckout(tx, event.object, 'Failed', at)
+          : await onAsyncPayment(ctx, tx, event.object, false, at);
       case 'checkout.session.expired':
-        return await onCheckoutExpired(tx, event.object, at);
+        return isSubscriptionCheckout(event.object)
+          ? await onSubscriptionCheckout(tx, event.object, 'Expired', at)
+          : await onCheckoutExpired(tx, event.object, at);
+      case 'customer.subscription.created':
+      case 'customer.subscription.updated':
+        return await onSubscriptionEvent(ctx, tx, event.object, event.created, false, at);
+      case 'customer.subscription.deleted':
+        return await onSubscriptionEvent(ctx, tx, event.object, event.created, true, at);
       case 'charge.refunded':
         return await onChargeRefunded(ctx, tx, event.object, at);
       case 'charge.dispute.created':
@@ -439,6 +458,7 @@ export async function handleStripeWebhook(ctx: AppContext, rawBody: Buffer, sign
   }
   const event = parseEvent(rawBody);
   const at = ctx.clock.now();
+  let notifyKeys: string[] = [];
   const outcome = await ctx.db.withTransaction(async (tx): Promise<WebhookOutcome> => {
     const inserted = await tx.query(
       `INSERT INTO webhook_events (id, type, status, payload, received_at) VALUES ($1, $2, 'processed', $3, $4)
@@ -450,10 +470,11 @@ export async function handleStripeWebhook(ctx: AppContext, rawBody: Buffer, sign
     }
     const result = await dispatchAtomically(ctx, tx, event, at);
     await tx.query('UPDATE webhook_events SET status = $1, detail = $2 WHERE id = $3', [result.status, result.detail, event.id]);
+    notifyKeys = result.notifyKeys ?? [];
     return { status: result.status, detail: result.detail, orderIds: result.orderIds ?? [] };
   });
-  for (const orderId of outcome.orderIds) {
-    ctx.notifier.notify(orderId);
+  for (const key of [...outcome.orderIds, ...notifyKeys]) {
+    ctx.notifier.notify(key);
   }
   const level = outcome.status === 'needs_attention' ? 'warn' : 'info';
   ctx.log[level]('webhook', { eventId: event.id, type: event.type, status: outcome.status, detail: outcome.detail, orders: outcome.orderIds });

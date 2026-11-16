@@ -29,6 +29,7 @@
 #include "Environment/StageAtmosphereSubsystem.h"
 #include "Environment/StageEnvironmentSubsystem.h"
 #include "Game/StageCraftGameModeBase.h"
+#include "Licence/StageLicenceSubsystem.h"
 #include "Interaction/StageParameterInterface.h"
 #include "InputAction.h"
 #include "InputActionValue.h"
@@ -194,6 +195,13 @@ void AModularPlayerController::BeginPlay()
 	// MIDI and OSC controllers drive the desk through this controller's requests (Docs/ADR/0035).
 	BindRemoteControl();
 
+	// The licence decides what the network DMX may do (Docs/ADR/0034 §17); it is applied now and whenever it changes.
+	if (UStageLicenceSubsystem* Licence = GetGameInstance() ? GetGameInstance()->GetSubsystem<UStageLicenceSubsystem>() : nullptr)
+	{
+		LicenceChangedHandle = Licence->OnLicenceChanged.AddUObject(this, &ThisClass::ApplyLicenceLimits);
+	}
+	ApplyLicenceLimits();
+
 	// Both happen after the selection binding, so panels that read the current selection in NativeConstruct see a ready controller.
 	// In the dockable workspace (Standalone/packaged) the panels live in dock tabs. The fixed HUD holds only those same panels today,
 	// so it is not shown there. It returns as the viewport-overlay layer in Phase 1.
@@ -231,6 +239,11 @@ void AModularPlayerController::EndPlay(const EEndPlayReason::Type EndPlayReason)
 	}
 	CameraNavigation->CancelAll();
 	UnbindRemoteControl();
+	if (UStageLicenceSubsystem* Licence = GetGameInstance() ? GetGameInstance()->GetSubsystem<UStageLicenceSubsystem>() : nullptr)
+	{
+		Licence->OnLicenceChanged.Remove(LicenceChangedHandle);
+	}
+	LicenceChangedHandle.Reset();
 
 	UnbindPreviewRefreshSources();
 	GetWorldTimerManager().ClearAllTimersForObject(this);
@@ -1645,6 +1658,14 @@ FStageEconomyResultInfo AModularPlayerController::RequestSetDMXInput(bool bEnabl
 	// Input without External would be received and ignored; External without input would freeze the show. They go together.
 	if (bEnabled)
 	{
+		const AStageCraftGameModeBase* GameMode = GetStageGameMode();
+		const FStageEconomyResultInfo Verdict = GameMode ? GameMode->EvaluateDmxInput(this)
+			: FStageEconomyResultInfo::Fail(EStageEconomyResult::InvalidRequest, LOCTEXT("NoDMXInputRules", "DMX input is not available here."));
+		if (!Verdict.IsSuccess())
+		{
+			ReportRejection(Verdict);
+			return Verdict;
+		}
 		FText Error;
 		if (!Network->SetInputEnabled(true, Error))
 		{

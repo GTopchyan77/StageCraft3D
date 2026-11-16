@@ -44,6 +44,25 @@ export interface TransferInput {
   payoutId: string;
 }
 
+/** A StageCraft Pro subscription checkout (ADR 0034 §17.2). The subscription's state still only comes from webhooks. */
+export interface SubscriptionCheckoutInput {
+  checkoutId: string;
+  accountId: string;
+  plan: string;
+  priceId: string;
+  /** The account's Stripe customer from an earlier subscription, so invoices stay on one customer; null for a first one. */
+  customerId: string | null;
+  /** Epoch ms; the provider refuses the session after it. */
+  expiresAt: number;
+  successUrl: string;
+  cancelUrl: string;
+}
+
+export interface BillingPortalInput {
+  customerId: string;
+  returnUrl: string;
+}
+
 export interface PaymentProvider {
   readonly name: string;
   createCheckout(input: CheckoutInput): Promise<CheckoutSession>;
@@ -51,6 +70,8 @@ export interface PaymentProvider {
   createConnectedAccount(input: ConnectedAccountInput): Promise<{ providerAccountId: string }>;
   createOnboardingLink(input: OnboardingLinkInput): Promise<{ url: string; expiresAt: number }>;
   createTransfer(input: TransferInput): Promise<{ transferId: string }>;
+  createSubscriptionCheckout(input: SubscriptionCheckoutInput): Promise<CheckoutSession>;
+  createBillingPortal(input: BillingPortalInput): Promise<{ url: string }>;
 }
 
 export class ProviderFailure extends Error {

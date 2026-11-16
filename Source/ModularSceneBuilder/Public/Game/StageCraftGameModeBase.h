@@ -91,16 +91,16 @@ public:
 	FStageEconomyResultInfo EvaluateOnlineFixtureSource(const APlayerController* Player) const;
 
 	/**
-	 * May Player export the stage as an MVR scene (Docs/ADR/0034 §7, MV4)? Off when SessionRules.bAllowMvrExport is false. Step 6 adds
-	 * the Pro entitlement (StageCraft.Entitlement.Pro.MvrExport, §2.1) here, as for remote control.
+	 * May Player export the stage as an MVR scene (Docs/ADR/0034 §7, MV4)? Off when SessionRules.bAllowMvrExport is false; then
+	 * StageCraft Pro (StageCraft.Entitlement.Pro.MvrExport, §17) is required.
 	 */
 	UFUNCTION(BlueprintNativeEvent, BlueprintCallable, Category = "StageCraft|Rules")
 	FStageEconomyResultInfo EvaluateMvrExport(const APlayerController* Player) const;
 
 	/**
 	 * May Player's MIDI and OSC controllers drive the desk (Docs/ADR/0035 §4)? Asked when the inputs are switched on and before every
-	 * remote command, which EvaluateCueRequest then judges like a click. Off when SessionRules.bAllowRemoteControl is false. Step 6
-	 * adds the Pro entitlement (StageCraft.Entitlement.Pro.MidiOsc) here.
+	 * remote command, which EvaluateCueRequest then judges like a click. Off when SessionRules.bAllowRemoteControl is false; then
+	 * StageCraft Pro (StageCraft.Entitlement.Pro.MidiOsc, Docs/ADR/0034 §17) is required.
 	 */
 	UFUNCTION(BlueprintNativeEvent, BlueprintCallable, Category = "StageCraft|Rules")
 	FStageEconomyResultInfo EvaluateRemoteControl(const APlayerController* Player) const;
@@ -108,10 +108,27 @@ public:
 	/**
 	 * May Player's Web Remote serve phones and tablets and drive the desk (Docs/ADR/0036 §6)? Asked when the server is switched on and
 	 * before every web command, which EvaluateCueRequest then judges like a click. Off when SessionRules.bAllowWebRemote is false.
-	 * Step 6 adds the Pro entitlement (StageCraft.Entitlement.Pro.WebRemote) here.
+	 * Then StageCraft Pro (StageCraft.Entitlement.Pro.WebRemote, Docs/ADR/0034 §17) is required.
 	 */
 	UFUNCTION(BlueprintNativeEvent, BlueprintCallable, Category = "StageCraft|Rules")
 	FStageEconomyResultInfo EvaluateWebRemote(const APlayerController* Player) const;
+
+	/**
+	 * May Player receive Art-Net / sACN (DMX IN, Docs/ADR/0019 §3)? StageCraft Pro only (StageCraft.Entitlement.Pro.DmxIn, Docs/ADR/0034
+	 * §17). Asked when input is switched on and whenever the licence changes (the controller then stops or resumes the input).
+	 */
+	UFUNCTION(BlueprintNativeEvent, BlueprintCallable, Category = "StageCraft|Rules")
+	FStageEconomyResultInfo EvaluateDmxInput(const APlayerController* Player) const;
+
+	/**
+	 * How many universes Player's DMX OUT may send at once: 0 means no limit (StageCraft Pro, StageCraft.Entitlement.Pro.DmxUniverses),
+	 * otherwise FreeDmxOutputUniverses (Docs/ADR/0034 §2, §17). The patch and the scene are never limited, only what is sent.
+	 */
+	UFUNCTION(BlueprintNativeEvent, BlueprintCallable, Category = "StageCraft|Rules")
+	int32 GetDmxOutputUniverseLimit(const APlayerController* Player) const;
+
+	/** Universes DMX OUT sends without StageCraft Pro (Docs/ADR/0034 §2: Free = 1). */
+	static constexpr int32 FreeDmxOutputUniverses = 1;
 
 	/**
 	 * May Player change the audio-reactive source, file, transport or settings (Docs/ADR/0029 §5)? Allowed for any player by
@@ -131,6 +148,9 @@ protected:
 private:
 	/** The rules a placed item's own state imposes on an edit (lock, scale, quantity limits), independent of ownership. */
 	FStageEconomyResultInfo EvaluateItemEdit(const class AModularBaseActor& Item, const FGameplayTag& ParameterId, const FStageParameterValue& Value) const;
+
+	/** Refuses with Locked and a reason naming StageCraft Pro unless this game's licence grants Entitlement (deny by default). */
+	FStageEconomyResultInfo RequirePro(const struct FGameplayTag& Entitlement, const FText& Feature) const;
 
 	class UStageSessionSubsystem* GetSession() const;
 	class UStageEconomySubsystem* GetEconomy() const;

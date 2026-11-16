@@ -1,4 +1,6 @@
 // Configuration, migrations, blob stores (local signed URLs, S3 SigV4 against AWS's published vector and a fake S3), credentials.
+import { generateKeyPairSync } from 'node:crypto';
+import { DEV_SIGNING_KEY_PKCS8 } from '../src/licence/token.ts';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createServer } from 'node:http';
@@ -26,6 +28,8 @@ function configProblems(env: Record<string, string>): string[] {
     return error.problems;
   }
 }
+
+const productionKey = generateKeyPairSync('ed25519').privateKey.export({ type: 'pkcs8', format: 'der' }).toString('base64');
 
 test('config: development defaults, validation errors, production refusals', () => {
   const config = loadConfig(testEnv());
@@ -64,6 +68,8 @@ test('config: development defaults, validation errors, production refusals', () 
     'PUBLIC_BASE_URL must be https in production',
     'STRIPE_WEBHOOK_SECRETS is required',
     'S3_ENDPOINT must be https in production',
+    'LICENCE_KEY_ID is required: 1-32 letters, digits, ., _ or -',
+    'LICENCE_SIGNING_KEY is required (base64 PKCS#8 Ed25519; scripts/make-licence-key.ts)',
   ]) {
     assert.ok(production.includes(expected), expected);
   }
@@ -77,8 +83,17 @@ test('config: development defaults, validation errors, production refusals', () 
     STRIPE_WEBHOOK_SECRETS: 'whsec_a, whsec_b',
     S3_BUCKET: 'stagecraft-packages',
     S3_REGION: 'us-east-1',
+    LICENCE_KEY_ID: 'prod-test',
+    LICENCE_SIGNING_KEY: productionKey,
   });
   assert.equal(good.migrateOnStart, false);
+  assert.equal(good.licence.offlineDays, 14);
+  assert.equal(good.subscriptions.prices.monthly, null, 'a Stripe server offers no plan until its Price is configured');
+  // The development licence key is public, so production refuses it; a key that is not Ed25519 is refused anywhere.
+  const devKeyInProduction = configProblems({ NODE_ENV: 'production', LICENCE_KEY_ID: 'dev-1', LICENCE_SIGNING_KEY: DEV_SIGNING_KEY_PKCS8 });
+  assert.ok(devKeyInProduction.includes('the development licence key is refused when NODE_ENV=production'));
+  assert.ok(configProblems({ LICENCE_SIGNING_KEY: 'bm90IGEga2V5' }).includes('LICENCE_SIGNING_KEY is not a base64 PKCS#8 Ed25519 private key'));
+  assert.ok(configProblems({ PRO_PRICE_MONTHLY: 'monthly' }).includes('PRO_PRICE_MONTHLY must be a Stripe Price id (price_...)'));
   assert.equal(good.payments.webhookSecrets.length, 2);
   assert.equal(good.blob.kind, 's3');
 });
@@ -86,7 +101,7 @@ test('config: development defaults, validation errors, production refusals', () 
 test('migrations apply once, in order, and a failing migration rolls back', async () => {
   const db = new SqliteDatabase(':memory:');
   try {
-    assert.deepEqual(await migrate(db), ['0001_init']);
+    assert.deepEqual(await migrate(db), ['0001_init', '0002_subscriptions']);
     assert.deepEqual(await migrate(db), []);
     const dir = mkdtempSync(join(tmpdir(), 'scc-migrations-'));
     writeFileSync(join(dir, '0002_bad.sql'), 'CREATE TABLE ok_table (a TEXT); THIS IS NOT SQL;');

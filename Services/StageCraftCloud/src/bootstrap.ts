@@ -18,6 +18,7 @@ import { FakeProvider } from './payments/fake.ts';
 import { StripeProvider } from './payments/stripe.ts';
 import type { PaymentProvider } from './payments/provider.ts';
 import { createRouter } from './app.ts';
+import { createSigner, loadSigningKey } from './licence/token.ts';
 
 export interface Overrides {
   db?: Database;
@@ -87,7 +88,8 @@ export async function buildContext(config: Config, overrides: Overrides = {}): P
           fetchImpl: overrides.fetchImpl,
         })
       : null;
-  return { config, db, clock, provider, blob, log, notifier: new OrderNotifier(), oidc, limiter: new RateLimiter(() => clock.now()) };
+  const signer = createSigner(config.licence.keyId, loadSigningKey(config.licence.signingKeyPkcs8));
+  return { config, db, clock, provider, blob, log, notifier: new OrderNotifier(), oidc, limiter: new RateLimiter(() => clock.now()), signer };
 }
 
 export function createHttpServer(ctx: AppContext): Server {

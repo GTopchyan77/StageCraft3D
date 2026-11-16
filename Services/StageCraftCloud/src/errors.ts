@@ -32,6 +32,11 @@ export const ErrorStatus = {
   ProviderError: 502,
   IllegalTransition: 409,
   RefundExceedsCharge: 422,
+  // StageCraft Pro (ADR 0034 §17)
+  AlreadySubscribed: 409,
+  PlanNotAvailable: 409,
+  NoActiveSubscription: 403,
+  MachineLimitReached: 409,
   // Webhooks
   InvalidSignature: 400,
   // RFC 8628 device-flow errors (kept in RFC spelling so the client can follow the RFC)

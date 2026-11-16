@@ -9140,7 +9140,7 @@ All times in ms.
   - Safari / iOS;
   - the page against the real game in a browser (the page was tested against a mock server; the game was driven by PowerShell).
 
-**Commit:** uncommitted (working tree).
+**Commit:** `71bb476`.
 
 **Known issues / follow-ups**
 - **Gevor:**
@@ -9151,3 +9151,122 @@ All times in ms.
 - Pairings live in the world subsystem, so a new stage world means pairing again.
 - The port can only be changed in the ini or the dev console. Preferences shows it in the address.
 - Still open from #89–#91: D7 for OSC, the MIDI map, checking an exported `.mvr` in a third-party app, the GDTF logo, and `RunGameScripted.ps1` not backing up `Saved/StageCraft/Fixtures`.
+
+## #93 — Step 6: StageCraft Pro subscription, offline licence and Pro gates (ADR 0034 §17) (2026-11-16)
+
+**What & why**
+- **Context.** Gevor asked (2026-11-16) for roadmap Step 6, the last step of D8: Stripe subscriptions, a client-side licence that works offline, and the Pro gates.
+  - The gates were written but open since #89–#92 ("Step 6 adds the Pro entitlement here").
+  - DMX IN and multi-universe DMX OUT were still free.
+- **Housekeeping first.** #92 said "uncommitted"; it now carries `71bb476`.
+- **Decisions (Gevor restated D3–D5, recorded in ADR 0034 §17.1):**
+  - D3: Pro is a **subscription** (monthly and yearly) through the existing cloud and Stripe.
+  - D4: an **Ed25519 token signed by the server, valid offline for 14 days**. When it expires Pro locks, and scenes stay fully usable.
+  - D5: the **same Stripe account and cloud server** as the marketplace.
+- **Architecture choice (ADR 0034 §17.3): Pro is not an economy purchase and is not stored in the profile.**
+  - A profile entitlement is permanent and locally editable (Economy security 1, 7, 8).
+  - Pro expires and is server-signed. Recording it in the profile would make it forgeable and permanent.
+  - The subscription reuses the cloud session, browser checkout and long-poll pattern of `UStageCloudCommerceBackend`. It does not go through `UStageEconomySubsystem`.
+- **Server (`Services/StageCraftCloud`):**
+  - **Migration `0002_subscriptions.sql`:** `subscription_checkouts`, `subscriptions` (holds `last_event_created`) and `licence_machines`. Additive.
+  - **`POST /v1/subscriptions/checkout {plan, idempotencyKey}`:**
+    - Stripe Checkout in `mode=subscription`. The Price comes from server config (`PRO_PRICE_MONTHLY` / `PRO_PRICE_YEARLY`).
+    - The account and plan are in the session's and the subscription's metadata.
+    - Idempotent per key. An open checkout is reused; a second plan while one is open is refused (`PurchasePending`).
+    - Refused when the account already has Pro (`AlreadySubscribed`) or the plan has no Price (`PlanNotAvailable`). A provider failure is retryable.
+  - **State only from verified webhooks:** `customer.subscription.created/updated/deleted` on the existing signed, stored-once, one-transaction path.
+    - An older event never overwrites a newer one.
+    - On a same-second tie the later lifecycle stage wins (incomplete < active/trialing/past_due < unpaid < canceled), and `canceled` is final.
+    - The plan comes from the Price first, then the metadata.
+    - In subscription mode `checkout.session.*` only closes the checkout record.
+    - Subscription revenue is not written to the marketplace ledger: there is no seller share, and Stripe is its record.
+  - **Entitled** = `active`, `trialing` or `past_due`, so a declined renewal card does not lock a paying user out while Stripe retries. `unpaid`, `canceled` and `incomplete` are not entitled.
+  - **`POST /v1/licences {machineId}`:**
+    - The token is `SC1.<b64url payload>.<b64url Ed25519 sig>`, with `v`, `kid`, `sub`, `mid`, `plan`, `ent` (the five Pro tags), `iat` and `exp = iat + 14 days` (`LICENCE_OFFLINE_DAYS`).
+    - At most 3 machines per account (`LICENCE_MAX_MACHINES`).
+    - `POST /v1/licences/release` frees one, at most 3 releases per 30 days.
+    - Refusals: `NoActiveSubscription` (403) and `MachineLimitReached` (409).
+  - **Other routes:** `POST /v1/subscriptions/portal` (Stripe Billing Portal) and `GET /v1/me/subscription?waitSeconds=0..25` (long poll woken by the webhook).
+  - **Signing key:** `LICENCE_SIGNING_KEY` (PKCS#8) and `LICENCE_KEY_ID`.
+    - Production refuses to start without them and refuses the public development key `dev-1`.
+    - `scripts/make-licence-key.ts <id>` makes a pair and prints the C++ line for the client.
+  - **Development:** `/dev/fake-subscription/:session` and `/dev/fake-portal/:customer` settle through the same signed-webhook path.
+  - **Docs:** `.env.example`, `README.md`, `docs/RUNBOOK.md` (webhook events, secrets, Customer Portal).
+- **Client:**
+  - **`StageLicenceToken` (pure).**
+    - Verification uses the engine's OpenSSL 1.1.1t (`EVP_PKEY_ED25519`; module dependency `OpenSSL`), not hand-written crypto.
+    - Trusted keys are compiled in (`AddProductionKeys`, empty until the production pair exists), plus `dev-1` outside Shipping only.
+    - Strict base64url; every field is capped.
+    - `Evaluate` refuses: wrong machine, expired, or the clock more than a day behind the newest time seen or before the issue time.
+    - `MakeMachineId` = SHA-256 of a salt and `FPlatformMisc::GetLoginId`.
+  - **`UStageLicenceSubsystem` (game instance, depends on `UStageCloudSubsystem`).** The only owner of the token, kept in `<user data>/StageCraft/Licence.json` and written atomically.
+    - Verified at start. `HasProEntitlement` is an exact match, so the parent tag grants nothing and unknown names are ignored.
+    - `HasPro(GameInstance, Tag)` denies by default.
+    - Refreshed at sign-in, at start and every 12 h on a timer. A one-shot timer re-evaluates the in-memory token at expiry.
+    - `NoActiveSubscription` removes the token; an unreachable server keeps it (the offline case). A server token this build cannot verify never replaces a working one.
+    - Checkout opens the browser and watches the subscription (long poll, one serial per checkout, the next poll always from a timer), then refreshes. Also Manage (portal) and Release.
+    - Development: the `StageCraft.Licence.DevAssumePro` cvar exists only outside Shipping. `DefaultEngine.ini` sets it to 1, so editor and Development builds behave as before.
+  - **Gates (GameMode).** The session rule is judged first, then `RequirePro`, which refuses `Locked` with "… needs StageCraft Pro …".
+    - `EvaluateMvrExport` (`Pro.MvrExport`), `EvaluateRemoteControl` (`Pro.MidiOsc`), `EvaluateWebRemote` (`Pro.WebRemote`).
+    - New: `EvaluateDmxInput` (`Pro.DmxIn`) and `GetDmxOutputUniverseLimit` (`Pro.DmxUniverses`; Free = `FreeDmxOutputUniverses` = 1).
+    - Native tags `StageCraft.Entitlement.Pro.*` are in `StageCraftTags`.
+  - **DMX enforcement:**
+    - `FStageDMXCapabilityLimits` (input allowed, maximum universes) goes into `UStageDMXNetworkSubsystem::SetCapabilityLimits`.
+    - `AModularPlayerController::ApplyLicenceLimits` pushes the limits at `BeginPlay` and on `OnLicenceChanged`, and moves the show between External and Internal with the input.
+    - Input that becomes disallowed stops without changing the saved choice, and reopens when Pro returns.
+    - Output sends the lowest patched, unmuted universes up to the limit (`StageDMXOutput::ApplyUniverseLimit`). The held ones are in `FStageDMXOutputStatus::HeldUniverses` and the Patch panel names them.
+    - The saved input/output is reopened only by the first limits push, no longer at `OnWorldBeginPlay`, so a Free licence never receives or sends for even a frame.
+    - `RequestSetDMXInput(true)` asks `EvaluateDmxInput` first.
+  - **Requests:** `RequestProCheckout`, `RequestManageSubscription`, `RequestRefreshLicence` and `RequestReleaseLicence` (`ModularPlayerControllerLicence.cpp`).
+  - **UI:**
+    - Preferences STAGECRAFT PRO: status (Free / Pro until date / expired / unusable), subscription, sign-in hint, development-override line; buttons MONTHLY, YEARLY, REFRESH, MANAGE, RELEASE THIS PC.
+    - Help article `pro-licence` EN/HY, and one Pro line each in `dmx-in`, `dmx-out`, `remote-control`, `web-remote` and `mvr-export` (EN/HY).
+- **Review.** A subagent reviewed the change; all findings were fixed or recorded:
+  - Fixed: the same-second `incomplete` after `active`; the plan after a portal switch; the expiry check now uses the in-memory token; the high-water mark also uses the licence file's write time; the DMX restore now waits for the limits; the poll serial and timer re-arm (an instant answer recursed); `past_due` handled as above.
+  - Recorded in ADR 0034 §17.4: the remaining deterrent-only limits (registry machine id, about 2× machines for 14 days after releases, Development/Test builds trust the dev key).
+
+**Files changed**
+- **Docs and config:**
+  - `Docs/ADR/0034-mvr-scene-exchange-and-product-tiers.md` (§2 notes, new §17);
+  - `Config/DefaultEngine.ini` (`StageCraft.Licence.DevAssumePro=1` under `[SystemSettings]`);
+  - `tasks/todo.md`;
+  - `STATE.md` (#92 commit, #93).
+- **Server:**
+  - new: `migrations/0002_subscriptions.sql`, `src/licence/token.ts`, `src/subscriptions.ts`, `src/licences.ts`, `scripts/make-licence-key.ts`, `test/subscriptions.test.ts`;
+  - changed: `src/app.ts`, `src/bootstrap.ts`, `src/config.ts`, `src/context.ts`, `src/errors.ts`, `src/http/rateLimit.ts`, `src/payments/provider.ts`, `src/payments/stripe.ts`, `src/payments/fake.ts`, `src/webhooks.ts`, `test/infra.test.ts`, `.env.example`, `README.md`, `docs/RUNBOOK.md`.
+- **Client (`Source/ModularSceneBuilder`):**
+  - new: `Public/Licence/StageLicenceTypes.h`, `Public/Licence/StageLicenceToken.h`, `Public/Licence/StageLicenceSubsystem.h`, `Private/Licence/StageLicenceToken.cpp`, `Private/Licence/StageLicenceSubsystem.cpp`, `Private/Licence/Tests/StageLicenceTests.cpp`, `Private/Player/ModularPlayerControllerLicence.cpp`;
+  - changed: `ModularSceneBuilder.Build.cs` (OpenSSL), `Public/Economy/StageEconomyTypes.h`, `Private/Economy/StageEconomyTypes.cpp`, `Public/Game/StageCraftGameModeBase.h`, `Private/Game/StageCraftGameModeBase.cpp`, `Public/Player/ModularPlayerController.h`, `Private/Player/ModularPlayerController.cpp`, `Public/Show/StageDMXNetworkTypes.h`, `Private/Show/StageDMXNetworkTypes.cpp`, `Public/Subsystems/StageDMXNetworkSubsystem.h`, `Private/Subsystems/StageDMXNetworkSubsystem.cpp`, `Private/UI/StagePatchPanel.cpp`, `Public/UI/StagePreferencesPanel.h`, `Private/UI/StagePreferencesPanel.cpp`.
+- **Content (help text):** `Content/StageCraft/Help/{en,hy}/pro-licence.md` (new) and `{dmx-in,dmx-out,remote-control,web-remote,mvr-export}.md`.
+- No `.uasset`, maps or input actions changed.
+
+**Verification**
+- **Server (Claude):** `npm test` **83/83**.
+  - The 78 existing tests pass; `infra` was updated for the licence config and migration 0002.
+  - 5 new tests:
+    - token sign/verify and tampering;
+    - checkout idempotency, PurchasePending, PlanNotAvailable, provider failure, AlreadySubscribed;
+    - webhooks: only signed events, out of order, same-second tie, past_due/unpaid/canceled final, account mismatch, plan from the Price;
+    - licences: claims, 14 days, the 3-machine limit, release and its cap, cancellation;
+    - HTTP: auth, validation, the long poll woken by the webhook, the full fake checkout → licence → fake portal cancel → refused.
+- **Builds (Claude):** Editor, Game and Shipping, 0 warnings. Shipping binary (UTF-16 scan): `StageCraft.Licence.DevAssumePro` and the development-override text are absent (the first scan found them in the Preferences line and a log line, now compiled out); "STAGECRAFT PRO" and "needs StageCraft Pro" are present. The two compile-outs came after the full suite; they change only preprocessor branches.
+- **Automation (Claude):** `StageCraft.Licence.*` 4/4:
+  - **Token:** RFC 8032 vector; the server-signed tokens verify in C++; forged, unknown kid, edited, malformed, expired, wrong machine, rollback; the machine-id vector matches Node.
+  - **Subsystem:** a fake cloud covering sign-in → Pro, offline keep, forged answer kept out, partial tags, NoActiveSubscription → Free with the file removed, an unpaid checkout polling per tick and stopping on cancel, checkout → Pro, portal opened; on a second run offline restart → Pro, a copied licence → Invalid, expired, edited, clock back 3 days, release → Free.
+  - **Gates:** all five Locked on Free, open with Pro, partial licence, expired, session rule first, development override.
+  - **DmxLimits.**
+  - Full suite **294/294** (290 + 4), user data unchanged (127 files).
+- **Not verified:**
+  - a real Stripe test-mode subscription;
+  - a `-game` run with the Preferences section and the Patch panel held-universe line on screen;
+  - the controller's limit push in a live stage (covered by reading and the subsystem tests, not by an integration test).
+
+**Commit:** uncommitted (working tree).
+
+**Known issues / follow-ups**
+- **Release blocker, Gevor:** generate the production key pair (`node Services/StageCraftCloud/scripts/make-licence-key.ts <id>`), put the private key in the secret store and the printed line into `StageLicenceToken.cpp` `AddProductionKeys`. Until then Shipping trusts no key and every Shipping user is Free.
+- **Gevor, Stripe:** create the recurring Pro Prices, configure the Customer Portal, and add `customer.subscription.*` to the webhook endpoint.
+- **Gevor, manual check with the dev server:** `StageCraft.Licence.DevAssumePro 0`, sign in, Preferences › STAGECRAFT PRO › MONTHLY, pay on the fake page, see Pro; cancel in the fake portal, REFRESH, see Free; patch two universes and check the Patch panel line.
+- **Deterrent-only limits** (ADR 0034 §17.4): registry-based machine id, editable high-water mark, about 2× machines briefly after releases; Development/Test packages assume Pro.
+- **Remote servers on Free:** OSC, MIDI and the Web Remote still open from saved settings on a Free licence; every command is refused (reported once). Closing them on a lapse is a possible follow-up.
+- **Tests:** the existing `StageCraft.Remote.Rules`, `StageCraft.WebRemote.Rules` and the MVR export rule test assert "allowed by default" and rely on `DevAssumePro=1` from `DefaultEngine.ini`; the Free path is covered by `StageCraft.Licence.Gates`.

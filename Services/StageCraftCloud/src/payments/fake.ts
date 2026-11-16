@@ -5,10 +5,12 @@ import {
   ProviderFailure,
   type CheckoutInput,
   type CheckoutSession,
+  type BillingPortalInput,
   type ConnectedAccountInput,
   type OnboardingLinkInput,
   type PaymentProvider,
   type RefundInput,
+  type SubscriptionCheckoutInput,
   type TransferInput,
 } from './provider.ts';
 
@@ -18,15 +20,16 @@ export class FakeProvider implements PaymentProvider {
   readonly refunds: RefundInput[] = [];
   readonly transfers: TransferInput[] = [];
   readonly accounts: ConnectedAccountInput[] = [];
+  readonly subscriptionCheckouts: SubscriptionCheckoutInput[] = [];
   /** Set by tests to make the next call of that kind fail. */
-  failNext: Partial<Record<'checkout' | 'refund' | 'transfer' | 'account', boolean>> = {};
+  failNext: Partial<Record<'checkout' | 'refund' | 'transfer' | 'account' | 'subscription', boolean>> = {};
   private readonly publicBaseUrl: string;
 
   constructor(publicBaseUrl: string) {
     this.publicBaseUrl = publicBaseUrl;
   }
 
-  private maybeFail(kind: 'checkout' | 'refund' | 'transfer' | 'account'): void {
+  private maybeFail(kind: 'checkout' | 'refund' | 'transfer' | 'account' | 'subscription'): void {
     if (this.failNext[kind]) {
       this.failNext[kind] = false;
       throw new ProviderFailure(`fake ${kind} failure`, 502, 'fake_failure');
@@ -38,6 +41,17 @@ export class FakeProvider implements PaymentProvider {
     this.checkouts.push(input);
     const sessionId = `cs_fake_${input.orderId}`;
     return { sessionId, url: `${this.publicBaseUrl}/dev/fake-checkout/${sessionId}`, expiresAt: input.expiresAt };
+  }
+
+  async createSubscriptionCheckout(input: SubscriptionCheckoutInput): Promise<CheckoutSession> {
+    this.maybeFail('subscription');
+    this.subscriptionCheckouts.push(input);
+    const sessionId = `cs_fake_sub_${input.checkoutId}`;
+    return { sessionId, url: `${this.publicBaseUrl}/dev/fake-subscription/${sessionId}`, expiresAt: input.expiresAt };
+  }
+
+  async createBillingPortal(input: BillingPortalInput): Promise<{ url: string }> {
+    return { url: `${this.publicBaseUrl}/dev/fake-portal/${encodeURIComponent(input.customerId)}` };
   }
 
   async createRefund(input: RefundInput): Promise<{ refundId: string; status: string }> {

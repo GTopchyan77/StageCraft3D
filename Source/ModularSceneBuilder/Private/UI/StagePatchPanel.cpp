@@ -1278,7 +1278,19 @@ void UStagePatchPanel::RefreshOutputStatus()
 			: FText::Format(LOCTEXT("OutputLive", "Sending {0} {0}|plural(one=universe,other=universes) · {1} · {2} Art-Net, {3} sACN packets{4}"),
 				Status.Universes.Num(), FText::FromString(Status.Target), FText::AsNumber(Status.ArtNetPackets), FText::AsNumber(Status.SACNPackets),
 				Status.SendErrors > 0 ? FText::Format(LOCTEXT("OutputErrors", " · {0} not sent"), FText::AsNumber(Status.SendErrors)) : FText::GetEmpty()));
-		OutputStatusText->SetColorAndOpacity(FSlateColor(Status.SendErrors > 0 ? Palette.WarningColor : Palette.TextSecondary));
+		if (!bPaused && !Status.HeldUniverses.IsEmpty())
+		{
+			// Display only: the limit itself is the GameMode's, pushed into the network subsystem (Docs/ADR/0034 §17.3).
+			TArray<FString> Held;
+			for (const int32 Universe : Status.HeldUniverses)
+			{
+				Held.Add(FString::FromInt(Universe));
+			}
+			OutputStatusText->SetText(FText::Format(LOCTEXT("OutputHeld", "{0}\nFree sends one universe: universe {1} is live; {2} {3}|plural(one=is,other=are) held back. StageCraft Pro sends them all."),
+				OutputStatusText->GetText(), FText::FromString(Status.Universes.IsEmpty() ? FString(TEXT("-")) : FString::FromInt(Status.Universes[0])),
+				FText::FromString(FString::Join(Held, TEXT(", "))), Status.HeldUniverses.Num()));
+		}
+		OutputStatusText->SetColorAndOpacity(FSlateColor(Status.SendErrors > 0 || !Status.HeldUniverses.IsEmpty() ? Palette.WarningColor : Palette.TextSecondary));
 		break;
 	case EStageDMXOutputState::Failed:
 		OutputButtonLabel->SetText(LOCTEXT("OutputOffFailed", "DMX OUT: OFF"));

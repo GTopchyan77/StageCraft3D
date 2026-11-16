@@ -12,6 +12,7 @@
 #include "Fixtures/StageFixtureLibraryTypes.h"
 #include "History/StageEditCommand.h"
 #include "Input/StageKeyBindings.h"
+#include "Licence/StageLicenceTypes.h"
 #include "Marketplace/StageDispatchTypes.h"
 #include "Marketplace/StageMarketplaceTypes.h"
 #include "Placement/StagePlacementTypes.h"
@@ -787,6 +788,22 @@ public:
 	/** Forgets every paired Web Remote device and makes a new PIN. Always allowed. False while the server is off. */
 	bool RequestWebRemoteUnpairAll();
 
+	// --- StageCraft Pro (Docs/ADR/0034 §17; Preferences › STAGECRAFT PRO) ---
+	// UStageLicenceSubsystem carries these out; each needs a signed-in StageCraft Cloud account and reports a refusal on
+	// OnRequestRejected. None of them changes the stage. Pro itself arrives only as a server-signed licence.
+
+	/** Opens the Stripe checkout for Plan in the browser; the licence refreshes by itself once the subscription is active. */
+	FStageEconomyResultInfo RequestProCheckout(EStageProPlan Plan);
+
+	/** Opens the Stripe Billing Portal (cancel, card, invoices) in the browser. */
+	FStageEconomyResultInfo RequestManageSubscription();
+
+	/** Asks the server for a fresh licence for this computer (after paying elsewhere, or to renew before going offline). */
+	FStageEconomyResultInfo RequestRefreshLicence();
+
+	/** Frees this computer's place on the account and removes its licence. */
+	FStageEconomyResultInfo RequestReleaseLicence();
+
 	/**
 	 * MIDI learn (Docs/ADR/0035 §5): the next control pressed on the MIDI input is bound to Action (PlaybackNumber 1–10 for playback
 	 * actions, CueNumber for CueGoTo) and saved. Action None cancels. Refused while MIDI is off or the GameMode refuses remote control.
@@ -1229,6 +1246,18 @@ private:
 	TWeakObjectPtr<class USceneComponent> BoundCameraRoot;
 	FDelegateHandle CursorMovedHandle;
 	FDelegateHandle CameraTransformHandle;
+
+	/** UStageLicenceSubsystem::OnLicenceChanged, bound while this local controller plays. */
+	FDelegateHandle LicenceChangedHandle;
+
+	/**
+	 * Pushes what the GameMode allows with the current licence into the network DMX (EvaluateDmxInput, GetDmxOutputUniverseLimit), and
+	 * moves the show's control source with an input that stopped or resumed. At BeginPlay and on every licence change.
+	 */
+	void ApplyLicenceLimits();
+
+	/** Reports Error on OnRequestRejected as a refused licence request and returns the refusal. */
+	FStageEconomyResultInfo RefuseLicenceRequest(const FText& Error);
 
 	bool bPreviewRefreshQueued = false;
 

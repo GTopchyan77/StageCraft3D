@@ -31,6 +31,8 @@ import { signStripePayload } from './payments/webhookSignature.ts';
 import { MaxPackageBytes } from './package/stagePackage.ts';
 import { maskEmail } from './redaction.ts';
 import { num, str } from './db/driver.ts';
+import { checkoutToJson, createPortalLink, createSubscriptionCheckout, waitForSubscriptionChange } from './subscriptions.ts';
+import { issueLicence, parseMachineId, releaseLicence } from './licences.ts';
 
 const ok = (json: unknown, status = 200): Reply => ({ status, json });
 const html = (markup: string, status = 200): Reply => ({ status, body: markup, contentType: 'text/html; charset=utf-8' });
@@ -309,6 +311,48 @@ ${dev ? '<label>Development user (AUTH_MODE=dev only)<br><input name="dev_user" 
     { auth: 'user' },
   );
 
+  // StageCraft Pro (ADR 0034 §17)
+  router.add(
+    'POST',
+    '/v1/subscriptions/checkout',
+    async (context) => {
+      const body = await context.json();
+      return ok(checkoutToJson(await createSubscriptionCheckout(ctx, context.requireUser().accountId, body.plan, body.idempotencyKey)));
+    },
+    { auth: 'user', limits: [{ policy: 'orderCreate', by: 'account' }] },
+  );
+  router.add('POST', '/v1/subscriptions/portal', async (context) => ok(await createPortalLink(ctx, context.requireUser().accountId)), {
+    auth: 'user',
+    limits: [{ policy: 'licence', by: 'account' }],
+  });
+  router.add(
+    'GET',
+    '/v1/me/subscription',
+    async (context) => {
+      const raw = context.query.get('waitSeconds') ?? '0';
+      if (!/^[0-9]{1,2}$/.test(raw) || Number(raw) > 25) {
+        throw new ApiError('InvalidRequest', 'waitSeconds must be 0..25');
+      }
+      return ok(await waitForSubscriptionChange(ctx, context.requireUser().accountId, Number(raw)));
+    },
+    { auth: 'user' },
+  );
+  router.add(
+    'POST',
+    '/v1/licences',
+    async (context) => {
+      const licence = await issueLicence(ctx, context.requireUser().accountId, parseMachineId((await context.json()).machineId));
+      return ok({ token: licence.token, expiresAt: new Date(licence.expiresAt).toISOString(), plan: licence.plan, entitlements: licence.entitlements });
+    },
+    { auth: 'user', limits: [{ policy: 'licence', by: 'account' }] },
+  );
+  router.add(
+    'POST',
+    '/v1/licences/release',
+    async (context) => ok(await releaseLicence(ctx, context.requireUser().accountId, parseMachineId((await context.json()).machineId))),
+    { auth: 'user', limits: [{ policy: 'licence', by: 'account' }] },
+  );
+
   // Selling
   router.add(
     'POST',
@@ -441,6 +485,7 @@ ${dev ? '<label>Development user (AUTH_MODE=dev only)<br><input name="dev_user" 
   // Checkout return pages: display only; the order state comes from webhooks.
   router.add('GET', '/checkout/success', async () => html(page('Payment received', '<p>Return to StageCraft: your purchase appears there as soon as the payment is confirmed.</p>')));
   router.add('GET', '/checkout/cancel', async () => html(page('Checkout cancelled', '<p>Nothing was charged. You can close this page.</p>')));
+  router.add('GET', '/subscription/done', async () => html(page('StageCraft Pro', '<p>Return to StageCraft: Pro switches on as soon as the payment is confirmed.</p>')));
   router.add('GET', '/seller/onboarding/done', async () => html(page('Payout setup', '<p>Return to StageCraft. Your payout status updates as soon as the payment provider confirms it.</p>')));
   router.add('GET', '/seller/onboarding/refresh', async () => html(page('Payout setup', '<p>The setup link expired. Start payout setup again in StageCraft.</p>')));
 
@@ -510,6 +555,7 @@ function registerFakeCheckout(router: Router, ctx: AppContext): void {
     const outcome = await handleStripeWebhook(ctx, raw, signature);
     return html(page('Fake payment sent', `<p>Webhook result: ${escapeHtml(outcome.status)} (${escapeHtml(outcome.detail)}). Return to StageCraft.</p>`));
   });
+  registerFakeSubscription(router, ctx);
   router.add('GET', '/dev/fake-onboarding/:account', async (context) => {
     const providerAccountId = context.params.account!;
     const raw = Buffer.from(
@@ -518,5 +564,84 @@ function registerFakeCheckout(router: Router, ctx: AppContext): void {
     const signature = signStripePayload(raw, ctx.config.payments.webhookSecrets[0]!, Math.floor(ctx.clock.now() / 1000));
     const outcome = await handleStripeWebhook(ctx, raw, signature);
     return html(page('Fake onboarding (development)', `<p>Payouts enabled: ${escapeHtml(outcome.detail)}. Return to StageCraft.</p>`));
+  });
+}
+
+/**
+ * Development only: stand-ins for Stripe's subscription checkout and Billing Portal. Paying or cancelling signs the events Stripe would
+ * send and feeds them to the same webhook handler as production, so the subscription changes only through that path.
+ */
+function registerFakeSubscription(router: Router, ctx: AppContext): void {
+  const deliver = async (type: string, object: Record<string, unknown>): Promise<string> => {
+    const raw = Buffer.from(JSON.stringify({ id: `evt_fake_${randomUUID()}`, type, created: Math.floor(ctx.clock.now() / 1000), data: { object } }));
+    const signature = signStripePayload(raw, ctx.config.payments.webhookSecrets[0]!, Math.floor(ctx.clock.now() / 1000));
+    return (await handleStripeWebhook(ctx, raw, signature)).detail;
+  };
+  const checkoutForSession = async (sessionId: string) => {
+    const rows = await ctx.db.query('SELECT id, account_id, plan, state FROM subscription_checkouts WHERE session_id = $1', [sessionId]);
+    if (rows.length === 0) {
+      throw new ApiError('NotFound', 'no such checkout');
+    }
+    return { id: str(rows[0]!.id), accountId: str(rows[0]!.account_id), plan: str(rows[0]!.plan), state: str(rows[0]!.state) };
+  };
+  router.add('GET', '/dev/fake-subscription/:session', async (context) => {
+    const checkout = await checkoutForSession(context.params.session!);
+    return html(
+      page(
+        'Fake subscription checkout (development)',
+        `<p>StageCraft Pro, ${escapeHtml(checkout.plan)}: checkout ${escapeHtml(checkout.state)}.</p>
+<form method="post" action="/dev/fake-subscription/${escapeHtml(context.params.session!)}/pay"><button type="submit">Subscribe</button></form>`,
+      ),
+    );
+  });
+  router.add('POST', '/dev/fake-subscription/:session/pay', async (context) => {
+    const sessionId = context.params.session!;
+    const checkout = await checkoutForSession(sessionId);
+    const now = Math.floor(ctx.clock.now() / 1000);
+    const customer = `cus_fake_${checkout.accountId.replace(/-/g, '').slice(0, 16)}`;
+    const metadata = { checkoutId: checkout.id, accountId: checkout.accountId, plan: checkout.plan };
+    const created = await deliver('customer.subscription.created', {
+      id: `sub_fake_${checkout.id.replace(/-/g, '')}`,
+      object: 'subscription',
+      status: 'active',
+      customer,
+      metadata,
+      cancel_at_period_end: false,
+      current_period_end: now + (checkout.plan === 'yearly' ? 365 : 30) * 86_400,
+    });
+    const completed = await deliver('checkout.session.completed', {
+      id: sessionId,
+      object: 'checkout.session',
+      mode: 'subscription',
+      client_reference_id: checkout.id,
+      metadata,
+      payment_status: 'paid',
+      customer,
+    });
+    return html(page('Fake subscription sent', `<p>${escapeHtml(created)}; ${escapeHtml(completed)}. Return to StageCraft.</p>`));
+  });
+  router.add('GET', '/dev/fake-portal/:customer', async (context) =>
+    html(
+      page(
+        'Fake billing portal (development)',
+        `<form method="post" action="/dev/fake-portal/${escapeHtml(context.params.customer!)}/cancel"><button type="submit">Cancel subscription now</button></form>`,
+      ),
+    ),
+  );
+  router.add('POST', '/dev/fake-portal/:customer/cancel', async (context) => {
+    const rows = await ctx.db.query('SELECT provider_subscription_id, account_id, plan FROM subscriptions WHERE provider_customer_id = $1', [context.params.customer!]);
+    const details: string[] = [];
+    for (const row of rows) {
+      details.push(
+        await deliver('customer.subscription.deleted', {
+          id: str(row.provider_subscription_id),
+          object: 'subscription',
+          status: 'canceled',
+          customer: context.params.customer!,
+          metadata: { accountId: str(row.account_id), plan: str(row.plan) },
+        }),
+      );
+    }
+    return html(page('Fake cancellation sent', `<p>${escapeHtml(details.join('; ') || 'no subscription')}. Return to StageCraft.</p>`));
   });
 }

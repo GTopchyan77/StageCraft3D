@@ -13,3 +13,4 @@ The Web Remote lets a phone or tablet run the desk from its browser, with no app
 - The connection is plain HTTP, not encrypted: use it on a network you trust, as with OSC. Anyone who can read the network's traffic could see the PIN.
 - Windows may ask whether StageCraft may use the network the first time you choose Network. Allow private networks.
 - Scripts and stream-deck style buttons can send the same commands: pair with POST /api/pair, then POST /api/command with the token and a path from Help: MIDI and OSC, for example {"path":"/stagecraft/cue/go"}.
+- The Web Remote is part of StageCraft Pro. Without a licence every command is refused, and the phone says why (Help: StageCraft Pro).

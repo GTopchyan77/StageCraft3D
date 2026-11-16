@@ -86,6 +86,10 @@ public class ModularSceneBuilder : ModuleRules
 		// ADR 0035: MIDI and OSC remote control through the engine's MIDIDevice (PortMidi) and OSC plugins.
 		PrivateDependencyModuleNames.AddRange(new string[] { "MIDIDevice", "OSC" });
 
+		// ADR 0034 §17: StageCraft Pro licence tokens are verified with the engine's OpenSSL (Ed25519, SHA-256), the same library the
+		// HTTP module already links, rather than hand-written cryptography.
+		AddEngineThirdPartyPrivateStaticDependencies(Target, "OpenSSL");
+
 		// Uncomment if you are using online features
 		// PrivateDependencyModuleNames.Add("OnlineSubsystem");
 

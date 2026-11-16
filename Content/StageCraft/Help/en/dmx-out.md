@@ -9,3 +9,4 @@ DMX OUT in the Patch panel sends the show as Art-Net and/or sACN to real fixture
 - PRI is the sACN priority (0-200, default 100). HZ is the frame rate while the look changes (1-44); unchanged universes repeat once a second.
 
 Only universes with patched fixtures are sent, and only while the cue list drives the show. Click a universe chip to mute it on this PC. Settings are remembered on this PC.
+- Without StageCraft Pro, DMX OUT sends one universe: the lowest patched one. The status line names the universes held back (Help: StageCraft Pro).

@@ -21,3 +21,4 @@ The desk answers on port 9000 of the device that last sent to it, so a tablet's 
 **MIDI**: pick your controller in MIDI input (plug it in before opening Preferences). The default map follows the Korg nanoKONTROL2: faders 1–8 are playbacks 1–8, S flashes, M is playback GO, R releases, knob 1 is the Grand Master, knob 2 the Audio master, ▶ is GO, ◀◀ is BACK and ● is Blackout.
 
 The status line under the choices shows the last message received, so you can check which control sends what.
+- MIDI and OSC control is part of StageCraft Pro. Without a licence every command is refused, and the status says why (Help: StageCraft Pro).

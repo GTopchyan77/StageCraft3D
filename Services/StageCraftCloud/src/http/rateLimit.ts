@@ -83,6 +83,8 @@ export const RatePolicies = {
   orderCreate: { capacity: 20, refillPerSecond: 20 / 60 / 10 },
   onboarding: { capacity: 10, refillPerSecond: 10 / 3600 },
   adminMutation: { capacity: 60, refillPerSecond: 1 },
+  // A client refreshes its licence a few times a day; 30 an hour covers restarts and REFRESH clicks.
+  licence: { capacity: 30, refillPerSecond: 30 / 3600 },
 } as const satisfies Record<string, RatePolicy>;
 
 export type RatePolicyName = keyof typeof RatePolicies;

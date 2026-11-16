@@ -7,6 +7,7 @@
 #include "Engine/GameInstance.h"
 #include "Engine/World.h"
 #include "Interaction/StageTransformRules.h"
+#include "Licence/StageLicenceSubsystem.h"
 #include "Player/ModularPlayerController.h"
 #include "Player/StageCameraPawn.h"
 #include "Show/StageDMXPatching.h"
@@ -204,7 +205,7 @@ FStageEconomyResultInfo AStageCraftGameModeBase::EvaluateMvrExport_Implementatio
 	{
 		return FStageEconomyResultInfo::Fail(EStageEconomyResult::SessionRuleViolation, LOCTEXT("MvrExportDisabled", "Exporting MVR scenes is switched off for this session."));
 	}
-	return FStageEconomyResultInfo::Ok();
+	return RequirePro(StageCraftTags::Entitlement_Pro_MvrExport, LOCTEXT("ProMvrExport", "MVR export"));
 }
 
 FStageEconomyResultInfo AStageCraftGameModeBase::EvaluateRemoteControl_Implementation(const APlayerController* Player) const
@@ -217,7 +218,7 @@ FStageEconomyResultInfo AStageCraftGameModeBase::EvaluateRemoteControl_Implement
 	{
 		return FStageEconomyResultInfo::Fail(EStageEconomyResult::SessionRuleViolation, LOCTEXT("RemoteDisabled", "MIDI and OSC control is switched off for this session."));
 	}
-	return FStageEconomyResultInfo::Ok();
+	return RequirePro(StageCraftTags::Entitlement_Pro_MidiOsc, LOCTEXT("ProMidiOsc", "MIDI and OSC control"));
 }
 
 FStageEconomyResultInfo AStageCraftGameModeBase::EvaluateWebRemote_Implementation(const APlayerController* Player) const
@@ -230,7 +231,31 @@ FStageEconomyResultInfo AStageCraftGameModeBase::EvaluateWebRemote_Implementatio
 	{
 		return FStageEconomyResultInfo::Fail(EStageEconomyResult::SessionRuleViolation, LOCTEXT("WebRemoteDisabled", "The Web Remote is switched off for this session."));
 	}
-	return FStageEconomyResultInfo::Ok();
+	return RequirePro(StageCraftTags::Entitlement_Pro_WebRemote, LOCTEXT("ProWebRemote", "The Web Remote"));
+}
+
+FStageEconomyResultInfo AStageCraftGameModeBase::EvaluateDmxInput_Implementation(const APlayerController* Player) const
+{
+	if (!Player)
+	{
+		return FStageEconomyResultInfo::Fail(EStageEconomyResult::InvalidRequest, LOCTEXT("NoDmxInputPlayer", "DMX input is not available."));
+	}
+	return RequirePro(StageCraftTags::Entitlement_Pro_DmxIn, LOCTEXT("ProDmxIn", "DMX input (Art-Net and sACN IN)"));
+}
+
+int32 AStageCraftGameModeBase::GetDmxOutputUniverseLimit_Implementation(const APlayerController* Player) const
+{
+	return Player && UStageLicenceSubsystem::HasPro(GetGameInstance(), StageCraftTags::Entitlement_Pro_DmxUniverses) ? 0 : FreeDmxOutputUniverses;
+}
+
+FStageEconomyResultInfo AStageCraftGameModeBase::RequirePro(const FGameplayTag& Entitlement, const FText& Feature) const
+{
+	if (UStageLicenceSubsystem::HasPro(GetGameInstance(), Entitlement))
+	{
+		return FStageEconomyResultInfo::Ok();
+	}
+	return FStageEconomyResultInfo::Fail(EStageEconomyResult::Locked,
+		FText::Format(LOCTEXT("NeedsPro", "{0} needs StageCraft Pro. Subscribe or refresh your licence in Preferences, STAGECRAFT PRO."), Feature));
 }
 
 FStageEconomyResultInfo AStageCraftGameModeBase::EvaluateAudioRequest_Implementation(const APlayerController* Player, EStageAudioRequest Request) const

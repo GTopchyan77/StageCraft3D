@@ -88,6 +88,12 @@ private:
 	void HandleWebPairingPicked(int32 Index);
 	void RefreshWebRemote();
 
+	/** STAGECRAFT PRO (Docs/ADR/0034 §17): the licence's status and the subscription actions, all through the controller. */
+	class UWidget* BuildProSection();
+	void HandleProSubscribePicked(int32 Index);
+	void HandleProLicencePicked(int32 Index);
+	void RefreshPro();
+
 	/** A binding button: Index = command * 2 + slot. Arms capture for that slot (or disarms it when it is already armed). */
 	void HandleBindingPicked(int32 Index);
 	void HandleResetPicked(int32 CommandIndex);
@@ -178,4 +184,22 @@ private:
 
 	TWeakObjectPtr<class UStageWebRemoteSubsystem> BoundWebRemote;
 	FDelegateHandle WebStatusHandle;
+
+	/** SUBSCRIBE MONTHLY, SUBSCRIBE YEARLY: actions, never shown as selected. */
+	UPROPERTY(Transient)
+	TArray<TObjectPtr<class UStageChoiceButton>> ProSubscribeButtons;
+
+	/** REFRESH, MANAGE, RELEASE THIS PC: actions, never shown as selected. */
+	UPROPERTY(Transient)
+	TArray<TObjectPtr<class UStageChoiceButton>> ProLicenceButtons;
+
+	UPROPERTY(Transient)
+	TObjectPtr<class UTextBlock> ProStatusText = nullptr;
+
+	TWeakObjectPtr<class UStageLicenceSubsystem> BoundLicence;
+	FDelegateHandle LicenceHandle;
+
+	/** The cloud's sign-in state decides which Pro actions can run; bound with the licence. */
+	TWeakObjectPtr<class UStageCloudSubsystem> BoundCloud;
+	FDelegateHandle CloudHandle;
 };

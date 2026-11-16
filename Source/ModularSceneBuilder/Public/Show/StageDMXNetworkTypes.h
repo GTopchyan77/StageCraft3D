@@ -159,6 +159,22 @@ struct FStageDMXOutputStatus
 	int64 SendErrors = 0;
 	/** StageCraft universes being sent, ascending. */
 	TArray<int32> Universes;
+	/** Patched, unmuted universes not sent because of FStageDMXCapabilityLimits::MaxOutputUniverses, ascending. */
+	TArray<int32> HeldUniverses;
+};
+
+/**
+ * What the network DMX may do on this PC (Docs/ADR/0034 §17.3): the licence's limits, decided by the GameMode and pushed by
+ * AModularPlayerController into UStageDMXNetworkSubsystem. The default limits nothing, so tools and tests without a controller are
+ * unaffected. Limits act on what is received and sent, never on the patch or the scene.
+ */
+struct FStageDMXCapabilityLimits
+{
+	bool bInputAllowed = true;
+	/** Most universes the output sends at once (the lowest patched, unmuted ones); 0 = no limit. */
+	int32 MaxOutputUniverses = 0;
+
+	bool operator==(const FStageDMXCapabilityLimits& Other) const = default;
 };
 
 /** Universe numbering between the wire and StageCraft, and validation of the saved settings. Pure. */
@@ -195,4 +211,10 @@ namespace StageDMXOutput
 
 	/** Whether Universe is in Settings.MutedUniverses (sanitized, so sorted). */
 	MODULARSCENEBUILDER_API bool IsMuted(const FStageDMXOutputSettings& Settings, int32 Universe);
+
+	/**
+	 * Keeps the first MaxUniverses of InOutSent (ascending, so the lowest universes stay live) and moves the rest to OutHeld
+	 * (FStageDMXCapabilityLimits; Docs/ADR/0034 §17.3). MaxUniverses 0 or less keeps everything and empties OutHeld.
+	 */
+	MODULARSCENEBUILDER_API void ApplyUniverseLimit(TArray<int32>& InOutSent, int32 MaxUniverses, TArray<int32>& OutHeld);
 }

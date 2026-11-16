@@ -21,6 +21,8 @@
 #include "Player/ModularPlayerController.h"
 #include "Remote/StageRemoteControlSubsystem.h"
 #include "Remote/StageWebRemoteSubsystem.h"
+#include "Cloud/StageCloudSubsystem.h"
+#include "Licence/StageLicenceSubsystem.h"
 #include "Settings/StageCraftUserSettings.h"
 #include "UI/StageCraftUITheme.h"
 #include "UI/StageCraftWidgetStyle.h"
@@ -176,6 +178,7 @@ void UStagePreferencesPanel::BuildTree()
 
 	Add(BuildRemoteSection(), SectionGap);
 	Add(BuildWebRemoteSection(), SectionGap);
+	Add(BuildProSection(), SectionGap);
 
 	Add(BuildShortcutSection());
 }
@@ -472,6 +475,19 @@ void UStagePreferencesPanel::NativeConstruct()
 		BoundWebRemote = Web;
 		WebStatusHandle = Web->OnStatusChanged.AddUObject(this, &ThisClass::RefreshWebRemote);
 	}
+	if (UGameInstance* GameInstance = GetGameInstance())
+	{
+		if (UStageLicenceSubsystem* Licence = GameInstance->GetSubsystem<UStageLicenceSubsystem>())
+		{
+			BoundLicence = Licence;
+			LicenceHandle = Licence->OnLicenceChanged.AddUObject(this, &ThisClass::RefreshPro);
+		}
+		if (UStageCloudSubsystem* Cloud = GameInstance->GetSubsystem<UStageCloudSubsystem>())
+		{
+			BoundCloud = Cloud;
+			CloudHandle = Cloud->OnStateChanged.AddUObject(this, &ThisClass::RefreshPro);
+		}
+	}
 	SetNotice(LOCTEXT("Intro", "Click a shortcut to change it. Fly keys work only while the right mouse button is held, so they may share a key with a tool (W: Move tool and fly forward)."), false);
 	Refresh();
 }
@@ -507,6 +523,18 @@ void UStagePreferencesPanel::NativeDestruct()
 	}
 	WebStatusHandle.Reset();
 	BoundWebRemote.Reset();
+	if (UStageLicenceSubsystem* Licence = BoundLicence.Get())
+	{
+		Licence->OnLicenceChanged.Remove(LicenceHandle);
+	}
+	LicenceHandle.Reset();
+	BoundLicence.Reset();
+	if (UStageCloudSubsystem* Cloud = BoundCloud.Get())
+	{
+		Cloud->OnStateChanged.Remove(CloudHandle);
+	}
+	CloudHandle.Reset();
+	BoundCloud.Reset();
 	BoundPreferences.Reset();
 	BoundAudio.Reset();
 	BoundSnapping.Reset();
@@ -617,6 +645,7 @@ void UStagePreferencesPanel::Refresh()
 
 	RefreshRemote();
 	RefreshWebRemote();
+	RefreshPro();
 
 	const FStageKeyBindings Bindings = Preferences ? Preferences->GetKeyBindings() : FStageKeyBindings::MakeDefaults();
 	for (const FStageInputCommandInfo& Info : StageKeyBindings::GetCommands())
@@ -858,6 +887,142 @@ void UStagePreferencesPanel::RefreshWebRemote()
 	}
 	WebStatusText->SetText(Lines.IsEmpty() ? LOCTEXT("WebOff", "Off. Nothing is served until you choose This PC or Network.") : FText::Join(FText::FromString(TEXT("\n")), Lines));
 	WebStatusText->SetColorAndOpacity(FSlateColor(Status.LastProblem.IsEmpty() ? GetTheme().TextSecondary : GetTheme().WarningColor));
+}
+
+UWidget* UStagePreferencesPanel::BuildProSection()
+{
+	using namespace StagePreferencesPanel;
+	const UStageCraftUITheme& Palette = GetTheme();
+
+	UVerticalBox* Section = WidgetTree->ConstructWidget<UVerticalBox>(UVerticalBox::StaticClass(), TEXT("ProSection"));
+	const auto Add = [Section](UWidget* Widget)
+	{
+		if (UVerticalBoxSlot* WidgetSlot = Section->AddChildToVerticalBox(Widget))
+		{
+			WidgetSlot->SetPadding(FMargin(0.f, 0.f, 0.f, RowGap));
+		}
+	};
+
+	Add(BuildSectionTitle(LOCTEXT("Pro", "STAGECRAFT PRO")));
+	ProStatusText = MakeText(FText::GetEmpty(), 7, TEXT("Regular"), Palette.TextSecondary);
+	ProStatusText->SetAutoWrapText(true);
+	Add(ProStatusText);
+	Add(BuildChoiceRow(LOCTEXT("ProSubscribe", "Subscribe"),
+		LOCTEXT("ProSubscribeTip", "Pro adds unlimited DMX OUT universes, DMX IN, MIDI and OSC, the Web Remote and MVR export.\nThe checkout opens in your browser; StageCraft never sees your card. Pro switches on here when the payment is confirmed, and works offline for 14 days at a time."),
+		{ LOCTEXT("ProMonthly", "MONTHLY"), LOCTEXT("ProYearly", "YEARLY") }, ProSubscribeButtons, &ThisClass::HandleProSubscribePicked));
+	Add(BuildChoiceRow(LOCTEXT("ProLicence", "Licence"),
+		LOCTEXT("ProLicenceTip", "REFRESH: get a fresh licence for this computer now (after paying, or before going offline).\nMANAGE: cancel, change the card or see invoices in your browser.\nRELEASE THIS PC: free this computer's place on your account (up to 3 computers)."),
+		{ LOCTEXT("ProRefresh", "REFRESH"), LOCTEXT("ProManage", "MANAGE"), LOCTEXT("ProRelease", "RELEASE THIS PC") }, ProLicenceButtons, &ThisClass::HandleProLicencePicked));
+	return Section;
+}
+
+void UStagePreferencesPanel::HandleProSubscribePicked(int32 Index)
+{
+	if (AModularPlayerController* Controller = Cast<AModularPlayerController>(GetOwningPlayer()))
+	{
+		Controller->RequestProCheckout(Index == 1 ? EStageProPlan::Yearly : EStageProPlan::Monthly);
+	}
+	RefreshPro();
+}
+
+void UStagePreferencesPanel::HandleProLicencePicked(int32 Index)
+{
+	AModularPlayerController* Controller = Cast<AModularPlayerController>(GetOwningPlayer());
+	if (!Controller)
+	{
+		return;
+	}
+	switch (Index)
+	{
+	case 0:
+		Controller->RequestRefreshLicence();
+		break;
+	case 1:
+		Controller->RequestManageSubscription();
+		break;
+	default:
+		Controller->RequestReleaseLicence();
+		break;
+	}
+	RefreshPro();
+}
+
+void UStagePreferencesPanel::RefreshPro()
+{
+	const UStageLicenceSubsystem* Licence = BoundLicence.Get();
+	const UStageCloudSubsystem* Cloud = BoundCloud.Get();
+	const bool bSignedIn = Cloud && Cloud->IsSignedIn();
+	const bool bIdle = Licence && !Licence->IsRequestInFlight();
+	const bool bCanSubscribe = bSignedIn && bIdle && Licence->GetStatus() != EStageLicenceStatus::Pro && !Licence->IsWaitingForCheckout();
+	for (UStageChoiceButton* Button : ProSubscribeButtons)
+	{
+		if (Button)
+		{
+			StyleChoice(*Button, false);
+			// Display only: the server refuses a second subscription anyway (AlreadySubscribed).
+			Button->SetIsEnabled(bCanSubscribe);
+		}
+	}
+	for (UStageChoiceButton* Button : ProLicenceButtons)
+	{
+		if (Button)
+		{
+			StyleChoice(*Button, false);
+			Button->SetIsEnabled(bSignedIn && bIdle);
+		}
+	}
+	if (!ProStatusText)
+	{
+		return;
+	}
+	if (!Licence)
+	{
+		ProStatusText->SetText(LOCTEXT("ProUnavailable", "StageCraft Pro is not available in this session."));
+		return;
+	}
+
+	TArray<FText> Lines;
+	switch (Licence->GetStatus())
+	{
+	case EStageLicenceStatus::Pro:
+		Lines.Add(FText::Format(LOCTEXT("ProActive", "Pro ({0}) on this computer until {1}."), FText::FromString(Licence->GetPlan()),
+			FText::AsDate(Licence->GetExpiresUtc(), EDateTimeStyle::Medium)));
+		break;
+	case EStageLicenceStatus::Expired:
+		Lines.Add(LOCTEXT("ProExpired", "Pro expired on this computer: unlimited universes, DMX IN, MIDI and OSC, the Web Remote and MVR export are locked until it is refreshed. Your scenes are unaffected."));
+		break;
+	case EStageLicenceStatus::Invalid:
+		Lines.Add(LOCTEXT("ProInvalid", "The licence on this computer cannot be used."));
+		break;
+	default:
+		Lines.Add(LOCTEXT("ProFree", "Free: design, GDTF and MVR import, one DMX OUT universe."));
+		break;
+	}
+	const FStageSubscriptionInfo& Subscription = Licence->GetSubscription();
+	if (Subscription.bKnown && Subscription.Status != TEXT("none"))
+	{
+		Lines.Add(Subscription.bCancelAtPeriodEnd && Subscription.PeriodEndUtc.GetTicks() > 0
+			? FText::Format(LOCTEXT("ProCancelling", "Subscription {0}, ends {1}."), FText::FromString(Subscription.Status), FText::AsDate(Subscription.PeriodEndUtc, EDateTimeStyle::Medium))
+			: FText::Format(LOCTEXT("ProSubscription", "Subscription {0}."), FText::FromString(Subscription.Status)));
+	}
+	// The message repeats the Pro line once active, so it is shown only when it says something the status does not.
+	if (!Licence->GetStatusMessage().IsEmpty() && (Licence->GetStatus() != EStageLicenceStatus::Pro || Licence->IsWaitingForCheckout()))
+	{
+		Lines.Add(Licence->GetStatusMessage());
+	}
+	if (!bSignedIn)
+	{
+		Lines.Add(LOCTEXT("ProSignIn", "Sign in to StageCraft Cloud (Marketplace, SIGN IN) to subscribe or refresh."));
+	}
+#if !UE_BUILD_SHIPPING
+	if (UStageLicenceSubsystem::IsDevAssumeProActive())
+	{
+		Lines.Add(LOCTEXT("ProDevOverride", "Development build: Pro is assumed (StageCraft.Licence.DevAssumePro 1). Set it to 0 to see Free."));
+	}
+#endif
+	ProStatusText->SetText(FText::Join(FText::FromString(TEXT("\n")), Lines));
+	const bool bWarn = Licence->GetStatus() == EStageLicenceStatus::Expired || Licence->GetStatus() == EStageLicenceStatus::Invalid;
+	ProStatusText->SetColorAndOpacity(FSlateColor(bWarn ? GetTheme().WarningColor : GetTheme().TextSecondary));
 }
 
 void UStagePreferencesPanel::RefreshRemote()

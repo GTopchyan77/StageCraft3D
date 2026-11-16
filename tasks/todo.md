@@ -754,4 +754,14 @@ Gevor's choices: automation tests on a harness game instance (not AFunctionalTes
 - [ ] Gevor: open the page on a real phone over Wi-Fi (scope Network) and run a show
 - [ ] D7: plain HTTP with PIN pairing on the LAN acceptable? Pairings across restarts?
 - [ ] WR2: QR code with address and PIN, remembered devices, page layout options
-- [ ] WR3: Pro gate StageCraft.Entitlement.Pro.WebRemote in EvaluateWebRemote (Step 6)
+- [x] WR3: Pro gate StageCraft.Entitlement.Pro.WebRemote in EvaluateWebRemote (Step 6, STATE.md #93)
+
+## Phase 43 - Step 6: StageCraft Pro subscription and licence (requested by Gevor 2026-11-16; STATE.md #93; ADR 0034 section 17)
+- [x] D3-D5 restated by Gevor and recorded (subscription, Ed25519 token with 14 days offline, same Stripe and cloud)
+- [x] Server: migration 0002, subscription checkout (mode=subscription), Billing Portal, webhook-only subscription state with out-of-order and same-second guards, licence issue and release with a 3-machine limit, long poll, dev fake checkout and portal, key script, config and docs
+- [x] Client: StageLicenceToken (OpenSSL Ed25519, compiled-in keys, dev key outside Shipping), UStageLicenceSubsystem (file, refresh, offline, expiry, checkout, portal, release), DevAssumePro cvar
+- [x] Gates: EvaluateMvrExport, EvaluateRemoteControl, EvaluateWebRemote, EvaluateDmxInput, GetDmxOutputUniverseLimit; DMX limits pushed by the controller; restore waits for the limits
+- [x] Preferences STAGECRAFT PRO, Patch panel held universes, help pro-licence EN/HY and Pro lines in five articles
+- [ ] Gevor: generate the production key pair (scripts/make-licence-key.ts), store the private key, paste the public key into StageLicenceToken.cpp
+- [ ] Gevor: create the Pro Prices and configure the Customer Portal in Stripe; subscribe the webhook to customer.subscription.*
+- [ ] Gevor: end-to-end with the dev cloud server (StageCraft.Licence.DevAssumePro 0, sign in, subscribe on the fake page, see Pro, cancel in the fake portal, REFRESH)

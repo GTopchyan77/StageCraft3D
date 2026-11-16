@@ -3,10 +3,12 @@ import {
   ProviderFailure,
   type CheckoutInput,
   type CheckoutSession,
+  type BillingPortalInput,
   type ConnectedAccountInput,
   type OnboardingLinkInput,
   type PaymentProvider,
   type RefundInput,
+  type SubscriptionCheckoutInput,
   type TransferInput,
 } from './provider.ts';
 
@@ -129,6 +131,43 @@ export class StripeProvider implements PaymentProvider {
       url: StripeProvider.requireString(body, 'url'),
       expiresAt: typeof body.expires_at === 'number' ? body.expires_at * 1000 : expiresAtSeconds * 1000,
     };
+  }
+
+  async createSubscriptionCheckout(input: SubscriptionCheckoutInput): Promise<CheckoutSession> {
+    const expiresAtSeconds = Math.floor(input.expiresAt / 1000);
+    const metadata = { checkoutId: input.checkoutId, accountId: input.accountId, plan: input.plan };
+    const body = await this.post(
+      '/v1/checkout/sessions',
+      {
+        mode: 'subscription',
+        client_reference_id: input.checkoutId,
+        customer: input.customerId ?? undefined,
+        success_url: input.successUrl,
+        cancel_url: input.cancelUrl,
+        expires_at: expiresAtSeconds,
+        line_items: [{ price: input.priceId, quantity: 1 }],
+        metadata,
+        // The subscription's own events carry the account, so a webhook never has to find it through the checkout.
+        subscription_data: { metadata },
+        automatic_tax: { enabled: this.options.automaticTax },
+      },
+      `subscription-checkout-${input.checkoutId}`,
+    );
+    return {
+      sessionId: StripeProvider.requireString(body, 'id'),
+      url: StripeProvider.requireString(body, 'url'),
+      expiresAt: typeof body.expires_at === 'number' ? body.expires_at * 1000 : expiresAtSeconds * 1000,
+    };
+  }
+
+  async createBillingPortal(input: BillingPortalInput): Promise<{ url: string }> {
+    const body = await this.post(
+      '/v1/billing_portal/sessions',
+      { customer: input.customerId, return_url: input.returnUrl },
+      // A portal session is single-use; a fresh key per call is intended.
+      `portal-${input.customerId}-${Date.now()}`,
+    );
+    return { url: StripeProvider.requireString(body, 'url') };
   }
 
   async createRefund(input: RefundInput): Promise<{ refundId: string; status: string }> {

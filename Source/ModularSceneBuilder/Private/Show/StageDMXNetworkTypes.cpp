@@ -100,3 +100,14 @@ bool StageDMXOutput::IsMuted(const FStageDMXOutputSettings& Settings, int32 Univ
 {
 	return Algo::BinarySearch(Settings.MutedUniverses, Universe) != INDEX_NONE;
 }
+
+void StageDMXOutput::ApplyUniverseLimit(TArray<int32>& InOutSent, int32 MaxUniverses, TArray<int32>& OutHeld)
+{
+	OutHeld.Reset();
+	if (MaxUniverses <= 0 || InOutSent.Num() <= MaxUniverses)
+	{
+		return;
+	}
+	OutHeld.Append(InOutSent.GetData() + MaxUniverses, InOutSent.Num() - MaxUniverses);
+	InOutSent.SetNum(MaxUniverses);
+}

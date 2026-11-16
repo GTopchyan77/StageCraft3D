@@ -78,21 +78,9 @@ void UStageDMXNetworkSubsystem::OnWorldBeginPlay(UWorld& InWorld)
 {
 	Super::OnWorldBeginPlay(InWorld);
 
-	// The user left input on last time: open it again with this stage, and give the show to the console as before.
-	if (GetSettings().bEnabled)
-	{
-		FText Error;
-		if (StartListening(Error) && ShowControl)
-		{
-			ShowControl->SetControlSource(EStageControlSource::External);
-		}
-	}
-	// And output: the show sends again (while it is Internal).
-	if (GetOutputSettings().bEnabled)
-	{
-		FText Error;
-		StartSending(Error);
-	}
+	// What the user left on opens again once the controller has pushed the licence's limits (SetCapabilityLimits), so a Free licence
+	// never receives or sends anything Pro, not even for the frames before the controller's BeginPlay.
+	bRestorePending = true;
 }
 
 // --- Bridge ---
@@ -222,6 +210,12 @@ FStageDMXInputStatus UStageDMXNetworkSubsystem::GetStatus() const
 
 bool UStageDMXNetworkSubsystem::StartListening(FText& OutError)
 {
+	if (!Limits.bInputAllowed)
+	{
+		OutError = LOCTEXT("InputLimited", "DMX input needs StageCraft Pro.");
+		SetState(EStageDMXInputState::Off, OutError);
+		return false;
+	}
 	UStageNetworkDMXBridge* Target = EnsureBridge();
 	if (!Target)
 	{
@@ -353,7 +347,56 @@ FStageDMXOutputStatus UStageDMXNetworkSubsystem::GetOutputStatus() const
 	FStageDMXOutputStatus Status = bSending ? Bridge->GetOutputStatus() : FStageDMXOutputStatus();
 	Status.State = OutputState == EStageDMXOutputState::Sending && !bSending ? EStageDMXOutputState::Off : OutputState;
 	Status.Error = LastOutputError;
+	if (bSending)
+	{
+		Status.HeldUniverses = HeldUniverses;
+	}
 	return Status;
+}
+
+bool UStageDMXNetworkSubsystem::SetCapabilityLimits(const FStageDMXCapabilityLimits& NewLimits)
+{
+	FStageDMXCapabilityLimits Sanitized = NewLimits;
+	Sanitized.MaxOutputUniverses = FMath::Max(Sanitized.MaxOutputUniverses, 0);
+	if (Sanitized == Limits && !bRestorePending)
+	{
+		return false;
+	}
+	Limits = Sanitized;
+
+	bool bInputChanged = false;
+	if (bRestorePending)
+	{
+		bRestorePending = false;
+		// Output first: it sends only while the show is Internal, and opening input moves the show to External afterwards.
+		if (GetOutputSettings().bEnabled)
+		{
+			FText Error;
+			StartSending(Error);
+		}
+	}
+	const bool bListening = Bridge && Bridge->IsListening();
+	if (!Limits.bInputAllowed && bListening)
+	{
+		// Not SetInputEnabled(false): the user's choice stays on, so input opens again by itself when the licence allows it.
+		StopListening();
+		SetState(EStageDMXInputState::Off, LOCTEXT("InputLocked", "DMX input needs StageCraft Pro."));
+		bInputChanged = true;
+	}
+	else if (Limits.bInputAllowed && !bListening && GetSettings().bEnabled)
+	{
+		FText Error;
+		bInputChanged = StartListening(Error);
+	}
+
+	if (Bridge && Bridge->IsSending())
+	{
+		UpdateUniverses();
+		OnOutputChanged.Broadcast();
+	}
+	UE_LOG(LogStageCraft, Log, TEXT("DMX network: limits now input %s, output %s."), Limits.bInputAllowed ? TEXT("allowed") : TEXT("off"),
+		Limits.MaxOutputUniverses > 0 ? *FString::Printf(TEXT("%d universe(s)"), Limits.MaxOutputUniverses) : TEXT("unlimited"));
+	return bInputChanged;
 }
 
 bool UStageDMXNetworkSubsystem::StartSending(FText& OutError)
@@ -476,6 +519,7 @@ void UStageDMXNetworkSubsystem::UpdateUniverses()
 				Sent.Add(Universe);
 			}
 		}
+		StageDMXOutput::ApplyUniverseLimit(Sent, Limits.MaxOutputUniverses, HeldUniverses);
 		Bridge->SetOutputUniverses(Sent);
 		// A universe that just joined (or every universe, when output just opened) is sent at once, not at its next change.
 		if (ShowControl)

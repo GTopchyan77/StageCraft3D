@@ -1,6 +1,7 @@
 // Configuration from environment variables, validated at startup. Every problem is reported at once, then the process refuses
 // to start. Secrets are kept in the config object but never logged (see describeConfig).
 import { isCurrencyCode } from './money.ts';
+import { DEV_KEY_ID, DEV_SIGNING_KEY_PKCS8, loadSigningKey } from './licence/token.ts';
 
 export interface Config {
   nodeEnv: 'production' | 'development' | 'test';
@@ -36,6 +37,9 @@ export interface Config {
     | { kind: 'local'; dir: string; urlSecret: string }
     | { kind: 's3'; bucket: string; region: string; endpoint: string | null; prefix: string };
   downloadUrlTtlSeconds: number;
+  /** StageCraft Pro (ADR 0034 §17). A plan whose Stripe Price is null is not offered (PlanNotAvailable). */
+  subscriptions: { prices: { monthly: string | null; yearly: string | null }; portalReturnUrl: string };
+  licence: { keyId: string; signingKeyPkcs8: string; offlineDays: number; maxMachines: number };
 }
 
 export class ConfigError extends Error {
@@ -202,6 +206,47 @@ export function loadConfig(env: Env): Config {
     blob = { kind: 'local', dir: get('BLOB_LOCAL_DIR') ?? './data/blobs', urlSecret };
   }
 
+  // StageCraft Pro (ADR 0034 §17.2). The development key is public (licence/token.ts), so production refuses it.
+  const priceId = (name: string, fallback: string | null): string | null => {
+    const raw = get(name) ?? fallback;
+    if (raw !== null && !/^price_[A-Za-z0-9_]{1,200}$/.test(raw)) {
+      problems.push(`${name} must be a Stripe Price id (price_...)`);
+      return null;
+    }
+    return raw;
+  };
+  const fakePrices = providerName === 'fake';
+  const subscriptions: Config['subscriptions'] = {
+    prices: {
+      monthly: priceId('PRO_PRICE_MONTHLY', fakePrices ? 'price_fake_pro_monthly' : null),
+      yearly: priceId('PRO_PRICE_YEARLY', fakePrices ? 'price_fake_pro_yearly' : null),
+    },
+    portalReturnUrl: url('PRO_PORTAL_RETURN_URL', `${publicBaseUrl}/subscription/done`),
+  };
+  const licenceKeyId = get('LICENCE_KEY_ID') ?? (production ? '' : DEV_KEY_ID);
+  const signingKeyPkcs8 = get('LICENCE_SIGNING_KEY') ?? (production ? '' : DEV_SIGNING_KEY_PKCS8);
+  if (!/^[A-Za-z0-9._-]{1,32}$/.test(licenceKeyId)) {
+    problems.push('LICENCE_KEY_ID is required: 1-32 letters, digits, ., _ or -');
+  }
+  if (signingKeyPkcs8 === '') {
+    problems.push('LICENCE_SIGNING_KEY is required (base64 PKCS#8 Ed25519; scripts/make-licence-key.ts)');
+  } else {
+    try {
+      loadSigningKey(signingKeyPkcs8);
+    } catch {
+      problems.push('LICENCE_SIGNING_KEY is not a base64 PKCS#8 Ed25519 private key');
+    }
+  }
+  if (production && (signingKeyPkcs8 === DEV_SIGNING_KEY_PKCS8 || licenceKeyId === DEV_KEY_ID)) {
+    problems.push('the development licence key is refused when NODE_ENV=production');
+  }
+  const licence: Config['licence'] = {
+    keyId: licenceKeyId,
+    signingKeyPkcs8,
+    offlineDays: integer('LICENCE_OFFLINE_DAYS', 14, 1, 30),
+    maxMachines: integer('LICENCE_MAX_MACHINES', 3, 1, 20),
+  };
+
   const config: Config = {
     nodeEnv,
     port: integer('PORT', 8080, 1, 65535),
@@ -223,6 +268,8 @@ export function loadConfig(env: Env): Config {
     disputeFeeFallbackMinor: BigInt(integer('DISPUTE_FEE_FALLBACK_MINOR', 1500, 0, 100_000)),
     blob,
     downloadUrlTtlSeconds: integer('DOWNLOAD_URL_TTL_SECONDS', 300, 30, 3600),
+    subscriptions,
+    licence,
   };
   if (problems.length > 0) {
     throw new ConfigError(problems);
@@ -243,5 +290,8 @@ export function describeConfig(config: Config): Record<string, unknown> {
     settlementCurrencies: config.settlementCurrencies,
     sellerShareBps: Number(config.sellerShareBps),
     payoutHoldDays: config.payoutHoldDays,
+    proPlans: Object.entries(config.subscriptions.prices).filter(([, price]) => price !== null).map(([plan]) => plan),
+    licenceKeyId: config.licence.keyId,
+    licenceOfflineDays: config.licence.offlineDays,
   };
 }

@@ -29,7 +29,7 @@ npm run test:pg              # Postgres 16 in Docker
 2. Install the Stripe CLI and forward webhooks:
    ```sh
    stripe listen --forward-to localhost:8080/v1/webhooks/stripe \
-     --events checkout.session.completed,checkout.session.async_payment_succeeded,checkout.session.async_payment_failed,checkout.session.expired,charge.refunded,charge.dispute.created,charge.dispute.closed,account.updated
+     --events checkout.session.completed,checkout.session.async_payment_succeeded,checkout.session.async_payment_failed,checkout.session.expired,charge.refunded,charge.dispute.created,charge.dispute.closed,account.updated,customer.subscription.created,customer.subscription.updated,customer.subscription.deleted
    stripe listen --forward-connect-to localhost:8080/v1/webhooks/stripe --events account.updated   # Connect events
    ```
    Each prints a `whsec_…` secret.
@@ -44,10 +44,10 @@ One-time:
 1. **Postgres:** RDS for PostgreSQL 16, Multi-AZ, encryption on, in private subnets. Create database `stagecraft` and a user.
 2. **S3:** bucket `stagecraft-cloud-packages`, Block Public Access on, SSE-S3 or SSE-KMS, versioning on. No bucket policy for public access: downloads use 5-minute pre-signed URLs.
 3. **IAM:** role `stagecraft-cloud` with `s3:GetObject`, `s3:PutObject`, `s3:DeleteObject` on `arn:aws:s3:::stagecraft-cloud-packages/*`. Bind it to the `stagecraft/stagecraft-cloud` service account with an **EKS Pod Identity association** (preferred) or IRSA (the annotation in the manifest).
-4. **Secrets Manager:** secret `stagecraft/cloud`, a JSON object with `DATABASE_URL` (`postgres://user:pass@host:5432/stagecraft?sslmode=require`), `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRETS`, `OIDC_ISSUER`, `OIDC_CLIENT_ID`, `OIDC_CLIENT_SECRET`.
+4. **Secrets Manager:** secret `stagecraft/cloud`, a JSON object with `DATABASE_URL` (`postgres://user:pass@host:5432/stagecraft?sslmode=require`), `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRETS`, `OIDC_ISSUER`, `OIDC_CLIENT_ID`, `OIDC_CLIENT_SECRET`, `LICENCE_KEY_ID`, `LICENCE_SIGNING_KEY` (StageCraft Pro, ADR 0034 §17: generate them with `node scripts/make-licence-key.ts <id>`, and paste its public key line into the client's `StageLicenceToken.cpp` before the release that ships it). Plain config, not secrets: `PRO_PRICE_MONTHLY`, `PRO_PRICE_YEARLY` (recurring Stripe Prices).
 5. **Cluster add-ons:** AWS Load Balancer Controller, External Secrets Operator with a `ClusterSecretStore` named `aws-secrets-manager`, metrics-server, a NetworkPolicy-enforcing CNI (VPC CNI network policy agent or Calico). Kubernetes >= 1.30 for the `preStop.sleep` hook.
 6. **ACM certificate** for the host; DNS record to the ALB once it exists.
-7. **Stripe:** live webhook endpoint `https://<host>/v1/webhooks/stripe` with the events listed in §3, plus a Connect endpoint for `account.updated`; pin its API version and set `STRIPE_API_VERSION` to the same value.
+7. **Stripe:** live webhook endpoint `https://<host>/v1/webhooks/stripe` with the events listed in §3, plus a Connect endpoint for `account.updated`; pin its API version and set `STRIPE_API_VERSION` to the same value. Configure the Customer Portal (cancellation, payment method, invoices) for StageCraft Pro.
 
 Each release:
 ```sh

@@ -61,6 +61,20 @@ public:
 	/** State changes at once; traffic counters at most every StatusIntervalSeconds while frames arrive. */
 	FOnStageDMXInputChanged OnInputChanged;
 
+	// --- Capability limits (Docs/ADR/0034 §17.3) ---
+
+	/**
+	 * Replaces the limits. Input that is no longer allowed stops without changing the remembered choice, and opens again when allowed
+	 * while the choice is on; the output's universes follow at once. Returns true when the input started or stopped because of it, so
+	 * the caller can move the show's control source with it (RequestSetDMXInput pairs them).
+	 *
+	 * The input and output the user left on are reopened only by the first call (not at OnWorldBeginPlay), so nothing is received or sent
+	 * before the licence's limits are known. A world without a controller to push them reopens nothing by itself.
+	 */
+	bool SetCapabilityLimits(const FStageDMXCapabilityLimits& NewLimits);
+
+	const FStageDMXCapabilityLimits& GetCapabilityLimits() const { return Limits; }
+
 	// --- Output ---
 
 	/**
@@ -143,6 +157,14 @@ private:
 
 	EStageDMXOutputState OutputState = EStageDMXOutputState::Off;
 	FText LastOutputError;
+
+	FStageDMXCapabilityLimits Limits;
+
+	/** OnWorldBeginPlay has run and the remembered input/output wait for the first SetCapabilityLimits. */
+	bool bRestorePending = false;
+
+	/** Universes the last UpdateUniverses held back because of Limits (shown in the output status). */
+	TArray<int32> HeldUniverses;
 
 	FTimerHandle StatusTimer;
 	FTimerHandle OutputStatusTimer;
