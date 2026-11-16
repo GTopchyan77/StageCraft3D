@@ -715,7 +715,7 @@ Gevor's choices: automation tests on a harness game instance (not AFunctionalTes
 - [x] "This PC" enforced by the OSC allow-list (the engine server cannot bind loopback; ADR 0035 §4)
 - [ ] Gevor: D7 - is an unauthenticated opt-in OSC listener on the LAN acceptable, or should Network require an allow-list of tablets?
 - [ ] Gevor: confirm the default MIDI map (Korg nanoKONTROL2) or name your controller; check with real hardware
-- [ ] MR2: MIDI mapping editor with LEARN in Preferences; MIDI output feedback (motor faders, LEDs)
+- [x] MR2: MIDI mapping editor with LEARN in Preferences; MIDI output feedback (motor faders, LEDs) (STATE.md #96, ADR 0035 sections 11-12)
 - [x] MR3 (Step 6): Pro entitlement StageCraft.Entitlement.Pro.MidiOsc in EvaluateRemoteControl (STATE.md #93)
 
 ## Phase 40 - Step 2 MV4: MVR export (requested by Gevor 2026-11-11; STATE.md #90; ADR 0034 section 16)
@@ -779,3 +779,12 @@ Gevor's choices: automation tests on a harness game instance (not AFunctionalTes
 - [x] Remembered devices: SHA-256 of tokens only, WebRemoteDevices.json (atomic, deleted when empty or off), 30 days unused / 90 days from pairing, FORGET, POST /api/unpair, Remember devices setting
 - [x] Subagent review: 6 findings fixed; tests isolated from the user's files; help EN/HY
 - [ ] Gevor: scan with a real phone, restart and reconnect without the PIN, Unpair on the phone and FORGET in Preferences
+
+## Phase 46 - MIDI MR2 (requested by Gevor 2026-11-16; STATE.md #96; ADR 0035 sections 11-12)
+- [x] Pure map operations: AssignLearned (one control per row, overlap rule), ClearTarget, NeedsVerdict / HasSameInputs (map edits reopen nothing and need no verdict)
+- [x] Preferences MIDI MAP: LEARN / CLEAR per row, playback picker, RESET TO DEFAULT, CLEAR ALL; learn cancelled when Preferences closes
+- [x] MIDI output feedback: levels and lights, changes only, 0.5 s hand hold and settle, echo drop, unbound controls go dark, unplugged device detected
+- [x] Engine findings: output channels 0-15; device listings restart closed controllers (MarkAsGarbage)
+- [x] Subagent review: 9 of 10 findings fixed; help EN/HY; tests 299/299; scripted runs MR2a/MR2b; Shipping scan clean
+- [ ] Gevor: real controller check (LEARN, CLEAR, RESET; lights with LED Mode External; motor fader if available)
+- [ ] Gevor: one control per row, or several (ADR 0035 section 9)?

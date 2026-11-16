@@ -1,6 +1,6 @@
 # ADR 0035: MIDI and OSC remote control (Step 3)
 
-- **Status:** accepted for MR1 (2026-11-10, STATE.md #89). The protocol scope and security (D7) were locked by Gevor without their wording being recorded (ADR 0034 §2); this ADR follows the safest reading and lists what Gevor must confirm in §9.
+- **Status:** accepted for MR1 (2026-11-10, STATE.md #89); MR2 (MIDI MAP editor and MIDI output feedback) added 2026-11-16, STATE.md #96, §11–§12. The protocol scope and security (D7) were locked by Gevor without their wording being recorded (ADR 0034 §2); this ADR follows the safest reading and lists what Gevor must confirm in §9.
 - **Related:**
   - ADR 0034 §2 (tiers: MIDI / OSC is **Pro**; D8 puts it at Step 3, after MVR).
   - ADR 0026 §6 (playbacks and masters), ADR 0019 (DMX IN, the precedent for a network input and its settings), ADR 0013 §2.5 (Preferences panel).
@@ -59,18 +59,18 @@ Security, deny by default:
 - A binding: trigger (Note or Control Change), channel (0 = any, 1–16), number (0–127), the action, the playback (1–10) or the cue number.
 - Note On with velocity 0 is a Note Off (the MIDI convention). A note's value is its velocity / 127 while held and 0 on release; a CC's value is its data / 127.
 - **Default map:** the Korg nanoKONTROL2 factory CC layout (eight faders, knobs, S / M / R buttons, transport), chosen because it is the most common small fader box. It is an assumption, not tested on the hardware.
-- **MIDI learn:** `StartMidiLearn(Action, Playback, CueNumber)`; the next Note On or CC with a non-zero value becomes the binding and replaces any binding with the same trigger. MR1 exposes learn through the dev console only; a mapping editor is a follow-up (§8).
+- **MIDI learn:** `StartMidiLearn(Action, Playback, CueNumber)`; the next Note On or CC with a non-zero value becomes the binding and replaces any binding with the same trigger. MR1 exposed learn through the dev console only; MR2 adds the MIDI MAP editor in Preferences (§11), where LEARN also removes the target's earlier control.
 
 ## 6. OSC feedback
 
-When feedback is on and a sender is known, the subsystem binds to the show (`OnCueStarted`, `OnDeskStateChanged`) and, once per frame after a change, sends only the values that changed since the last send: `/stagecraft/cue/active` (cue number), `/stagecraft/playback/N/level`, `/stagecraft/master/grand`, `/stagecraft/master/blackout`, `/stagecraft/master/audio`. A tablet's faders then follow the desk. MIDI output (motor faders, LED rings) is a follow-up.
+When feedback is on and a sender is known, the subsystem binds to the show (`OnCueStarted`, `OnDeskStateChanged`) and, once per frame after a change, sends only the values that changed since the last send: `/stagecraft/cue/active` (cue number), `/stagecraft/playback/N/level`, `/stagecraft/master/grand`, `/stagecraft/master/blackout`, `/stagecraft/master/audio`. A tablet's faders then follow the desk. MIDI output (motor faders, button lights) is MR2 (§12).
 
 ## 7. Phases and verification
 
 | Phase | What | Verification |
 |---|---|---|
 | **MR1** (this) | Plugins, pure parser and resolver, queue, subsystem, controller and GameMode gate, settings, Preferences section (OSC mode, MIDI device, status), OSC feedback, dev console commands, help EN/HY | Unit tests for the pure layer, subsystem tests with a test sink, a scripted `-game` run that sends real OSC UDP packets from PowerShell; Editor, Game and Shipping at 0 warnings |
-| MR2 | MIDI mapping editor with LEARN in Preferences, MIDI output feedback | Manual check with a real controller |
+| **MR2** (STATE.md #96) | MIDI MAP editor with LEARN / CLEAR / RESET / CLEAR ALL in Preferences (§11), MIDI output feedback (§12), map edits without reopening or a GameMode verdict, dev console `MidiOut=`, `Clear=`, `#n` device picks | Pure tests (map operations, overlap rule, verdict rule, feedback values, holds, echoes, unbound controls going dark), a real-device test with the settle timer and an echo on Windows' GS synth, a scripted `-game` run (output opened, map edited with Pro withdrawn, screenshot); a real controller is Gevor's check |
 | MR3 | Pro gate (Step 6) | Licensing tests |
 
 ## 8. Alternatives considered
@@ -84,7 +84,35 @@ When feedback is on and a sender is known, the subsystem binds to the show (`OnC
 
 - D7 wording: is an unauthenticated OSC listener on the LAN (opt-in) acceptable, or should `Network` require an allow-list of tablet addresses?
 - The default MIDI map (nanoKONTROL2) — or another controller you use.
+- MR2: LEARN gives a row exactly one control (the earlier one is removed). Is one control per row right, or should a row keep several (a pedal and a button for GO)?
+- MR2: check MIDI MAP and MIDI output with the real controller (motor faders or button lights; on the nanoKONTROL2 the lights need LED Mode External).
 
 ## 10. Rollback
 
-Remove the subsystem, the settings field and the plugin entries; nothing is saved in scenes or the profile.
+Remove the subsystem, the settings fields (MidiOutputName included) and the plugin entries; nothing is saved in scenes or the profile.
+For MR2 alone: remove the MIDI MAP rows and the MIDI output row; an ini with `MidiOutputName` loads without it (unknown keys are ignored).
+
+## 11. MIDI MAP editor (MR2)
+
+Preferences › REMOTE CONTROL › MIDI map. The view edits the map through the controller's request bridge only (`RequestSetRemoteControl`, `RequestMidiLearn`); the map's operations are pure (`StageRemote`), so the panel, the dev console and the subsystem share them and the tests prove them.
+- **Rows (targets):** Cue GO, Cue BACK, Grand Master, Blackout, Audio master; then a Playback 1–10 picker and Fader, Flash, GO, Release for that playback. A row lists its controls (`DescribeControl`: "CC 41", "Note 60 ch 10"). Go to cue needs a cue number per binding, so it has no row; RESET and CLEAR ALL still remove such bindings.
+- **LEARN** arms `StartMidiLearn` for the row (pressed again: cancel). The next press becomes the binding through `StageRemote::AssignLearned`: the map in force becomes the user's, the control's other bindings (an "any channel" binding of it included: `OverlapsTrigger`) and the row's earlier controls are removed. `Sanitize` applies the same overlap rule, so one control never drives two rows by accident. One control per row is the decision of this phase (open for Gevor, §9). Learn needs an open MIDI input (LEARN is disabled otherwise). Closing Preferences cancels a waiting learn, so a stray press later cannot rebind silently.
+- **CLEAR** (`ClearTarget`), **RESET TO DEFAULT** (`bCustomMidiMap` off), **CLEAR ALL** (an empty user map).
+- **Rows are built once** and only relabelled and enabled: LEARN and CLEAR change the map from inside their own click (Rules.md Safe data binding).
+- **A map edit is not a new input.** `StageRemote::HasSameInputs` (OSC scope and ports, both MIDI devices): when only the map differs, `ApplySettings` saves it and reopens nothing (the controller stays connected, a learn keeps waiting), and `NeedsVerdict` lets it through without `EvaluateRemoteControl`, because every command a control sends is judged when it runs. Applying identical settings (a retry after a missing device) and every change that opens or moves an input are still judged; switching off never is.
+
+## 12. MIDI output feedback (MR2)
+
+`FStageRemoteSettings::MidiOutputName` (empty = off; Preferences › MIDI output, Off plus the first three outputs). It counts as switching something on, so it needs the GameMode's verdict and Pro.
+- **What is sent:** for each binding of the map in force, `FeedbackValue`: a fader its playback level, Grand Master and Audio master their level (0–127), Flash lit while the playback is flashing, playback GO lit while it is live, Blackout lit while on. Cue GO / BACK, go to cue and release have no state and send nothing. A CC binding answers with a CC, a note binding with Note On (velocity 0 = off).
+- **When:** the subsystem binds the show (`OnCueStarted`, `OnDeskStateChanged`) while OSC feedback or a MIDI output is open; at most once per frame, `CollectMidiFeedback` sends only the controls whose value differs from what `FStageMidiFeedbackMemory` says the controller shows. The memory is reset (everything sent once) when the output opens and when the map changes.
+- **No fight with the hand:** the desk applies a move one frame after it arrives, so during a move it is always a step behind the hand. `NoteMidiInput` therefore records a fader's or knob's own move as shown and holds the control for `MidiHoldSeconds` (0.5 s) after its last move; `CollectMidiFeedback` skips held controls and reports when the last hold ends. A settle timer (`ArmMidiSettle`) then runs feedback once more, so a released fader settles on the desk's value and a refused or clamped move snaps back, even though the show itself did not change (read-back, as in the UI). The hold survives a map change, so a learned fader is not yanked either. Buttons are not recorded or held: their light is the show's to set.
+- **Echo:** an input equal to a message sent within `MidiEchoSeconds` (0.1 s) is dropped as the output's echo (a virtual port or a controller's MIDI thru chosen as both input and output), counted as ignored and shown as "(echo of feedback)"; otherwise a lit GO light would fire GO again.
+- **Map changes:** before the memory resets, `CollectUnboundOff` sends 0 to every lit or raised control that no binding answers any more (a cleared Blackout button goes dark).
+- **Unplugged controller:** a device listing marks a controller the engine cannot restart as garbage. `CheckMidiDevices` (before learn, before feedback, and when Preferences opens, since building it lists the devices) closes such a device and says "The MIDI controller was disconnected".
+- **Channels:** a binding on "any channel" answers on the channel the control was last heard on (channel 1 until then; a controller on another global channel gets its lights once each control has been touched; an output-channel setting is possible later). A control bound twice answers for its first binding only, so it never flickers between two values.
+- **Engine findings (UE 5.8):**
+  - `UMIDIDeviceOutputController::SendMIDIEvent` builds the status byte as `(type << 4) | channel`: it takes channels 0–15, unlike the input, which reports 1–16. StageCraft sends `Channel - 1`; channel 16 sent as 16 would have changed the message type.
+  - `UMIDIDeviceManager::FindAllMIDIDeviceInfo` re-initializes PortMidi and restarts every live `UMIDIDeviceControllerBase` object, a shut-down one too, until garbage collection removes it. It would take the device back and the next open would fail as "in use" (this also affected reopening the MIDI input in MR1). `CloseMidi` marks both controllers as garbage after `ShutdownDevice`, as the engine does with a controller it could not restart; the MidiOutput test reopens the same output to prove it.
+  - `FTimerManager` runs once per engine frame (`HasBeenTickedThisFrame`), so a test that ticks its own world several times in one frame runs the timers once: the MidiOutput test checks the settle timer in a latent command, one world tick per engine frame.
+  - Device listings are expensive for that reason: the panel and `OpenMidi` list inputs and outputs in one call (`FindMidiDevices`).

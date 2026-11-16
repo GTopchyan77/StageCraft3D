@@ -5,6 +5,7 @@
 #include "Engine/World.h"
 #include "MIDIDeviceInputController.h"
 #include "MIDIDeviceManager.h"
+#include "MIDIDeviceOutputController.h"
 #include "ModularSceneBuilder.h"
 #include "OSCClient.h"
 #include "OSCManager.h"
@@ -35,6 +36,30 @@ namespace StageRemoteControl
 
 	/** Feedback is sent when a value moved at least this much (a fader's float noise is not news). */
 	constexpr float FeedbackTolerance = 0.001f;
+
+	/** Sends Messages to Output; returns how many were sent. */
+	int32 SendMidiMessages(UMIDIDeviceOutputController* Output, TConstArrayView<StageRemote::FMidiOutMessage> Messages)
+	{
+		if (!Output)
+		{
+			return 0;
+		}
+		for (const StageRemote::FMidiOutMessage& Message : Messages)
+		{
+			// Engine finding (UE 5.8): the output builds the status byte as (type << 4) | channel, so it takes channels 0–15, unlike the
+			// input, which reports 1–16 (UMIDIDeviceOutputController::SendMIDIEvent). Channel 16 sent as 16 would corrupt the message type.
+			const int32 WireChannel = Message.Channel - 1;
+			if (Message.Type == StageRemote::MidiNoteOn)
+			{
+				Output->SendMIDINoteOn(WireChannel, Message.Data1, Message.Data2);
+			}
+			else
+			{
+				Output->SendMIDIControlChange(WireChannel, Message.Data1, Message.Data2);
+			}
+		}
+		return Messages.Num();
+	}
 
 	/** The first argument of an OSC message as a number; false for a type that is not one (string, blob…). */
 	bool ReadFirstNumber(const FOSCMessage& Message, TOptional<float>& OutValue)
@@ -94,6 +119,7 @@ void UStageRemoteControlSubsystem::Deinitialize()
 		World->GetTimerManager().ClearTimer(FlushTimer);
 		World->GetTimerManager().ClearTimer(FeedbackTimer);
 		World->GetTimerManager().ClearTimer(StatusTimer);
+		World->GetTimerManager().ClearTimer(MidiSettleTimer);
 	}
 	CloseInputs();
 	PendingCommands.Reset();
@@ -127,9 +153,19 @@ bool UStageRemoteControlSubsystem::ApplySettings(const FStageRemoteSettings& Set
 		OutError = LOCTEXT("NoSettings", "The settings of this PC are not available.");
 		return false;
 	}
+	const FStageRemoteSettings Before = UserSettings->GetRemoteSettings();
 	if (UserSettings->SetRemoteSettings(Settings))
 	{
 		UserSettings->SaveSettings();
+	}
+	const FStageRemoteSettings& After = UserSettings->GetRemoteSettings();
+	if (StageRemote::HasSameInputs(Before, After) && !(Before == After))
+	{
+		// A map edit (Preferences › MIDI MAP): closing the devices would drop the controller and a learn for nothing.
+		OutError = FText::GetEmpty();
+		RestartMidiFeedback();
+		BroadcastStatus();
+		return true;
 	}
 
 	CloseInputs();
@@ -141,17 +177,28 @@ bool UStageRemoteControlSubsystem::ApplySettings(const FStageRemoteSettings& Set
 
 TArray<FString> UStageRemoteControlSubsystem::FindMidiInputs()
 {
+	TArray<FString> Inputs;
+	TArray<FString> Outputs;
+	FindMidiDevices(Inputs, Outputs);
+	return Inputs;
+}
+
+void UStageRemoteControlSubsystem::FindMidiDevices(TArray<FString>& OutInputs, TArray<FString>& OutOutputs)
+{
 	TArray<FMIDIDeviceInfo> Inputs;
 	TArray<FMIDIDeviceInfo> Outputs;
 	UMIDIDeviceManager::FindAllMIDIDeviceInfo(Inputs, Outputs);
 
-	TArray<FString> Names;
-	Names.Reserve(Inputs.Num());
+	OutInputs.Reset(Inputs.Num());
 	for (const FMIDIDeviceInfo& Input : Inputs)
 	{
-		Names.Add(Input.DeviceName);
+		OutInputs.Add(Input.DeviceName);
 	}
-	return Names;
+	OutOutputs.Reset(Outputs.Num());
+	for (const FMIDIDeviceInfo& Output : Outputs)
+	{
+		OutOutputs.Add(Output.DeviceName);
+	}
 }
 
 bool UStageRemoteControlSubsystem::StartMidiLearn(EStageRemoteAction Action, int32 PlaybackNumber, float CueNumber, FText& OutError)
@@ -160,10 +207,11 @@ bool UStageRemoteControlSubsystem::StartMidiLearn(EStageRemoteAction Action, int
 	{
 		LearnTemplate.Reset();
 		Status.Learning = EStageRemoteAction::None;
+		Status.LearningPlayback = 0;
 		BroadcastStatus();
 		return true;
 	}
-	if (!MidiInput)
+	if (!CheckMidiDevices() || !MidiInput)
 	{
 		OutError = LOCTEXT("LearnNoMidi", "Choose a MIDI input first.");
 		return false;
@@ -180,6 +228,7 @@ bool UStageRemoteControlSubsystem::StartMidiLearn(EStageRemoteAction Action, int
 	}
 	LearnTemplate = Template;
 	Status.Learning = Action;
+	Status.LearningPlayback = StageRemote::UsesPlayback(Action) ? PlaybackNumber : 0;
 	BroadcastStatus();
 	return true;
 }
@@ -212,12 +261,75 @@ void UStageRemoteControlSubsystem::OpenInputs(FText& OutError)
 		OutError = OscError.IsEmpty() ? MidiError : OscError;
 	}
 	SetProblem(OutError);
+	UpdateShowBinding();
+	RestartMidiFeedback();
 }
 
 void UStageRemoteControlSubsystem::CloseInputs()
 {
+	UnbindShow();
 	CloseOsc();
 	CloseMidi();
+}
+
+void UStageRemoteControlSubsystem::UpdateShowBinding()
+{
+	const bool bOscFeedback = OscServer && GetSettings().OscFeedbackPort > 0;
+	if (bOscFeedback || MidiOutput)
+	{
+		BindShow();
+	}
+	else
+	{
+		UnbindShow();
+	}
+}
+
+void UStageRemoteControlSubsystem::RestartMidiFeedback()
+{
+	if (MidiOutput)
+	{
+		// The previous map's lights and faders that no binding answers any more would otherwise stay as they were.
+		TArray<StageRemote::FMidiOutMessage> Messages;
+		StageRemote::CollectUnboundOff(StageRemote::EffectiveMidiBindings(GetSettings()), MidiShown, MidiClock(), Messages);
+		Status.MidiSent += StageRemoteControl::SendMidiMessages(MidiOutput, Messages);
+	}
+	MidiShown.Reset();
+	ScheduleFeedback();
+}
+
+void UStageRemoteControlSubsystem::ArmMidiSettle(double Delay)
+{
+	UWorld* World = GetWorld();
+	if (!World || !MidiOutput)
+	{
+		return;
+	}
+	// One timer, pushed back by every move: it fires once the last hold has ended.
+	constexpr double Margin = 0.02;
+	World->GetTimerManager().SetTimer(MidiSettleTimer, FTimerDelegate::CreateUObject(this, &ThisClass::ScheduleFeedback),
+		static_cast<float>(FMath::Max(Delay, 0.0) + Margin), /*bLoop*/ false);
+}
+
+double UStageRemoteControlSubsystem::MidiClock() const
+{
+	const UWorld* World = GetWorld();
+	return World ? World->GetRealTimeSeconds() : 0.0;
+}
+
+bool UStageRemoteControlSubsystem::CheckMidiDevices()
+{
+	const bool bInputLost = Status.bMidiOpen && !IsValid(MidiInput);
+	const bool bOutputLost = Status.bMidiOutputOpen && !IsValid(MidiOutput);
+	if (!bInputLost && !bOutputLost)
+	{
+		return true;
+	}
+	CloseMidi();
+	SetProblem(LOCTEXT("MidiLost", "The MIDI controller was disconnected. Plug it in, then choose it again."));
+	UE_LOG(LogStageCraft, Warning, TEXT("Remote: a MIDI device was disconnected (input lost: %d, output lost: %d)."), bInputLost, bOutputLost);
+	BroadcastStatus();
+	return false;
 }
 
 bool UStageRemoteControlSubsystem::OpenOsc(FText& OutError)
@@ -255,17 +367,12 @@ bool UStageRemoteControlSubsystem::OpenOsc(FText& OutError)
 	Status.OscEndpoint = Settings.OscScope == EStageOscScope::ThisComputer
 		? FString::Printf(TEXT("port %d, this PC only"), Settings.OscPort)
 		: FString::Printf(TEXT("port %d, every network"), Settings.OscPort);
-	if (Settings.OscFeedbackPort > 0)
-	{
-		BindShow();
-	}
 	UE_LOG(LogStageCraft, Log, TEXT("Remote: OSC listening on %s (feedback port %d)."), *Status.OscEndpoint, Settings.OscFeedbackPort);
 	return true;
 }
 
 void UStageRemoteControlSubsystem::CloseOsc()
 {
-	UnbindShow();
 	if (OscServer)
 	{
 		OscServer->OnOscMessageReceivedNative.Remove(OscMessageHandle);
@@ -283,55 +390,109 @@ void UStageRemoteControlSubsystem::CloseOsc()
 bool UStageRemoteControlSubsystem::OpenMidi(FText& OutError)
 {
 	const FStageRemoteSettings& Settings = GetSettings();
-	if (Settings.MidiInputName.IsEmpty())
+	if (Settings.MidiInputName.IsEmpty() && Settings.MidiOutputName.IsEmpty())
 	{
 		return true;
 	}
 
-	// By name, every time: a controller plugged into another USB port gets another ID but keeps its name.
+	// By name, every time: a controller plugged into another USB port gets another ID but keeps its name. One listing for both,
+	// because each one restarts the engine's MIDI layer.
 	TArray<FMIDIDeviceInfo> Inputs;
 	TArray<FMIDIDeviceInfo> Outputs;
 	UMIDIDeviceManager::FindAllMIDIDeviceInfo(Inputs, Outputs);
-	const FMIDIDeviceInfo* Found = Inputs.FindByPredicate([&Settings](const FMIDIDeviceInfo& Info) { return Info.DeviceName == Settings.MidiInputName; });
-	if (!Found)
+	TArray<FText> Errors;
+
+	if (!Settings.MidiInputName.IsEmpty())
 	{
-		OutError = FText::Format(LOCTEXT("MidiMissing", "The MIDI input \"{0}\" is not connected."), FText::FromString(Settings.MidiInputName));
-		return false;
-	}
-	if (Found->bIsAlreadyInUse)
-	{
-		OutError = FText::Format(LOCTEXT("MidiInUse", "The MIDI input \"{0}\" is in use by another program."), FText::FromString(Settings.MidiInputName));
-		return false;
+		const FMIDIDeviceInfo* Found = Inputs.FindByPredicate([&Settings](const FMIDIDeviceInfo& Info) { return Info.DeviceName == Settings.MidiInputName; });
+		UMIDIDeviceInputController* Input = Found && !Found->bIsAlreadyInUse
+			? UMIDIDeviceManager::CreateMIDIDeviceInputController(Found->DeviceID, StageRemoteControl::MidiBufferSize) : nullptr;
+		if (!Found)
+		{
+			Errors.Add(FText::Format(LOCTEXT("MidiMissing", "The MIDI input \"{0}\" is not connected."), FText::FromString(Settings.MidiInputName)));
+		}
+		else if (Found->bIsAlreadyInUse)
+		{
+			Errors.Add(FText::Format(LOCTEXT("MidiInUse", "The MIDI input \"{0}\" is in use by another program."), FText::FromString(Settings.MidiInputName)));
+		}
+		else if (!Input)
+		{
+			Errors.Add(FText::Format(LOCTEXT("MidiOpenFailed", "The MIDI input \"{0}\" could not be opened."), FText::FromString(Settings.MidiInputName)));
+		}
+		else
+		{
+			MidiInput = Input;
+			MidiEventHandle = MidiInput->OnMIDIRawEvent.AddUObject(this, &ThisClass::HandleMidiEvent);
+			Status.bMidiOpen = true;
+			Status.MidiDevice = Settings.MidiInputName;
+			UE_LOG(LogStageCraft, Log, TEXT("Remote: MIDI input \"%s\" open."), *Settings.MidiInputName);
+		}
 	}
 
-	UMIDIDeviceInputController* Input = UMIDIDeviceManager::CreateMIDIDeviceInputController(Found->DeviceID, StageRemoteControl::MidiBufferSize);
-	if (!Input)
+	if (!Settings.MidiOutputName.IsEmpty())
 	{
-		OutError = FText::Format(LOCTEXT("MidiOpenFailed", "The MIDI input \"{0}\" could not be opened."), FText::FromString(Settings.MidiInputName));
-		return false;
+		const FMIDIDeviceInfo* Found = Outputs.FindByPredicate([&Settings](const FMIDIDeviceInfo& Info) { return Info.DeviceName == Settings.MidiOutputName; });
+		UMIDIDeviceOutputController* Output = Found && !Found->bIsAlreadyInUse ? UMIDIDeviceManager::CreateMIDIDeviceOutputController(Found->DeviceID) : nullptr;
+		if (!Found)
+		{
+			Errors.Add(FText::Format(LOCTEXT("MidiOutMissing", "The MIDI output \"{0}\" is not connected."), FText::FromString(Settings.MidiOutputName)));
+		}
+		else if (Found->bIsAlreadyInUse)
+		{
+			Errors.Add(FText::Format(LOCTEXT("MidiOutInUse", "The MIDI output \"{0}\" is in use by another program."), FText::FromString(Settings.MidiOutputName)));
+		}
+		else if (!Output)
+		{
+			Errors.Add(FText::Format(LOCTEXT("MidiOutOpenFailed", "The MIDI output \"{0}\" could not be opened."), FText::FromString(Settings.MidiOutputName)));
+		}
+		else
+		{
+			MidiOutput = Output;
+			Status.bMidiOutputOpen = true;
+			Status.MidiOutputDevice = Settings.MidiOutputName;
+			UE_LOG(LogStageCraft, Log, TEXT("Remote: MIDI output \"%s\" open (feedback)."), *Settings.MidiOutputName);
+		}
 	}
-	MidiInput = Input;
-	MidiEventHandle = MidiInput->OnMIDIRawEvent.AddUObject(this, &ThisClass::HandleMidiEvent);
-	Status.bMidiOpen = true;
-	Status.MidiDevice = Settings.MidiInputName;
-	UE_LOG(LogStageCraft, Log, TEXT("Remote: MIDI input \"%s\" open."), *Settings.MidiInputName);
-	return true;
+
+	OutError = FText::Join(FText::FromString(TEXT(" ")), Errors);
+	return Errors.IsEmpty();
 }
 
 void UStageRemoteControlSubsystem::CloseMidi()
 {
-	if (MidiInput)
+	if (UWorld* World = GetWorld())
+	{
+		World->GetTimerManager().ClearTimer(MidiSettleTimer);
+	}
+	// IsValid: the engine may have dropped a device already (CheckMidiDevices); its object is garbage but not yet collected.
+	if (IsValid(MidiInput))
 	{
 		MidiInput->OnMIDIRawEvent.Remove(MidiEventHandle);
 		MidiInput->ShutdownDevice();
+		// Engine finding (UE 5.8): every device listing (UMIDIDeviceManager::FindAllMIDIDeviceInfo) restarts each live controller object,
+		// a shut-down one too, until garbage collection removes it. It would take the device back, and reopening it here would fail as
+		// "in use". Marked as garbage, the listing skips it, as the engine does with a controller it could not restart.
+		MidiInput->MarkAsGarbage();
 		UE_LOG(LogStageCraft, Log, TEXT("Remote: MIDI input \"%s\" closed."), *Status.MidiDevice);
 	}
 	MidiEventHandle.Reset();
 	MidiInput = nullptr;
 	LearnTemplate.Reset();
 	Status.Learning = EStageRemoteAction::None;
+	Status.LearningPlayback = 0;
 	Status.bMidiOpen = false;
 	Status.MidiDevice.Reset();
+
+	if (IsValid(MidiOutput))
+	{
+		MidiOutput->ShutdownDevice();
+		MidiOutput->MarkAsGarbage();
+		UE_LOG(LogStageCraft, Log, TEXT("Remote: MIDI output \"%s\" closed."), *Status.MidiOutputDevice);
+	}
+	MidiOutput = nullptr;
+	MidiShown = FStageMidiFeedbackMemory();
+	Status.bMidiOutputOpen = false;
+	Status.MidiOutputDevice.Reset();
 }
 
 // --- Input ---
@@ -393,20 +554,28 @@ void UStageRemoteControlSubsystem::ReceiveMidi(int32 Type, int32 Channel, int32 
 	}
 	++Status.Received;
 	Status.LastInput = StageRemote::DescribeMidi(Type, Channel, Data1, Data2);
+	const double Now = MidiClock();
+	if (MidiOutput && StageRemote::IsMidiEcho(Type, Channel, Data1, Data2, MidiShown, Now))
+	{
+		// Our own feedback coming back (a virtual port or a controller's MIDI thru): a lit GO light must not fire GO again.
+		++Status.Ignored;
+		Status.LastInput += TEXT(" (echo of feedback)");
+		MarkStatusDirty();
+		return;
+	}
+	if (StageRemote::NoteMidiInput(Type, Channel, Data1, Data2, StageRemote::EffectiveMidiBindings(GetSettings()), MidiShown, Now))
+	{
+		ArmMidiSettle(StageRemote::MidiHoldSeconds);
+	}
 
 	if (LearnTemplate.IsSet())
 	{
 		FStageMidiBinding Binding = LearnTemplate.GetValue();
 		if (StageRemote::LearnFromMidi(Type, Channel, Data1, Data2, Binding))
 		{
-			// The learned press is the binding, not a command. The map becomes the user's from the one in force.
+			// The learned press is the binding, not a command. The control now drives this target only, and the target only this control.
 			FStageRemoteSettings Settings = GetSettings();
-			if (!Settings.bCustomMidiMap)
-			{
-				Settings.MidiBindings = StageRemote::DefaultMidiBindings();
-				Settings.bCustomMidiMap = true;
-			}
-			Settings.MidiBindings.Add(Binding);
+			StageRemote::AssignLearned(Settings, Binding);
 			if (UStageCraftUserSettings* UserSettings = UStageCraftUserSettings::Get())
 			{
 				if (UserSettings->SetRemoteSettings(Settings))
@@ -417,6 +586,8 @@ void UStageRemoteControlSubsystem::ReceiveMidi(int32 Type, int32 Channel, int32 
 			UE_LOG(LogStageCraft, Log, TEXT("Remote: learned %s for %s."), *Status.LastInput, *StageRemote::DescribeAction(Binding.Action, Binding.Playback).ToString());
 			LearnTemplate.Reset();
 			Status.Learning = EStageRemoteAction::None;
+			Status.LearningPlayback = 0;
+			RestartMidiFeedback();
 			BroadcastStatus();
 			return;
 		}
@@ -528,7 +699,8 @@ void UStageRemoteControlSubsystem::HandleShowDeskChanged()
 void UStageRemoteControlSubsystem::ScheduleFeedback()
 {
 	UWorld* World = GetWorld();
-	if (!World || !BoundShow.IsValid() || FeedbackHost.IsEmpty() || FeedbackTimer.IsValid())
+	const bool bSomeoneListens = MidiOutput || (OscServer && !FeedbackHost.IsEmpty());
+	if (!World || !BoundShow.IsValid() || !bSomeoneListens || FeedbackTimer.IsValid())
 	{
 		return;
 	}
@@ -538,10 +710,57 @@ void UStageRemoteControlSubsystem::ScheduleFeedback()
 
 void UStageRemoteControlSubsystem::SendFeedback()
 {
+	if (UWorld* World = GetWorld())
+	{
+		World->GetTimerManager().ClearTimer(FeedbackTimer);
+	}
 	FeedbackTimer.Invalidate();
-	const UShowControlSubsystem* Show = BoundShow.Get();
+	if (const UShowControlSubsystem* Show = BoundShow.Get())
+	{
+		SendOscFeedback(*Show);
+		SendMidiFeedback(*Show);
+	}
+}
+
+void UStageRemoteControlSubsystem::SendMidiFeedback(const UShowControlSubsystem& Show)
+{
+	if (!MidiOutput || !CheckMidiDevices())
+	{
+		return;
+	}
+	StageRemote::FMidiShowState State;
+	State.Levels.SetNum(StagePlaybackRules::Count);
+	State.Flashing.SetNum(StagePlaybackRules::Count);
+	State.Active.SetNum(StagePlaybackRules::Count);
+	for (int32 Index = 0; Index < StagePlaybackRules::Count; ++Index)
+	{
+		State.Levels[Index] = Show.GetPlaybackLevel(Index);
+		State.Flashing[Index] = Show.IsPlaybackFlashing(Index);
+		State.Active[Index] = Show.IsPlaybackActive(Index);
+	}
+	State.GrandMaster = Show.GetGrandMaster();
+	State.bBlackout = Show.IsBlackout();
+	State.AudioMaster = Show.GetAudioMaster();
+
+	TArray<StageRemote::FMidiOutMessage> Messages;
+	double HoldUntil = 0.0;
+	const double Now = MidiClock();
+	StageRemote::CollectMidiFeedback(StageRemote::EffectiveMidiBindings(GetSettings()), State, MidiShown, Now, Messages, HoldUntil);
+	if (HoldUntil > 0.0)
+	{
+		ArmMidiSettle(HoldUntil - Now);
+	}
+	if (const int32 Sent = StageRemoteControl::SendMidiMessages(MidiOutput, Messages))
+	{
+		Status.MidiSent += Sent;
+		MarkStatusDirty();
+	}
+}
+
+void UStageRemoteControlSubsystem::SendOscFeedback(const UShowControlSubsystem& Show)
+{
 	const int32 Port = GetSettings().OscFeedbackPort;
-	if (!Show || FeedbackHost.IsEmpty() || Port <= 0)
+	if (!OscServer || FeedbackHost.IsEmpty() || Port <= 0)
 	{
 		return;
 	}
@@ -566,14 +785,14 @@ void UStageRemoteControlSubsystem::SendFeedback()
 			SendFeedbackValue(Address, Value);
 		}
 	};
-	SendIfChanged(SentFeedback.ActiveCue, Show->GetActiveCueNumber(), TEXT("/stagecraft/cue/active"));
+	SendIfChanged(SentFeedback.ActiveCue, Show.GetActiveCueNumber(), TEXT("/stagecraft/cue/active"));
 	for (int32 Index = 0; Index < SentFeedback.Levels.Num(); ++Index)
 	{
-		SendIfChanged(SentFeedback.Levels[Index], Show->GetPlaybackLevel(Index), StageRemote::OscAddressFor(EStageRemoteAction::PlaybackLevel, Index));
+		SendIfChanged(SentFeedback.Levels[Index], Show.GetPlaybackLevel(Index), StageRemote::OscAddressFor(EStageRemoteAction::PlaybackLevel, Index));
 	}
-	SendIfChanged(SentFeedback.GrandMaster, Show->GetGrandMaster(), StageRemote::OscAddressFor(EStageRemoteAction::GrandMaster, 0));
-	SendIfChanged(SentFeedback.Blackout, Show->IsBlackout() ? 1.f : 0.f, StageRemote::OscAddressFor(EStageRemoteAction::Blackout, 0));
-	SendIfChanged(SentFeedback.AudioMaster, Show->GetAudioMaster(), StageRemote::OscAddressFor(EStageRemoteAction::AudioMaster, 0));
+	SendIfChanged(SentFeedback.GrandMaster, Show.GetGrandMaster(), StageRemote::OscAddressFor(EStageRemoteAction::GrandMaster, 0));
+	SendIfChanged(SentFeedback.Blackout, Show.IsBlackout() ? 1.f : 0.f, StageRemote::OscAddressFor(EStageRemoteAction::Blackout, 0));
+	SendIfChanged(SentFeedback.AudioMaster, Show.GetAudioMaster(), StageRemote::OscAddressFor(EStageRemoteAction::AudioMaster, 0));
 }
 
 void UStageRemoteControlSubsystem::SendFeedbackValue(const FString& Address, float Value)

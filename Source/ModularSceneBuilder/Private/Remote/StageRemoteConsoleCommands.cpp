@@ -40,11 +40,12 @@ namespace StageRemoteConsoleCommands
 		}
 		const FStageRemoteStatus& State = Remote->GetStatus();
 		const FStageRemoteSettings& Settings = Remote->GetSettings();
-		UE_LOG(LogStageCraft, Display, TEXT("StageCraft.Remote.Status: OSC %s (%s, feedback port %d, feedback to %s); MIDI %s; map %s (%d bindings); learning %s"),
+		UE_LOG(LogStageCraft, Display, TEXT("StageCraft.Remote.Status: OSC %s (%s, feedback port %d, feedback to %s); MIDI %s; MIDI out %s (%lld sent); map %s (%d bindings); learning %s %d"),
 			State.bOscListening ? TEXT("on") : TEXT("off"), *State.OscEndpoint, Settings.OscFeedbackPort,
 			Settings.OscFeedbackPort > 0 ? TEXT("last sender") : TEXT("nobody"),
-			State.bMidiOpen ? *State.MidiDevice : TEXT("off"), Settings.bCustomMidiMap ? TEXT("custom") : TEXT("default"),
-			StageRemote::EffectiveMidiBindings(Settings).Num(), *UEnum::GetValueAsString(State.Learning));
+			State.bMidiOpen ? *State.MidiDevice : TEXT("off"), State.bMidiOutputOpen ? *State.MidiOutputDevice : TEXT("off"), State.MidiSent,
+			Settings.bCustomMidiMap ? TEXT("custom") : TEXT("default"),
+			StageRemote::EffectiveMidiBindings(Settings).Num(), *UEnum::GetValueAsString(State.Learning), State.LearningPlayback);
 		UE_LOG(LogStageCraft, Display, TEXT("StageCraft.Remote.Status: received %lld, applied %lld, refused %lld, ignored %lld, dropped %lld; last input \"%s\"; problem \"%s\"; last refusal \"%s\""),
 			State.Received, State.Applied, State.Refused, State.Ignored, State.Dropped, *State.LastInput, *State.LastProblem.ToString(), *State.LastRefusal.ToString());
 		if (Args.Contains(TEXT("Map")))
@@ -57,14 +58,21 @@ namespace StageRemoteConsoleCommands
 		}
 		if (Args.Contains(TEXT("Devices")))
 		{
-			for (const FString& Name : UStageRemoteControlSubsystem::FindMidiInputs())
+			TArray<FString> Inputs;
+			TArray<FString> Outputs;
+			UStageRemoteControlSubsystem::FindMidiDevices(Inputs, Outputs);
+			for (const FString& Name : Inputs)
 			{
 				UE_LOG(LogStageCraft, Display, TEXT("  MIDI input: %s"), *Name);
+			}
+			for (const FString& Name : Outputs)
+			{
+				UE_LOG(LogStageCraft, Display, TEXT("  MIDI output: %s"), *Name);
 			}
 		}
 	}
 
-	/** Off|Local|Network [Port=n] [Feedback=n] [Midi=name|Off] [Map=Default] */
+	/** Off|Local|Network [Port=n] [Feedback=n] [Midi=name|#n|Off] [MidiOut=name|#n|Off] [Map=Default] [Clear=Action[:Playback]] */
 	void Settings(const TArray<FString>& Args, UWorld* World)
 	{
 		AModularPlayerController* Controller = FindController(World);
@@ -74,6 +82,24 @@ namespace StageRemoteConsoleCommands
 			return;
 		}
 		FStageRemoteSettings Settings = Remote->GetSettings();
+		// #N picks the Nth device of the listing: StageCraft.Workspace.Delay splits a scripted command on spaces, and device names have them.
+		const auto DeviceName = [](const FString& Value, bool bOutput)
+		{
+			if (Value.Equals(TEXT("Off"), ESearchCase::IgnoreCase))
+			{
+				return FString();
+			}
+			if (Value.StartsWith(TEXT("#")))
+			{
+				TArray<FString> Inputs;
+				TArray<FString> Outputs;
+				UStageRemoteControlSubsystem::FindMidiDevices(Inputs, Outputs);
+				const TArray<FString>& Names = bOutput ? Outputs : Inputs;
+				const int32 Index = FCString::Atoi(*Value.Mid(1)) - 1;
+				return Names.IsValidIndex(Index) ? Names[Index] : Value;
+			}
+			return Value;
+		};
 		for (const FString& Arg : Args)
 		{
 			FString Key;
@@ -87,7 +113,25 @@ namespace StageRemoteConsoleCommands
 			else if (Key.Equals(TEXT("Network"), ESearchCase::IgnoreCase)) { Settings.OscScope = EStageOscScope::Network; }
 			else if (Key.Equals(TEXT("Port"), ESearchCase::IgnoreCase)) { Settings.OscPort = FCString::Atoi(*Value); }
 			else if (Key.Equals(TEXT("Feedback"), ESearchCase::IgnoreCase)) { Settings.OscFeedbackPort = FCString::Atoi(*Value); }
-			else if (Key.Equals(TEXT("Midi"), ESearchCase::IgnoreCase)) { Settings.MidiInputName = Value.Equals(TEXT("Off"), ESearchCase::IgnoreCase) ? FString() : Value; }
+			else if (Key.Equals(TEXT("Midi"), ESearchCase::IgnoreCase)) { Settings.MidiInputName = DeviceName(Value, false); }
+			else if (Key.Equals(TEXT("MidiOut"), ESearchCase::IgnoreCase)) { Settings.MidiOutputName = DeviceName(Value, true); }
+			else if (Key.Equals(TEXT("Clear"), ESearchCase::IgnoreCase))
+			{
+				// As MIDI MAP's CLEAR: Clear=GrandMaster, Clear=PlaybackLevel:3.
+				FString ActionName;
+				FString PlaybackText;
+				if (!Value.Split(TEXT(":"), &ActionName, &PlaybackText))
+				{
+					ActionName = Value;
+				}
+				const int64 Action = StaticEnum<EStageRemoteAction>()->GetValueByNameString(ActionName);
+				if (Action == INDEX_NONE)
+				{
+					UE_LOG(LogStageCraft, Warning, TEXT("StageCraft.Remote.Settings: unknown action %s."), *ActionName);
+					return;
+				}
+				StageRemote::ClearTarget(Settings, static_cast<EStageRemoteAction>(Action), PlaybackText.IsEmpty() ? 1 : FCString::Atoi(*PlaybackText));
+			}
 			else if (Key.Equals(TEXT("Map"), ESearchCase::IgnoreCase) && Value.Equals(TEXT("Default"), ESearchCase::IgnoreCase))
 			{
 				Settings.MidiBindings.Reset();
@@ -163,10 +207,10 @@ namespace StageRemoteConsoleCommands
 	}
 
 	FAutoConsoleCommandWithWorldAndArgs StatusCommand(TEXT("StageCraft.Remote.Status"),
-		TEXT("Logs the MIDI and OSC inputs, their counters and the last input. [Map] lists the MIDI map, [Devices] the MIDI inputs."),
+		TEXT("Logs the MIDI and OSC inputs, their counters and the last input. [Map] lists the MIDI map, [Devices] the MIDI inputs and outputs."),
 		FConsoleCommandWithWorldAndArgsDelegate::CreateStatic(&Status));
 	FAutoConsoleCommandWithWorldAndArgs SettingsCommand(TEXT("StageCraft.Remote.Settings"),
-		TEXT("Changes the remote settings through the player's request: Off|Local|Network [Port=n] [Feedback=n] [Midi=<name>|Off] [Map=Default]."),
+		TEXT("Changes the remote settings through the player's request: Off|Local|Network [Port=n] [Feedback=n] [Midi=<name>|#n|Off] [MidiOut=<name>|#n|Off] [Map=Default] [Clear=<Action>[:Playback]]."),
 		FConsoleCommandWithWorldAndArgsDelegate::CreateStatic(&Settings));
 	FAutoConsoleCommandWithWorldAndArgs LearnCommand(TEXT("StageCraft.Remote.Learn"),
 		TEXT("MIDI learn through the player's request: <Action> [Playback] [Cue] | Cancel. Actions: CueGo, CueBack, CueGoTo, PlaybackLevel, PlaybackFlash, PlaybackGo, PlaybackRelease, GrandMaster, Blackout, AudioMaster."),

@@ -762,7 +762,8 @@ public:
 
 	/**
 	 * Replaces this PC's MIDI and OSC settings (Preferences › Remote control, Docs/ADR/0035 §4): sanitized, saved, and the inputs reopen
-	 * with them. Switching an input on asks the GameMode (EvaluateRemoteControl); switching off is always allowed. A port or device that
+	 * with them (a map edit reopens nothing). Switching an input on asks the GameMode (EvaluateRemoteControl); switching off and editing
+	 * the MIDI map are always allowed (StageRemote::NeedsVerdict). A port or device that
 	 * cannot open is reported on OnRequestRejected; the settings are kept, so the next stage tries again.
 	 */
 	FStageEconomyResultInfo RequestSetRemoteControl(const struct FStageRemoteSettings& Settings);

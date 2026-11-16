@@ -129,9 +129,9 @@ FStageEconomyResultInfo AModularPlayerController::RequestSetRemoteControl(const 
 		return Refusal;
 	}
 
-	// Switching an input on is a capability the session may withhold; switching off never is.
-	const bool bTurnsSomethingOn = Settings.OscScope != EStageOscScope::Off || !Settings.MidiInputName.TrimStartAndEnd().IsEmpty();
-	if (bTurnsSomethingOn)
+	// Switching an input on is a capability the session may withhold; switching off never is, and neither is editing the map (MIDI
+	// MAP's LEARN, CLEAR and RESET), since every command a control sends is judged when it runs.
+	if (StageRemote::NeedsVerdict(Remote->GetSettings(), Settings))
 	{
 		const AStageCraftGameModeBase* GameMode = GetStageGameMode();
 		const FStageEconomyResultInfo Verdict = GameMode ? GameMode->EvaluateRemoteControl(this)

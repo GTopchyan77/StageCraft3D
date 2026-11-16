@@ -116,6 +116,13 @@ struct FStageRemoteSettings
 	UPROPERTY(Config)
 	FString MidiInputName;
 
+	/**
+	 * The MIDI output device that receives the show's state (motor faders, LEDs; Docs/ADR/0035 §12), by name; empty = no MIDI feedback.
+	 * Usually the same controller as the input, which lists itself once as an input and once as an output.
+	 */
+	UPROPERTY(Config)
+	FString MidiOutputName;
+
 	/** The MIDI map. Empty while bCustomMidiMap is false means the default map (StageRemote::DefaultMidiBindings). */
 	UPROPERTY(Config)
 	TArray<FStageMidiBinding> MidiBindings;
@@ -127,7 +134,8 @@ struct FStageRemoteSettings
 	bool operator==(const FStageRemoteSettings& Other) const
 	{
 		return OscScope == Other.OscScope && OscPort == Other.OscPort && OscFeedbackPort == Other.OscFeedbackPort
-			&& MidiInputName == Other.MidiInputName && MidiBindings == Other.MidiBindings && bCustomMidiMap == Other.bCustomMidiMap;
+			&& MidiInputName == Other.MidiInputName && MidiOutputName == Other.MidiOutputName && MidiBindings == Other.MidiBindings
+			&& bCustomMidiMap == Other.bCustomMidiMap;
 	}
 };
 
@@ -160,6 +168,35 @@ struct FStageRemoteCommand
 	}
 };
 
+/**
+ * What a MIDI controller shows now, as far as MIDI feedback knows (StageRemote::CollectMidiFeedback), so only changes are sent. Reset()
+ * when the output opens or the map changes: every bound control is then sent once. HeardChannel keeps the channel each control was last
+ * heard on, so an "any channel" binding answers on it. Keys are StageRemote's (trigger, channel, number). Plain data, game thread.
+ */
+struct FStageMidiFeedbackMemory
+{
+	TMap<uint32, int32> Shown;
+	TMap<uint32, int32> HeardChannel;
+
+	/**
+	 * When the hand last moved each fader or knob (the caller's clock, seconds). Feedback leaves it alone for StageRemote::MidiHoldSeconds:
+	 * the desk applies a move a frame later, so answering during a move would send the hand an older value.
+	 */
+	TMap<uint32, double> LastMoved;
+
+	/** A message sent to the output, kept for StageRemote::MidiEchoSeconds so its echo (an output looped into the input) is dropped. */
+	struct FSent
+	{
+		uint32 Key = 0;
+		int32 Value = 0;
+		double Time = 0.0;
+	};
+	TArray<FSent> RecentSent;
+
+	/** Everything is sent again on the next feedback; the hand's holds and the channels heard stay. */
+	void Reset() { Shown.Reset(); }
+};
+
 /** What the remote inputs are doing, for the Preferences panel and the status command. */
 struct FStageRemoteStatus
 {
@@ -169,8 +206,12 @@ struct FStageRemoteStatus
 	/** The open MIDI input device; empty while MIDI is off or the device is missing. */
 	FString MidiDevice;
 	bool bMidiOpen = false;
-	/** The action MIDI learn waits to bind, None when not learning. */
+	/** The open MIDI output device (feedback); empty while it is off or missing. */
+	FString MidiOutputDevice;
+	bool bMidiOutputOpen = false;
+	/** The target MIDI learn waits to bind, None when not learning; LearningPlayback is its playback (1–10) for playback actions. */
 	EStageRemoteAction Learning = EStageRemoteAction::None;
+	int32 LearningPlayback = 0;
 
 	/** Messages and events received (OSC messages, MIDI channel events). */
 	int64 Received = 0;
@@ -182,6 +223,8 @@ struct FStageRemoteStatus
 	int64 Ignored = 0;
 	/** Commands over the per-frame limit. */
 	int64 Dropped = 0;
+	/** MIDI feedback messages sent to the output device. */
+	int64 MidiSent = 0;
 
 	/** "OSC /stagecraft/playback/1/level 0.50", "MIDI CC 0 ch 1 = 64": the last input, for checking a controller. */
 	FString LastInput;

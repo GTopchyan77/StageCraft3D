@@ -72,12 +72,29 @@ private:
 	void HandleMutePicked(int32 Index);
 	void HandleSliderMoved(int32 SliderIndex, float Value);
 
-	/** REMOTE CONTROL (Docs/ADR/0035): OSC scope, MIDI input and the status line. Written through the controller's request. */
+	/**
+	 * REMOTE CONTROL (Docs/ADR/0035): OSC scope, MIDI input and output, the MIDI MAP editor (§11) and the status line. Written through
+	 * the controller's requests. The map editor's rows are built once and only relabelled: LEARN and CLEAR change the map from inside
+	 * their own click, so nothing may be rebuilt then (Rules.md Safe data binding).
+	 */
 	class UWidget* BuildRemoteSection();
+	/** One MIDI MAP row: the target's name, its controls, LEARN and CLEAR. Index is into StagePreferencesPanel::MidiTargets. */
+	class UWidget* BuildMidiTargetRow(int32 Index);
 	void HandleOscPicked(int32 Index);
 	void HandleMidiPicked(int32 Index);
+	void HandleMidiOutputPicked(int32 Index);
+	/** RESET TO DEFAULT, CLEAR ALL. */
+	void HandleMidiMapPicked(int32 Index);
+	/** The playback (1–10) the playback rows of MIDI MAP edit. */
+	void HandleMidiPlaybackPicked(int32 Index);
+	/** LEARN on target row Index: waits for a control, or cancels when that row is already waiting. */
+	void HandleMidiLearnPicked(int32 Index);
+	void HandleMidiClearPicked(int32 Index);
 	void ApplyRemoteSettings(const struct FStageRemoteSettings& Settings);
 	void RefreshRemote();
+	void RefreshMidiMap(const struct FStageRemoteSettings& Settings, const struct FStageRemoteStatus* Status);
+	/** The playback target row Index edits: MidiMapPlayback for the playback rows, 1 (ignored) for the others. */
+	int32 MidiTargetPlayback(int32 Index) const;
 
 	/**
 	 * WEB REMOTE (Docs/ADR/0036): scope, remembering devices, NEW PIN and UNPAIR ALL, a QR code that opens the page and pairs, the paired
@@ -172,6 +189,33 @@ private:
 	TArray<TObjectPtr<class UStageChoiceButton>> MidiButtons;
 
 	TArray<FString> MidiInputNames;
+
+	/** Off, then one per MIDI output found when the panel was built (MidiOutputNames). */
+	UPROPERTY(Transient)
+	TArray<TObjectPtr<class UStageChoiceButton>> MidiOutputButtons;
+
+	TArray<FString> MidiOutputNames;
+
+	/** RESET TO DEFAULT, CLEAR ALL: actions, never shown as selected. */
+	UPROPERTY(Transient)
+	TArray<TObjectPtr<class UStageChoiceButton>> MidiMapButtons;
+
+	/** Playbacks 1–10 for the playback rows of MIDI MAP. */
+	UPROPERTY(Transient)
+	TArray<TObjectPtr<class UStageChoiceButton>> MidiPlaybackButtons;
+
+	/** One per MIDI MAP target row: the controls that drive it, LEARN, CLEAR. */
+	UPROPERTY(Transient)
+	TArray<TObjectPtr<class UTextBlock>> MidiTargetTexts;
+
+	UPROPERTY(Transient)
+	TArray<TObjectPtr<class UStageChoiceButton>> MidiLearnButtons;
+
+	UPROPERTY(Transient)
+	TArray<TObjectPtr<class UStageChoiceButton>> MidiClearButtons;
+
+	/** The playback (1–10) the playback rows of MIDI MAP show; view state only. */
+	int32 MidiMapPlayback = 1;
 
 	UPROPERTY(Transient)
 	TObjectPtr<class UTextBlock> RemoteStatusText = nullptr;

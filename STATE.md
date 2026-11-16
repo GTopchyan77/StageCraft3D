@@ -9416,10 +9416,97 @@ All times in ms.
 - **Shipping scan (UTF-16 and ASCII):** `StageCraft.WebRemote.Pin=`, `to=<WidgetName>` and `StageCraft.Licence.Status` are absent. "Remember devices", "OTHER ADDRESS", `WebRemoteDevices.json` and `/api/unpair` are present.
 - **Not verified:** a real phone scanning the code and auto-pairing (the page's fragment handling was syntax-checked, not run in a mobile browser), and the Unpair button on a phone.
 
-**Commit:** uncommitted (working tree).
+**Commit:** `2b5e73a`.
 
 **Known issues / follow-ups**
 - **Gevor:** scan the QR with a real phone on Wi-Fi (Network scope), check auto-pairing, restart StageCraft and see the phone reconnect without a PIN, then Unpair on the phone and FORGET in Preferences.
 - **Gevor:** confirm the D7 parts in ADR 0036 §9: plain HTTP; remembered by default; 30 days unused and 90 days from pairing.
 - The page's layout options (the third WR2 item) were not done; they stay in tasks/todo.md.
 - **Pre-existing, not changed:** the server opens from saved settings at BeginPlay without asking the GameMode (WR1). Every command is still judged.
+
+---
+
+## #96 — MIDI MR2: MIDI MAP editor with LEARN and MIDI output feedback (ADR 0035 §11–§12) (2026-11-16)
+
+**What & why**
+- **Context.** Gevor asked (2026-11-16) for WR4 or MR2 from tasks/todo.md. MR2 was chosen: it is fully specified in ADR 0035 §7 (mapping editor with LEARN in Preferences, MIDI output feedback). WR4 ("page layout options") has no specification yet.
+  - Before this change, learn existed only as a dev console command, and MIDI was input only.
+- **Housekeeping first.** #95 said "uncommitted"; it now carries `2b5e73a`.
+- **MIDI MAP editor** (Preferences › REMOTE CONTROL):
+  - **Rows:** Cue GO, Cue BACK, Grand Master, Blackout and Audio master; then a Playback 1–10 picker with Fader, Flash, GO and Release rows for that playback. Each row lists its controls ("CC 41", "Note 60 ch 10").
+  - **Buttons:** LEARN (pressed again: cancel; disabled without an open MIDI input) and CLEAR on each row; RESET TO DEFAULT and CLEAR ALL for the whole map.
+  - **One control per row:** LEARN goes through `StageRemote::AssignLearned`. The map in force becomes the user's; the row's earlier controls and any overlapping binding of the learned control are removed (`OverlapsTrigger`: an "any channel" binding overlaps every channel). `Sanitize` applies the same overlap rule.
+  - **Closing Preferences cancels a waiting learn,** so a stray press later cannot rebind silently.
+  - **Rows are built once** and only relabelled: LEARN and CLEAR change the map from inside their own click.
+  - **Go to cue has no row** (it needs a cue number per binding).
+- **A map edit is not a new input:**
+  - `StageRemote::HasSameInputs`: when only the map differs, `ApplySettings` saves it without reopening any device, so the controller stays connected and a learn keeps waiting.
+  - `StageRemote::NeedsVerdict` lets map edits and switching off through without `EvaluateRemoteControl`, since every command a control sends is judged when it runs. Switching on, moving an input, the MIDI output, and re-applying identical settings are still judged.
+- **MIDI output feedback:**
+  - **Setting:** `FStageRemoteSettings::MidiOutputName` (Preferences › MIDI output). It is gated like an input (GameMode verdict, Pro).
+  - **What it shows:** faders and knobs show their level; Flash, playback GO and Blackout lights show flashing, live and on.
+  - **What it sends:** only changes, at most once per frame (`CollectMidiFeedback` against `FStageMidiFeedbackMemory`). Everything is sent once when the output opens and when the map changes; controls no longer bound are sent 0 first (`CollectUnboundOff`).
+- **Engine findings (UE 5.8):**
+  - The MIDI output takes channels 0–15 (`SendMIDIEvent` builds `(type<<4)|channel`), while the input reports 1–16. StageCraft sends `Channel - 1`.
+  - Every device listing (`FindAllMIDIDeviceInfo`) restarts every live MIDI controller object, shut-down ones too, until GC. A closed device was grabbed back, so reopening it failed as "in use". This also affected reopening the MR1 input. `CloseMidi` now marks both controllers as garbage.
+  - Panels and `OpenMidi` list inputs and outputs in one call (`FindMidiDevices`).
+- **Subagent review** (10 findings; 9 fixed, 1 design choice documented):
+  - **High:**
+    - A motor fader would fight the hand: the desk is a frame behind, so feedback sent older values during a move. Fixed with a 0.5 s hold per moved fader or knob (`LastMoved`, `MidiHoldSeconds`) and a settle timer (`ArmMidiSettle`).
+    - LEARN left the default "any channel" binding of the same control, so one knob drove two rows; my first test even asserted it. Fixed with `OverlapsTrigger`.
+  - **Medium:**
+    - A refused fader move never snapped back, because no show change meant no feedback. The settle timer fixes it.
+    - An output echoing into the input (virtual port, MIDI thru) made a lit GO light fire GO again. `IsMidiEcho` now drops inputs equal to a message sent within 0.1 s.
+  - **Low:**
+    - The status went stale when an unplugged controller was dropped by a listing (fixed: `CheckMidiDevices` before learn, before feedback, and when Preferences opens).
+    - Lights stayed on after CLEAR (fixed: `CollectUnboundOff`).
+    - A learned fader was yanked (fixed by the hold, which survives the map reset).
+    - `NativeDestruct` cancelled learn before unbinding (fixed: reordered).
+    - The device test failed rather than skipped when the synth was in use (fixed).
+  - **Kept as a design choice (ADR §12):** an "any channel" binding answers on channel 1 until the control is heard.
+- **Dev-only console:** `StageCraft.Remote.Settings MidiOut=<name>|#n|Off`, `Clear=<Action>[:Playback]`, `Midi=#n`. `#n` is needed because `StageCraft.Workspace.Delay` re-splits on spaces and device names have them. `Status` shows the MIDI output, messages sent and the learning target; `Status Devices` also lists outputs.
+
+**Files changed**
+- `Source/ModularSceneBuilder/Public/Remote/StageRemoteControlTypes.h` (`MidiOutputName`, status fields, `FStageMidiFeedbackMemory`)
+- `Source/ModularSceneBuilder/Private/Remote/StageRemoteMapping.h/.cpp` (map operations, overlap rule, verdict rule, feedback, holds, echoes, unbound off)
+- `Source/ModularSceneBuilder/Public/Remote/StageRemoteControlSubsystem.h`, `Private/Remote/StageRemoteControlSubsystem.cpp` (MIDI output, map edits without reopening, feedback, settle timer, echo drop, `CheckMidiDevices`, `MarkAsGarbage`)
+- `Source/ModularSceneBuilder/Private/Player/ModularPlayerControllerRemote.cpp`, `Public/Player/ModularPlayerController.h` (`NeedsVerdict`)
+- `Source/ModularSceneBuilder/Public/UI/StagePreferencesPanel.h`, `Private/UI/StagePreferencesPanel.cpp` (MIDI output row, MIDI MAP editor)
+- `Source/ModularSceneBuilder/Private/Remote/StageRemoteConsoleCommands.cpp` (dev-only)
+- `Source/ModularSceneBuilder/Private/Remote/Tests/StageRemoteControlTests.cpp` (new: MidiMap, MidiFeedback, MidiOutput; Settings extended)
+- `Content/StageCraft/Help/{en,hy}/remote-control.md` (MIDI map, MIDI output)
+- `Docs/ADR/0035-midi-and-osc-remote-control.md` (status, §5, §6, §7 MR2 row, §9, §10, new §11, §12)
+- `tasks/todo.md`, `STATE.md`
+- No `.uasset`, maps or input actions changed.
+
+**Verification**
+- **Automation (Claude):**
+  - `StageCraft.Remote.*` 10/10.
+    - **MidiMap:** targets, learn from the default map, overlap, clear, and the verdict rule.
+    - **MidiFeedback:** values, the first full send, changes only, the hold during a move, the snap back after the hold, echoes, unbound controls going dark, any-channel answers, bad input.
+    - **MidiOutput:** a real device ("Microsoft GS Wavetable Synth", control changes only, so it is silent). Open by name, a full send, the echo ignored, one message per change, a refused knob settled by the world's timer (latent), and a reopen.
+  - Full suite **299/299** (296 + 3) both before and after the review fixes; user data unchanged (127 files).
+  - The first run showed the one-time new ini key `MidiOutputName=""` with the user's own values (expected, as for earlier keys).
+  - The help wording was refined after the last full run (text only).
+- **Scripted `-game` runs (Claude), MR2a and MR2b** (Preferences docked through a temporary Session.json, deleted after):
+  - **Output:** #1 ("Microsoft MIDI Mapper") opened with Pro assumed (`StageCraft.Licence.DevAssumePro 1`) and sent 27 messages.
+  - **Map edits with Pro withdrawn:** `Clear=GrandMaster` and `Clear=PlaybackGo:2` were applied without the GameMode, and the output stayed open. MR2b counts: 27 → 28 (the knob sent to 0) → 54 → 79.
+  - **Gate:** choosing the output again was refused ("needs StageCraft Pro"); switching off and `Map=Default` were allowed.
+  - **Screenshot:** MIDI output selected, MIDI MAP rows (Grand Master "–", CLEAR disabled), LEARN disabled with no input, and the status lines "MIDI feedback … (78 sent)" and "MIDI map: yours, 35 controls."
+  - The harness restored profile, scenes and settings.
+- **Builds (Claude):** Editor, Game Development and Game Shipping succeeded with no warnings.
+- **Shipping scan (UTF-16 and ASCII):**
+  - Absent: `StageCraft.Remote.Settings`, `MidiOut=<name>`, `Clear=<Action>`, `StageCraft.Licence.DevAssumePro`, `StageCraft.Workspace.Delay`.
+  - Present: "MIDI output", "RESET TO DEFAULT", "(echo of feedback)", "The MIDI controller was disconnected".
+- **Not verified:** a real MIDI controller (no MIDI input on this PC), so LEARN completing from a real press, motor faders and button lights are untested on hardware. Learn's completion path is covered by `AssignLearned` tests only.
+
+**Commit:** uncommitted (working tree).
+
+**Known issues / follow-ups**
+- **Gevor:** with a real controller (nanoKONTROL2 or yours), check:
+  - LEARN on a few rows, then CLEAR, RESET TO DEFAULT and CLEAR ALL;
+  - MIDI output on the same controller: lights for Blackout, flash and live playbacks (nanoKONTROL2: LED Mode External in KORG KONTROL Editor), and a motor fader if you have one.
+- **Gevor (ADR 0035 §9):** is one control per row right, or should a row keep several (a pedal and a button for GO)?
+- An "any channel" binding answers on channel 1 until its control is heard; an output-channel setting is possible later.
+- A map-only `ApplySettings` is proven in the scripted run, not in automation: an automation test would have to save to the user's ini.
+- WR4 (Web Remote page layout options) remains open.

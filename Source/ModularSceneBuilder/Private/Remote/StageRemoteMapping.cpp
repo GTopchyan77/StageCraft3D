@@ -60,6 +60,69 @@ namespace StageRemote
 			return Part.Equals(Word, ESearchCase::IgnoreCase);
 		}
 
+		/** A control's key in FStageMidiFeedbackMemory: trigger, channel (0 in HeardChannel) and number. */
+		uint32 ControlKey(EStageMidiTrigger Trigger, int32 Channel, int32 Number)
+		{
+			return (static_cast<uint32>(Trigger) << 16) | (static_cast<uint32>(Channel & 0xFF) << 8) | static_cast<uint32>(Number & 0xFF);
+		}
+
+		EStageMidiTrigger KeyTrigger(uint32 Key) { return static_cast<EStageMidiTrigger>((Key >> 16) & 0xFF); }
+		int32 KeyChannel(uint32 Key) { return static_cast<int32>((Key >> 8) & 0xFF); }
+		int32 KeyNumber(uint32 Key) { return static_cast<int32>(Key & 0xFF); }
+
+		/** The trigger of a raw channel message, false for the kinds a binding cannot answer. */
+		bool TriggerOf(int32 Type, EStageMidiTrigger& OutTrigger)
+		{
+			if (Type == MidiNoteOn || Type == MidiNoteOff)
+			{
+				OutTrigger = EStageMidiTrigger::Note;
+				return true;
+			}
+			if (Type == MidiControlChange)
+			{
+				OutTrigger = EStageMidiTrigger::ControlChange;
+				return true;
+			}
+			return false;
+		}
+
+		/** The channel a binding's feedback goes to: its own, else where the control was last heard, else 1. */
+		int32 AnswerChannel(const FStageMidiBinding& Binding, const FStageMidiFeedbackMemory& Memory)
+		{
+			const int32* Heard = Memory.HeardChannel.Find(ControlKey(Binding.Trigger, 0, Binding.Number));
+			return Binding.Channel != 0 ? Binding.Channel : (Heard ? *Heard : 1);
+		}
+
+		void Remember(FStageMidiFeedbackMemory& Memory, uint32 Key, int32 Value, double NowSeconds, TArray<FMidiOutMessage>& OutMessages)
+		{
+			Memory.Shown.Add(Key, Value);
+			if (Memory.RecentSent.Num() >= MaxRecentSent)
+			{
+				Memory.RecentSent.RemoveAt(0, Memory.RecentSent.Num() - MaxRecentSent + 1, EAllowShrinking::No);
+			}
+			Memory.RecentSent.Add({ Key, Value, NowSeconds });
+			FMidiOutMessage& Message = OutMessages.AddDefaulted_GetRef();
+			Message.Type = KeyTrigger(Key) == EStageMidiTrigger::Note ? MidiNoteOn : MidiControlChange;
+			Message.Channel = KeyChannel(Key);
+			Message.Data1 = KeyNumber(Key);
+			Message.Data2 = Value;
+		}
+
+		int32 ToMidi(float Value)
+		{
+			return FMath::IsFinite(Value) ? FMath::Clamp(FMath::RoundToInt(Value * MidiMax), 0, 127) : 0;
+		}
+
+		/** The map in force as the user's own, so an edit of the default map keeps the rest of it. */
+		void MakeCustom(FStageRemoteSettings& Settings)
+		{
+			if (!Settings.bCustomMidiMap)
+			{
+				Settings.MidiBindings = DefaultMidiBindings();
+				Settings.bCustomMidiMap = true;
+			}
+		}
+
 		/** The command a binding gives for a MIDI value: continuous actions get the value, the others pressed (1) or released (0). */
 		FStageRemoteCommand MakeCommand(const FStageMidiBinding& Binding, float Value, bool bPressed)
 		{
@@ -342,6 +405,11 @@ namespace StageRemote
 		return Settings.bCustomMidiMap ? TConstArrayView<FStageMidiBinding>(Settings.MidiBindings) : TConstArrayView<FStageMidiBinding>(DefaultMidiBindings());
 	}
 
+	bool OverlapsTrigger(const FStageMidiBinding& A, const FStageMidiBinding& B)
+	{
+		return A.Trigger == B.Trigger && A.Number == B.Number && (A.Channel == B.Channel || A.Channel == 0 || B.Channel == 0);
+	}
+
 	bool IsValidBinding(const FStageMidiBinding& Binding)
 	{
 		const uint8 Action = static_cast<uint8>(Binding.Action);
@@ -371,13 +439,15 @@ namespace StageRemote
 		}
 		Settings.MidiInputName.TrimStartAndEndInline();
 		Settings.MidiInputName.LeftInline(MaxDeviceNameLength);
+		Settings.MidiOutputName.TrimStartAndEndInline();
+		Settings.MidiOutputName.LeftInline(MaxDeviceNameLength);
 
-		// Keep the last binding of each trigger: learn appends, so the newest wins.
+		// Keep the last binding of each control (an "any channel" one overlaps every channel): learn appends, so the newest wins.
 		TArray<FStageMidiBinding> Kept;
 		for (int32 Index = Settings.MidiBindings.Num() - 1; Index >= 0 && Kept.Num() < MaxMidiBindings; --Index)
 		{
 			const FStageMidiBinding& Binding = Settings.MidiBindings[Index];
-			if (IsValidBinding(Binding) && !Kept.ContainsByPredicate([&Binding](const FStageMidiBinding& Other) { return Other.HasSameTrigger(Binding); }))
+			if (IsValidBinding(Binding) && !Kept.ContainsByPredicate([&Binding](const FStageMidiBinding& Other) { return OverlapsTrigger(Other, Binding); }))
 			{
 				Kept.Add(Binding);
 			}
@@ -386,6 +456,208 @@ namespace StageRemote
 		Settings.MidiBindings = MoveTemp(Kept);
 
 		return !(Settings == Before);
+	}
+
+	bool IsSameTarget(const FStageMidiBinding& Binding, EStageRemoteAction Action, int32 PlaybackNumber, float CueNumber)
+	{
+		return Binding.Action == Action && Action != EStageRemoteAction::None
+			&& (!UsesPlayback(Action) || Binding.Playback == PlaybackNumber)
+			&& (Action != EStageRemoteAction::CueGoTo || Binding.CueNumber == CueNumber);
+	}
+
+	TArray<FStageMidiBinding> BindingsForTarget(TConstArrayView<FStageMidiBinding> Bindings, EStageRemoteAction Action, int32 PlaybackNumber, float CueNumber)
+	{
+		TArray<FStageMidiBinding> Found;
+		for (const FStageMidiBinding& Binding : Bindings)
+		{
+			if (IsSameTarget(Binding, Action, PlaybackNumber, CueNumber))
+			{
+				Found.Add(Binding);
+			}
+		}
+		return Found;
+	}
+
+	FString DescribeControl(const FStageMidiBinding& Binding)
+	{
+		const TCHAR* Kind = Binding.Trigger == EStageMidiTrigger::Note ? TEXT("Note") : TEXT("CC");
+		return Binding.Channel == 0 ? FString::Printf(TEXT("%s %d"), Kind, Binding.Number) : FString::Printf(TEXT("%s %d ch %d"), Kind, Binding.Number, Binding.Channel);
+	}
+
+	bool AssignLearned(FStageRemoteSettings& Settings, const FStageMidiBinding& Learned)
+	{
+		if (!IsValidBinding(Learned))
+		{
+			return false;
+		}
+		MakeCustom(Settings);
+		Settings.MidiBindings.RemoveAll([&Learned](const FStageMidiBinding& Binding)
+		{
+			return OverlapsTrigger(Binding, Learned) || IsSameTarget(Binding, Learned.Action, Learned.Playback, Learned.CueNumber);
+		});
+		Settings.MidiBindings.Add(Learned);
+		return true;
+	}
+
+	bool ClearTarget(FStageRemoteSettings& Settings, EStageRemoteAction Action, int32 PlaybackNumber, float CueNumber)
+	{
+		if (BindingsForTarget(EffectiveMidiBindings(Settings), Action, PlaybackNumber, CueNumber).IsEmpty())
+		{
+			return false;
+		}
+		MakeCustom(Settings);
+		Settings.MidiBindings.RemoveAll([=](const FStageMidiBinding& Binding) { return IsSameTarget(Binding, Action, PlaybackNumber, CueNumber); });
+		return true;
+	}
+
+	bool HasInputOn(const FStageRemoteSettings& Settings)
+	{
+		return Settings.OscScope != EStageOscScope::Off || !Settings.MidiInputName.TrimStartAndEnd().IsEmpty()
+			|| !Settings.MidiOutputName.TrimStartAndEnd().IsEmpty();
+	}
+
+	bool HasSameInputs(const FStageRemoteSettings& A, const FStageRemoteSettings& B)
+	{
+		return A.OscScope == B.OscScope && A.OscPort == B.OscPort && A.OscFeedbackPort == B.OscFeedbackPort
+			&& A.MidiInputName == B.MidiInputName && A.MidiOutputName == B.MidiOutputName;
+	}
+
+	bool NeedsVerdict(const FStageRemoteSettings& Current, const FStageRemoteSettings& Requested)
+	{
+		const bool bMapEdit = HasSameInputs(Current, Requested) && !(Current == Requested);
+		return HasInputOn(Requested) && !bMapEdit;
+	}
+
+	TOptional<int32> FeedbackValue(const FStageMidiBinding& Binding, const FMidiShowState& State)
+	{
+		if (!IsValidBinding(Binding))
+		{
+			return {};
+		}
+		const int32 Index = Binding.Playback - 1;
+		const auto Lit = [](bool bOn) { return bOn ? 127 : 0; };
+		switch (Binding.Action)
+		{
+		case EStageRemoteAction::PlaybackLevel:
+			return State.Levels.IsValidIndex(Index) ? TOptional<int32>(ToMidi(State.Levels[Index])) : TOptional<int32>();
+		case EStageRemoteAction::PlaybackFlash:
+			return State.Flashing.IsValidIndex(Index) ? TOptional<int32>(Lit(State.Flashing[Index])) : TOptional<int32>();
+		case EStageRemoteAction::PlaybackGo:
+			return State.Active.IsValidIndex(Index) ? TOptional<int32>(Lit(State.Active[Index])) : TOptional<int32>();
+		case EStageRemoteAction::GrandMaster:
+			return ToMidi(State.GrandMaster);
+		case EStageRemoteAction::AudioMaster:
+			return ToMidi(State.AudioMaster);
+		case EStageRemoteAction::Blackout:
+			return Lit(State.bBlackout);
+		default:
+			return {};
+		}
+	}
+
+	bool NoteMidiInput(int32 Type, int32 Channel, int32 Data1, int32 Data2, TConstArrayView<FStageMidiBinding> Bindings, FStageMidiFeedbackMemory& Memory,
+		double NowSeconds)
+	{
+		EStageMidiTrigger Trigger;
+		if (Channel < 1 || Channel > 16 || Data1 < 0 || Data1 > 127 || Data2 < 0 || Data2 > 127 || !TriggerOf(Type, Trigger))
+		{
+			return false;
+		}
+		Memory.HeardChannel.Add(ControlKey(Trigger, 0, Data1), Channel);
+
+		const bool bMovesItself = Bindings.ContainsByPredicate([=](const FStageMidiBinding& Binding)
+		{
+			return Binding.Trigger == Trigger && Binding.Number == Data1 && (Binding.Channel == 0 || Binding.Channel == Channel) && IsContinuous(Binding.Action);
+		});
+		if (!bMovesItself)
+		{
+			return false;
+		}
+		const uint32 Key = ControlKey(Trigger, Channel, Data1);
+		Memory.Shown.Add(Key, Type == MidiNoteOff ? 0 : Data2);
+		Memory.LastMoved.Add(Key, NowSeconds);
+		return true;
+	}
+
+	bool IsMidiEcho(int32 Type, int32 Channel, int32 Data1, int32 Data2, FStageMidiFeedbackMemory& Memory, double NowSeconds)
+	{
+		Memory.RecentSent.RemoveAll([NowSeconds](const FStageMidiFeedbackMemory::FSent& Sent) { return NowSeconds - Sent.Time > MidiEchoSeconds; });
+		EStageMidiTrigger Trigger;
+		if (Channel < 1 || Channel > 16 || !TriggerOf(Type, Trigger))
+		{
+			return false;
+		}
+		const uint32 Key = ControlKey(Trigger, Channel, Data1);
+		const int32 Value = Type == MidiNoteOff ? 0 : Data2;
+		return Memory.RecentSent.ContainsByPredicate([Key, Value](const FStageMidiFeedbackMemory::FSent& Sent) { return Sent.Key == Key && Sent.Value == Value; });
+	}
+
+	int32 CollectMidiFeedback(TConstArrayView<FStageMidiBinding> Bindings, const FMidiShowState& State, FStageMidiFeedbackMemory& Memory,
+		double NowSeconds, TArray<FMidiOutMessage>& OutMessages, double& OutHoldUntil)
+	{
+		OutHoldUntil = 0.0;
+		TSet<uint32> Answered;
+		int32 Added = 0;
+		for (const FStageMidiBinding& Binding : Bindings)
+		{
+			const TOptional<int32> Value = FeedbackValue(Binding, State);
+			if (!Value.IsSet())
+			{
+				continue;
+			}
+			const uint32 Key = ControlKey(Binding.Trigger, AnswerChannel(Binding, Memory), Binding.Number);
+			bool bAlreadyAnswered = false;
+			Answered.Add(Key, &bAlreadyAnswered);
+			const int32* Shown = Memory.Shown.Find(Key);
+			if (bAlreadyAnswered || (Shown && *Shown == Value.GetValue()))
+			{
+				continue;
+			}
+			if (const double* Moved = Memory.LastMoved.Find(Key))
+			{
+				const double HoldUntil = *Moved + MidiHoldSeconds;
+				if (NowSeconds < HoldUntil)
+				{
+					OutHoldUntil = FMath::Max(OutHoldUntil, HoldUntil);
+					continue;
+				}
+				Memory.LastMoved.Remove(Key);
+			}
+			Remember(Memory, Key, Value.GetValue(), NowSeconds, OutMessages);
+			++Added;
+		}
+		return Added;
+	}
+
+	int32 CollectUnboundOff(TConstArrayView<FStageMidiBinding> Bindings, FStageMidiFeedbackMemory& Memory, double NowSeconds,
+		TArray<FMidiOutMessage>& OutMessages)
+	{
+		const FMidiShowState NoState;
+		TSet<uint32> Answered;
+		for (const FStageMidiBinding& Binding : Bindings)
+		{
+			// Any action with a state answers; FeedbackValue needs the arrays only for its value, not for whether it has one.
+			const bool bHasState = IsValidBinding(Binding) && Binding.Action != EStageRemoteAction::CueGo && Binding.Action != EStageRemoteAction::CueBack
+				&& Binding.Action != EStageRemoteAction::CueGoTo && Binding.Action != EStageRemoteAction::PlaybackRelease;
+			if (bHasState)
+			{
+				Answered.Add(ControlKey(Binding.Trigger, AnswerChannel(Binding, Memory), Binding.Number));
+			}
+		}
+		TArray<uint32> Darken;
+		for (const TPair<uint32, int32>& Shown : Memory.Shown)
+		{
+			if (Shown.Value != 0 && !Answered.Contains(Shown.Key))
+			{
+				Darken.Add(Shown.Key);
+			}
+		}
+		Darken.Sort();
+		for (const uint32 Key : Darken)
+		{
+			Remember(Memory, Key, 0, NowSeconds, OutMessages);
+		}
+		return Darken.Num();
 	}
 
 	bool Enqueue(TArray<FStageRemoteCommand>& Pending, const FStageRemoteCommand& Command)

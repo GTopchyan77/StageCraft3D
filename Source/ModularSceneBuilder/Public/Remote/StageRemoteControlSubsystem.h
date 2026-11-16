@@ -11,7 +11,7 @@
 
 /**
  * MIDI and OSC remote control of the stage's desk (Docs/ADR/0035). Owns this PC's OSC server, its feedback client and the MIDI input
- * device for one stage world, like UStageDMXNetworkSubsystem: OnWorldBeginPlay reopens what the saved settings ask for, Deinitialize
+ * and output devices for one stage world, like UStageDMXNetworkSubsystem: OnWorldBeginPlay reopens what the saved settings ask for, Deinitialize
  * closes everything. No tick.
  *
  * Flow: the engine plugins deliver on the game thread (MIDIDevice from its module tick, OSC from its packet pump) → ReceiveOsc /
@@ -19,7 +19,8 @@
  * StageRemote::MaxCommandsPerFrame) → once per frame each command goes to the command handler, which the local
  * AModularPlayerController binds (RequestRemoteCommand: GameMode, then the desk's own request). The subsystem never changes the show.
  *
- * Writes the remote settings in UStageCraftUserSettings (only writer); reads the show (UShowControlSubsystem) for OSC feedback.
+ * Writes the remote settings in UStageCraftUserSettings (only writer); reads the show (UShowControlSubsystem) for OSC and MIDI feedback
+ * (Docs/ADR/0035 §6, §12): after a change in the show, once per frame, only the values that changed go out.
  */
 UCLASS()
 class MODULARSCENEBUILDER_API UStageRemoteControlSubsystem : public UWorldSubsystem
@@ -52,7 +53,8 @@ public:
 	/**
 	 * Stores Settings (sanitized and saved) and reopens the inputs with them. Returns false with OutError when OSC or MIDI was asked for
 	 * and could not open (port in use, device missing); the settings are kept either way, and the status shows the problem.
-	 * Game thread. Callers in play go through AModularPlayerController::RequestSetRemoteControl.
+	 * A map edit (StageRemote::HasSameInputs) reopens nothing: the devices keep running, a learn keeps waiting, and the MIDI output is
+	 * sent the new map's state. Game thread. Callers in play go through AModularPlayerController::RequestSetRemoteControl.
 	 */
 	bool ApplySettings(const FStageRemoteSettings& Settings, FText& OutError);
 
@@ -63,6 +65,12 @@ public:
 
 	/** The names of the MIDI input devices on this PC, in the order the system lists them. */
 	static TArray<FString> FindMidiInputs();
+
+	/**
+	 * The MIDI inputs and outputs on this PC, in the order the system lists them. One call, because each listing restarts the engine's
+	 * MIDI layer (UMIDIDeviceManager::FindAllMIDIDeviceInfo re-initializes PortMidi and reconnects open devices).
+	 */
+	static void FindMidiDevices(TArray<FString>& OutInputs, TArray<FString>& OutOutputs);
 
 	/**
 	 * MIDI learn: the next Note On or CC (with a value) on the open MIDI input is bound to Action and saved, replacing any binding of
@@ -81,6 +89,16 @@ public:
 	/** Carries out the queued commands now (normally on the next tick after the first one arrives). */
 	void FlushCommands();
 
+	/** Sends the show's changed values to the OSC and MIDI feedback now (normally on the next tick after a change). */
+	void SendFeedback();
+
+	/**
+	 * Closes the MIDI devices the engine has dropped (a controller unplugged: each device listing marks a controller it cannot restart
+	 * as garbage) and says so in the status. Returns false when one was. Called before MIDI is used, and by Preferences after it lists
+	 * the devices.
+	 */
+	bool CheckMidiDevices();
+
 	/**
 	 * Who carries out commands: the local AModularPlayerController binds RequestRemoteCommand in its BeginPlay (tests bind their own).
 	 * Without one, commands are refused and counted.
@@ -98,8 +116,17 @@ private:
 	void CloseInputs();
 	bool OpenOsc(FText& OutError);
 	void CloseOsc();
+	/** Opens the MIDI input and output the settings name, from one device listing. */
 	bool OpenMidi(FText& OutError);
 	void CloseMidi();
+	/** The show is bound while some feedback can go out: OSC with a feedback port, or a MIDI output. */
+	void UpdateShowBinding();
+	/** The MIDI output shows the map's controls from scratch: after it opens and after the map changes (controls no longer bound go dark). */
+	void RestartMidiFeedback();
+	/** Feedback runs again after Delay seconds: a fader the hand let go of settles on the desk's value (refused moves snap back). */
+	void ArmMidiSettle(double Delay);
+	/** The clock of the hand's holds and of echo checks: the world's real time, so ticks and timers agree with it. */
+	double MidiClock() const;
 
 	void HandleOscMessage(const struct FOSCMessage& Message, const FString& IPAddress, uint16 Port);
 	void HandleMidiEvent(class UMIDIDeviceInputController* Controller, int32 Timestamp, int32 Type, int32 Channel, int32 Data1, int32 Data2);
@@ -107,13 +134,14 @@ private:
 	void Enqueue(const FStageRemoteCommand& Command);
 	FStageEconomyResultInfo Dispatch(const FStageRemoteCommand& Command);
 
-	/** OSC feedback (Docs/ADR/0035 §6): sends the show's values that changed since the last send, to the last sender. */
+	/** OSC and MIDI feedback (Docs/ADR/0035 §6, §12): the show's values that changed since the last send. */
 	UFUNCTION()
 	void HandleShowCueStarted(float CueNumber);
 	UFUNCTION()
 	void HandleShowDeskChanged();
 	void ScheduleFeedback();
-	void SendFeedback();
+	void SendOscFeedback(const class UShowControlSubsystem& Show);
+	void SendMidiFeedback(const class UShowControlSubsystem& Show);
 	void SendFeedbackValue(const FString& Address, float Value);
 	void BindShow();
 	void UnbindShow();
@@ -131,6 +159,12 @@ private:
 
 	UPROPERTY(Transient)
 	TObjectPtr<class UMIDIDeviceInputController> MidiInput = nullptr;
+
+	UPROPERTY(Transient)
+	TObjectPtr<class UMIDIDeviceOutputController> MidiOutput = nullptr;
+
+	/** What the MIDI controller shows, so MIDI feedback sends only changes (and never a fader's own move back to it). */
+	FStageMidiFeedbackMemory MidiShown;
 
 	/** The show this world's feedback reads (non-owning; the world owns it). */
 	TWeakObjectPtr<class UShowControlSubsystem> BoundShow;
@@ -164,6 +198,7 @@ private:
 
 	FTimerHandle FlushTimer;
 	FTimerHandle FeedbackTimer;
+	FTimerHandle MidiSettleTimer;
 	FTimerHandle StatusTimer;
 	bool bStatusDirty = false;
 };

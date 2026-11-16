@@ -20,6 +20,7 @@
 #include "Placement/StageSnappingComponent.h"
 #include "Player/ModularPlayerController.h"
 #include "Remote/StageRemoteControlSubsystem.h"
+#include "Remote/StageRemoteMapping.h"
 #include "Remote/StageQrCode.h"
 #include "Remote/StageWebRemoteProtocol.h"
 #include "Remote/StageWebRemoteSubsystem.h"
@@ -27,6 +28,7 @@
 #include "Cloud/StageCloudSubsystem.h"
 #include "Licence/StageLicenceSubsystem.h"
 #include "Settings/StageCraftUserSettings.h"
+#include "Show/ShowControlTypes.h"
 #include "UI/StageCraftUITheme.h"
 #include "UI/StageCraftWidgetStyle.h"
 #include "UI/StageToolButton.h"
@@ -54,6 +56,43 @@ namespace StagePreferencesPanel
 		MasterVolume,
 		Count
 	};
+
+	/** The rows of MIDI MAP: the desk's live controls a MIDI control can be taught (go to cue needs a cue number, so it is not one). */
+	struct FMidiTarget
+	{
+		EStageRemoteAction Action = EStageRemoteAction::None;
+		/** A playback row: it edits the playback chosen above it. */
+		bool bPerPlayback = false;
+	};
+
+	const FMidiTarget MidiTargets[] =
+	{
+		{ EStageRemoteAction::CueGo, false },
+		{ EStageRemoteAction::CueBack, false },
+		{ EStageRemoteAction::GrandMaster, false },
+		{ EStageRemoteAction::Blackout, false },
+		{ EStageRemoteAction::AudioMaster, false },
+		{ EStageRemoteAction::PlaybackLevel, true },
+		{ EStageRemoteAction::PlaybackFlash, true },
+		{ EStageRemoteAction::PlaybackGo, true },
+		{ EStageRemoteAction::PlaybackRelease, true },
+	};
+	constexpr int32 MidiTargetCount = static_cast<int32>(UE_ARRAY_COUNT(MidiTargets));
+	constexpr int32 FirstPlaybackTarget = 5;
+	constexpr int32 MaxShownMidiDevices = 3;
+	constexpr float MapButtonWidth = 52.f;
+
+	FText MidiTargetLabel(EStageRemoteAction Action)
+	{
+		switch (Action)
+		{
+		case EStageRemoteAction::PlaybackLevel:		return LOCTEXT("MidiTargetLevel", "  Fader");
+		case EStageRemoteAction::PlaybackFlash:		return LOCTEXT("MidiTargetFlash", "  Flash");
+		case EStageRemoteAction::PlaybackGo:		return LOCTEXT("MidiTargetGo", "  GO");
+		case EStageRemoteAction::PlaybackRelease:	return LOCTEXT("MidiTargetRelease", "  Release");
+		default:									return StageRemote::DescribeAction(Action, 1);
+		}
+	}
 
 	int32 BindingIndex(EStageInputCommand Command, EStageKeySlot Slot)
 	{
@@ -205,23 +244,100 @@ UWidget* UStagePreferencesPanel::BuildRemoteSection()
 		LOCTEXT("OscTip", "Run cues, playbacks and masters from an OSC app (TouchOSC, Open Stage Control) on port 8000.\nThis PC: only apps on this computer.\nNetwork: tablets on your network too. OSC has no password: anyone on the network who knows the port can run the show."),
 		{ LOCTEXT("Off", "Off"), LOCTEXT("OscThisPC", "This PC"), LOCTEXT("OscNetwork", "Network") }, OscButtons, &ThisClass::HandleOscPicked));
 
-	// The inputs found now; a controller plugged in later appears when Preferences opens again.
-	MidiInputNames = UStageRemoteControlSubsystem::FindMidiInputs();
-	constexpr int32 MaxShownMidiInputs = 3;
-	TArray<FText> MidiChoices = { LOCTEXT("Off", "Off") };
-	for (int32 Index = 0; Index < FMath::Min(MidiInputNames.Num(), MaxShownMidiInputs); ++Index)
+	// The devices found now (one listing: each restarts the engine's MIDI layer); a controller plugged in later appears when Preferences
+	// opens again.
+	UStageRemoteControlSubsystem::FindMidiDevices(MidiInputNames, MidiOutputNames);
+	const auto DeviceChoices = [](TArray<FString>& Names)
 	{
-		MidiChoices.Add(FText::FromString(MidiInputNames[Index]));
-	}
-	MidiInputNames.SetNum(MidiChoices.Num() - 1);
+		Names.SetNum(FMath::Min(Names.Num(), MaxShownMidiDevices));
+		TArray<FText> Choices = { LOCTEXT("Off", "Off") };
+		for (const FString& Name : Names)
+		{
+			Choices.Add(FText::FromString(Name));
+		}
+		return Choices;
+	};
 	Add(BuildChoiceRow(LOCTEXT("Midi", "MIDI input"),
-		LOCTEXT("MidiTip", "A MIDI fader box or pad controller. The default map follows the Korg nanoKONTROL2: faders 1–8 are playbacks 1–8, ▶ is GO, ◀◀ is BACK, ● is Blackout, knob 1 the Grand Master.\nPlug the controller in before opening Preferences."),
-		MidiChoices, MidiButtons, &ThisClass::HandleMidiPicked));
+		LOCTEXT("MidiTip", "A MIDI fader box or pad controller. The default map follows the Korg nanoKONTROL2: faders 1–8 are playbacks 1–8, ▶ is GO, ◀◀ is BACK, ● is Blackout, knob 1 the Grand Master. Change it in MIDI MAP below.\nPlug the controller in before opening Preferences."),
+		DeviceChoices(MidiInputNames), MidiButtons, &ThisClass::HandleMidiPicked));
+	Add(BuildChoiceRow(LOCTEXT("MidiOutput", "MIDI output"),
+		LOCTEXT("MidiOutputTip", "The show's state goes back to the controller: motorised faders move with the desk, and button lights show Blackout, flashes and live playbacks.\nUsually the same controller as the input. Some controllers light their buttons only when set to external LED control in their editor."),
+		DeviceChoices(MidiOutputNames), MidiOutputButtons, &ThisClass::HandleMidiOutputPicked));
+
+	Add(BuildChoiceRow(LOCTEXT("MidiMap", "MIDI map"),
+		LOCTEXT("MidiMapTip", "LEARN, then move or press a control on the MIDI input: it now drives that row (and only that row).\nCLEAR: nothing drives the row.\nRESET TO DEFAULT: the Korg nanoKONTROL2 map again. CLEAR ALL: an empty map to learn from scratch."),
+		{ LOCTEXT("MidiMapReset", "RESET TO DEFAULT"), LOCTEXT("MidiMapClearAll", "CLEAR ALL") }, MidiMapButtons, &ThisClass::HandleMidiMapPicked));
+	MidiTargetTexts.Reset();
+	MidiLearnButtons.Reset();
+	MidiClearButtons.Reset();
+	for (int32 Index = 0; Index < MidiTargetCount; ++Index)
+	{
+		if (Index == FirstPlaybackTarget)
+		{
+			TArray<FText> Numbers;
+			for (int32 Number = 1; Number <= StagePlaybackRules::Count; ++Number)
+			{
+				Numbers.Add(FText::AsNumber(Number));
+			}
+			Add(BuildChoiceRow(LOCTEXT("MidiMapPlayback", "Playback"),
+				LOCTEXT("MidiMapPlaybackTip", "The playback the rows below edit, as the desk numbers it."), Numbers, MidiPlaybackButtons, &ThisClass::HandleMidiPlaybackPicked));
+		}
+		Add(BuildMidiTargetRow(Index));
+	}
 
 	RemoteStatusText = MakeText(FText::GetEmpty(), 7, TEXT("Regular"), Palette.TextSecondary);
 	RemoteStatusText->SetAutoWrapText(true);
 	Add(RemoteStatusText);
 	return Section;
+}
+
+UWidget* UStagePreferencesPanel::BuildMidiTargetRow(int32 Index)
+{
+	using namespace StagePreferencesPanel;
+	const UStageCraftUITheme& Palette = GetTheme();
+
+	UHorizontalBox* Row = WidgetTree->ConstructWidget<UHorizontalBox>(UHorizontalBox::StaticClass());
+	USizeBox* LabelBox = WidgetTree->ConstructWidget<USizeBox>(USizeBox::StaticClass());
+	LabelBox->SetWidthOverride(LabelWidth);
+	LabelBox->SetContent(MakeText(MidiTargetLabel(MidiTargets[Index].Action), 8, TEXT("Regular"), Palette.TextPrimary));
+	if (UHorizontalBoxSlot* LabelSlot = Row->AddChildToHorizontalBox(LabelBox))
+	{
+		LabelSlot->SetVerticalAlignment(VAlign_Center);
+	}
+
+	UTextBlock* Controls = MakeText(FText::GetEmpty(), 8, TEXT("Regular"), Palette.TextSecondary);
+	Controls->SetTextOverflowPolicy(ETextOverflowPolicy::Ellipsis);
+	if (UHorizontalBoxSlot* ControlsSlot = Row->AddChildToHorizontalBox(Controls))
+	{
+		ControlsSlot->SetSize(FSlateChildSize(ESlateSizeRule::Fill));
+		ControlsSlot->SetVerticalAlignment(VAlign_Center);
+	}
+	MidiTargetTexts.Add(Controls);
+
+	const auto AddButton = [this, Row](UStageChoiceButton* Button)
+	{
+		USizeBox* Box = WidgetTree->ConstructWidget<USizeBox>(USizeBox::StaticClass());
+		Box->SetWidthOverride(MapButtonWidth);
+		Box->SetContent(Button);
+		if (UHorizontalBoxSlot* ButtonSlot = Row->AddChildToHorizontalBox(Box))
+		{
+			ButtonSlot->SetPadding(FMargin(ChoiceGap, 0.f, 0.f, 0.f));
+		}
+	};
+	UStageChoiceButton* Learn = MakeButton(LOCTEXT("MidiLearn", "LEARN"),
+		LOCTEXT("MidiLearnTip", "Then move or press the control to use on the MIDI input. Click again to stop waiting."), Index);
+	Learn->OnPicked.BindUObject(this, &ThisClass::HandleMidiLearnPicked);
+	AddButton(Learn);
+	MidiLearnButtons.Add(Learn);
+	UStageChoiceButton* Clear = MakeButton(LOCTEXT("MidiClear", "CLEAR"), LOCTEXT("MidiClearTip", "No control drives this any more."), Index);
+	Clear->OnPicked.BindUObject(this, &ThisClass::HandleMidiClearPicked);
+	AddButton(Clear);
+	MidiClearButtons.Add(Clear);
+
+	USizeBox* SizedRow = WidgetTree->ConstructWidget<USizeBox>(USizeBox::StaticClass());
+	SizedRow->SetHeightOverride(StageCraftWidgetStyle::FieldHeight);
+	SizedRow->SetContent(Row);
+	return SizedRow;
 }
 
 UWidget* UStagePreferencesPanel::BuildHeader()
@@ -472,6 +588,8 @@ void UStagePreferencesPanel::NativeConstruct()
 	{
 		BoundRemote = Remote;
 		RemoteStatusHandle = Remote->OnStatusChanged.AddUObject(this, &ThisClass::RefreshRemote);
+		// Building the panel listed the MIDI devices, which drops a controller that was unplugged: the status must say so.
+		Remote->CheckMidiDevices();
 	}
 	if (UStageWebRemoteSubsystem* Web = UWorld::GetSubsystem<UStageWebRemoteSubsystem>(GetWorld()))
 	{
@@ -517,6 +635,13 @@ void UStagePreferencesPanel::NativeDestruct()
 	if (UStageRemoteControlSubsystem* Remote = BoundRemote.Get())
 	{
 		Remote->OnStatusChanged.Remove(RemoteStatusHandle);
+		// Unbound first, so the cancel does not refresh a panel being torn down. A learn left waiting would silently rebind the next
+		// control touched, long after the panel closed.
+		AModularPlayerController* Controller = Cast<AModularPlayerController>(GetOwningPlayer());
+		if (Controller && Remote->GetStatus().Learning != EStageRemoteAction::None)
+		{
+			Controller->RequestMidiLearn(EStageRemoteAction::None, 1, 0.f);
+		}
 	}
 	RemoteStatusHandle.Reset();
 	BoundRemote.Reset();
@@ -751,6 +876,131 @@ void UStagePreferencesPanel::HandleMidiPicked(int32 Index)
 	FStageRemoteSettings Settings = Remote->GetSettings();
 	Settings.MidiInputName = MidiInputNames.IsValidIndex(Index - 1) ? MidiInputNames[Index - 1] : FString();
 	ApplyRemoteSettings(Settings);
+}
+
+void UStagePreferencesPanel::HandleMidiOutputPicked(int32 Index)
+{
+	const UStageRemoteControlSubsystem* Remote = BoundRemote.Get();
+	if (!Remote)
+	{
+		return;
+	}
+	FStageRemoteSettings Settings = Remote->GetSettings();
+	Settings.MidiOutputName = MidiOutputNames.IsValidIndex(Index - 1) ? MidiOutputNames[Index - 1] : FString();
+	ApplyRemoteSettings(Settings);
+}
+
+void UStagePreferencesPanel::HandleMidiMapPicked(int32 Index)
+{
+	const UStageRemoteControlSubsystem* Remote = BoundRemote.Get();
+	if (!Remote)
+	{
+		return;
+	}
+	FStageRemoteSettings Settings = Remote->GetSettings();
+	Settings.MidiBindings.Reset();
+	// RESET: back to the default map. CLEAR ALL: the user's map, empty, so nothing fires until something is learned.
+	Settings.bCustomMidiMap = Index == 1;
+	ApplyRemoteSettings(Settings);
+}
+
+void UStagePreferencesPanel::HandleMidiPlaybackPicked(int32 Index)
+{
+	MidiMapPlayback = FMath::Clamp(Index + 1, 1, StagePlaybackRules::Count);
+	RefreshRemote();
+}
+
+int32 UStagePreferencesPanel::MidiTargetPlayback(int32 Index) const
+{
+	using namespace StagePreferencesPanel;
+	return Index >= 0 && Index < MidiTargetCount && MidiTargets[Index].bPerPlayback ? MidiMapPlayback : 1;
+}
+
+void UStagePreferencesPanel::HandleMidiLearnPicked(int32 Index)
+{
+	using namespace StagePreferencesPanel;
+	const UStageRemoteControlSubsystem* Remote = BoundRemote.Get();
+	AModularPlayerController* Controller = Cast<AModularPlayerController>(GetOwningPlayer());
+	if (!Remote || !Controller || Index < 0 || Index >= MidiTargetCount)
+	{
+		return;
+	}
+	const EStageRemoteAction Action = MidiTargets[Index].Action;
+	const int32 Playback = MidiTargetPlayback(Index);
+	const FStageRemoteStatus& Status = Remote->GetStatus();
+	const bool bWaitingHere = Status.Learning == Action && (!StageRemote::UsesPlayback(Action) || Status.LearningPlayback == Playback);
+	Controller->RequestMidiLearn(bWaitingHere ? EStageRemoteAction::None : Action, Playback, 0.f);
+	RefreshRemote();
+}
+
+void UStagePreferencesPanel::HandleMidiClearPicked(int32 Index)
+{
+	using namespace StagePreferencesPanel;
+	const UStageRemoteControlSubsystem* Remote = BoundRemote.Get();
+	if (!Remote || Index < 0 || Index >= MidiTargetCount)
+	{
+		return;
+	}
+	FStageRemoteSettings Settings = Remote->GetSettings();
+	if (StageRemote::ClearTarget(Settings, MidiTargets[Index].Action, MidiTargetPlayback(Index)))
+	{
+		ApplyRemoteSettings(Settings);
+	}
+}
+
+void UStagePreferencesPanel::RefreshMidiMap(const FStageRemoteSettings& Settings, const FStageRemoteStatus* Status)
+{
+	using namespace StagePreferencesPanel;
+	const UStageCraftUITheme& Palette = GetTheme();
+	const bool bMidiOpen = Status && Status->bMidiOpen;
+	const TConstArrayView<FStageMidiBinding> Bindings = StageRemote::EffectiveMidiBindings(Settings);
+
+	if (MidiMapButtons.Num() == 2 && MidiMapButtons[0] && MidiMapButtons[1])
+	{
+		StyleChoice(*MidiMapButtons[0], false);
+		StyleChoice(*MidiMapButtons[1], false);
+		MidiMapButtons[0]->SetIsEnabled(Status && Settings.bCustomMidiMap);
+		MidiMapButtons[1]->SetIsEnabled(Status && !Bindings.IsEmpty());
+	}
+	for (UStageChoiceButton* Button : MidiPlaybackButtons)
+	{
+		if (Button)
+		{
+			StyleChoice(*Button, Button->GetChoiceIndex() == MidiMapPlayback - 1);
+			Button->SetIsEnabled(Status != nullptr);
+		}
+	}
+
+	for (int32 Index = 0; Index < MidiTargetTexts.Num() && Index < MidiTargetCount; ++Index)
+	{
+		const EStageRemoteAction Action = MidiTargets[Index].Action;
+		const int32 Playback = MidiTargetPlayback(Index);
+		const bool bWaiting = Status && Status->Learning == Action && (!StageRemote::UsesPlayback(Action) || Status->LearningPlayback == Playback);
+		const TArray<FStageMidiBinding> Controls = StageRemote::BindingsForTarget(Bindings, Action, Playback);
+
+		TArray<FString> Names;
+		for (const FStageMidiBinding& Binding : Controls)
+		{
+			Names.Add(StageRemote::DescribeControl(Binding));
+		}
+		if (UTextBlock* Text = MidiTargetTexts[Index])
+		{
+			Text->SetText(bWaiting ? LOCTEXT("MidiWaiting", "Move or press a control…")
+				: Names.IsEmpty() ? LOCTEXT("MidiNotSet", "–") : FText::FromString(FString::Join(Names, TEXT(", "))));
+			Text->SetColorAndOpacity(FSlateColor(bWaiting ? Palette.AccentColor : Palette.TextSecondary));
+		}
+		if (UStageChoiceButton* Learn = MidiLearnButtons.IsValidIndex(Index) ? MidiLearnButtons[Index].Get() : nullptr)
+		{
+			StyleChoice(*Learn, bWaiting);
+			// Learning listens to the open input; with none, LEARN would only explain why it cannot.
+			Learn->SetIsEnabled(bMidiOpen);
+		}
+		if (UStageChoiceButton* Clear = MidiClearButtons.IsValidIndex(Index) ? MidiClearButtons[Index].Get() : nullptr)
+		{
+			StyleChoice(*Clear, false);
+			Clear->SetIsEnabled(Status && !Controls.IsEmpty());
+		}
+	}
 }
 
 void UStagePreferencesPanel::ApplyRemoteSettings(const FStageRemoteSettings& Settings)
@@ -1222,6 +1472,9 @@ void UStagePreferencesPanel::RefreshRemote()
 	StyleRow(OscButtons, static_cast<int32>(Settings.OscScope), Remote != nullptr);
 	const int32 MidiIndex = Settings.MidiInputName.IsEmpty() ? 0 : MidiInputNames.IndexOfByKey(Settings.MidiInputName) + 1;
 	StyleRow(MidiButtons, MidiIndex, Remote != nullptr);
+	const int32 MidiOutputIndex = Settings.MidiOutputName.IsEmpty() ? 0 : MidiOutputNames.IndexOfByKey(Settings.MidiOutputName) + 1;
+	StyleRow(MidiOutputButtons, MidiOutputIndex, Remote != nullptr);
+	RefreshMidiMap(Settings, Remote ? &Remote->GetStatus() : nullptr);
 
 	if (!RemoteStatusText)
 	{
@@ -1252,6 +1505,21 @@ void UStagePreferencesPanel::RefreshRemote()
 	else if (MidiInputNames.IsEmpty())
 	{
 		Lines.Add(LOCTEXT("NoMidiInputs", "No MIDI input found. Plug a controller in, then open Preferences again."));
+	}
+	if (Status.bMidiOutputOpen)
+	{
+		Lines.Add(FText::Format(LOCTEXT("MidiOutputOpen", "MIDI feedback to {0}: faders and lights follow the show ({1} sent)."),
+			FText::FromString(Status.MidiOutputDevice), FText::AsNumber(Status.MidiSent)));
+	}
+	else if (!Settings.MidiOutputName.IsEmpty() && MidiOutputIndex == 0)
+	{
+		Lines.Add(FText::Format(LOCTEXT("MidiOutputSavedMissing", "MIDI output: \"{0}\" is not connected."), FText::FromString(Settings.MidiOutputName)));
+	}
+	if (Status.bMidiOpen || Status.bMidiOutputOpen)
+	{
+		Lines.Add(Settings.bCustomMidiMap
+			? FText::Format(LOCTEXT("MidiMapCustom", "MIDI map: yours, {0} controls."), FText::AsNumber(Settings.MidiBindings.Num()))
+			: LOCTEXT("MidiMapDefault", "MIDI map: the default (Korg nanoKONTROL2)."));
 	}
 	if (Status.Received > 0)
 	{
