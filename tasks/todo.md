@@ -754,7 +754,7 @@ Gevor's choices: automation tests on a harness game instance (not AFunctionalTes
 - [ ] Gevor: open the page on a real phone over Wi-Fi (scope Network) and run a show
 - [ ] D7: plain HTTP with PIN pairing on the LAN acceptable? (Pairings across restarts: requested 2026-11-16, built in #95; confirm 30 days unused / 90 days from pairing, default On)
 - [x] WR2: QR code with address and PIN, remembered devices (STATE.md #95, ADR 0036 section 11)
-- [ ] WR4: page layout options (the third item of the old WR2 line)
+- [x] WR4: page layout options (STATE.md #97, ADR 0036 section 12)
 - [x] WR3: Pro gate StageCraft.Entitlement.Pro.WebRemote in EvaluateWebRemote (Step 6, STATE.md #93)
 
 ## Phase 43 - Step 6: StageCraft Pro subscription and licence (requested by Gevor 2026-11-16; STATE.md #93; ADR 0034 section 17)
@@ -788,3 +788,9 @@ Gevor's choices: automation tests on a harness game instance (not AFunctionalTes
 - [x] Subagent review: 9 of 10 findings fixed; help EN/HY; tests 299/299; scripted runs MR2a/MR2b; Shipping scan clean
 - [ ] Gevor: real controller check (LEARN, CLEAR, RESET; lights with LED Mode External; motor fader if available)
 - [ ] Gevor: one control per row, or several (ADR 0035 section 9)?
+
+## Phase 47 - Web Remote WR4 (requested by Gevor 2026-11-16; STATE.md #97; ADR 0036 section 12)
+- [x] Per-device page layout in the browser: sections shown, playbacks 1-10 / All / Hide empty, Large controls, Lock (2-second unlock), Reset; no server change
+- [x] Pure layout block tested by node Scripts/Tests/WebRemotePageTests.mjs (18/18) with static page checks
+- [x] Real browser check: Scripts/Tests/RunWebRemotePageCheck.ps1 (headless Edge against StageCraft, 16/16, PASS twice); help EN/HY
+- [ ] Gevor: real phone (thumb sizes, touch unlock) and a tablet with a section hidden

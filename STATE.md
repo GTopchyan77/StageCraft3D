@@ -9500,7 +9500,7 @@ All times in ms.
   - Present: "MIDI output", "RESET TO DEFAULT", "(echo of feedback)", "The MIDI controller was disconnected".
 - **Not verified:** a real MIDI controller (no MIDI input on this PC), so LEARN completing from a real press, motor faders and button lights are untested on hardware. Learn's completion path is covered by `AssignLearned` tests only.
 
-**Commit:** uncommitted (working tree).
+**Commit:** `bdfcbed`.
 
 **Known issues / follow-ups**
 - **Gevor:** with a real controller (nanoKONTROL2 or yours), check:
@@ -9510,3 +9510,69 @@ All times in ms.
 - An "any channel" binding answers on channel 1 until its control is heard; an output-channel setting is possible later.
 - A map-only `ApplySettings` is proven in the scripted run, not in automation: an automation test would have to save to the user's ini.
 - WR4 (Web Remote page layout options) remains open.
+
+---
+
+## #97 — Web Remote WR4: page layout options per device (ADR 0036 §12) (2026-11-16)
+
+**What & why**
+- **Context.** Gevor asked (2026-11-16) for WR4 ("page layout options", the third item of the old WR2 line) or other polish. WR4 had no specification. It is defined here (ADR 0036 §12) as what a phone needs to fit one person's job:
+  - choose the sections and the playbacks shown;
+  - large controls for gloves or a dark stage;
+  - a lock against pocket taps.
+- **Housekeeping first.** #96 said "uncommitted"; it now carries `bdfcbed`.
+- **Decision: per device, in the browser.**
+  - The layout is a page preference in `localStorage` (`stagecraft.webremote.layout`), not a StageCraft setting.
+  - Nothing new reaches the server: no route, message, setting or trust boundary. Every command is still paired and judged by the GameMode.
+  - Each phone keeps its own layout, and Unpair keeps it.
+  - So there is no C++ change in this entry.
+- **The page** (`Source/ModularSceneBuilder/Resources/WebRemote/index.html`) gains a header Layout button and a Layout sheet:
+  - **Show:** Cues, Playbacks, Masters. Hidden sections lose their tab; with one section left, the tabs go.
+  - **Playbacks:** 1–10 and All; Hide empty (playbacks without cues) follows the show's state as playbacks gain or lose cues.
+  - **Size:** Normal or Large (bigger buttons, faders, GO/BACK and cue number).
+  - **Lock layout:** hides Layout and Unpair. Unlocking needs a 2-second press on Locked; a tap only explains.
+  - **Reset.**
+  - **Safety:** a strip hidden while held still sends its release.
+- **Pure block.** The layout logic is one marked block of the page script (`layout:pure:begin` … `layout:pure:end`) with no DOM or storage:
+  - **Functions:** `sanitizeLayout`, `parseLayout`, `serializeLayout`, `withPane`, `withPlayback`, `visiblePanes`, `visibleStrips`, `pickPane`.
+  - **Storage is untrusted:** over 4 KB, unparsable, another version or a non-object gives the default. Each field is checked on its own and unknown keys are dropped.
+  - **Never an empty page:** the last section and the last playback cannot be switched off; a stored "none" falls back to all.
+
+**Files changed**
+- `Source/ModularSceneBuilder/Resources/WebRemote/index.html` (Layout sheet, header buttons, CSS for Large and single-section, the pure block, applying the layout)
+- New:
+  - `Scripts/Tests/WebRemotePageTests.mjs` (Node, no packages: the pure block in a sandbox plus static page checks)
+  - `Scripts/Tests/WebRemotePageBrowserCheck.mjs` (headless Edge or Chrome over the DevTools protocol)
+  - `Scripts/Tests/RunWebRemotePageCheck.ps1` (StageCraft plus the browser check; restores the user's devices file)
+- `Content/StageCraft/Help/{en,hy}/web-remote.md` (Layout paragraph, keywords)
+- `Docs/ADR/0036-web-remote.md` (status, §7 WR4 row, new §12)
+- `tasks/todo.md`, `STATE.md`
+- No C++, `.uasset`, maps or input actions changed.
+
+**Verification**
+- **`node Scripts/Tests/WebRemotePageTests.mjs` (Claude): 18/18.**
+  - **The whole page:** one inline script that parses; nothing external (CSP); unique ids; every `$('id')` exists.
+  - **The pure block:** no DOM or storage; defaults; broken or foreign storage; round trip; per-field fallback; never empty; unknown keys dropped; withPane and withPlayback refusals; visibleStrips with Hide empty; pickPane.
+  - Unpair keeps the layout.
+- **`Scripts/Tests/RunWebRemotePageCheck.ps1` (Claude): PASS twice (WR4a, WR4b), 16/16 browser checks.**
+  - **Setup:** StageCraft `-game` with the Web Remote on this PC (port 48792, Pro assumed through the dev switch); headless Edge at 390×844 phone size.
+  - **Pairing:** paired from the QR link `/#pin=`; the PIN left the address bar and a token was stored.
+  - **Layout sheet:** used through its own buttons (Masters off, Large, playbacks 1–4); the last section stayed on.
+  - **Applied:** Large, Masters and its tab hidden, 4 strips; kept after a reload.
+  - **GO** reached StageCraft (received 1; refused "Cue GO: nothing to do", since the test stage has no cues).
+  - **Lock:** Layout and Unpair were hidden; a 0.3 s press kept the lock; a 2.3 s press unlocked.
+  - **Reset** gave the default; **Unpair** removed the token and kept the layout, and StageCraft logged "a device unpaired itself".
+  - The user's devices file was as before; the harness restored profile, scenes and settings.
+  - **Screenshots** (the sheet, Large playbacks, Large cues, locked) were checked by eye.
+  - This is the first time the phone page ran in a real browser; before, it had only been syntax-checked.
+- **Automation (Claude):** `StageCraft.WebRemote.*` 9/9 (the page they serve changed); user data unchanged. No C++ changed, so the 299-test suite of #96 stands.
+- **Builds (Claude):** Game Development and Shipping are up to date (no C++ change).
+- **Shipping scan:** the dev commands are absent. The page stays a staged runtime dependency (`ModularSceneBuilder.Build.cs`), and its path is in the binary.
+- **Not verified:** a real phone (iOS Safari, Android Chrome), real touch input, and the tablet side-by-side view with sections hidden (CSS reasoning only: `[hidden]` overrides the tablet `display:flex`).
+
+**Commit:** uncommitted (working tree).
+
+**Known issues / follow-ups**
+- **Gevor:** on a real phone, check that Layout, Large and Lock feel right with a thumb, and that the 2-second unlock works with touch. On a tablet, hide a section.
+- The page tests are Node scripts, not part of `RunAutomation.ps1`: run `node Scripts/Tests/WebRemotePageTests.mjs` after editing the page, and `RunWebRemotePageCheck.ps1` for the browser check.
+- Ideas not built: playback order or custom labels per phone, and a portrait faders-only "rig" view.

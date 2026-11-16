@@ -1,6 +1,6 @@
 # ADR 0036: Web Remote (Step 5)
 
-- **Status:** accepted for WR1 (2026-11-11, STATE.md #92); WR2 (QR code, remembered devices) added 2026-11-16 (STATE.md #95, §11).
+- **Status:** accepted for WR1 (2026-11-11, STATE.md #92); WR2 (QR code, remembered devices) added 2026-11-16 (STATE.md #95, §11); WR4 (page layout options) added 2026-11-16 (STATE.md #97, §12).
 - **Related:**
   - ADR 0034 §2 (tiers: Web Remote is **Pro**; D8 puts it at Step 5, after the download manager).
   - ADR 0035 (MIDI and OSC): the address space, the pure `StageRemote` layer and the controller's `RequestRemoteCommand` are reused as they are.
@@ -80,6 +80,7 @@ Deny by default:
 | **WR1** (this) | Pure protocol, server, pairing, subsystem, controller and GameMode gate, settings, Preferences section (scope, port shown, PIN, addresses, NEW PIN, UNPAIR ALL, status), the page, dev console commands, help EN/HY | Unit tests for the pure layer; a loopback test with real sockets (page, pairing, lockout, WebSocket hello, command, state, refusal); the GameMode rule; a scripted `-game` run that pairs and sends commands from PowerShell; Editor, Game and Shipping at 0 warnings |
 | WR2 (§11) | QR code with the address and PIN; remembered devices across runs; FORGET and the page's own Unpair. Layout options on the page moved to a later phase | QR symbols checked module for module against node-qrcode and read back by jsQR; pairing persistence unit tests; loopback restart, `/api/unpair` and FORGET; a `-game` run whose screenshot of Preferences jsQR decodes to the address and PIN; a real phone remains Gevor's check |
 | WR3 | Pro gate (Step 6) | Licensing tests |
+| WR4 (§12) | Page layout options per device: sections, playbacks, Hide empty, Large, Lock; stored in the browser only | Node tests of the pure layout block and static page checks; the page driven in headless Edge against a running StageCraft (pairing from the QR link, layout, reload, GO, lock, unpair) with phone-size screenshots; a real phone remains Gevor's check |
 
 ## 8. Alternatives considered
 
@@ -126,3 +127,16 @@ Remove the subsystem, the settings field, the controller request and the Prefere
 - **No expiry:** a phone lost at a festival would stay paired until someone remembers to press UNPAIR ALL.
 - **A QR library from the marketplace or GitHub:** a third-party dependency and licence review for one small, testable function.
 - **The PIN as a query parameter (`?pin=`):** it would be sent to the server and end up in the request line.
+
+## 12. WR4: page layout options (2026-11-16, STATE.md #97)
+
+A phone in a pocket and a tablet on the desk want different pages: one LD rides four playbacks with gloves on, another only needs GO.
+
+- **Where it lives: the browser, per device.** The layout is a page preference (`localStorage`, key `stagecraft.webremote.layout`), not a StageCraft setting. Nothing reaches the server, so there is no new route, message, setting or trust boundary; every command still goes through pairing and the GameMode. Each phone keeps its own layout, and Unpair keeps it (it belongs to the device, not to the pairing).
+- **Options** (the page's Layout sheet, header button): sections shown (Cues, Playbacks, Masters); which playbacks (1–10, All) and Hide empty (playbacks without cues; follows the show as playbacks gain or lose cues); Size Normal / Large (bigger buttons, faders and cue number); Lock layout (hides Layout and Unpair; unlocking needs a 2-second press on Locked, so a pocket tap does not undo it); Reset.
+- **Never an empty page.** The pure block refuses to switch off the last section or the last playback, and a stored layout with none falls back to all. With Hide empty, the playbacks section may have nothing to show; it then says so.
+- **Untrusted storage.** `parseLayout` / `sanitizeLayout` take the stored text as untrusted: over 4 KB, unparsable, another version or a non-object gives the default; each field is checked on its own (unknown keys dropped, playbacks whole numbers 1–10, deduplicated and sorted, size from the list, booleans only as booleans).
+- **Pure and tested.** The layout logic is one marked block of the page script (`layout:pure:begin` … `layout:pure:end`) with no DOM or storage. `Scripts/Tests/WebRemotePageTests.mjs` (Node, no packages) runs it in a sandbox and also checks that the whole script parses, that the page loads nothing external (CSP), that ids are unique and that every `$('id')` exists.
+- **In a real browser.** `Scripts/Tests/RunWebRemotePageCheck.ps1` runs StageCraft with the Web Remote on this PC and drives the page in headless Edge (or Chrome) through the DevTools protocol (`WebRemotePageBrowserCheck.mjs`) at phone size: pairing from the QR link, the PIN leaving the address bar, the Layout sheet's own buttons, a reload keeping the layout, GO reaching StageCraft, lock and a real 2-second unlock press, reset, and unpair. It restores the user's devices file.
+- **A control under a finger:** a strip hidden while held (Hide empty, as the show changes) still sends its release.
+- **Rollback:** remove the Layout sheet, the header buttons and the block; a stored layout is then ignored.

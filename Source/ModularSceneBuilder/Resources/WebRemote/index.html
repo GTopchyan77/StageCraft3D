@@ -96,12 +96,41 @@ body.nc main{opacity:.55}
  .strips{overflow-x:auto}
 }
 @media (max-height:480px){.cuenum{font-size:30px}#go,#back{min-height:54px}}
+/* Layout sheet (WR4): saved on this device only */
+#layout{position:fixed;inset:0;z-index:4;background:rgba(0,0,0,.6);display:flex;align-items:flex-end;justify-content:center;padding:12px;padding-bottom:calc(12px + env(safe-area-inset-bottom))}
+#layout .card{max-width:520px;max-height:100%;overflow:auto;gap:14px}
+.optrow{display:flex;flex-direction:column;gap:6px}
+.optrow h3{margin:0;font-size:13px;color:var(--dim);font-weight:600}
+.opts{display:flex;flex-wrap:wrap;gap:6px}
+.opts button{flex:1 0 auto}
+.opts button[aria-pressed=true]{background:var(--amber);color:#1a1205;border-color:var(--amber);font-weight:700}
+.pbopts button{flex:0 0 calc(20% - 5px);padding:0}
+.sheetbtns{display:flex;gap:8px}
+.sheetbtns button{flex:1}
+#lockBtn.holding{color:var(--amber);border-color:var(--amber)}
+/* One section shown: no tabs */
+body.single nav{display:none}
+/* Large controls: gloves, a dark stage, a phone at arm's length */
+body.large{--knob:40px}
+body.large button:not(.small){min-height:56px;font-size:17px}
+body.large #go,body.large #back{min-height:96px}
+body.large #go{font-size:38px}
+body.large #back{font-size:22px}
+body.large .cuenum{font-size:56px}
+body.large .cuelbl{font-size:24px}
+body.large .strip{flex-basis:116px}
+body.large .strip button{min-height:56px;font-size:15px}
+body.large .mstrip{flex-basis:124px}
+body.large .track{width:80px}
+body.large #bo{font-size:28px}
 </style>
 </head>
 <body>
 <header>
  <h1>StageCraft Remote</h1>
  <div class="conn" id="conn" data-s="offline"><span class="dot"></span><span id="connTxt">Offline</span></div>
+ <button class="small" id="layoutBtn" type="button" hidden>Layout</button>
+ <button class="small" id="lockBtn" type="button" hidden title="Hold for 2 seconds to unlock">Locked</button>
  <button class="small" id="unpair" type="button" hidden>Unpair</button>
 </header>
 
@@ -132,11 +161,33 @@ body.nc main{opacity:.55}
    <div class="gorow"><button type="button" id="back">BACK</button><button type="button" id="go">GO</button></div>
    <div class="box list" id="cueList"><div class="empty">No cues yet.</div></div>
   </div>
-  <div class="pane" id="pPlaybacks"><div class="strips" id="strips"></div></div>
+  <div class="pane" id="pPlaybacks"><div class="strips" id="strips"></div><div class="box empty" id="noPbs" hidden>No playbacks to show. Change it in Layout.</div></div>
   <div class="pane" id="pMasters"><div class="masters" id="masters">
    <div class="bocol"><button type="button" id="bo">BLACKOUT</button><div class="bostate" id="boState">Off</div></div>
   </div></div>
  </main>
+</section>
+
+<section id="layout" hidden role="dialog" aria-modal="true" aria-labelledby="layoutTitle">
+ <div class="card">
+  <h2 id="layoutTitle">Layout</h2>
+  <p class="hint">Saved on this device only; other phones keep their own.</p>
+  <div class="optrow"><h3>Show</h3>
+   <div class="opts" id="optPanes"><button type="button" data-pane="cues">Cues</button><button type="button" data-pane="playbacks">Playbacks</button><button type="button" data-pane="masters">Masters</button></div>
+  </div>
+  <div class="optrow"><h3>Playbacks</h3>
+   <div class="opts pbopts" id="optPbs"></div>
+   <div class="opts"><button type="button" id="optAllPbs">All</button><button type="button" id="optHideEmpty">Hide empty</button></div>
+  </div>
+  <div class="optrow"><h3>Size</h3>
+   <div class="opts" id="optSize"><button type="button" data-size="normal">Normal</button><button type="button" data-size="large">Large</button></div>
+  </div>
+  <div class="optrow"><h3>Lock</h3>
+   <div class="opts"><button type="button" id="optLock">Lock layout</button></div>
+   <p class="hint">Hides Layout and Unpair so a pocket tap cannot change them. Hold Locked for 2 seconds to unlock.</p>
+  </div>
+  <div class="sheetbtns"><button type="button" id="layoutReset">Reset</button><button type="button" class="primary" id="layoutDone">Done</button></div>
+ </div>
 </section>
 
 <div id="toast" role="status" hidden></div>
@@ -166,6 +217,98 @@ body.nc main{opacity:.55}
     return e;
   }
   function button(cls, text) { const b = el('button', cls, text); b.type = 'button'; return b; }
+
+  /* layout:pure:begin. The page layout (WR4, Docs/ADR/0036 section 12): no DOM and no storage in this block, so
+     Scripts/Tests/WebRemotePageTests.mjs can run it on its own. */
+  const LAYOUT_VERSION = 1;
+  const LAYOUT_MAX_CHARS = 4096;
+  const LAYOUT_PANES = ['cues', 'playbacks', 'masters'];
+  const LAYOUT_SIZES = ['normal', 'large'];
+  const LAYOUT_PLAYBACKS = 10;
+
+  function allPlaybacks() {
+    const all = [];
+    for (let n = 1; n <= LAYOUT_PLAYBACKS; n++) all.push(n);
+    return all;
+  }
+
+  function defaultLayout() {
+    return { v: LAYOUT_VERSION, panes: { cues: true, playbacks: true, masters: true }, playbacks: allPlaybacks(), hideEmpty: false, size: 'normal', lock: false };
+  }
+
+  // Whatever is stored may be old, edited or broken: each field is checked on its own and falls back to its default, and a page
+  // with nothing to show (every section off, no playback chosen) is never the result.
+  function sanitizeLayout(raw) {
+    const d = defaultLayout();
+    if (!raw || typeof raw !== 'object' || Array.isArray(raw) || raw.v !== LAYOUT_VERSION) return d;
+    const panes = {};
+    const rawPanes = raw.panes && typeof raw.panes === 'object' ? raw.panes : {};
+    LAYOUT_PANES.forEach((k) => { panes[k] = typeof rawPanes[k] === 'boolean' ? rawPanes[k] : d.panes[k]; });
+    if (!LAYOUT_PANES.some((k) => panes[k])) LAYOUT_PANES.forEach((k) => { panes[k] = true; });
+    let pbs = Array.isArray(raw.playbacks) ? raw.playbacks.filter((n) => Number.isInteger(n) && n >= 1 && n <= LAYOUT_PLAYBACKS) : d.playbacks;
+    pbs = Array.from(new Set(pbs)).sort((a, b) => a - b);
+    if (!pbs.length) pbs = d.playbacks;
+    return {
+      v: LAYOUT_VERSION,
+      panes: panes,
+      playbacks: pbs,
+      hideEmpty: raw.hideEmpty === true,
+      size: LAYOUT_SIZES.indexOf(raw.size) >= 0 ? raw.size : d.size,
+      lock: raw.lock === true
+    };
+  }
+
+  function parseLayout(text) {
+    if (typeof text !== 'string' || text.length > LAYOUT_MAX_CHARS) return defaultLayout();
+    try { return sanitizeLayout(JSON.parse(text)); } catch (e) { return defaultLayout(); }
+  }
+
+  function serializeLayout(layout) { return JSON.stringify(sanitizeLayout(layout)); }
+
+  // Switching a section off is refused for the last one shown: the page would be empty.
+  function withPane(layout, key, on) {
+    const l = sanitizeLayout(layout);
+    if (LAYOUT_PANES.indexOf(key) < 0) return l;
+    if (!on && l.panes[key] && LAYOUT_PANES.filter((k) => l.panes[k]).length === 1) return l;
+    l.panes[key] = on === true;
+    return l;
+  }
+
+  // Likewise the last playback chosen stays.
+  function withPlayback(layout, n, on) {
+    const l = sanitizeLayout(layout);
+    if (!Number.isInteger(n) || n < 1 || n > LAYOUT_PLAYBACKS) return l;
+    const has = l.playbacks.indexOf(n) >= 0;
+    if (on && !has) l.playbacks = l.playbacks.concat([n]).sort((a, b) => a - b);
+    if (!on && has && l.playbacks.length > 1) l.playbacks = l.playbacks.filter((p) => p !== n);
+    return l;
+  }
+
+  function visiblePanes(layout) {
+    const l = sanitizeLayout(layout);
+    return LAYOUT_PANES.filter((k) => l.panes[k]);
+  }
+
+  // The 0-based playbacks to draw: chosen ones, less the empty ones when hideEmpty is on (empties[i] === true: no cue list).
+  function visibleStrips(layout, empties) {
+    const l = sanitizeLayout(layout);
+    return l.playbacks.map((n) => n - 1).filter((i) => !(l.hideEmpty && Array.isArray(empties) && empties[i] === true));
+  }
+
+  // The section a phone shows: the one it showed last if it is still shown, else the first shown.
+  function pickPane(layout, saved) {
+    const shown = visiblePanes(layout);
+    return shown.indexOf(saved) >= 0 ? saved : shown[0];
+  }
+  /* layout:pure:end */
+
+  const LAYOUT_KEY = 'stagecraft.webremote.layout';
+  const PANE_IDS = { cues: 'pCues', playbacks: 'pPlaybacks', masters: 'pMasters' };
+  // Per device, not per pairing: unpairing keeps it, and another phone has its own.
+  let layout = parseLayout(load(LAYOUT_KEY));
+  const empties = [];
+  let onControl = false;
+  let currentTab = 'pCues';
 
   let toastTimer = 0;
   function toast(msg) {
@@ -289,8 +432,10 @@ body.nc main{opacity:.55}
 
   // ---- screens -------------------------------------------------------------
   function showPair(reason) {
+    onControl = false;
+    closeLayout();
     $('ctl').hidden = true;
-    $('unpair').hidden = true;
+    drawHeader();
     $('pair').hidden = false;
     $('pairErr').textContent = reason || '';
     setConn('offline');
@@ -308,7 +453,8 @@ body.nc main{opacity:.55}
   function showControl() {
     $('pair').hidden = true;
     $('ctl').hidden = false;
-    $('unpair').hidden = false;
+    onControl = true;
+    drawHeader();
     retryDelay = 1000;
     connect();
   }
@@ -547,16 +693,20 @@ body.nc main{opacity:.55}
       markActive(changed);
     }
     if (Array.isArray(m.playbacks)) {
+      let emptiesChanged = false;
       for (let i = 0; i < PLAYBACKS && i < m.playbacks.length; i++) {
         const p = m.playbacks[i];
         if (!p || typeof p !== 'object') continue;
         const s = strips[i];
         s.name.textContent = str(p.name, 64).trim() || `PB ${i + 1}`;
+        if (empties[i] !== (p.empty === true)) { empties[i] = p.empty === true; emptiesChanged = true; }
         s.box.classList.toggle('empty', p.empty === true);
         s.box.classList.toggle('active', p.active === true);
         s.fl.classList.toggle('on', p.flash === true);
         if (isNum(p.level)) s.fader.set(p.level);
       }
+      // "Hide empty" follows the show: a playback given cues appears, one cleared disappears.
+      if (emptiesChanged) drawStrips();
     }
     if (isNum(m.grand)) grand.set(m.grand);
     if (isNum(m.audio)) audio.set(m.audio);
@@ -564,13 +714,111 @@ body.nc main{opacity:.55}
   }
 
   // ---- tabs ----------------------------------------------------------------
+  function paneKeyOf(id) { return LAYOUT_PANES.find((k) => PANE_IDS[k] === id) || ''; }
+
   function selectTab(id) {
-    if (!$(id)) id = 'pCues';
+    id = PANE_IDS[pickPane(layout, paneKeyOf(id))];
     document.querySelectorAll('.pane').forEach((p) => p.classList.toggle('on', p.id === id));
     document.querySelectorAll('#tabs button').forEach((b) => b.classList.toggle('on', b.dataset.tab === id));
+    currentTab = id;
     store(TAB_KEY, id);
   }
   document.querySelectorAll('#tabs button').forEach((b) => b.addEventListener('click', () => selectTab(b.dataset.tab)));
+
+  // ---- layout (WR4) ----------------------------------------------------------
+  function drawHeader() {
+    $('layoutBtn').hidden = !onControl || layout.lock;
+    $('unpair').hidden = !onControl || layout.lock;
+    $('lockBtn').hidden = !onControl || !layout.lock;
+  }
+
+  function drawStrips() {
+    const shown = new Set(visibleStrips(layout, empties));
+    let hidHeld = false;
+    strips.forEach((s, i) => {
+      const hide = !shown.has(i);
+      if (hide && !s.box.hidden && s.box.querySelector('.held,.down')) hidHeld = true;
+      s.box.hidden = hide;
+    });
+    // A control that disappears under a finger must still send its release.
+    if (hidHeld) releaseHeld();
+    $('noPbs').hidden = shown.size > 0;
+  }
+
+  function applyLayout() {
+    document.body.classList.toggle('large', layout.size === 'large');
+    document.body.classList.toggle('single', visiblePanes(layout).length === 1);
+    LAYOUT_PANES.forEach((k) => { $(PANE_IDS[k]).hidden = !layout.panes[k]; });
+    document.querySelectorAll('#tabs button').forEach((b) => { b.hidden = !layout.panes[paneKeyOf(b.dataset.tab)]; });
+    drawStrips();
+    drawHeader();
+    selectTab(currentTab);
+  }
+
+  function setLayout(next) {
+    layout = sanitizeLayout(next);
+    store(LAYOUT_KEY, serializeLayout(layout));
+    applyLayout();
+    drawLayoutSheet();
+  }
+
+  function pressed(b, on) { b.setAttribute('aria-pressed', String(on === true)); }
+
+  function drawLayoutSheet() {
+    document.querySelectorAll('#optPanes button').forEach((b) => pressed(b, layout.panes[b.dataset.pane]));
+    document.querySelectorAll('#optPbs button').forEach((b) => pressed(b, layout.playbacks.indexOf(Number(b.dataset.pb)) >= 0));
+    pressed($('optAllPbs'), layout.playbacks.length === LAYOUT_PLAYBACKS);
+    pressed($('optHideEmpty'), layout.hideEmpty);
+    document.querySelectorAll('#optSize button').forEach((b) => pressed(b, layout.size === b.dataset.size));
+    pressed($('optLock'), layout.lock);
+  }
+
+  function openLayout() {
+    releaseHeld();
+    drawLayoutSheet();
+    $('layout').hidden = false;
+    try { $('layoutDone').focus(); } catch (e) { /* ignore */ }
+  }
+  function closeLayout() { $('layout').hidden = true; }
+
+  for (let n = 1; n <= LAYOUT_PLAYBACKS; n++) {
+    const b = button('', String(n));
+    b.dataset.pb = String(n);
+    b.setAttribute('aria-label', `Playback ${n}`);
+    b.addEventListener('click', () => setLayout(withPlayback(layout, n, layout.playbacks.indexOf(n) < 0)));
+    $('optPbs').append(b);
+  }
+  document.querySelectorAll('#optPanes button').forEach((b) => b.addEventListener('click', () => {
+    setLayout(withPane(layout, b.dataset.pane, !layout.panes[b.dataset.pane]));
+  }));
+  document.querySelectorAll('#optSize button').forEach((b) => b.addEventListener('click', () => setLayout(Object.assign({}, layout, { size: b.dataset.size }))));
+  $('optAllPbs').addEventListener('click', () => setLayout(Object.assign({}, layout, { playbacks: allPlaybacks() })));
+  $('optHideEmpty').addEventListener('click', () => setLayout(Object.assign({}, layout, { hideEmpty: !layout.hideEmpty })));
+  $('optLock').addEventListener('click', () => { setLayout(Object.assign({}, layout, { lock: true })); closeLayout(); toast('Layout locked. Hold Locked for 2 seconds to unlock.'); });
+  $('layoutReset').addEventListener('click', () => setLayout(defaultLayout()));
+  $('layoutDone').addEventListener('click', closeLayout);
+  $('layoutBtn').addEventListener('click', openLayout);
+  $('layout').addEventListener('click', (e) => { if (e.target === $('layout')) closeLayout(); });
+  document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && !$('layout').hidden) closeLayout(); });
+
+  // Unlocking takes a deliberate 2-second hold, so the lock survives a phone in a pocket.
+  {
+    const lockBtn = $('lockBtn');
+    let unlockTimer = 0;
+    let justUnlocked = false;
+    const cancel = () => { clearTimeout(unlockTimer); unlockTimer = 0; lockBtn.classList.remove('holding'); };
+    lockBtn.addEventListener('pointerdown', (e) => {
+      cancel();
+      lockBtn.classList.add('holding');
+      unlockTimer = setTimeout(() => { cancel(); justUnlocked = true; setLayout(Object.assign({}, layout, { lock: false })); toast('Layout unlocked.'); }, 2000);
+      e.preventDefault();
+    });
+    ['pointerup', 'pointercancel', 'pointerleave'].forEach((t) => lockBtn.addEventListener(t, cancel));
+    lockBtn.addEventListener('click', () => {
+      if (justUnlocked) { justUnlocked = false; return; }
+      if (!unlockTimer) toast('Hold for 2 seconds to unlock.');
+    });
+  }
 
   // ---- page lifecycle ------------------------------------------------------
   document.addEventListener('visibilitychange', () => {
@@ -606,7 +854,8 @@ body.nc main{opacity:.55}
   });
 
   drawBlackout();
-  selectTab(load(TAB_KEY) || 'pCues');
+  currentTab = load(TAB_KEY) || 'pCues';
+  applyLayout();
   if (token) showControl(); else showPair('');
 })();
 </script>
