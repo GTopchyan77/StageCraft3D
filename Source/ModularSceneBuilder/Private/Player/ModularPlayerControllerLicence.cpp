@@ -9,6 +9,8 @@
 #include "Engine/World.h"
 #include "Game/StageCraftGameModeBase.h"
 #include "Licence/StageLicenceSubsystem.h"
+#include "Remote/StageRemoteControlSubsystem.h"
+#include "Remote/StageWebRemoteSubsystem.h"
 #include "Show/StageDMXNetworkTypes.h"
 #include "Subsystems/StageDMXNetworkSubsystem.h"
 
@@ -20,6 +22,28 @@ namespace StageControllerLicence
 	{
 		const UGameInstance* GameInstance = Controller.GetGameInstance();
 		return GameInstance ? GameInstance->GetSubsystem<UStageLicenceSubsystem>() : nullptr;
+	}
+
+	/**
+	 * MIDI, OSC and the Web Remote are open network ports and devices: refusing every command while they stay open would still leave a
+	 * listener on the LAN for a capability the user no longer has. So a refusal closes them, and the saved settings bring them back.
+	 * Deny by default: without a GameMode there is no one to allow them.
+	 */
+	void PushRemoteCapabilities(const AModularPlayerController& Controller, const AStageCraftGameModeBase* GameMode)
+	{
+		UWorld* World = Controller.GetWorld();
+		if (UStageRemoteControlSubsystem* Remote = UWorld::GetSubsystem<UStageRemoteControlSubsystem>(World))
+		{
+			const FStageEconomyResultInfo Verdict = GameMode ? GameMode->EvaluateRemoteControl(&Controller)
+				: FStageEconomyResultInfo::Fail(EStageEconomyResult::InvalidRequest, LOCTEXT("NoRemoteRules", "MIDI and OSC control is not available here."));
+			Remote->SetCapabilityAllowed(Verdict.IsSuccess(), Verdict.Message);
+		}
+		if (UStageWebRemoteSubsystem* Web = UWorld::GetSubsystem<UStageWebRemoteSubsystem>(World))
+		{
+			const FStageEconomyResultInfo Verdict = GameMode ? GameMode->EvaluateWebRemote(&Controller)
+				: FStageEconomyResultInfo::Fail(EStageEconomyResult::InvalidRequest, LOCTEXT("NoWebRules", "The Web Remote is not available here."));
+			Web->SetCapabilityAllowed(Verdict.IsSuccess(), Verdict.Message);
+		}
 	}
 }
 
@@ -61,13 +85,15 @@ FStageEconomyResultInfo AModularPlayerController::RequestReleaseLicence()
 
 void AModularPlayerController::ApplyLicenceLimits()
 {
+	// Deny by default: without a GameMode there is no one to grant Pro, so the Free limits apply.
+	const AStageCraftGameModeBase* GameMode = GetStageGameMode();
+	StageControllerLicence::PushRemoteCapabilities(*this, GameMode);
+
 	UStageDMXNetworkSubsystem* Network = UWorld::GetSubsystem<UStageDMXNetworkSubsystem>(GetWorld());
 	if (!Network)
 	{
 		return;
 	}
-	// Deny by default: without a GameMode there is no one to grant Pro, so the Free limits apply.
-	const AStageCraftGameModeBase* GameMode = GetStageGameMode();
 	FStageDMXCapabilityLimits Limits;
 	Limits.bInputAllowed = GameMode && GameMode->EvaluateDmxInput(this).IsSuccess();
 	Limits.MaxOutputUniverses = GameMode ? GameMode->GetDmxOutputUniverseLimit(this) : AStageCraftGameModeBase::FreeDmxOutputUniverses;

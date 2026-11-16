@@ -40,7 +40,8 @@ namespace StageRemoteControlTests
 	{
 		UWorld* World = nullptr;
 
-		FScopedWorld()
+		/** bAllow: push "allowed" as the local controller does after BeginPlay, so the saved settings open; false leaves the push to the test. */
+		explicit FScopedWorld(bool bAllow = true)
 		{
 			World = UWorld::CreateWorld(EWorldType::Game, /*bInformEngineOfWorld*/ false, TEXT("StageRemoteTestWorld"));
 			FWorldContext& Context = GEngine->CreateNewWorldContext(EWorldType::Game);
@@ -48,6 +49,10 @@ namespace StageRemoteControlTests
 			World->InitializeActorsForPlay(FURL());
 			World->BeginPlay();
 			World->GetWorldSettings()->NotifyBeginPlay();
+			if (bAllow && GetRemote())
+			{
+				GetRemote()->SetCapabilityAllowed(true, FText::GetEmpty());
+			}
 		}
 
 		~FScopedWorld()
@@ -704,6 +709,80 @@ bool FStageRemoteSubsystemTest::RunTest(const FString& Parameters)
 	return true;
 }
 
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FStageRemoteCapabilityTest, "StageCraft.Remote.Capability", StageRemoteControlTests::Flags)
+bool FStageRemoteCapabilityTest::RunTest(const FString& Parameters)
+{
+	using namespace StageRemoteControlTests;
+	// Docs/ADR/0035 §13: OSC and MIDI open only while the GameMode allows them (the licence); a lapse closes them and keeps the
+	// user's choice, a renewal opens them again by itself. OSC on this PC only; MIDI stays off, so no device of this PC is touched.
+	FStageRemoteSettings LeftOn;
+	LeftOn.OscScope = EStageOscScope::ThisComputer;
+	LeftOn.OscPort = 48767;
+	LeftOn.OscFeedbackPort = 0;
+	const FText Lapsed = INVTEXT("MIDI and OSC control needs StageCraft Pro.");
+	const FScopedRemoteSettings Settings{ LeftOn };
+	FScopedWorld Stage(/*bAllow*/ false);
+	UStageRemoteControlSubsystem* Remote = Stage.GetRemote();
+	if (!TestNotNull(TEXT("Remote subsystem"), Remote))
+	{
+		return false;
+	}
+	TestFalse(TEXT("The saved settings wait for the controller's verdict"), Remote->GetStatus().bOscListening);
+
+	// A Free licence at start: never opened, the reason shown, the choice kept.
+	TestTrue(TEXT("First verdict: a change"), Remote->SetCapabilityAllowed(false, Lapsed));
+	TestFalse(TEXT("Free: OSC stays closed"), Remote->GetStatus().bOscListening);
+	TestEqual(TEXT("Free: says why"), Remote->GetStatus().LastProblem.ToString(), Lapsed.ToString());
+	TestEqual(TEXT("Free: the choice is kept"), Remote->GetSettings().OscScope, EStageOscScope::ThisComputer);
+	TestFalse(TEXT("The same verdict again: nothing to do"), Remote->SetCapabilityAllowed(false, Lapsed));
+	const FText SessionRule = INVTEXT("MIDI and OSC control is switched off for this session.");
+	TestFalse(TEXT("Another reason: the verdict did not change"), Remote->SetCapabilityAllowed(false, SessionRule));
+	TestEqual(TEXT("...but the warning follows it"), Remote->GetStatus().LastProblem.ToString(), SessionRule.ToString());
+	Remote->SetCapabilityAllowed(false, Lapsed);
+	FText Error;
+	TestFalse(TEXT("Free: applying does not open"), Remote->ApplySettings(LeftOn, Error));
+	TestEqual(TEXT("...and says why"), Error.ToString(), Lapsed.ToString());
+	TestFalse(TEXT("...still closed"), Remote->GetStatus().bOscListening);
+	TestFalse(TEXT("Free: learn needs an open MIDI input"), Remote->StartMidiLearn(EStageRemoteAction::CueGo, 1, 1.f, Error));
+
+	// Pro: the saved choice opens by itself.
+	TestTrue(TEXT("Allowed: a change"), Remote->SetCapabilityAllowed(true, FText::GetEmpty()));
+	TestTrue(TEXT("Allowed: OSC opens from the saved settings"), Remote->GetStatus().bOscListening);
+	TestTrue(TEXT("Allowed: no warning"), Remote->GetStatus().LastProblem.IsEmpty());
+	TestFalse(TEXT("Allowed again: nothing reopened"), Remote->SetCapabilityAllowed(true, FText::GetEmpty()));
+
+	// The licence lapses: closed, a command already queued is not carried out, the choice is kept.
+	int32 Carried = 0;
+	Remote->SetCommandHandler(UStageRemoteControlSubsystem::FCommandHandler::CreateLambda([&Carried](const FStageRemoteCommand&)
+	{
+		++Carried;
+		return FStageEconomyResultInfo::Ok();
+	}));
+	Remote->ReceiveOsc(TEXT("/stagecraft/cue/go"), {}, FString());
+	TestTrue(TEXT("Lapse: a change"), Remote->SetCapabilityAllowed(false, Lapsed));
+	TestFalse(TEXT("Lapse: OSC closed"), Remote->GetStatus().bOscListening);
+	TestEqual(TEXT("Lapse: says why"), Remote->GetStatus().LastProblem.ToString(), Lapsed.ToString());
+	TestEqual(TEXT("Lapse: the choice is kept"), Remote->GetSettings().OscScope, EStageOscScope::ThisComputer);
+	Remote->FlushCommands();
+	TestEqual(TEXT("Lapse: the queued command is dropped"), Carried, 0);
+
+	// Renewed: open again.
+	TestTrue(TEXT("Renewed: a change"), Remote->SetCapabilityAllowed(true, FText::GetEmpty()));
+	TestTrue(TEXT("Renewed: OSC listening"), Remote->GetStatus().bOscListening);
+
+	// Both inputs off while refused: nothing is held back, so no warning. Set in memory first: ApplySettings then sees no change and
+	// never writes the user's GameUserSettings.ini.
+	Remote->SetCapabilityAllowed(false, Lapsed);
+	if (UStageCraftUserSettings* UserSettings = UStageCraftUserSettings::Get())
+	{
+		UserSettings->SetRemoteSettings(FStageRemoteSettings());
+	}
+	const FStageRemoteSettings Off = Remote->GetSettings();
+	TestTrue(TEXT("Off while refused"), Remote->ApplySettings(Off, Error));
+	TestTrue(TEXT("Off while refused: no warning"), Remote->GetStatus().LastProblem.IsEmpty());
+	return true;
+}
+
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FStageRemoteMidiOutputTest, "StageCraft.Remote.MidiOutput", StageRemoteControlTests::Flags)
 bool FStageRemoteMidiOutputTest::RunTest(const FString& Parameters)
 {
@@ -721,7 +800,7 @@ bool FStageRemoteMidiOutputTest::RunTest(const FString& Parameters)
 		return true;
 	}
 
-	// In memory only, so the world opens the output at BeginPlay and the user's ini is never written. Kept in shared state: the settle
+	// In memory only, so the world opens the output at its start and the user's ini is never written. Kept in shared state: the settle
 	// after a hand's hold is a world timer, and the world's timers run once per engine frame, so the end of the test is latent.
 	struct FOutputState
 	{
@@ -896,7 +975,7 @@ bool FStageRemoteOscLoopbackTest::RunTest(const FString& Parameters)
 		State->Close();
 		return false;
 	}
-	// OnWorldBeginPlay opened OSC from the settings.
+	// The world's start (BeginPlay, then the controller's verdict) opened OSC from the settings.
 	TestTrue(TEXT("OSC listening"), Remote->GetStatus().bOscListening);
 	TestEqual(TEXT("This computer only"), Remote->GetStatus().OscEndpoint, FString::Printf(TEXT("port %d, this PC only"), FLoopbackState::InputPort));
 	Remote->SetCommandHandler(UStageRemoteControlSubsystem::FCommandHandler::CreateLambda([WeakState = TWeakPtr<FLoopbackState>(State)](const FStageRemoteCommand& Command)

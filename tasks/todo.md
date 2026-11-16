@@ -794,3 +794,10 @@ Gevor's choices: automation tests on a harness game instance (not AFunctionalTes
 - [x] Pure layout block tested by node Scripts/Tests/WebRemotePageTests.mjs (18/18) with static page checks
 - [x] Real browser check: Scripts/Tests/RunWebRemotePageCheck.ps1 (headless Edge against StageCraft, 16/16, PASS twice); help EN/HY
 - [ ] Gevor: real phone (thumb sizes, touch unlock) and a tablet with a section hidden
+
+## Phase 48 - Remote servers close on a lapsed licence (requested by Gevor 2026-11-16; STATE.md #98; ADR 0035 section 13, ADR 0036 section 13)
+- [x] SetCapabilityAllowed on UStageRemoteControlSubsystem and UStageWebRemoteSubsystem: refused closes OSC / MIDI / the HTTP server and shows the reason, the saved settings stay and reopen when allowed again
+- [x] Saved settings open only after the controller's first verdict (no port bound on Free, not even before BeginPlay); ApplyLicenceLimits pushes EvaluateRemoteControl / EvaluateWebRemote with the DMX limits
+- [x] Tests StageCraft.Remote.Capability and StageCraft.WebRemote.Capability; full suite 301/301; help EN/HY (remote-control, web-remote, pro-licence)
+- [x] Scripts/Tests/RunRemoteLapseCheck.ps1: -game run, the Pro override lapses and returns, ports watched from outside the game (PASS)
+- [ ] Gevor: in Preferences, let a real licence lapse (or DevAssumePro 0) with OSC and the Web Remote on, and read the warning lines

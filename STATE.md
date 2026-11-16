@@ -9570,9 +9570,73 @@ All times in ms.
 - **Shipping scan:** the dev commands are absent. The page stays a staged runtime dependency (`ModularSceneBuilder.Build.cs`), and its path is in the binary.
 - **Not verified:** a real phone (iOS Safari, Android Chrome), real touch input, and the tablet side-by-side view with sections hidden (CSS reasoning only: `[hidden]` overrides the tablet `display:flex`).
 
-**Commit:** uncommitted (working tree).
+**Commit:** `7dfa401`.
 
 **Known issues / follow-ups**
 - **Gevor:** on a real phone, check that Layout, Large and Lock feel right with a thumb, and that the 2-second unlock works with touch. On a tablet, hide a section.
 - The page tests are Node scripts, not part of `RunAutomation.ps1`: run `node Scripts/Tests/WebRemotePageTests.mjs` after editing the page, and `RunWebRemotePageCheck.ps1` for the browser check.
 - Ideas not built: playback order or custom labels per phone, and a portrait faders-only "rig" view.
+
+---
+
+## #98 — Remote servers close on a lapsed licence: MIDI, OSC and the Web Remote (ADR 0035 §13, ADR 0036 §13) (2026-11-16)
+
+**What & why**
+- **Context.** Gevor asked (2026-11-16) for the highest-value self-contained follow-up needing no hardware or cloud keys. Candidates were MV5 (MVR re-import diffs), dropdowns for crowded panels (waiting on Gevor's look at the viewport bar) and this one. This was chosen because it is a security and correctness gap with a small change surface. The other two remain open.
+- **Housekeeping first.** #97 said "uncommitted"; it now carries `7dfa401`.
+- **Root cause (#93 known issue).** Two things kept running on a Free licence, every command refused (reported once):
+  - The OSC server and MIDI devices (`UStageRemoteControlSubsystem`) and the Web Remote HTTP server (`UStageWebRemoteSubsystem`) opened from the saved settings in `OnWorldBeginPlay` whatever the licence said.
+  - A lapse mid-session closed nothing.
+  - The result: an unauthenticated UDP listener (OSC) or an HTTP server stayed on the LAN, and a MIDI controller stayed held, for a capability the user no longer had. The status said "listening" although nothing would be carried out.
+- **Fix (same pattern as the DMX limits, ADR 0034 §17):**
+  - **New API.** Both subsystems have `SetCapabilityAllowed(bAllowed, Reason)`. `AModularPlayerController::ApplyLicenceLimits` (BeginPlay and every `OnLicenceChanged`: expiry, refresh, cancel, release, dev override) now also pushes `EvaluateRemoteControl` / `EvaluateWebRemote` (session rule, then Pro) through `StageControllerLicence::PushRemoteCapabilities`.
+  - **Refused:** OSC and MIDI close (a learn is cancelled), or the HTTP server stops (pages show "Reconnecting…"; remembered devices are saved as at any stop). Queued commands are dropped. The GameMode's message shows as the Preferences warning, only when the user had something switched on. `ApplySettings` stores but does not open, and returns the reason.
+  - **The user's choice is kept.** Settings, the MIDI map and remembered devices are untouched, so a renewal reopens everything with no click. The Web Remote gets a new PIN, and remembered phones reconnect without one.
+  - **No open before the verdict.** `OnWorldBeginPlay` only marks the restore pending, and the controller's first push opens or refuses. `UWorld::BeginPlay` runs subsystems before actors' BeginPlay, so a Free licence never binds a port, not even for a frame.
+  - **Unbound use.** The verdict defaults to allowed, so tests and tools that call `ApplySettings` directly keep working. Play reaches `ApplySettings` only through the controller's GameMode check.
+- **Review (subagent, read-only):** no blocking bugs; ordering confirmed. Two findings fixed:
+  - With the licence lapsed, unticking "Remember devices" deleted the file but was reported as a refusal. It now returns success, and the status still shows why the server is off.
+  - A new reason with the same verdict (a session rule after the licence) did not update the warning; now it does.
+  - Also from the review: the script checks that its ports are free first, and the ADR notes that a world with no `AModularPlayerController` never opens the saved settings.
+
+**Files changed**
+- `Source/ModularSceneBuilder/Public/Remote/StageRemoteControlSubsystem.h`, `Private/Remote/StageRemoteControlSubsystem.cpp` (SetCapabilityAllowed, restore pending, OpenInputs gate)
+- `Source/ModularSceneBuilder/Public/Remote/StageWebRemoteSubsystem.h`, `Private/Remote/StageWebRemoteSubsystem.cpp` (SetCapabilityAllowed, restore pending, Open gate, remember-off while refused)
+- `Source/ModularSceneBuilder/Private/Player/ModularPlayerControllerLicence.cpp`, `Public/Player/ModularPlayerController.h` (push the remote verdicts with the DMX limits)
+- `Source/ModularSceneBuilder/Private/Remote/Tests/StageRemoteControlTests.cpp`, `StageWebRemoteTests.cpp` (helpers push "allowed" like the controller; new Capability tests)
+- `Scripts/Tests/RunRemoteLapseCheck.ps1` (new)
+- `Content/StageCraft/Help/{en,hy}/remote-control.md`, `web-remote.md`, `pro-licence.md`
+- `Docs/ADR/0035-midi-and-osc-remote-control.md` (§13, status), `Docs/ADR/0036-web-remote.md` (§13, status)
+- `tasks/todo.md`, `STATE.md`
+- No `.uasset`, maps or input actions changed.
+
+**Verification**
+- **Automation (Claude):**
+  - **New `StageCraft.Remote.Capability`.** Nothing opens before the verdict. Free at start keeps the choice and shows the reason. The same verdict is a no-op, and a new reason updates the warning. `ApplySettings` while refused does not open, and learn is refused. Renewal opens from the saved settings; a lapse closes OSC and drops a queued GO. With everything off while refused, no warning shows.
+  - **New `StageCraft.WebRemote.Capability`.** A real paired phone over loopback. On the lapse nothing answers on the port, the device stays in the file and the queued command is dropped. On renewal the phone's token works without the PIN. A new reason updates the warning. Forgetting devices while refused succeeds and deletes the file.
+  - **Full suite 301/301** (299 + 2, before the review fixes). After the fixes, `StageCraft.Remote`, `StageCraft.WebRemote` and `StageCraft.Licence` (25 tests) pass. User data unchanged (127 files).
+- **`Scripts/Tests/RunRemoteLapseCheck.ps1` (Claude): PASS three times (LapseA after fixing the script's counting, LapseB, LapseC after the review fixes), 8/8.**
+  - **Setup:** a `-game` run with Pro assumed (dev switch), Web Remote and OSC on this PC; MIDI is off, so no device is touched.
+  - **Lapse and renewal:** the switch lapses (`DevAssumePro 0`) and comes back.
+  - **Ports seen from outside the game** (`Get-NetTCPConnection` / `Get-NetUDPEndpoint`): closed, open, closed on the lapse, open on renewal, closed when switched off.
+  - **Status lines:** they show "needs StageCraft Pro" while lapsed and no warning after renewal.
+  - **Refusal:** `WebRemote.Settings Local` while lapsed is refused.
+  - **User data:** the devices file is as before, and `GameUserSettings.ini` was not written.
+- **Builds (Claude):** Editor, Game Development and Game Shipping succeeded with no warnings, after the review fixes.
+- **Shipping scan (UTF-16):**
+  - absent: `StageCraft.Licence.DevAssumePro`, `StageCraft.Remote.Status`, `StageCraft.WebRemote.Status` / `.Settings`;
+  - present: the refusal texts.
+- **Not verified:**
+  - a real licence expiring (the expiry timer path is the same `OnLicenceChanged` as the dev switch);
+  - a real MIDI controller closing on a lapse (MIDI goes through the same `CloseInputs` as MR2's tested paths);
+  - the Preferences warning lines looked at on screen.
+
+**Commit:** uncommitted (working tree).
+
+**Known issues / follow-ups**
+- **Gevor:** with OSC and the Web Remote on, let the licence lapse (or `StageCraft.Licence.DevAssumePro 0`). Read the two warning lines in Preferences; then renew and check that both come back.
+- `ForgetDevice` (Preferences FORGET) does nothing while the server is held back, since the device list is empty then. UnpairAll still deletes the saved list.
+- Split-screen: the last local controller to push wins (verdicts differ per player only if a Blueprint GameMode makes them).
+- **Next candidates:**
+  - MV5 (MVR re-import diffs, preserved unknown nodes);
+  - the dropdown treatment for the Sketch toolbar and the Audio panel, after Gevor's look at the viewport bar.

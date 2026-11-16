@@ -37,7 +37,8 @@ namespace StageWebRemoteTests
 	{
 		UWorld* World = nullptr;
 
-		FScopedWorld()
+		/** bAllow: push "allowed" as the local controller does after BeginPlay, so the saved settings start; false leaves the push to the test. */
+		explicit FScopedWorld(bool bAllow = true)
 		{
 			World = UWorld::CreateWorld(EWorldType::Game, false, TEXT("StageWebRemoteTestWorld"));
 			FWorldContext& Context = GEngine->CreateNewWorldContext(EWorldType::Game);
@@ -45,6 +46,10 @@ namespace StageWebRemoteTests
 			World->InitializeActorsForPlay(FURL());
 			World->BeginPlay();
 			World->GetWorldSettings()->NotifyBeginPlay();
+			if (bAllow && GetWeb())
+			{
+				GetWeb()->SetCapabilityAllowed(true, FText::GetEmpty());
+			}
 		}
 
 		~FScopedWorld()
@@ -1007,6 +1012,110 @@ bool FStageWebRemoteSubsystemTest::RunTest(const FString& Parameters)
 	Web->ReceiveCommand(TEXT("/stagecraft/cue/go"), {});
 	Web->FlushCommands();
 	TestEqual(TEXT("Handler kept"), Carried.Last().Action, EStageRemoteAction::CueGo);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FStageWebRemoteCapabilityTest, "StageCraft.WebRemote.Capability", StageWebRemoteTests::Flags)
+bool FStageWebRemoteCapabilityTest::RunTest(const FString& Parameters)
+{
+	using namespace StageWebRemoteTests;
+	// Docs/ADR/0036 §13: the server runs only while the GameMode allows it (the licence); a lapse stops it and keeps the user's choice
+	// and remembered devices, a renewal starts it again by itself.
+	constexpr uint16 Port = 48783;
+	const FText Lapsed = INVTEXT("The Web Remote needs StageCraft Pro.");
+	FStageWebRemoteSettings Local;
+	Local.Scope = EStageWebRemoteScope::ThisComputer;
+	Local.Port = Port;
+	FScopedWebSettings Settings{ Local };
+	FScopedWorld Stage(/*bAllow*/ false);
+	UStageWebRemoteSubsystem* Web = Stage.GetWeb();
+	if (!TestNotNull(TEXT("Web Remote subsystem"), Web))
+	{
+		return false;
+	}
+	TestFalse(TEXT("The saved settings wait for the controller's verdict"), Web->GetStatus().bListening);
+
+	// A Free licence at start: the port is never opened, the reason is shown, the choice is kept.
+	TestTrue(TEXT("First verdict: a change"), Web->SetCapabilityAllowed(false, Lapsed));
+	TestFalse(TEXT("Free: not listening"), Web->GetStatus().bListening);
+	TestEqual(TEXT("Free: says why"), Web->GetStatus().LastProblem.ToString(), Lapsed.ToString());
+	TestEqual(TEXT("Free: the choice is kept"), Web->GetSettings().Scope, EStageWebRemoteScope::ThisComputer);
+	TestFalse(TEXT("The same verdict again: nothing to do"), Web->SetCapabilityAllowed(false, Lapsed));
+	FText Error;
+	TestFalse(TEXT("Free: applying does not start the server"), Web->ApplySettings(Local, Error));
+	TestEqual(TEXT("...and says why"), Error.ToString(), Lapsed.ToString());
+	TestFalse(TEXT("...still not listening"), Web->GetStatus().bListening);
+
+	// Pro: the saved choice starts by itself.
+	Web->SetPinForTesting(TEXT("135791"));
+	TestTrue(TEXT("Allowed: a change"), Web->SetCapabilityAllowed(true, FText::GetEmpty()));
+	TestTrue(TEXT("Allowed: listening from the saved settings"), Web->GetStatus().bListening);
+	TestTrue(TEXT("Allowed: no warning"), Web->GetStatus().LastProblem.IsEmpty());
+	TestFalse(TEXT("Allowed again: nothing restarted"), Web->SetCapabilityAllowed(true, FText::GetEmpty()));
+
+	const FHttpAnswer Paired = Exchange(Port, MakeRequest(TEXT("POST"), TEXT("/api/pair"), Port, TEXT("{\"pin\":\"135791\",\"name\":\"Lapse phone\"}")));
+	const TSharedPtr<FJsonObject> PairedJson = ParseJson(Paired.Body);
+	const FString Token = PairedJson.IsValid() ? PairedJson->GetStringField(TEXT("token")) : FString();
+	if (!TestEqual(TEXT("A phone pairs"), Token.Len(), 64))
+	{
+		return false;
+	}
+	const FString Bearer = FString::Printf(TEXT("Authorization: Bearer %s\r\n"), *Token);
+
+	// The licence lapses: the server stops and nothing answers; the choice and the remembered device are kept.
+	Web->ReceiveCommand(TEXT("/stagecraft/cue/go"), {});
+	TestTrue(TEXT("Lapse: a change"), Web->SetCapabilityAllowed(false, Lapsed));
+	TestFalse(TEXT("Lapse: stopped"), Web->GetStatus().bListening);
+	TestEqual(TEXT("Lapse: no port"), Web->GetListeningPort(), 0);
+	TestEqual(TEXT("Lapse: says why"), Web->GetStatus().LastProblem.ToString(), Lapsed.ToString());
+	TestEqual(TEXT("Lapse: nothing answers on the port"), Exchange(Port, MakeRequest(TEXT("GET"), TEXT("/api/state"), Port, FString(), Bearer)).Status, 0);
+	TestEqual(TEXT("Lapse: the choice is kept"), Web->GetSettings().Scope, EStageWebRemoteScope::ThisComputer);
+	int32 Carried = 0;
+	Web->SetCommandHandler(UStageWebRemoteSubsystem::FCommandHandler::CreateLambda([&Carried](const FStageRemoteCommand&)
+	{
+		++Carried;
+		return FStageEconomyResultInfo::Ok();
+	}));
+	Web->FlushCommands();
+	TestEqual(TEXT("Lapse: a command queued before it is not carried out"), Carried, 0);
+	FString Saved;
+	TestTrue(TEXT("Lapse: the remembered device is saved"), FFileHelper::LoadFileToString(Saved, *UStageWebRemoteSubsystem::GetDevicesFile())
+		&& Saved.Contains(StageWebRemote::HashToken(Token)));
+
+	// Renewed: the server starts again and the remembered phone works without the PIN.
+	TestTrue(TEXT("Renewed: a change"), Web->SetCapabilityAllowed(true, FText::GetEmpty()));
+	TestTrue(TEXT("Renewed: listening"), Web->GetStatus().bListening);
+	TestEqual(TEXT("Renewed: the phone is still paired"), Web->GetStatus().PairedDevices, 1);
+	TestEqual(TEXT("Renewed: its token works"), Exchange(Port, MakeRequest(TEXT("GET"), TEXT("/api/state"), Port, FString(), Bearer)).Status, 200);
+
+	// Still refused for another reason: the warning follows the latest verdict.
+	Web->SetCapabilityAllowed(false, Lapsed);
+	const FText SessionRule = INVTEXT("The Web Remote is switched off for this session.");
+	TestFalse(TEXT("Another reason: the verdict did not change"), Web->SetCapabilityAllowed(false, SessionRule));
+	TestEqual(TEXT("...but the warning follows it"), Web->GetStatus().LastProblem.ToString(), SessionRule.ToString());
+
+	// Forgetting the remembered devices while refused is done, not refused. Set in memory first, so the user's ini is never written.
+	if (UStageCraftUserSettings* UserSettings = UStageCraftUserSettings::Get())
+	{
+		FStageWebRemoteSettings Forgetful = Local;
+		Forgetful.bRememberDevices = false;
+		UserSettings->SetWebRemoteSettings(Forgetful);
+	}
+	const FStageWebRemoteSettings Forgetting = Web->GetSettings();
+	TestTrue(TEXT("Forgetting while refused is not a refusal"), Web->ApplySettings(Forgetting, Error) && Error.IsEmpty());
+	TestFalse(TEXT("...and the devices file is gone"), FPaths::FileExists(UStageWebRemoteSubsystem::GetDevicesFile()));
+	TestFalse(TEXT("...the server stays off"), Web->GetStatus().bListening);
+
+	// Switched off while refused: nothing is held back, so no warning.
+	Web->SetPinForTesting(FString());
+	// Set in memory first: ApplySettings then sees no change and never writes the user's GameUserSettings.ini.
+	if (UStageCraftUserSettings* UserSettings = UStageCraftUserSettings::Get())
+	{
+		UserSettings->SetWebRemoteSettings(FStageWebRemoteSettings());
+	}
+	const FStageWebRemoteSettings Off = Web->GetSettings();
+	TestTrue(TEXT("Off while refused"), Web->ApplySettings(Off, Error));
+	TestTrue(TEXT("Off while refused: no warning"), Web->GetStatus().LastProblem.IsEmpty());
 	return true;
 }
 

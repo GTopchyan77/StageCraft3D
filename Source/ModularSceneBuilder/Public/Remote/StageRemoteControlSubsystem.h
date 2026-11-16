@@ -11,8 +11,8 @@
 
 /**
  * MIDI and OSC remote control of the stage's desk (Docs/ADR/0035). Owns this PC's OSC server, its feedback client and the MIDI input
- * and output devices for one stage world, like UStageDMXNetworkSubsystem: OnWorldBeginPlay reopens what the saved settings ask for, Deinitialize
- * closes everything. No tick.
+ * and output devices for one stage world, like UStageDMXNetworkSubsystem: what the saved settings ask for opens once the local controller
+ * has pushed the GameMode's verdict (SetCapabilityAllowed), closes while it is refused, and Deinitialize closes everything. No tick.
  *
  * Flow: the engine plugins deliver on the game thread (MIDIDevice from its module tick, OSC from its packet pump) → ReceiveOsc /
  * ReceiveMidi resolve the input with the pure StageRemote layer → the frame's queue (continuous values coalesced, at most
@@ -57,6 +57,17 @@ public:
 	 * sent the new map's state. Game thread. Callers in play go through AModularPlayerController::RequestSetRemoteControl.
 	 */
 	bool ApplySettings(const FStageRemoteSettings& Settings, FText& OutError);
+
+	/**
+	 * Whether this stage may open MIDI and OSC at all: the GameMode's verdict (EvaluateRemoteControl: the session's rules, then the
+	 * StageCraft Pro licence), pushed by the local AModularPlayerController when it starts and whenever the licence changes
+	 * (Docs/ADR/0035 §13). While refused, the OSC server and the MIDI devices stay closed, a learn is cancelled and the status shows
+	 * Reason; the saved settings are kept, so the inputs open again by themselves once allowed (a renewed licence). The saved settings
+	 * open only after the first push, so a Free licence never opens a port or a device, not even before the controller's BeginPlay.
+	 * Returns true when the verdict changed (or the first push opened the saved inputs). Game thread.
+	 */
+	bool SetCapabilityAllowed(bool bAllowed, const FText& Reason);
+	bool IsCapabilityAllowed() const { return bCapabilityAllowed; }
 
 	const FStageRemoteStatus& GetStatus() const { return Status; }
 
@@ -201,4 +212,14 @@ private:
 	FTimerHandle MidiSettleTimer;
 	FTimerHandle StatusTimer;
 	bool bStatusDirty = false;
+
+	/**
+	 * The pushed verdict (SetCapabilityAllowed). True until a push, so tests and tools that call ApplySettings directly work unbound;
+	 * the saved settings themselves wait for the push (bRestorePending), and play reaches ApplySettings only through the GameMode.
+	 */
+	bool bCapabilityAllowed = true;
+	/** Why the inputs stay closed while not allowed (the GameMode's message). */
+	FText CapabilityReason;
+	/** OnWorldBeginPlay ran and the saved settings wait for the controller's first SetCapabilityAllowed. */
+	bool bRestorePending = false;
 };

@@ -1,6 +1,6 @@
 # ADR 0036: Web Remote (Step 5)
 
-- **Status:** accepted for WR1 (2026-11-11, STATE.md #92); WR2 (QR code, remembered devices) added 2026-11-16 (STATE.md #95, §11); WR4 (page layout options) added 2026-11-16 (STATE.md #97, §12).
+- **Status:** accepted for WR1 (2026-11-11, STATE.md #92); WR2 (QR code, remembered devices) added 2026-11-16 (STATE.md #95, §11); WR4 (page layout options) added 2026-11-16 (STATE.md #97, §12); stopping on a lapsed licence added 2026-11-16 (STATE.md #98, §13).
 - **Related:**
   - ADR 0034 §2 (tiers: Web Remote is **Pro**; D8 puts it at Step 5, after the download manager).
   - ADR 0035 (MIDI and OSC): the address space, the pure `StageRemote` layer and the controller's `RequestRemoteCommand` are reused as they are.
@@ -140,3 +140,12 @@ A phone in a pocket and a tablet on the desk want different pages: one LD rides 
 - **In a real browser.** `Scripts/Tests/RunWebRemotePageCheck.ps1` runs StageCraft with the Web Remote on this PC and drives the page in headless Edge (or Chrome) through the DevTools protocol (`WebRemotePageBrowserCheck.mjs`) at phone size: pairing from the QR link, the PIN leaving the address bar, the Layout sheet's own buttons, a reload keeping the layout, GO reaching StageCraft, lock and a real 2-second unlock press, reset, and unpair. It restores the user's devices file.
 - **A control under a finger:** a strip hidden while held (Hide empty, as the show changes) still sends its release.
 - **Rollback:** remove the Layout sheet, the header buttons and the block; a stored layout is then ignored.
+
+## 13. Stopping on a lapsed licence (2026-11-16, STATE.md #98)
+
+The same decision as ADR 0035 §13, for the Web Remote's HTTP server:
+- `UStageWebRemoteSubsystem::SetCapabilityAllowed(bAllowed, Reason)`, pushed by `AModularPlayerController::ApplyLicenceLimits` with `EvaluateWebRemote`. The saved settings start only after the first push, so a Free licence never opens the port.
+- **Refused:** the server stops (open pages disconnect and show "reconnecting"), queued commands are dropped, and Preferences shows the GameMode's message as a warning. Remembered devices are saved as at any stop.
+- **Allowed again:** the server starts by itself from the saved settings, with a new PIN; remembered devices reconnect with their token and no PIN. With "Remember devices" off, pairings live only in memory, so phones pair again, as after any restart.
+- **Kept:** the settings, the remembered devices file and each phone's layout (§12).
+- **Verification:** `StageCraft.WebRemote.Capability` (a paired phone; on the lapse nothing answers on the port and the device stays in the file; on renewal its token works without the PIN) and the scripted `-game` run of STATE.md #98.

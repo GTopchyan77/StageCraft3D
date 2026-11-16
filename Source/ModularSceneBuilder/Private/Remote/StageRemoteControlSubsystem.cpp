@@ -132,10 +132,44 @@ void UStageRemoteControlSubsystem::OnWorldBeginPlay(UWorld& InWorld)
 {
 	Super::OnWorldBeginPlay(InWorld);
 
-	// The user left OSC or MIDI on last time: this stage opens them again. A port or device that is gone shows in the status.
+	// The user left OSC or MIDI on last time: they open again with the controller's first SetCapabilityAllowed, once the licence has
+	// been judged, so a Free licence never opens them (the controller's BeginPlay follows in this same UWorld::BeginPlay).
+	bRestorePending = true;
+	BroadcastStatus();
+}
+
+bool UStageRemoteControlSubsystem::SetCapabilityAllowed(bool bAllowed, const FText& Reason)
+{
+	CapabilityReason = Reason.IsEmpty() ? LOCTEXT("CapabilityRefused", "MIDI and OSC control is not available here.") : Reason;
+	if (bAllowed == bCapabilityAllowed && !bRestorePending)
+	{
+		// Still refused, maybe for another reason (a session rule now, the licence before): the warning follows the latest one.
+		if (!bAllowed && !Status.LastProblem.IsEmpty() && !Status.LastProblem.EqualTo(CapabilityReason))
+		{
+			SetProblem(CapabilityReason);
+			BroadcastStatus();
+		}
+		return false;
+	}
+	bRestorePending = false;
+	bCapabilityAllowed = bAllowed;
+
+	const bool bWasOpen = Status.bOscListening || Status.bMidiOpen || Status.bMidiOutputOpen;
+	CloseInputs();
+	if (!bAllowed)
+	{
+		// Commands already queued would be refused one by one; nothing from before the lapse is carried out.
+		PendingCommands.Reset();
+		if (bWasOpen)
+		{
+			UE_LOG(LogStageCraft, Log, TEXT("Remote: MIDI and OSC closed (%s); the settings are kept."), *CapabilityReason.ToString());
+		}
+	}
+	// Opens the saved inputs, or says why they stay closed.
 	FText Error;
 	OpenInputs(Error);
 	BroadcastStatus();
+	return true;
 }
 
 const FStageRemoteSettings& UStageRemoteControlSubsystem::GetSettings() const
@@ -168,6 +202,8 @@ bool UStageRemoteControlSubsystem::ApplySettings(const FStageRemoteSettings& Set
 		return true;
 	}
 
+	// An explicit change replaces the restore of the saved settings.
+	bRestorePending = false;
 	CloseInputs();
 	OutError = FText::GetEmpty();
 	OpenInputs(OutError);
@@ -246,6 +282,16 @@ void UStageRemoteControlSubsystem::ClearCommandHandler(const UObject* Owner)
 void UStageRemoteControlSubsystem::OpenInputs(FText& OutError)
 {
 	SetProblem(FText::GetEmpty());
+	if (!bCapabilityAllowed)
+	{
+		// Only a choice the user made is worth a warning; with both off there is nothing being held back.
+		if (StageRemote::HasInputOn(GetSettings()))
+		{
+			OutError = CapabilityReason;
+			SetProblem(OutError);
+		}
+		return;
+	}
 	FText OscError;
 	FText MidiError;
 	OpenOsc(OscError);

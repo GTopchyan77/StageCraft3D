@@ -59,9 +59,44 @@ void UStageWebRemoteSubsystem::Deinitialize()
 void UStageWebRemoteSubsystem::OnWorldBeginPlay(UWorld& InWorld)
 {
 	Super::OnWorldBeginPlay(InWorld);
+	// The saved settings start with the controller's first SetCapabilityAllowed, once the licence has been judged, so a Free licence
+	// never opens the port (the controller's BeginPlay follows in this same UWorld::BeginPlay).
+	bRestorePending = true;
+	BroadcastStatus();
+}
+
+bool UStageWebRemoteSubsystem::SetCapabilityAllowed(bool bAllowed, const FText& Reason)
+{
+	CapabilityReason = Reason.IsEmpty() ? LOCTEXT("CapabilityRefused", "The Web Remote is not available here.") : Reason;
+	if (bAllowed == bCapabilityAllowed && !bRestorePending)
+	{
+		// Still refused, maybe for another reason (a session rule now, the licence before): the warning follows the latest one.
+		if (!bAllowed && !Status.LastProblem.IsEmpty() && !Status.LastProblem.EqualTo(CapabilityReason))
+		{
+			Status.LastProblem = CapabilityReason;
+			BroadcastStatus();
+		}
+		return false;
+	}
+	bRestorePending = false;
+	bCapabilityAllowed = bAllowed;
+
+	const bool bWasListening = Server.IsValid();
+	Close();
+	if (!bAllowed)
+	{
+		// Commands already queued would be refused one by one; nothing from before the lapse is carried out.
+		PendingCommands.Reset();
+		if (bWasListening)
+		{
+			UE_LOG(LogStageCraft, Log, TEXT("Web Remote: stopped (%s); the settings and remembered devices are kept."), *CapabilityReason.ToString());
+		}
+	}
+	// Starts the saved settings, or says why the server stays off.
 	FText Error;
 	Open(Error);
 	BroadcastStatus();
+	return true;
 }
 
 const FStageWebRemoteSettings& UStageWebRemoteSubsystem::GetSettings() const
@@ -79,15 +114,25 @@ bool UStageWebRemoteSubsystem::ApplySettings(const FStageWebRemoteSettings& Sett
 		OutError = LOCTEXT("NoSettings", "The settings of this PC are not available.");
 		return false;
 	}
+	const FStageWebRemoteSettings Before = UserSettings->GetWebRemoteSettings();
 	if (UserSettings->SetWebRemoteSettings(Settings))
 	{
 		UserSettings->SaveSettings();
 	}
 
+	// An explicit change replaces the start of the saved settings.
+	bRestorePending = false;
 	Close();
 	OutError = FText::GetEmpty();
 	const bool bOpened = Open(OutError);
 	BroadcastStatus();
+	if (!bOpened && !bCapabilityAllowed && StageWebRemote::OnlyStopsRemembering(Before, UserSettings->GetWebRemoteSettings()))
+	{
+		// Forgetting the remembered devices while the licence holds the server back did what was asked (Open deleted the file); the
+		// status still says why the server is off, but this is not a refusal.
+		OutError = FText::GetEmpty();
+		return true;
+	}
 	return bOpened;
 }
 
@@ -173,6 +218,12 @@ bool UStageWebRemoteSubsystem::Open(FText& OutError)
 	if (Settings.Scope == EStageWebRemoteScope::Off)
 	{
 		return true;
+	}
+	if (!bCapabilityAllowed)
+	{
+		OutError = CapabilityReason;
+		Status.LastProblem = OutError;
+		return false;
 	}
 
 	TFunction<FString()> MakePin;

@@ -1256,7 +1256,9 @@ private:
 
 	/**
 	 * Pushes what the GameMode allows with the current licence into the network DMX (EvaluateDmxInput, GetDmxOutputUniverseLimit), and
-	 * moves the show's control source with an input that stopped or resumed. At BeginPlay and on every licence change.
+	 * moves the show's control source with an input that stopped or resumed; and into MIDI / OSC and the Web Remote (EvaluateRemoteControl,
+	 * EvaluateWebRemote), which close while refused and reopen from their saved settings when allowed again (Docs/ADR/0035 §13).
+	 * At BeginPlay and on every licence change.
 	 */
 	void ApplyLicenceLimits();
 

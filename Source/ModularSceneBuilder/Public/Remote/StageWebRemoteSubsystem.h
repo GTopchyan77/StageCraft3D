@@ -13,7 +13,8 @@
 /**
  * The Web Remote of the stage's desk (Docs/ADR/0036): a page served to phones and tablets on the LAN that runs the desk's live
  * controls. Owns this PC's FStageWebRemoteServer for one stage world, like UStageRemoteControlSubsystem owns OSC and MIDI:
- * OnWorldBeginPlay reopens what the saved settings ask for, Deinitialize stops the server. No tick.
+ * what the saved settings ask for starts once the local controller has pushed the GameMode's verdict (SetCapabilityAllowed), stops
+ * while it is refused, and Deinitialize stops the server. No tick.
  *
  * Flow: the server's worker thread answers HTTP, pairs devices and reads WebSockets → paired commands come back as events, drained
  * on the game thread → StageRemote::ParseOsc resolves each path (the OSC address space, ADR 0035 §3) → the frame's queue (continuous
@@ -61,6 +62,17 @@ public:
 	 * the problem. Game thread. Callers in play go through AModularPlayerController::RequestSetWebRemote.
 	 */
 	bool ApplySettings(const FStageWebRemoteSettings& Settings, FText& OutError);
+
+	/**
+	 * Whether this stage may run the Web Remote at all: the GameMode's verdict (EvaluateWebRemote: the session's rules, then the
+	 * StageCraft Pro licence), pushed by the local AModularPlayerController when it starts and whenever the licence changes
+	 * (Docs/ADR/0036 §13). While refused, the server is stopped (pages disconnect; remembered devices are saved as at any stop) and the
+	 * status shows Reason; the saved settings are kept, so the server starts again by itself once allowed, with a new PIN, and
+	 * remembered devices reconnect without one. The saved settings start only after the first push, so a Free licence never opens the
+	 * port. Returns true when the verdict changed (or the first push started the saved settings). Game thread.
+	 */
+	bool SetCapabilityAllowed(bool bAllowed, const FText& Reason);
+	bool IsCapabilityAllowed() const { return bCapabilityAllowed; }
 
 	const FStageWebRemoteStatus& GetStatus() const { return Status; }
 
@@ -171,6 +183,13 @@ private:
 	TArray<FString> OpenDeviceIds;
 	/** What the devices file holds now, so an unchanged list is not written again. */
 	FString SavedDevicesJson;
+
+	/** The pushed verdict (SetCapabilityAllowed); true until a push, as in UStageRemoteControlSubsystem. */
+	bool bCapabilityAllowed = true;
+	/** Why the server stays closed while not allowed (the GameMode's message). */
+	FText CapabilityReason;
+	/** OnWorldBeginPlay ran and the saved settings wait for the controller's first SetCapabilityAllowed. */
+	bool bRestorePending = false;
 
 #if WITH_DEV_AUTOMATION_TESTS
 	FString PinForTesting;

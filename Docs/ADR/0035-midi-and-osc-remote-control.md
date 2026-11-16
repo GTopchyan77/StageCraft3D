@@ -1,6 +1,6 @@
 # ADR 0035: MIDI and OSC remote control (Step 3)
 
-- **Status:** accepted for MR1 (2026-11-10, STATE.md #89); MR2 (MIDI MAP editor and MIDI output feedback) added 2026-11-16, STATE.md #96, §11–§12. The protocol scope and security (D7) were locked by Gevor without their wording being recorded (ADR 0034 §2); this ADR follows the safest reading and lists what Gevor must confirm in §9.
+- **Status:** accepted for MR1 (2026-11-10, STATE.md #89); MR2 (MIDI MAP editor and MIDI output feedback) added 2026-11-16, STATE.md #96, §11–§12; closing on a lapsed licence added 2026-11-16, STATE.md #98, §13. The protocol scope and security (D7) were locked by Gevor without their wording being recorded (ADR 0034 §2); this ADR follows the safest reading and lists what Gevor must confirm in §9.
 - **Related:**
   - ADR 0034 §2 (tiers: MIDI / OSC is **Pro**; D8 puts it at Step 3, after MVR).
   - ADR 0026 §6 (playbacks and masters), ADR 0019 (DMX IN, the precedent for a network input and its settings), ADR 0013 §2.5 (Preferences panel).
@@ -116,3 +116,24 @@ Preferences › REMOTE CONTROL › MIDI map. The view edits the map through the 
   - `UMIDIDeviceManager::FindAllMIDIDeviceInfo` re-initializes PortMidi and restarts every live `UMIDIDeviceControllerBase` object, a shut-down one too, until garbage collection removes it. It would take the device back and the next open would fail as "in use" (this also affected reopening the MIDI input in MR1). `CloseMidi` marks both controllers as garbage after `ShutdownDevice`, as the engine does with a controller it could not restart; the MidiOutput test reopens the same output to prove it.
   - `FTimerManager` runs once per engine frame (`HasBeenTickedThisFrame`), so a test that ticks its own world several times in one frame runs the timers once: the MidiOutput test checks the settle timer in a latent command, one world tick per engine frame.
   - Device listings are expensive for that reason: the panel and `OpenMidi` list inputs and outputs in one call (`FindMidiDevices`).
+
+## 13. Closing on a lapsed licence (2026-11-16, STATE.md #98)
+
+**Problem.** Until #98 the OSC server and the MIDI devices opened from the saved settings at every stage start, whatever the licence said, and on Free every command was refused (#93). That left an unauthenticated UDP listener on the LAN, and a controller held open, for a capability the user no longer had: an attack surface with no benefit, and a status that said "listening" when nothing would ever be carried out.
+
+**Decision.** The GameMode's verdict decides whether the inputs are open at all, as it already decides the network DMX's limits (ADR 0034 §17):
+- `UStageRemoteControlSubsystem::SetCapabilityAllowed(bAllowed, Reason)`. The local `AModularPlayerController` pushes `EvaluateRemoteControl` (the session's rules, then Pro) in `ApplyLicenceLimits`, at BeginPlay and on every `UStageLicenceSubsystem::OnLicenceChanged` (expiry timer, refresh, cancel, release, the development override).
+- **Refused:** OSC and MIDI close, a learn is cancelled, queued commands are dropped, and the status shows the GameMode's message as a warning (only when the user had something switched on). `ApplySettings` stores but does not open, and returns that message.
+- **The user's choice is kept.** The saved settings and the MIDI map are not touched, so a renewed licence reopens exactly what was open, with no click. This mirrors the DMX input's "the user's choice stays on" (`SetCapabilityLimits`).
+- **No open before the verdict.** `OnWorldBeginPlay` no longer opens; it marks the restore pending, and the controller's first push opens or refuses. `UWorld::BeginPlay` runs the subsystems' `OnWorldBeginPlay` before the actors' BeginPlay in the same call, so a Free licence never binds the port or opens a device, not even for a frame.
+- **Unbound use.** The verdict defaults to allowed, so tests and tools that call `ApplySettings` directly work without a controller. In play, `ApplySettings` is reached only through `RequestSetRemoteControl`, which asks the GameMode first. Deny by default still holds for the saved settings: without a push they never open, and without a GameMode the controller pushes a refusal. A world with no `AModularPlayerController` (none in this project plays without one) never opens the saved settings and shows no reason; this matches the DMX network subsystem.
+- **Same verdict, new reason** (a session rule after the licence): the warning follows the latest reason. **Web Remote:** switching "Remember devices" off while refused deletes the file and is not reported as a refusal.
+
+**Alternatives.**
+- Keep refusing per command (#93): the listener stays open; rejected for the reason above.
+- Switch the settings off on a lapse: the user would have to set OSC, MIDI and the map up again after renewing, and a lapse during a show's preparation would silently lose them. Rejected.
+- Close only after a grace period: the licence already has 14 days offline (ADR 0034 §17); a second grace adds nothing.
+
+**Verification.** `StageCraft.Remote.Capability` (no open before the verdict; Free at start keeps the choice; `ApplySettings` while refused; renew opens; lapse closes and drops a queued command; no warning when everything is off), and a scripted `-game` run that lets the development override lapse and come back (STATE.md #98).
+
+**Rollback.** Call `OpenInputs` in `OnWorldBeginPlay` again and remove the push; behaviour returns to #93.
