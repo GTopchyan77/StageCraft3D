@@ -17,8 +17,10 @@ struct FStageWebRemoteEvent
 		Paired,
 		/** Too many wrong PINs: the PIN changed and pairing is locked for a while. */
 		PairingLocked,
-		/** A paired page's WebSocket opened or closed; Pages is how many are open now. */
+		/** A paired page's WebSocket opened or closed; Pages is how many are open now, OpenDeviceIds the device of each. */
 		PagesChanged,
+		/** A page unpaired its own device (POST /api/unpair). */
+		Unpaired,
 	};
 
 	EKind Kind = EKind::Command;
@@ -26,6 +28,7 @@ struct FStageWebRemoteEvent
 	TOptional<float> Value;
 	FString DeviceName;
 	int32 Pages = 0;
+	TArray<FString> OpenDeviceIds;
 };
 
 /**
@@ -52,13 +55,17 @@ public:
 
 	/**
 	 * Listens on 127.0.0.1 (bLoopbackOnly) or every card, on Port. PageFile is the remote page, read on the worker at the first request.
+	 * Remembered are the devices paired in earlier runs (Docs/ADR/0036 §11), validated by FPairing::Restore before the worker starts.
 	 * MakePin replaces the random PIN (tests). On failure nothing stays open and OutError says why (typically: the port is in use).
 	 */
 	bool Start(bool bLoopbackOnly, uint16 Port, const FString& PageFile, TFunction<void()> ScheduleDrain, FText& OutError,
-		TFunction<FString()> MakePin = nullptr);
+		TFunction<FString()> MakePin = nullptr, TConstArrayView<StageWebRemote::FRememberedDevice> Remembered = {});
 
-	/** Closes every page with "going away" and stops. Idempotent. */
-	void Stop();
+	/**
+	 * Closes every page with "going away" and stops. Idempotent. OutFinalDevices, when given, receives the devices as they were once
+	 * the worker had stopped: no pairing or unpair can land after that snapshot (Docs/ADR/0036 §11).
+	 */
+	void Stop(TArray<StageWebRemote::FRememberedDevice>* OutFinalDevices = nullptr);
 
 	bool IsRunning() const { return Thread.IsValid(); }
 
@@ -76,6 +83,12 @@ public:
 
 	/** Forgets every device (their pages are closed) and makes a new PIN. */
 	void UnpairAll();
+
+	/** Forgets one device (its pages are closed); the PIN stays. False when there is no such device or the server is stopped. */
+	bool ForgetDevice(const FString& DeviceId);
+
+	/** The paired devices as they are to be remembered; empty while stopped. */
+	TArray<StageWebRemote::FRememberedDevice> GetDevices() const;
 
 	/** The latest state and cue list messages (StageWebRemote::MakeStateMessage / MakeCuesMessage), sent to pages that lack them. */
 	void SetState(const FString& Message);

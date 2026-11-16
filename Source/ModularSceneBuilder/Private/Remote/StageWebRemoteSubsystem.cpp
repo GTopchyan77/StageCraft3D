@@ -2,9 +2,14 @@
 
 #include "Remote/StageWebRemoteSubsystem.h"
 
+#include "Algo/Count.h"
 #include "Async/Async.h"
 #include "Engine/World.h"
+#include "HAL/FileManager.h"
 #include "HAL/PlatformTime.h"
+#include "IO/StageAtomicFile.h"
+#include "IO/StageCraftPaths.h"
+#include "Misc/FileHelper.h"
 #include "IPAddress.h"
 #include "Misc/Paths.h"
 #include "ModularSceneBuilder.h"
@@ -102,13 +107,38 @@ bool UStageWebRemoteSubsystem::UnpairAll()
 {
 	if (!Server)
 	{
-		return false;
+		// Forgetting is always allowed, also while the server is off: the saved list would otherwise come back at the next start.
+		if (!CanUseDevicesFile())
+		{
+			return true;
+		}
+		IFileManager::Get().Delete(*GetDevicesFile(), /*RequireExists*/ false, /*EvenReadOnly*/ true, /*Quiet*/ true);
+		SavedDevicesJson.Reset();
+		UE_LOG(LogStageCraft, Log, TEXT("Web Remote: the remembered devices were forgotten."));
+		return true;
 	}
 	Server->UnpairAll();
 	RefreshPairingStatus();
 	UE_LOG(LogStageCraft, Log, TEXT("Web Remote: every device was unpaired."));
 	BroadcastStatus();
 	return true;
+}
+
+bool UStageWebRemoteSubsystem::ForgetDevice(const FString& DeviceId)
+{
+	if (!Server || !Server->ForgetDevice(DeviceId))
+	{
+		return false;
+	}
+	RefreshPairingStatus();
+	UE_LOG(LogStageCraft, Log, TEXT("Web Remote: a device was forgotten."));
+	BroadcastStatus();
+	return true;
+}
+
+FString UStageWebRemoteSubsystem::GetDevicesFile()
+{
+	return FPaths::Combine(StageCraftPaths::UserRoot(), TEXT("WebRemoteDevices.json"));
 }
 
 void UStageWebRemoteSubsystem::ClearCommandHandler(const UObject* Owner)
@@ -133,6 +163,13 @@ bool UStageWebRemoteSubsystem::Open(FText& OutError)
 {
 	Status.LastProblem = FText::GetEmpty();
 	const FStageWebRemoteSettings& Settings = GetSettings();
+	const FString DevicesFile = GetDevicesFile();
+	SavedDevicesJson.Reset();
+	if (!Settings.bRememberDevices && CanUseDevicesFile())
+	{
+		// Before the Off check: switching remembering off must remove the hashes even while the Web Remote itself is off.
+		IFileManager::Get().Delete(*DevicesFile, /*RequireExists*/ false, /*EvenReadOnly*/ true, /*Quiet*/ true);
+	}
 	if (Settings.Scope == EStageWebRemoteScope::Off)
 	{
 		return true;
@@ -146,6 +183,23 @@ bool UStageWebRemoteSubsystem::Open(FText& OutError)
 	}
 #endif
 
+	TArray<StageWebRemote::FRememberedDevice> Remembered;
+	if (Settings.bRememberDevices && CanUseDevicesFile() && IFileManager::Get().FileSize(*DevicesFile) > 0)
+	{
+		FString Json;
+		if (IFileManager::Get().FileSize(*DevicesFile) > StageWebRemote::MaxDevicesFileBytes || !FFileHelper::LoadFileToString(Json, *DevicesFile)
+			|| !StageWebRemote::ReadDevicesJson(Json, Remembered))
+		{
+			// Pairing again is the worst case, so a damaged file is ignored, not repaired.
+			UE_LOG(LogStageCraft, Warning, TEXT("Web Remote: %s cannot be read; remembered devices must pair again."), *DevicesFile);
+			Remembered.Reset();
+		}
+		else
+		{
+			SavedDevicesJson = Json;
+		}
+	}
+
 	const bool bLoopbackOnly = Settings.Scope == EStageWebRemoteScope::ThisComputer;
 	TUniquePtr<FStageWebRemoteServer> NewServer = MakeUnique<FStageWebRemoteServer>();
 	TWeakObjectPtr<UStageWebRemoteSubsystem> WeakThis(this);
@@ -158,7 +212,7 @@ bool UStageWebRemoteSubsystem::Open(FText& OutError)
 					Self->DrainEvents();
 				}
 			});
-		}, OutError, MoveTemp(MakePin)))
+		}, OutError, MoveTemp(MakePin), Remembered))
 	{
 		Status.LastProblem = OutError;
 		UE_LOG(LogStageCraft, Warning, TEXT("Web Remote: could not listen on port %d: %s"), Settings.Port, *OutError.ToString());
@@ -169,6 +223,7 @@ bool UStageWebRemoteSubsystem::Open(FText& OutError)
 	Status.bListening = true;
 	Status.Addresses = FindAddresses(Settings.Scope, Server->GetPort());
 	Status.ConnectedPages = 0;
+	OpenDeviceIds.Reset();
 	LastSentRefusal.Reset();
 	RefreshPairingStatus();
 	BindShow();
@@ -183,7 +238,13 @@ void UStageWebRemoteSubsystem::Close()
 	UnbindShow();
 	if (Server)
 	{
-		Server->Stop();
+		// The snapshot is taken after the worker has stopped, so a pairing or unpair still in flight is neither lost nor revived.
+		TArray<StageWebRemote::FRememberedDevice> FinalDevices;
+		Server->Stop(&FinalDevices);
+		if (GetSettings().bRememberDevices)
+		{
+			SaveDevicesIfChanged(StageWebRemote::WriteDevicesJsonOrEmpty(FinalDevices));
+		}
 		Server.Reset();
 		UE_LOG(LogStageCraft, Log, TEXT("Web Remote: closed."));
 	}
@@ -191,8 +252,10 @@ void UStageWebRemoteSubsystem::Close()
 	Status.Addresses.Reset();
 	Status.Pin.Reset();
 	Status.PairedDevices = 0;
+	Status.Devices.Reset();
 	Status.ConnectedPages = 0;
 	Status.PairingLockedUntil = 0.0;
+	OpenDeviceIds.Reset();
 }
 
 void UStageWebRemoteSubsystem::DrainEvents()
@@ -210,11 +273,13 @@ void UStageWebRemoteSubsystem::DrainEvents()
 			ReceiveCommand(Event.Path, Event.Value);
 			break;
 		case FStageWebRemoteEvent::EKind::Paired:
+		case FStageWebRemoteEvent::EKind::Unpaired:
 		case FStageWebRemoteEvent::EKind::PairingLocked:
 			bPairingChanged = true;
 			break;
 		case FStageWebRemoteEvent::EKind::PagesChanged:
 			Status.ConnectedPages = Event.Pages;
+			OpenDeviceIds = Event.OpenDeviceIds;
 			bPairingChanged = true;
 			break;
 		}
@@ -424,9 +489,61 @@ void UStageWebRemoteSubsystem::RefreshPairingStatus()
 		return;
 	}
 	Status.Pin = Server->GetPin();
-	Status.PairedDevices = Server->GetPairedCount();
+	const TArray<StageWebRemote::FRememberedDevice> Devices = Server->GetDevices();
+	Status.PairedDevices = Devices.Num();
+	Status.Devices.Reset(Devices.Num());
+	for (const StageWebRemote::FRememberedDevice& Device : Devices)
+	{
+		FStageWebRemoteDeviceInfo& Info = Status.Devices.AddDefaulted_GetRef();
+		Info.Id = Device.Id;
+		Info.Name = Device.Name;
+		Info.LastSeenUtc = FDateTime::FromUnixTimestamp(Device.LastSeenUnix);
+		Info.OpenPages = Algo::Count(OpenDeviceIds, Device.Id);
+	}
+	if (GetSettings().bRememberDevices)
+	{
+		SaveDevicesIfChanged(StageWebRemote::WriteDevicesJsonOrEmpty(Devices));
+	}
 	const double LockedUntil = Server->GetPairingLockedUntil();
 	Status.PairingLockedUntil = LockedUntil > FPlatformTime::Seconds() ? LockedUntil : 0.0;
+}
+
+bool UStageWebRemoteSubsystem::CanUseDevicesFile()
+{
+#if WITH_DEV_AUTOMATION_TESTS
+	// Any test that makes a Game world starts this subsystem; only tests that moved UserRoot to a temporary folder may read or write
+	// the devices file, so an unrelated test never rewrites (or expires entries in) the user's own list.
+	if (GIsAutomationTesting && !StageCraftPaths::HasTestOverride())
+	{
+		return false;
+	}
+#endif
+	return true;
+}
+
+void UStageWebRemoteSubsystem::SaveDevicesIfChanged(const FString& Json)
+{
+	if (Json == SavedDevicesJson || !CanUseDevicesFile())
+	{
+		return;
+	}
+	const FString File = GetDevicesFile();
+	if (Json.IsEmpty())
+	{
+		// No device, no file: nothing is left in the user folder by a Web Remote that never paired anything.
+		IFileManager::Get().Delete(*File, /*RequireExists*/ false, /*EvenReadOnly*/ true, /*Quiet*/ true);
+		SavedDevicesJson.Reset();
+		return;
+	}
+	IFileManager::Get().MakeDirectory(*FPaths::GetPath(File), /*Tree*/ true);
+	if (StageAtomicFile::WriteText(File, Json))
+	{
+		SavedDevicesJson = Json;
+	}
+	else
+	{
+		UE_LOG(LogStageCraft, Warning, TEXT("Web Remote: could not save the paired devices to %s; they must pair again after a restart."), *File);
+	}
 }
 
 TArray<FString> UStageWebRemoteSubsystem::FindAddresses(EStageWebRemoteScope Scope, int32 Port)
@@ -454,6 +571,11 @@ TArray<FString> UStageWebRemoteSubsystem::FindAddresses(EStageWebRemoteScope Sco
 			}
 			Addresses.AddUnique(FString::Printf(TEXT("http://%s:%d"), *Ip, Port));
 		}
+		// The first address is the one the QR code shows; put the likely Wi-Fi/Ethernet one there, not a virtual switch's.
+		Addresses.StableSort([](const FString& A, const FString& B)
+		{
+			return StageWebRemote::AddressPreference(A.Mid(7)) < StageWebRemote::AddressPreference(B.Mid(7));
+		});
 	}
 	if (Addresses.IsEmpty())
 	{

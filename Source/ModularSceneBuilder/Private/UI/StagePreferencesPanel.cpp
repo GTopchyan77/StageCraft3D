@@ -20,7 +20,10 @@
 #include "Placement/StageSnappingComponent.h"
 #include "Player/ModularPlayerController.h"
 #include "Remote/StageRemoteControlSubsystem.h"
+#include "Remote/StageQrCode.h"
+#include "Remote/StageWebRemoteProtocol.h"
 #include "Remote/StageWebRemoteSubsystem.h"
+#include "Engine/Texture2D.h"
 #include "Cloud/StageCloudSubsystem.h"
 #include "Licence/StageLicenceSubsystem.h"
 #include "Settings/StageCraftUserSettings.h"
@@ -778,14 +781,178 @@ UWidget* UStagePreferencesPanel::BuildWebRemoteSection()
 	Add(BuildChoiceRow(LOCTEXT("WebRemoteScope", "Web Remote"),
 		LOCTEXT("WebRemoteScopeTip", "Run cues, playbacks and masters from a phone or tablet browser: no app to install.\nThis PC: only a browser on this computer.\nNetwork: phones on your network open the address below and enter the PIN. The connection is not encrypted; use it on a network you trust."),
 		{ LOCTEXT("Off", "Off"), LOCTEXT("WebThisPC", "This PC"), LOCTEXT("WebNetwork", "Network") }, WebScopeButtons, &ThisClass::HandleWebScopePicked));
+	Add(BuildChoiceRow(LOCTEXT("WebRemember", "Remember devices"),
+		LOCTEXT("WebRememberTip", "On: a paired phone stays paired when StageCraft restarts, until you forget it or it is unused for 30 days.\nOff: every phone pairs again after a restart.\nChanging this restarts the Web Remote with a new PIN."),
+		{ LOCTEXT("Off", "Off"), LOCTEXT("On", "On") }, WebRememberButtons, &ThisClass::HandleWebRememberPicked));
 	Add(BuildChoiceRow(LOCTEXT("WebPairing", "Pairing"),
-		LOCTEXT("WebPairingTip", "NEW PIN: phones already paired stay paired; new ones need the new PIN.\nUNPAIR ALL: every phone is disconnected and must pair again with a new PIN."),
+		LOCTEXT("WebPairingTip", "NEW PIN: phones already paired stay paired; new ones need the new PIN.\nUNPAIR ALL: every phone, remembered ones too, is disconnected and must pair again with a new PIN."),
 		{ LOCTEXT("WebNewPin", "NEW PIN"), LOCTEXT("WebUnpairAll", "UNPAIR ALL") }, WebPairingButtons, &ThisClass::HandleWebPairingPicked));
+
+	// The QR code holds the address and the PIN, so scanning it opens the page and pairs in one step.
+	WebQrImage = WidgetTree->ConstructWidget<UImage>(UImage::StaticClass(), TEXT("WebRemoteQr"));
+	WebQrImage->SetToolTipText(LOCTEXT("WebQrTip", "Point the phone's camera at this code: it opens the Web Remote and pairs with the PIN.\nAnyone who can see this screen can pair the same way."));
+	Add(WebQrImage);
+	if (UVerticalBoxSlot* QrSlot = Cast<UVerticalBoxSlot>(WebQrImage->Slot))
+	{
+		// At its own pixel size: a slot that fills the width would stretch the modules into rectangles no camera reads.
+		QrSlot->SetHorizontalAlignment(HAlign_Left);
+	}
+	WebQrCaption = MakeText(FText::GetEmpty(), 7, TEXT("Regular"), Palette.TextSecondary);
+	WebQrCaption->SetAutoWrapText(true);
+	Add(WebQrCaption);
+	WebQrRow = BuildChoiceRow(LOCTEXT("WebQr", "QR code"),
+		LOCTEXT("WebQrAddressTip", "This PC has several network addresses. If the phone cannot open the page, show the code for the next one."),
+		{ LOCTEXT("WebOtherAddress", "OTHER ADDRESS") }, WebQrButtons, &ThisClass::HandleWebQrPicked);
+	Add(WebQrRow);
+
+	WebDeviceRows.Reset();
+	WebDeviceTexts.Reset();
+	WebForgetButtons.Reset();
+	WebDeviceIds.Init(FString(), StageWebRemote::MaxPairedDevices);
+	for (int32 Index = 0; Index < StageWebRemote::MaxPairedDevices; ++Index)
+	{
+		UHorizontalBox* Row = WidgetTree->ConstructWidget<UHorizontalBox>(UHorizontalBox::StaticClass());
+		UTextBlock* Text = MakeText(FText::GetEmpty(), 8, TEXT("Regular"), Palette.TextPrimary);
+		if (UHorizontalBoxSlot* TextSlot = Row->AddChildToHorizontalBox(Text))
+		{
+			TextSlot->SetSize(FSlateChildSize(ESlateSizeRule::Fill));
+			TextSlot->SetVerticalAlignment(VAlign_Center);
+		}
+		UStageChoiceButton* Forget = MakeButton(LOCTEXT("WebForget", "FORGET"),
+			LOCTEXT("WebForgetTip", "This device is disconnected and must pair again with the PIN. Other devices stay paired."), Index);
+		Forget->OnPicked.BindUObject(this, &ThisClass::HandleWebForgetPicked);
+		Row->AddChildToHorizontalBox(Forget);
+		USizeBox* SizedRow = WidgetTree->ConstructWidget<USizeBox>(USizeBox::StaticClass());
+		SizedRow->SetHeightOverride(StageCraftWidgetStyle::FieldHeight);
+		SizedRow->SetContent(Row);
+		SizedRow->SetVisibility(ESlateVisibility::Collapsed);
+		Add(SizedRow);
+		WebDeviceRows.Add(SizedRow);
+		WebDeviceTexts.Add(Text);
+		WebForgetButtons.Add(Forget);
+	}
 
 	WebStatusText = MakeText(FText::GetEmpty(), 7, TEXT("Regular"), Palette.TextSecondary);
 	WebStatusText->SetAutoWrapText(true);
 	Add(WebStatusText);
 	return Section;
+}
+
+void UStagePreferencesPanel::HandleWebRememberPicked(int32 Index)
+{
+	const UStageWebRemoteSubsystem* Web = BoundWebRemote.Get();
+	AModularPlayerController* Controller = Cast<AModularPlayerController>(GetOwningPlayer());
+	if (!Web || !Controller || (Index != 0 && Index != 1))
+	{
+		return;
+	}
+	FStageWebRemoteSettings Settings = Web->GetSettings();
+	if (Settings.bRememberDevices == (Index == 1))
+	{
+		return;
+	}
+	Settings.bRememberDevices = Index == 1;
+	Controller->RequestSetWebRemote(Settings);
+	RefreshWebRemote();
+}
+
+void UStagePreferencesPanel::HandleWebQrPicked(int32 Index)
+{
+	++WebQrAddressIndex;
+	RefreshWebRemote();
+}
+
+void UStagePreferencesPanel::HandleWebForgetPicked(int32 Index)
+{
+	AModularPlayerController* Controller = Cast<AModularPlayerController>(GetOwningPlayer());
+	if (Controller && WebDeviceIds.IsValidIndex(Index) && !WebDeviceIds[Index].IsEmpty())
+	{
+		Controller->RequestWebRemoteForgetDevice(WebDeviceIds[Index]);
+	}
+	RefreshWebRemote();
+}
+
+void UStagePreferencesPanel::RefreshWebQr(const FStageWebRemoteStatus* Status)
+{
+	if (!WebQrImage || !WebQrCaption)
+	{
+		return;
+	}
+	// Only Network serves phones; on This PC a code would point the phone at itself.
+	const bool bShow = Status && Status->bListening && !Status->Pin.IsEmpty() && !Status->Addresses.IsEmpty()
+		&& BoundWebRemote.IsValid() && BoundWebRemote->GetSettings().Scope == EStageWebRemoteScope::Network;
+	for (UStageChoiceButton* Button : WebQrButtons)
+	{
+		if (Button)
+		{
+			StyleChoice(*Button, false);
+		}
+	}
+	if (WebQrRow)
+	{
+		WebQrRow->SetVisibility(bShow && Status->Addresses.Num() > 1 ? ESlateVisibility::Visible : ESlateVisibility::Collapsed);
+	}
+	if (!bShow)
+	{
+		WebQrImage->SetVisibility(ESlateVisibility::Collapsed);
+		WebQrCaption->SetVisibility(ESlateVisibility::Collapsed);
+		WebQrText.Reset();
+		return;
+	}
+
+	const FString& Address = Status->Addresses[WebQrAddressIndex % Status->Addresses.Num()];
+	// The PIN goes in the fragment: browsers never send it to the server, so it is in no request line or log; the page reads it.
+	const FString Text = Address + TEXT("/#pin=") + Status->Pin;
+	if (Text != WebQrText)
+	{
+		WebQrText = Text;
+		constexpr int32 ModulePixels = 4;
+		int32 Side = 0;
+		const TArray<FColor> Pixels = StageQrCode::RenderPixels(StageQrCode::Encode(Text), ModulePixels, Side);
+		WebQrTexture = Pixels.IsEmpty() ? nullptr
+			: UTexture2D::CreateTransient(Side, Side, PF_B8G8R8A8, NAME_None,
+				TConstArrayView64<uint8>(reinterpret_cast<const uint8*>(Pixels.GetData()), Pixels.Num() * sizeof(FColor)));
+		if (WebQrTexture)
+		{
+			// Nearest filtering and no mips keep the modules square when the UI is scaled; a blurred edge is what makes codes unreadable.
+			WebQrTexture->Filter = TF_Nearest;
+			WebQrTexture->LODGroup = TEXTUREGROUP_UI;
+			WebQrTexture->UpdateResource();
+			WebQrImage->SetBrushFromTexture(WebQrTexture, /*bMatchSize*/ true);
+		}
+	}
+	WebQrImage->SetVisibility(WebQrTexture ? ESlateVisibility::Visible : ESlateVisibility::Collapsed);
+	WebQrCaption->SetVisibility(ESlateVisibility::Visible);
+	WebQrCaption->SetText(FText::Format(LOCTEXT("WebQrCaption", "Scan with the phone's camera to open {0} and pair."), FText::FromString(Address)));
+}
+
+void UStagePreferencesPanel::RefreshWebDevices(const FStageWebRemoteStatus* Status)
+{
+	const int32 Shown = Status && Status->bListening ? FMath::Min(Status->Devices.Num(), WebDeviceRows.Num()) : 0;
+	for (int32 Index = 0; Index < WebDeviceRows.Num(); ++Index)
+	{
+		if (!WebDeviceRows[Index] || !WebDeviceTexts[Index])
+		{
+			continue;
+		}
+		if (Index >= Shown)
+		{
+			WebDeviceRows[Index]->SetVisibility(ESlateVisibility::Collapsed);
+			WebDeviceIds[Index].Reset();
+			continue;
+		}
+		const FStageWebRemoteDeviceInfo& Device = Status->Devices[Index];
+		WebDeviceIds[Index] = Device.Id;
+		const FText Name = Device.Name.IsEmpty() ? LOCTEXT("WebUnnamed", "Unnamed device") : FText::FromString(Device.Name);
+		WebDeviceTexts[Index]->SetText(Device.OpenPages > 0
+			? FText::Format(LOCTEXT("WebDeviceOpen", "{0}  ·  connected"), Name)
+			: FText::Format(LOCTEXT("WebDeviceSeen", "{0}  ·  last used {1}"), Name, FText::AsDate(Device.LastSeenUtc, EDateTimeStyle::Medium)));
+		if (WebForgetButtons.IsValidIndex(Index) && WebForgetButtons[Index])
+		{
+			StyleChoice(*WebForgetButtons[Index], false);
+		}
+		WebDeviceRows[Index]->SetVisibility(ESlateVisibility::Visible);
+	}
 }
 
 void UStagePreferencesPanel::HandleWebScopePicked(int32 Index)
@@ -835,14 +1002,25 @@ void UStagePreferencesPanel::RefreshWebRemote()
 			Button->SetIsEnabled(Web != nullptr);
 		}
 	}
+	for (UStageChoiceButton* Button : WebRememberButtons)
+	{
+		if (Button)
+		{
+			StyleChoice(*Button, Button->GetChoiceIndex() == (Settings.bRememberDevices ? 1 : 0));
+			Button->SetIsEnabled(Web != nullptr);
+		}
+	}
 	for (UStageChoiceButton* Button : WebPairingButtons)
 	{
 		if (Button)
 		{
 			StyleChoice(*Button, false);
-			Button->SetIsEnabled(bListening);
+			// UNPAIR ALL also clears the remembered list while the server is off.
+			Button->SetIsEnabled(bListening || (Web != nullptr && Button->GetChoiceIndex() == 1));
 		}
 	}
+	RefreshWebQr(Web ? &Web->GetStatus() : nullptr);
+	RefreshWebDevices(Web ? &Web->GetStatus() : nullptr);
 
 	if (!WebStatusText)
 	{

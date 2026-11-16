@@ -11,7 +11,11 @@
 #include "Game/StageSessionTypes.h"
 #include "GameFramework/PlayerController.h"
 #include "GameFramework/WorldSettings.h"
+#include "HAL/FileManager.h"
 #include "HAL/PlatformTime.h"
+#include "IO/StageCraftPaths.h"
+#include "Misc/FileHelper.h"
+#include "Misc/Paths.h"
 #include "Interfaces/IPv4/IPv4Address.h"
 #include "Interfaces/IPv4/IPv4Endpoint.h"
 #include "Misc/AutomationTest.h"
@@ -54,13 +58,21 @@ namespace StageWebRemoteTests
 		UStageWebRemoteSubsystem* GetWeb() const { return World->GetSubsystem<UStageWebRemoteSubsystem>(); }
 	};
 
+	/**
+	 * The Web Remote settings for one test, and a temporary user folder: the subsystem saves remembered devices under UserRoot, which
+	 * must never be the user's own. Declare it before the world, so the folder outlives the server.
+	 */
 	struct FScopedWebSettings
 	{
 		FStageWebRemoteSettings Original;
 		UStageCraftUserSettings* UserSettings = nullptr;
+		FString Root;
+		TUniquePtr<FStageScopedDataRoot> DataRoot;
 
 		explicit FScopedWebSettings(const FStageWebRemoteSettings& Settings)
 		{
+			Root = FPaths::ConvertRelativePathToFull(FPaths::Combine(FPaths::AutomationTransientDir(), TEXT("StageWebRemote"), FGuid::NewGuid().ToString()));
+			DataRoot = MakeUnique<FStageScopedDataRoot>(Root);
 			UserSettings = UStageCraftUserSettings::Get();
 			if (UserSettings)
 			{
@@ -75,6 +87,8 @@ namespace StageWebRemoteTests
 			{
 				UserSettings->SetWebRemoteSettings(Original);
 			}
+			DataRoot.Reset();
+			IFileManager::Get().DeleteDirectory(*Root, /*RequireExists*/ false, /*Tree*/ true);
 		}
 	};
 
@@ -714,16 +728,18 @@ bool FStageWebRemotePairingTest::RunTest(const FString& Parameters)
 	FString Token;
 	double RetryAfter = 0.0;
 	bool bEvicted = false;
+	// Wall-clock time moves with the monotonic one, so the device seen longest ago is also the one paired first.
+	constexpr int64 Base = 1800000000;
 	const auto Pair = [&Pairing, &Token, &RetryAfter, &bEvicted](const TCHAR* Pin, const TCHAR* Client, double Now)
 	{
-		return Pairing.Pair(Pin, TEXT("Device"), Client, Now, Token, RetryAfter, bEvicted);
+		return Pairing.Pair(Pin, TEXT("Device"), Client, Now, Base + static_cast<int64>(Now), Token, RetryAfter, bEvicted);
 	};
 	const TCHAR* Phone = TEXT("192.168.1.30");
 	const TCHAR* Attacker = TEXT("192.168.1.66");
 
 	TestEqual(TEXT("Wrong PIN"), Pair(TEXT("999999"), Phone, 0.0), FPairing::EResult::WrongPin);
 	TestTrue(TEXT("No token for a wrong PIN"), Token.IsEmpty());
-	TestEqual(TEXT("Right PIN"), Pairing.Pair(TEXT("100001"), TEXT("Phone"), Phone, 1.0, Token, RetryAfter, bEvicted), FPairing::EResult::Paired);
+	TestEqual(TEXT("Right PIN"), Pairing.Pair(TEXT("100001"), TEXT("Phone"), Phone, 1.0, Base + 1, Token, RetryAfter, bEvicted), FPairing::EResult::Paired);
 	TestEqual(TEXT("Token"), Token, FString(TEXT("token-1")));
 	TestFalse(TEXT("Nobody evicted"), bEvicted);
 	TestTrue(TEXT("Paired"), Pairing.IsPaired(TEXT("token-1")));
@@ -758,7 +774,7 @@ bool FStageWebRemotePairingTest::RunTest(const FString& Parameters)
 	{
 		Pair(TEXT("000000"), *FString::Printf(TEXT("10.1.%d.%d"), Index / 200, Index % 200), 45.0);
 	}
-	TestEqual(TEXT("Many addresses: the PIN keeps working for a known device"), Pairing.Pair(Pairing.GetPin(), TEXT("Tablet"), Phone, 46.0, Token, RetryAfter, bEvicted), FPairing::EResult::Paired);
+	TestEqual(TEXT("Many addresses: the PIN keeps working for a known device"), Pairing.Pair(Pairing.GetPin(), TEXT("Tablet"), Phone, 46.0, Base + 46, Token, RetryAfter, bEvicted), FPairing::EResult::Paired);
 
 	for (int32 Device = Pairing.GetPairedCount(); Device < MaxPairedDevices; ++Device)
 	{
@@ -767,7 +783,7 @@ bool FStageWebRemotePairingTest::RunTest(const FString& Parameters)
 	}
 	TestEqual(TEXT("Full"), Pairing.GetPairedCount(), MaxPairedDevices);
 	TestEqual(TEXT("One more"), Pair(*Pairing.GetPin(), Phone, 51.0), FPairing::EResult::Paired);
-	TestTrue(TEXT("The oldest was evicted"), bEvicted);
+	TestTrue(TEXT("The device seen longest ago was evicted"), bEvicted);
 	TestEqual(TEXT("Still at the cap"), Pairing.GetPairedCount(), MaxPairedDevices);
 	TestFalse(TEXT("The oldest token is dead"), Pairing.IsPaired(TEXT("token-1")));
 	TestTrue(TEXT("The newest is paired"), Pairing.IsPaired(Token));
@@ -781,6 +797,124 @@ bool FStageWebRemotePairingTest::RunTest(const FString& Parameters)
 	TestEqual(TEXT("Unpair all"), Pairing.GetPairedCount(), 0);
 	TestFalse(TEXT("Tokens dead"), Pairing.IsPaired(Token));
 	TestNotEqual(TEXT("Unpair all makes a new PIN"), Pairing.GetPin(), BeforeUnpair);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FStageWebRemoteRememberTest, "StageCraft.WebRemote.Remember", StageWebRemoteTests::Flags)
+bool FStageWebRemoteRememberTest::RunTest(const FString& Parameters)
+{
+	using namespace StageWebRemote;
+
+	TestEqual(TEXT("SHA-256 of abc (FIPS 180-2 vector)"), HashToken(TEXT("abc")), FString(TEXT("ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad")));
+	TestTrue(TEXT("No hash for no token"), HashToken(FString()).IsEmpty());
+
+	constexpr int64 Now = 1800000000;
+	int32 TokenCount = 0;
+	FPairing First([]() { return FString(TEXT("135790")); }, [&TokenCount]() { return FString::Printf(TEXT("token-%d"), ++TokenCount); });
+	FString Token;
+	double RetryAfter = 0.0;
+	bool bEvicted = false;
+	First.Pair(TEXT("135790"), TEXT("Phone"), TEXT("10.0.0.2"), 1.0, Now - 100, Token, RetryAfter, bEvicted);
+	FString Tablet;
+	First.Pair(TEXT("135790"), TEXT("Tablet"), TEXT("10.0.0.3"), 2.0, Now - 50, Tablet, RetryAfter, bEvicted);
+	const TArray<FRememberedDevice>& Devices = First.GetDevices();
+	if (!TestEqual(TEXT("Two devices"), Devices.Num(), 2))
+	{
+		return false;
+	}
+	TestEqual(TEXT("Only the hash is kept"), Devices[0].TokenHash, HashToken(Token));
+	TestEqual(TEXT("Id: 32 hex characters"), Devices[0].Id.Len(), 32);
+	TestNotEqual(TEXT("Ids differ"), Devices[0].Id, Devices[1].Id);
+	TestEqual(TEXT("Paired time"), Devices[0].PairedUnix, Now - 100);
+
+	const FString Json = WriteDevicesJson(Devices);
+	TestFalse(TEXT("The file holds no token"), Json.Contains(Token) || Json.Contains(Tablet));
+	TArray<FRememberedDevice> Read;
+	TestTrue(TEXT("The file reads back"), ReadDevicesJson(Json, Read));
+	FPairing Second([]() { return FString(TEXT("246802")); });
+	TestEqual(TEXT("Nothing dropped on restore"), Second.Restore(Read, Now), 0);
+	TestTrue(TEXT("A remembered token works after a restart"), Second.IsPaired(Token) && Second.IsPaired(Tablet));
+	TestEqual(TEXT("Names kept"), Second.GetDeviceNames(), TArray<FString>({ TEXT("Phone"), TEXT("Tablet") }));
+	TestEqual(TEXT("Touch names the device"), Second.Touch(Token, Now), Devices[0].Id);
+	TestEqual(TEXT("Touch moves last seen"), Second.GetDevices()[0].LastSeenUnix, Now);
+	TestTrue(TEXT("An unknown token touches nothing"), Second.Touch(TEXT("nope"), Now).IsEmpty());
+	TestTrue(TEXT("The page's own Unpair"), Second.ForgetToken(Tablet));
+	TestFalse(TEXT("Unpaired token is dead"), Second.IsPaired(Tablet));
+	TestFalse(TEXT("A second Unpair finds nothing"), Second.ForgetToken(Tablet));
+	TestTrue(TEXT("FORGET by Id"), Second.Forget(Devices[0].Id));
+	TestFalse(TEXT("Forgotten token is dead"), Second.IsPaired(Token));
+	TestFalse(TEXT("Unknown Id"), Second.Forget(TEXT("0123456789abcdef0123456789abcdef")));
+
+	// Restore treats the file as untrusted.
+	const auto Make = [](const TCHAR* Id, const TCHAR* Hash, const TCHAR* Name, int64 Seen)
+	{
+		FRememberedDevice Device;
+		Device.Id = Id;
+		Device.TokenHash = Hash;
+		Device.Name = Name;
+		Device.PairedUnix = Seen - 10;
+		Device.LastSeenUnix = Seen;
+		return Device;
+	};
+	const FString GoodHash = HashToken(TEXT("good"));
+	TArray<FRememberedDevice> Untrusted;
+	Untrusted.Add(Make(TEXT("00000000000000000000000000000001"), *GoodHash, TEXT("Good\x01 phone"), Now - 10));
+	Untrusted.Add(Make(TEXT("00000000000000000000000000000001"), *HashToken(TEXT("x")), TEXT("Same id"), Now));
+	Untrusted.Add(Make(TEXT("00000000000000000000000000000002"), *GoodHash, TEXT("Same hash"), Now));
+	Untrusted.Add(Make(TEXT("0000000000000000000000000000000G"), *HashToken(TEXT("y")), TEXT("Bad id"), Now));
+	Untrusted.Add(Make(TEXT("00000000000000000000000000000003"), *GoodHash.ToUpper(), TEXT("Upper-case hash"), Now));
+	Untrusted.Add(Make(TEXT("00000000000000000000000000000004"), *HashToken(TEXT("old")), TEXT("Unused too long"), Now - RememberSeconds - 1));
+	Untrusted.Add(Make(TEXT("00000000000000000000000000000005"), *HashToken(TEXT("future")), TEXT("From the future"), Now + 999999));
+	{
+		// Used every day, but paired too long ago: a captured token cannot be kept alive forever by repeating its hello.
+		FRememberedDevice Ancient = Make(TEXT("00000000000000000000000000000006"), *HashToken(TEXT("ancient")), TEXT("Paired long ago"), Now);
+		Ancient.PairedUnix = Now - MaxPairingAgeSeconds - 1;
+		Untrusted.Add(Ancient);
+	}
+	FPairing Third;
+	TestEqual(TEXT("Six bad entries dropped"), Third.Restore(Untrusted, Now), 6);
+	TestFalse(TEXT("A pairing older than the cap ends even if used daily"), Third.IsPaired(TEXT("ancient")));
+	TestTrue(TEXT("The good one is paired"), Third.IsPaired(TEXT("good")));
+	TestEqual(TEXT("Control characters cleaned"), Third.GetDevices()[0].Name, FString(TEXT("Good phone")));
+	TestTrue(TEXT("A future time counts as now (a clock set back cannot keep a device forever)"),
+		Third.IsPaired(TEXT("future")) && Third.GetDevices().Last().LastSeenUnix == Now);
+
+	TArray<FRememberedDevice> Many;
+	for (int32 Index = 0; Index < MaxPairedDevices + 2; ++Index)
+	{
+		Many.Add(Make(*FString::Printf(TEXT("%032d"), Index + 1), *HashToken(FString::Printf(TEXT("t%d"), Index)), TEXT("Device"), Now - 1000 + Index));
+	}
+	FPairing Fourth;
+	TestEqual(TEXT("Over the cap: the two seen longest ago dropped"), Fourth.Restore(Many, Now), 2);
+	TestFalse(TEXT("Oldest gone"), Fourth.IsPaired(TEXT("t0")) || Fourth.IsPaired(TEXT("t1")));
+	TestTrue(TEXT("Newest kept"), Fourth.IsPaired(FString::Printf(TEXT("t%d"), MaxPairedDevices + 1)));
+
+	TestFalse(TEXT("Another file version is not read"), ReadDevicesJson(TEXT("{\"version\":2,\"devices\":[]}"), Read));
+	TestFalse(TEXT("Not JSON"), ReadDevicesJson(TEXT("token-1"), Read));
+	TestTrue(TEXT("Empty list"), ReadDevicesJson(TEXT("{\"version\":1,\"devices\":[]}"), Read) && Read.IsEmpty());
+	TestTrue(TEXT("Malformed entries skipped"), ReadDevicesJson(TEXT("{\"version\":1,\"devices\":[1,{\"id\":\"a\"},{\"id\":\"b\",\"hash\":\"c\",\"paired\":-1,\"seen\":2}]}"), Read) && Read.IsEmpty());
+
+	FHttpRequest Unpair;
+	Unpair.Method = EMethod::Post;
+	Unpair.Path = TEXT("/api/unpair");
+	TestEqual(TEXT("POST /api/unpair"), Route(Unpair), ERoute::Unpair);
+	Unpair.Method = EMethod::Get;
+	TestEqual(TEXT("GET /api/unpair"), Route(Unpair), ERoute::MethodNotAllowed);
+
+	FStageWebRemoteSettings Remembering;
+	Remembering.Scope = EStageWebRemoteScope::Network;
+	FStageWebRemoteSettings Forgetting = Remembering;
+	Forgetting.bRememberDevices = false;
+	TestTrue(TEXT("Switching remembering off needs no permission"), OnlyStopsRemembering(Remembering, Forgetting));
+	TestFalse(TEXT("Switching it on does"), OnlyStopsRemembering(Forgetting, Remembering));
+	FStageWebRemoteSettings ForgettingOnAnotherPort = Forgetting;
+	ForgettingOnAnotherPort.Port = 9090;
+	TestFalse(TEXT("Off plus any other change does"), OnlyStopsRemembering(Remembering, ForgettingOnAnotherPort));
+	TestFalse(TEXT("No change at all is not a reduction"), OnlyStopsRemembering(Remembering, Remembering));
+
+	TestTrue(TEXT("Home Wi-Fi before a virtual switch"), AddressPreference(TEXT("192.168.1.20:8080")) < AddressPreference(TEXT("172.20.48.1:8080")));
+	TestTrue(TEXT("10.x before 172.16-31"), AddressPreference(TEXT("10.0.0.5")) < AddressPreference(TEXT("172.16.0.1")));
+	TestTrue(TEXT("172.32 is not private"), AddressPreference(TEXT("172.32.0.1")) > AddressPreference(TEXT("172.31.0.1")));
 	return true;
 }
 
@@ -826,7 +960,8 @@ bool FStageWebRemoteSubsystemTest::RunTest(const FString& Parameters)
 	TestFalse(TEXT("Off: not listening"), Web->GetStatus().bListening);
 	TestEqual(TEXT("Off: no port"), Web->GetListeningPort(), 0);
 	TestFalse(TEXT("Off: no PIN to renew"), Web->RenewPin());
-	TestFalse(TEXT("Off: nothing to unpair"), Web->UnpairAll());
+	TestTrue(TEXT("Off: forgetting the remembered devices is still allowed"), Web->UnpairAll());
+	TestFalse(TEXT("Off: no device to forget"), Web->ForgetDevice(TEXT("0123456789abcdef0123456789abcdef")));
 	TestTrue(TEXT("The page ships with the module"), FPaths::FileExists(UStageWebRemoteSubsystem::GetPageFile()));
 
 	Web->ReceiveCommand(TEXT("/stagecraft/cue/go"), {});
@@ -972,6 +1107,43 @@ bool FStageWebRemoteLoopbackTest::RunTest(const FString& Parameters)
 	TestEqual(TEXT("State"), StateAnswer.Status, 200);
 	TestTrue(TEXT("State JSON"), StateAnswer.Body.Contains(TEXT("\"type\":\"state\"")));
 
+	// Remembered devices (Docs/ADR/0036 §11): a restart keeps the pairing; the page's Unpair and Preferences' FORGET end one device.
+	{
+		const auto PairDevice = [Port](const TCHAR* Name)
+		{
+			const FHttpAnswer Answer = Exchange(Port, MakeRequest(TEXT("POST"), TEXT("/api/pair"), Port, FString::Printf(TEXT("{\"pin\":\"246810\",\"name\":\"%s\"}"), Name)));
+			const TSharedPtr<FJsonObject> Json = ParseJson(Answer.Body);
+			return Json.IsValid() ? Json->GetStringField(TEXT("token")) : FString();
+		};
+		const auto CommandStatus = [Port](const FString& Token)
+		{
+			return Exchange(Port, MakeRequest(TEXT("POST"), TEXT("/api/command"), Port, TEXT("{\"path\":\"/stagecraft/cue/go\"}"),
+				FString::Printf(TEXT("Authorization: Bearer %s\r\n"), *Token))).Status;
+		};
+		const FString Spare = PairDevice(TEXT("Spare"));
+		TestEqual(TEXT("A second device pairs"), Spare.Len(), 64);
+		TestTrue(TEXT("Restart"), Web->ApplySettings(Local, Error));
+		TestEqual(TEXT("Both devices came back"), Web->GetStatus().PairedDevices, 2);
+		TestEqual(TEXT("A remembered token works after the restart"), CommandStatus(State->Token), 202);
+		FString Saved;
+		TestTrue(TEXT("The devices file was written"), FFileHelper::LoadFileToString(Saved, *UStageWebRemoteSubsystem::GetDevicesFile()));
+		TestTrue(TEXT("The file holds hashes, not tokens"), Saved.Contains(StageWebRemote::HashToken(State->Token)) && !Saved.Contains(State->Token) && !Saved.Contains(Spare));
+
+		const FString SpareBearer = FString::Printf(TEXT("Authorization: Bearer %s\r\n"), *Spare);
+		TestEqual(TEXT("The page's own Unpair"), Exchange(Port, MakeRequest(TEXT("POST"), TEXT("/api/unpair"), Port, FString(), SpareBearer)).Status, 200);
+		TestEqual(TEXT("Unpairing twice is unauthorized"), Exchange(Port, MakeRequest(TEXT("POST"), TEXT("/api/unpair"), Port, FString(), SpareBearer)).Status, 401);
+		TestEqual(TEXT("The unpaired token is dead"), CommandStatus(Spare), 401);
+
+		const FString Other = PairDevice(TEXT("Other"));
+		TestTrue(TEXT("Restart again"), Web->ApplySettings(Local, Error));
+		const FStageWebRemoteDeviceInfo* OtherInfo = Web->GetStatus().Devices.FindByPredicate([](const FStageWebRemoteDeviceInfo& Device) { return Device.Name == TEXT("Other"); });
+		TestTrue(TEXT("Preferences lists the device"), OtherInfo != nullptr);
+		TestTrue(TEXT("FORGET"), OtherInfo && Web->ForgetDevice(OtherInfo->Id));
+		TestEqual(TEXT("The forgotten token is dead"), CommandStatus(Other), 401);
+		TestEqual(TEXT("The first device stays paired"), CommandStatus(State->Token), 202);
+		TestEqual(TEXT("One device left"), Web->GetStatus().PairedDevices, 1);
+	}
+
 	{
 		bool bCanBind = false;
 		uint32 LanIp = 0;
@@ -1102,6 +1274,17 @@ bool FStageWebRemoteLoopbackTest::RunTest(const FString& Parameters)
 			if (Remote)
 			{
 				Remote->SetPinForTesting(FString());
+				FStageWebRemoteSettings Forgetful = Remote->GetSettings();
+				Forgetful.bRememberDevices = false;
+				// Set in memory first: ApplySettings then sees no change and does not save, so the test's values never reach the
+				// user's GameUserSettings.ini (FScopedWebSettings restores memory only).
+				if (UStageCraftUserSettings* UserSettings = UStageCraftUserSettings::Get())
+				{
+					UserSettings->SetWebRemoteSettings(Forgetful);
+				}
+				FText Ignored;
+				Remote->ApplySettings(Forgetful, Ignored);
+				TestFalse(TEXT("Remember off: the saved list is deleted"), FPaths::FileExists(UStageWebRemoteSubsystem::GetDevicesFile()));
 			}
 			State->Close();
 			return true;

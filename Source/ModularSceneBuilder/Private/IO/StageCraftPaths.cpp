@@ -40,6 +40,11 @@ FString StageCraftPaths::UserRoot()
 }
 
 #if WITH_DEV_AUTOMATION_TESTS
+bool StageCraftPaths::HasTestOverride()
+{
+	return !StageCraftPathsImpl::GetOverride().IsEmpty();
+}
+
 FStageScopedDataRoot::FStageScopedDataRoot(const FString& Directory)
 	: Previous(StageCraftPathsImpl::SetOverride(FPaths::ConvertRelativePathToFull(Directory)))
 {

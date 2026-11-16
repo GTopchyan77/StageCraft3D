@@ -1,6 +1,6 @@
 # ADR 0036: Web Remote (Step 5)
 
-- **Status:** accepted for WR1 (2026-11-11, STATE.md #92).
+- **Status:** accepted for WR1 (2026-11-11, STATE.md #92); WR2 (QR code, remembered devices) added 2026-11-16 (STATE.md #95, §11).
 - **Related:**
   - ADR 0034 §2 (tiers: Web Remote is **Pro**; D8 puts it at Step 5, after the download manager).
   - ADR 0035 (MIDI and OSC): the address space, the pure `StageRemote` layer and the controller's `RequestRemoteCommand` are reused as they are.
@@ -62,7 +62,7 @@ Settings, `FStageWebRemoteSettings` in `UStageCraftUserSettings` (per PC; the su
 
 Pairing:
 - The server makes a **6-digit PIN** when it starts (from `FGuid::NewGuid`, Windows' cryptographic generator). Preferences shows it with the addresses to open (`http://192.168.1.20:8080`).
-- A page that sends the PIN gets a **token** (two GUIDs, 64 hex characters), compared in constant time. Tokens live in memory only: a restart or a new stage world means pairing again. At most 8 paired devices; a ninth replaces the oldest.
+- A page that sends the PIN gets a **token** (two GUIDs, 64 hex characters), compared in constant time. WR1 kept tokens in memory only, so a restart or a new stage world meant pairing again; since WR2 only the token's SHA-256 is kept, and it can be remembered across restarts (§11). At most 8 paired devices; a ninth replaces the one seen longest ago.
 - **Five wrong PINs in a row from one address** lock that address out for 30 s; other devices can still pair, so one host on the LAN cannot keep the real phone out. **Twenty wrong PINs from all addresses together** replace the PIN, which bounds guessing from many addresses. From one address, guessing takes on average about two months of tries. (Changed after the code review of WR1: the first version locked everyone and replaced the PIN on every lock, which let any LAN host keep pairing locked.)
 - **Connections:** at most 4 unauthenticated connections (requests and WebSockets before their hello) per address; only paired pages count toward the 8 WebSockets. A connection that is closing is shut down for writing and closed after 5 s at most. At most 4096 events wait for the game thread; more are dropped and counted. A device evicted by a ninth pairing has its open page closed.
 - **NEW PIN** (Preferences) replaces the PIN; **UNPAIR ALL** forgets every device, closes their sockets and replaces the PIN.
@@ -78,7 +78,7 @@ Deny by default:
 | Phase | What | Verification |
 |---|---|---|
 | **WR1** (this) | Pure protocol, server, pairing, subsystem, controller and GameMode gate, settings, Preferences section (scope, port shown, PIN, addresses, NEW PIN, UNPAIR ALL, status), the page, dev console commands, help EN/HY | Unit tests for the pure layer; a loopback test with real sockets (page, pairing, lockout, WebSocket hello, command, state, refusal); the GameMode rule; a scripted `-game` run that pairs and sends commands from PowerShell; Editor, Game and Shipping at 0 warnings |
-| WR2 | QR code with the address and PIN; remembered devices across runs; layout options on the page | Manual check on a phone |
+| WR2 (§11) | QR code with the address and PIN; remembered devices across runs; FORGET and the page's own Unpair. Layout options on the page moved to a later phase | QR symbols checked module for module against node-qrcode and read back by jsQR; pairing persistence unit tests; loopback restart, `/api/unpair` and FORGET; a `-game` run whose screenshot of Preferences jsQR decodes to the address and PIN; a real phone remains Gevor's check |
 | WR3 | Pro gate (Step 6) | Licensing tests |
 
 ## 8. Alternatives considered
@@ -91,8 +91,38 @@ Deny by default:
 ## 9. Open for Gevor
 
 - D7: plain HTTP on the LAN with PIN pairing (no TLS) — acceptable?
-- Should pairings survive a restart (a token saved per PC), at the cost of a stolen token staying valid?
+- ~~Should pairings survive a restart?~~ Gevor asked for remembered devices (2026-11-16, WR2); §11 records how the cost (a stolen token staying valid) is bounded. Confirm the 30-day limit and the default (On).
 
 ## 10. Rollback
 
-Remove the subsystem, the settings field, the controller request and the Preferences section; nothing is saved in scenes or the profile.
+Remove the subsystem, the settings field, the controller request and the Preferences section; nothing is saved in scenes or the profile. For WR2 alone: set `bRememberDevices` off (the devices file is deleted at the next start) or delete `<UserRoot>/WebRemoteDevices.json`; the QR code is display only.
+
+## 11. WR2: QR code and remembered devices (2026-11-16, STATE.md #95)
+
+**QR code.**
+- Preferences shows, with Network on, a QR code of `http://<address>:<port>/#pin=NNNNNN`. Scanning it opens the page, which reads the PIN from the fragment, removes it from the address bar and history (`history.replaceState`), and pairs once.
+- The fragment is never sent in an HTTP request, so the PIN is in no request line or log. The code shows nothing the screen did not show already (the PIN is printed beside it); NEW PIN makes a new code.
+- On This PC no code is shown: it would point the phone at itself.
+- The encoder is our own pure `StageQrCode` (byte mode, level M, versions 1–10). The engine has none, and a third-party library for a 40-byte address is more surface than the 400 lines it replaces.
+  - Tests compare every module of 14 reference symbols (versions 1, 2, 3, 7, 10, all eight masks, UTF-8) from node-qrcode 1.5.4, each decoded by jsQR 1.4.0 first.
+  - The texture is drawn at 4 pixels per module with the standard 4-module quiet zone and nearest filtering, at its own size (a stretched code does not scan).
+- With several network cards, the addresses are ordered 192.168.x, 10.x, 172.16–31.x (Hyper-V, WSL and Docker switches), then the rest, and the code shows the first. OTHER ADDRESS moves to the next.
+
+**Remembered devices.**
+- `FStageWebRemoteSettings::bRememberDevices`, default **On** (Gevor asked for remembered devices).
+- Each device is `{id, name, SHA-256(token), paired, last seen}` in `<UserRoot>/WebRemoteDevices.json`: per Windows user, never in scenes, the profile or the cloud.
+  - The token itself is never stored. A copied file or backup does not let anyone in; only a phone that kept its token can.
+  - The file is written atomically, only when its content changes: a pairing, a page connecting (last seen), FORGET, Unpair, or the server closing. It is deleted when no device is left or remembering is turned off.
+- **Bounding a lost or stolen token.**
+  - A device not seen for **30 days** is dropped when the file is read. A time in the future is read as now, so moving the clock back cannot keep a device alive.
+  - Preferences lists the devices with FORGET. The page's Unpair also calls `POST /api/unpair` (bearer token) so the server forgets it. UNPAIR ALL forgets every device and, with the server off, deletes the file.
+  - At most 8 devices; the 9th replaces the one seen longest ago (WR1 replaced the oldest pairing, which could be the phone used every day).
+- The file is untrusted input. Malformed ids or hashes, duplicates, more than 32 entries, and wrong versions are dropped; names are cleaned and cut to 48 characters. A file that cannot be read means pairing again, never a crash or a partial state.
+- Token checks hash the presented token and compare every stored hash in constant time, so the time does not tell which device matched.
+- Turning remembering on or off restarts the server (a new PIN), as every other Web Remote setting does.
+
+**Alternatives considered.**
+- **Store the tokens themselves:** simpler, but the file would then be a set of keys.
+- **No expiry:** a phone lost at a festival would stay paired until someone remembers to press UNPAIR ALL.
+- **A QR library from the marketplace or GitHub:** a third-party dependency and licence review for one small, testable function.
+- **The PIN as a query parameter (`?pin=`):** it would be sent to the server and end up in the request line.

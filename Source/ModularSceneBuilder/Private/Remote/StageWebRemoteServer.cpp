@@ -114,6 +114,8 @@ private:
 		TArray<uint8> Inbox;
 		TArray<uint8> SendBuffer;
 		FString Token;
+		/** The paired device this page belongs to (FRememberedDevice::Id), so Preferences can show which devices are connected. */
+		FString DeviceId;
 		uint64 StateSent = 0;
 		uint64 CuesSent = 0;
 		FString Client;
@@ -197,7 +199,7 @@ private:
 			}
 			if (bPairingChanged && !IsPaired(Connection.Token))
 			{
-				SayByeAndClose(Connection, TEXT("This device was unpaired in StageCraft. Pair it again with the new PIN."));
+				SayByeAndClose(Connection, TEXT("This device was unpaired in StageCraft. Pair it again with the PIN StageCraft shows."));
 				bActive = true;
 				continue;
 			}
@@ -361,6 +363,9 @@ private:
 		case ERoute::Pair:
 			HandlePair(Connection, Request);
 			return;
+		case ERoute::Unpair:
+			HandleUnpair(Connection, Request);
+			return;
 		case ERoute::Command:
 			HandleCommand(Connection, Request);
 			return;
@@ -426,7 +431,7 @@ private:
 			FScopeLock ScopeLock(&Shared->Lock);
 			LockedBefore = Shared->Pairing.GetLockedUntil();
 			bool bEvicted = false;
-			Result = Shared->Pairing.Pair(Pin, Name, Connection.Client, FPlatformTime::Seconds(), Token, RetryAfter, bEvicted);
+			Result = Shared->Pairing.Pair(Pin, Name, Connection.Client, FPlatformTime::Seconds(), FDateTime::UtcNow().ToUnixTimestamp(), Token, RetryAfter, bEvicted);
 			LockedAfter = Shared->Pairing.GetLockedUntil();
 			Shared->bPairingChanged |= bEvicted;
 		}
@@ -464,6 +469,28 @@ private:
 			return;
 		}
 		}
+	}
+
+	void HandleUnpair(FConnection& Connection, const StageWebRemote::FHttpRequest& Request)
+	{
+		using namespace StageWebRemote;
+		bool bForgotten = false;
+		{
+			FScopeLock ScopeLock(&Shared->Lock);
+			bForgotten = Shared->Pairing.ForgetToken(ParseBearer(Request.GetHeader(TEXT("authorization"))));
+			// The same device may have another page open (a second tab); it stops working too.
+			Shared->bPairingChanged |= bForgotten;
+		}
+		if (!bForgotten)
+		{
+			RespondUnauthorized(Connection);
+			return;
+		}
+		Respond(Connection, MakeJsonResponse(200, MakeOkJson()));
+		FStageWebRemoteEvent Event;
+		Event.Kind = FStageWebRemoteEvent::EKind::Unpaired;
+		Post(MoveTemp(Event));
+		UE_LOG(LogStageCraft, Log, TEXT("Web Remote: a device unpaired itself."));
 	}
 
 	bool IsAuthorized(const StageWebRemote::FHttpRequest& Request) const
@@ -626,7 +653,12 @@ private:
 				SayByeAndClose(Connection, TEXT("Say hello first."));
 				return;
 			}
-			if (!IsPaired(Message.Token))
+			FString DeviceId;
+			{
+				FScopeLock ScopeLock(&Shared->Lock);
+				DeviceId = Shared->Pairing.Touch(Message.Token, FDateTime::UtcNow().ToUnixTimestamp());
+			}
+			if (DeviceId.IsEmpty())
 			{
 				UE_LOG(LogStageCraft, Warning, TEXT("Web Remote: connection %d presented a token that is not paired; closed."), Connection.Id);
 				SayByeAndClose(Connection, TEXT("This device is not paired with StageCraft (it restarted or unpaired it). Pair it again."));
@@ -634,6 +666,7 @@ private:
 			}
 			Connection.Phase = EPhase::Open;
 			Connection.Token = Message.Token;
+			Connection.DeviceId = DeviceId;
 			Connection.LastPing = FPlatformTime::Seconds();
 			Connection.StateSent = 0;
 			Connection.CuesSent = 0;
@@ -728,7 +761,14 @@ private:
 	{
 		FStageWebRemoteEvent Event;
 		Event.Kind = FStageWebRemoteEvent::EKind::PagesChanged;
-		Event.Pages = Algo::CountIf(Connections, [](const FConnection& Connection) { return Connection.Phase == EPhase::Open; });
+		for (const FConnection& Connection : Connections)
+		{
+			if (Connection.Phase == EPhase::Open)
+			{
+				Event.OpenDeviceIds.Add(Connection.DeviceId);
+			}
+		}
+		Event.Pages = Event.OpenDeviceIds.Num();
 		Post(MoveTemp(Event));
 	}
 
@@ -770,7 +810,7 @@ FStageWebRemoteServer::~FStageWebRemoteServer()
 }
 
 bool FStageWebRemoteServer::Start(bool bLoopbackOnly, uint16 Port, const FString& PageFile, TFunction<void()> ScheduleDrain, FText& OutError,
-	TFunction<FString()> MakePin)
+	TFunction<FString()> MakePin, TConstArrayView<StageWebRemote::FRememberedDevice> Remembered)
 {
 	Stop();
 
@@ -791,6 +831,11 @@ bool FStageWebRemoteServer::Start(bool bLoopbackOnly, uint16 Port, const FString
 
 	Shared = MakeShared<FShared, ESPMode::ThreadSafe>(MoveTemp(MakePin));
 	Shared->ScheduleDrain = MoveTemp(ScheduleDrain);
+	const int32 Dropped = Shared->Pairing.Restore(Remembered, FDateTime::UtcNow().ToUnixTimestamp());
+	if (Dropped > 0)
+	{
+		UE_LOG(LogStageCraft, Log, TEXT("Web Remote: %d remembered device(s) were not kept (unused for 30 days, or not valid)."), Dropped);
+	}
 	Worker = MakeUnique<FWorker>(*Listener, PageFile, Shared.ToSharedRef());
 	Thread.Reset(FRunnableThread::Create(Worker.Get(), TEXT("StageCraftWebRemote"), 0, TPri_BelowNormal));
 	if (!Thread.IsValid())
@@ -802,7 +847,7 @@ bool FStageWebRemoteServer::Start(bool bLoopbackOnly, uint16 Port, const FString
 	return true;
 }
 
-void FStageWebRemoteServer::Stop()
+void FStageWebRemoteServer::Stop(TArray<StageWebRemote::FRememberedDevice>* OutFinalDevices)
 {
 	if (Thread.IsValid())
 	{
@@ -810,6 +855,11 @@ void FStageWebRemoteServer::Stop()
 		Thread.Reset();
 	}
 	Worker.Reset();
+	if (OutFinalDevices && Shared.IsValid())
+	{
+		FScopeLock ScopeLock(&Shared->Lock);
+		*OutFinalDevices = Shared->Pairing.GetDevices();
+	}
 	if (Listener)
 	{
 		Listener->Close();
@@ -867,6 +917,28 @@ void FStageWebRemoteServer::UnpairAll()
 		Shared->Pairing.UnpairAll();
 		Shared->bPairingChanged = true;
 	}
+}
+
+bool FStageWebRemoteServer::ForgetDevice(const FString& DeviceId)
+{
+	if (!Shared.IsValid())
+	{
+		return false;
+	}
+	FScopeLock ScopeLock(&Shared->Lock);
+	const bool bForgotten = Shared->Pairing.Forget(DeviceId);
+	Shared->bPairingChanged |= bForgotten;
+	return bForgotten;
+}
+
+TArray<StageWebRemote::FRememberedDevice> FStageWebRemoteServer::GetDevices() const
+{
+	if (!Shared.IsValid())
+	{
+		return {};
+	}
+	FScopeLock ScopeLock(&Shared->Lock);
+	return Shared->Pairing.GetDevices();
 }
 
 void FStageWebRemoteServer::SetState(const FString& Message)

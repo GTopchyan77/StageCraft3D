@@ -8,6 +8,7 @@
 #include "Game/StageCraftGameModeBase.h"
 #include "Remote/StageRemoteControlSubsystem.h"
 #include "Remote/StageRemoteMapping.h"
+#include "Remote/StageWebRemoteProtocol.h"
 #include "Remote/StageWebRemoteSubsystem.h"
 
 #define LOCTEXT_NAMESPACE "StageCraftRemote"
@@ -78,7 +79,7 @@ FStageEconomyResultInfo AModularPlayerController::RequestSetWebRemote(const FSta
 		return Refusal;
 	}
 
-	if (Settings.Scope != EStageWebRemoteScope::Off)
+	if (Settings.Scope != EStageWebRemoteScope::Off && !StageWebRemote::OnlyStopsRemembering(Web->GetSettings(), Settings))
 	{
 		const AStageCraftGameModeBase* GameMode = GetStageGameMode();
 		const FStageEconomyResultInfo Verdict = GameMode ? GameMode->EvaluateWebRemote(this)
@@ -110,6 +111,12 @@ bool AModularPlayerController::RequestWebRemoteUnpairAll()
 {
 	UStageWebRemoteSubsystem* Web = UWorld::GetSubsystem<UStageWebRemoteSubsystem>(GetWorld());
 	return Web && Web->UnpairAll();
+}
+
+bool AModularPlayerController::RequestWebRemoteForgetDevice(const FString& DeviceId)
+{
+	UStageWebRemoteSubsystem* Web = UWorld::GetSubsystem<UStageWebRemoteSubsystem>(GetWorld());
+	return Web && Web->ForgetDevice(DeviceId);
 }
 
 FStageEconomyResultInfo AModularPlayerController::RequestSetRemoteControl(const FStageRemoteSettings& Settings)

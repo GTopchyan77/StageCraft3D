@@ -178,6 +178,14 @@ body.nc main{opacity:.55}
 
   // ---- connection state ----------------------------------------------------
   let token = load(TOKEN_KEY);
+  // StageCraft's QR code opens /#pin=123456. The fragment never reaches the server; it is removed from the address bar and history
+  // at once, so the PIN is not left in the browser's history or in a copied link.
+  let qrPin = null;
+  {
+    const m = /^#pin=(\d{6})$/.exec(location.hash || '');
+    if (m) qrPin = m[1];
+    if (location.hash) { try { history.replaceState(null, '', location.pathname + location.search); } catch (e) { /* ignore */ } }
+  }
   if (token !== null && !/^[A-Za-z0-9_-]{8,256}$/.test(token)) { token = null; store(TOKEN_KEY, null); }
   let ws = null;
   let welcomed = false;
@@ -287,6 +295,13 @@ body.nc main{opacity:.55}
     $('pairErr').textContent = reason || '';
     setConn('offline');
     $('pin').value = '';
+    // A QR code from StageCraft carries the PIN: pair at once, but only once, so a wrong or old code cannot loop.
+    if (qrPin) {
+      $('pin').value = qrPin;
+      qrPin = null;
+      pair(null);
+      return;
+    }
     setTimeout(() => { try { $('pin').focus(); } catch (e) { /* ignore */ } }, 50);
   }
 
@@ -319,7 +334,7 @@ body.nc main{opacity:.55}
 
   let pairing = false;
   async function pair(ev) {
-    ev.preventDefault();
+    if (ev) ev.preventDefault();
     if (pairing) return;
     const pin = $('pin').value.replace(/\D/g, '');
     if (pin.length !== 6) { $('pairErr').textContent = 'Enter the 6-digit PIN.'; return; }
@@ -580,7 +595,14 @@ body.nc main{opacity:.55}
   $('pairForm').addEventListener('submit', pair);
   $('devName').value = guessDeviceName();
   $('unpair').addEventListener('click', () => {
-    if (window.confirm('Unpair this device? You will need the PIN to pair it again.')) forget('');
+    if (!window.confirm('Unpair this device? You will need the PIN to pair it again.')) return;
+    // StageCraft forgets the device too (it remembers paired devices across restarts); the answer does not matter.
+    if (token) {
+      try {
+        fetch('/api/unpair', { method: 'POST', headers: { 'Authorization': 'Bearer ' + token }, cache: 'no-store', credentials: 'omit', keepalive: true }).catch(() => {});
+      } catch (e) { /* offline: StageCraft forgets it after 30 days unused */ }
+    }
+    forget('');
   });
 
   drawBlackout();

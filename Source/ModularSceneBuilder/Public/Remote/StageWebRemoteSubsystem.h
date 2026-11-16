@@ -55,7 +55,8 @@ public:
 	const FStageWebRemoteSettings& GetSettings() const;
 
 	/**
-	 * Stores Settings (sanitized and saved) and restarts the server with them: a new PIN, every device unpaired. Returns false with
+	 * Stores Settings (sanitized and saved) and restarts the server with them: a new PIN; remembered devices stay paired when
+	 * bRememberDevices is on, and the saved list is deleted when it is off. Returns false with
 	 * OutError when the server was asked for and could not open (port in use); the settings are kept either way, and the status shows
 	 * the problem. Game thread. Callers in play go through AModularPlayerController::RequestSetWebRemote.
 	 */
@@ -69,8 +70,14 @@ public:
 	/** A new PIN; paired devices stay. False while the server is off. */
 	bool RenewPin();
 
-	/** Forgets every paired device (their pages close) and makes a new PIN. False while the server is off. */
+	/** Forgets every paired device (their pages close), remembered ones too, and makes a new PIN. While the server is off it deletes the saved list. */
 	bool UnpairAll();
+
+	/** Forgets one paired device (Preferences, FORGET); its pages close and the PIN stays. False when there is no such device or the server is off. */
+	bool ForgetDevice(const FString& DeviceId);
+
+	/** Where remembered devices are saved: <UserRoot>/WebRemoteDevices.json (per user, never in scenes or the profile). */
+	static FString GetDevicesFile();
 
 	/**
 	 * One command from a paired page, as received. The server's events call this; tests feed it directly. Game thread. An unknown
@@ -126,8 +133,14 @@ private:
 	void MarkStateDirty(bool bCues);
 	void SendState();
 
-	/** Reads the PIN, devices and lock from the server into Status. */
+	/** Reads the PIN, devices and lock from the server into Status, and saves the devices when they changed and are remembered. */
 	void RefreshPairingStatus();
+
+	/** Writes the devices file when its content would change (a page connecting updates when its device was last seen); empty Json deletes it. */
+	void SaveDevicesIfChanged(const FString& Json);
+
+	/** False while automation tests run without a temporary UserRoot (FStageScopedDataRoot): the user's own devices file is never touched. */
+	static bool CanUseDevicesFile();
 
 	/** The pages to open: the loopback address for ThisComputer, every IPv4 card address for Network. */
 	static TArray<FString> FindAddresses(EStageWebRemoteScope Scope, int32 Port);
@@ -154,6 +167,10 @@ private:
 	FTimerHandle StateTimer;
 	FTimerHandle StatusTimer;
 	bool bStatusDirty = false;
+	/** The device of each open page (FStageWebRemoteEvent::OpenDeviceIds), for the per-device page counts. */
+	TArray<FString> OpenDeviceIds;
+	/** What the devices file holds now, so an unchanged list is not written again. */
+	FString SavedDevicesJson;
 
 #if WITH_DEV_AUTOMATION_TESTS
 	FString PinForTesting;

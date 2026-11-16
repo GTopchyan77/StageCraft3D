@@ -20,6 +20,11 @@ namespace StageCraftPaths
 
 	/** <local app data>/StageCraft, or <test override>/User. */
 	FString UserRoot();
+
+#if WITH_DEV_AUTOMATION_TESTS
+	/** True while an FStageScopedDataRoot is active: subsystems that write user files during automation check it. */
+	bool HasTestOverride();
+#endif
 }
 
 #if WITH_DEV_AUTOMATION_TESTS

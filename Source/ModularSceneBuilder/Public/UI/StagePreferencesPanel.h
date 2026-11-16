@@ -80,13 +80,21 @@ private:
 	void RefreshRemote();
 
 	/**
-	 * WEB REMOTE (Docs/ADR/0036): scope, NEW PIN and UNPAIR ALL, and a status line with the addresses and the PIN. Written through the
-	 * controller's requests.
+	 * WEB REMOTE (Docs/ADR/0036): scope, remembering devices, NEW PIN and UNPAIR ALL, a QR code that opens the page and pairs, the paired
+	 * devices with FORGET, and a status line with the addresses and the PIN. Written through the controller's requests.
 	 */
 	class UWidget* BuildWebRemoteSection();
 	void HandleWebScopePicked(int32 Index);
+	void HandleWebRememberPicked(int32 Index);
 	void HandleWebPairingPicked(int32 Index);
+	/** OTHER ADDRESS: the QR code moves to the next of this PC's addresses (the first is a guess when there are several cards). */
+	void HandleWebQrPicked(int32 Index);
+	/** FORGET on device row Index. */
+	void HandleWebForgetPicked(int32 Index);
 	void RefreshWebRemote();
+	/** Redraws the QR texture only when its text changes, so the status line's counters do not rebuild it four times a second. */
+	void RefreshWebQr(const struct FStageWebRemoteStatus* Status);
+	void RefreshWebDevices(const struct FStageWebRemoteStatus* Status);
 
 	/** STAGECRAFT PRO (Docs/ADR/0034 §17): the licence's status and the subscription actions, all through the controller. */
 	class UWidget* BuildProSection();
@@ -178,6 +186,47 @@ private:
 	/** NEW PIN, UNPAIR ALL: actions, never shown as selected. */
 	UPROPERTY(Transient)
 	TArray<TObjectPtr<class UStageChoiceButton>> WebPairingButtons;
+
+	/** Off, On (bRememberDevices). */
+	UPROPERTY(Transient)
+	TArray<TObjectPtr<class UStageChoiceButton>> WebRememberButtons;
+
+	/** OTHER ADDRESS: an action, never shown as selected. */
+	UPROPERTY(Transient)
+	TArray<TObjectPtr<class UStageChoiceButton>> WebQrButtons;
+
+	/** The OTHER ADDRESS row, shown only when this PC has more than one address to offer. */
+	UPROPERTY(Transient)
+	TObjectPtr<class UWidget> WebQrRow = nullptr;
+
+	UPROPERTY(Transient)
+	TObjectPtr<class UImage> WebQrImage = nullptr;
+
+	UPROPERTY(Transient)
+	TObjectPtr<class UTextBlock> WebQrCaption = nullptr;
+
+	/** The QR code drawn for WebQrText; transient, owned by this panel. */
+	UPROPERTY(Transient)
+	TObjectPtr<class UTexture2D> WebQrTexture = nullptr;
+
+	FString WebQrText;
+	int32 WebQrAddressIndex = 0;
+
+	/**
+	 * One row per possible device (StageWebRemote::MaxPairedDevices), built once and shown or hidden: FORGET changes the list from
+	 * inside its own click, so the rows must not be rebuilt then (Rules.md Safe data binding).
+	 */
+	UPROPERTY(Transient)
+	TArray<TObjectPtr<class UWidget>> WebDeviceRows;
+
+	UPROPERTY(Transient)
+	TArray<TObjectPtr<class UTextBlock>> WebDeviceTexts;
+
+	UPROPERTY(Transient)
+	TArray<TObjectPtr<class UStageChoiceButton>> WebForgetButtons;
+
+	/** The device Id each row's FORGET forgets. */
+	TArray<FString> WebDeviceIds;
 
 	UPROPERTY(Transient)
 	TObjectPtr<class UTextBlock> WebStatusText = nullptr;

@@ -9,6 +9,15 @@
 #include "Misc/SecureHash.h"
 #include "Serialization/JsonReader.h"
 #include "Serialization/JsonSerializer.h"
+#include "Serialization/JsonWriter.h"
+
+// OpenSSL declares a type named UI, which collides with Unreal's; the engine's own OpenSSL users rename it the same way. The engine
+// has no portable SHA-256 (FPlatformMisc::GetSHA256Signature is not implemented on Windows), and the module links OpenSSL already.
+#define UI UI_ST
+THIRD_PARTY_INCLUDES_START
+#include <openssl/evp.h>
+THIRD_PARTY_INCLUDES_END
+#undef UI
 
 namespace StageWebRemoteImpl
 {
@@ -243,6 +252,26 @@ namespace StageWebRemoteImpl
 	{
 		return Guid.ToString(EGuidFormats::Digits).ToLower();
 	}
+
+	bool IsLowerHex(const FString& Text, int32 Length)
+	{
+		if (Text.Len() != Length)
+		{
+			return false;
+		}
+		for (const TCHAR Char : Text)
+		{
+			if (!((Char >= TEXT('0') && Char <= TEXT('9')) || (Char >= TEXT('a') && Char <= TEXT('f'))))
+			{
+				return false;
+			}
+		}
+		return true;
+	}
+
+	constexpr int32 DeviceIdLength = 32;
+	constexpr int32 TokenHashLength = 64;
+	constexpr int32 DevicesFileVersion = 1;
 }
 
 FString StageWebRemote::FHttpRequest::GetHeader(const TCHAR* Name) const
@@ -430,6 +459,7 @@ StageWebRemote::ERoute StageWebRemote::Route(const FHttpRequest& Request)
 		{ TEXT("/"), EMethod::Get, ERoute::Page },
 		{ TEXT("/index.html"), EMethod::Get, ERoute::Page },
 		{ TEXT("/api/pair"), EMethod::Post, ERoute::Pair },
+		{ TEXT("/api/unpair"), EMethod::Post, ERoute::Unpair },
 		{ TEXT("/api/command"), EMethod::Post, ERoute::Command },
 		{ TEXT("/api/state"), EMethod::Get, ERoute::State },
 		{ TEXT("/ws"), EMethod::Get, ERoute::WebSocket },
@@ -970,6 +1000,13 @@ bool StageWebRemote::Sanitize(FStageWebRemoteSettings& Settings)
 	return !(Settings == Original);
 }
 
+bool StageWebRemote::OnlyStopsRemembering(const FStageWebRemoteSettings& Current, const FStageWebRemoteSettings& Requested)
+{
+	FStageWebRemoteSettings Forgetting = Current;
+	Forgetting.bRememberDevices = false;
+	return !Requested.bRememberDevices && Requested == Forgetting;
+}
+
 FString StageWebRemote::MakePin()
 {
 	const FGuid Guid = FGuid::NewGuid();
@@ -1050,7 +1087,7 @@ StageWebRemote::FPairing::FClientAttempts& StageWebRemote::FPairing::FindClient(
 }
 
 StageWebRemote::FPairing::EResult StageWebRemote::FPairing::Pair(const FString& PresentedPin, const FString& DeviceName, const FString& Client, double Now,
-	FString& OutToken, double& OutRetryAfterSeconds, bool& bOutEvicted)
+	int64 NowUnix, FString& OutToken, double& OutRetryAfterSeconds, bool& bOutEvicted)
 {
 	OutToken.Reset();
 	OutRetryAfterSeconds = 0.0;
@@ -1083,24 +1120,72 @@ StageWebRemote::FPairing::EResult StageWebRemote::FPairing::Pair(const FString& 
 	Attempts.WrongPins = 0;
 	if (Devices.Num() >= MaxPairedDevices)
 	{
-		Devices.RemoveAt(0);
+		// With devices remembered for weeks, "oldest paired" could be the phone used every day; the one seen longest ago goes.
+		int32 Stalest = 0;
+		for (int32 Index = 1; Index < Devices.Num(); ++Index)
+		{
+			if (Devices[Index].LastSeenUnix < Devices[Stalest].LastSeenUnix)
+			{
+				Stalest = Index;
+			}
+		}
+		Devices.RemoveAt(Stalest);
 		bOutEvicted = true;
 	}
-	FDevice& Device = Devices.AddDefaulted_GetRef();
-	Device.Token = MakeTokenFunc();
+	OutToken = MakeTokenFunc();
+	FRememberedDevice& Device = Devices.AddDefaulted_GetRef();
+	Device.Id = StageWebRemoteImpl::Hex(FGuid::NewGuid());
 	Device.Name = DeviceName;
-	OutToken = Device.Token;
+	Device.TokenHash = HashToken(OutToken);
+	Device.PairedUnix = NowUnix;
+	Device.LastSeenUnix = NowUnix;
 	return EResult::Paired;
+}
+
+int32 StageWebRemote::FPairing::FindByToken(const FString& Token) const
+{
+	const FString Hash = HashToken(Token);
+	int32 Found = INDEX_NONE;
+	for (int32 Index = 0; Index < Devices.Num(); ++Index)
+	{
+		if (IsSecretMatch(Devices[Index].TokenHash, Hash))
+		{
+			Found = Index;
+		}
+	}
+	return Found;
 }
 
 bool StageWebRemote::FPairing::IsPaired(const FString& Token) const
 {
-	bool bFound = false;
-	for (const FDevice& Device : Devices)
+	return FindByToken(Token) != INDEX_NONE;
+}
+
+FString StageWebRemote::FPairing::Touch(const FString& Token, int64 NowUnix)
+{
+	const int32 Index = FindByToken(Token);
+	if (Index == INDEX_NONE)
 	{
-		bFound |= IsSecretMatch(Device.Token, Token);
+		return FString();
 	}
-	return bFound;
+	Devices[Index].LastSeenUnix = FMath::Max(Devices[Index].LastSeenUnix, NowUnix);
+	return Devices[Index].Id;
+}
+
+bool StageWebRemote::FPairing::Forget(const FString& DeviceId)
+{
+	return !DeviceId.IsEmpty() && Devices.RemoveAll([&DeviceId](const FRememberedDevice& Device) { return Device.Id == DeviceId; }) > 0;
+}
+
+bool StageWebRemote::FPairing::ForgetToken(const FString& Token)
+{
+	const int32 Index = FindByToken(Token);
+	if (Index == INDEX_NONE)
+	{
+		return false;
+	}
+	Devices.RemoveAt(Index);
+	return true;
 }
 
 void StageWebRemote::FPairing::UnpairAll()
@@ -1109,13 +1194,149 @@ void StageWebRemote::FPairing::UnpairAll()
 	RenewPin();
 }
 
+int32 StageWebRemote::FPairing::Restore(TConstArrayView<FRememberedDevice> Remembered, int64 NowUnix)
+{
+	using namespace StageWebRemoteImpl;
+	Devices.Reset();
+	int32 Dropped = 0;
+	TArray<FRememberedDevice> Kept;
+	for (const FRememberedDevice& Entry : Remembered)
+	{
+		FRememberedDevice Device = Entry;
+		Device.LastSeenUnix = FMath::Min(Device.LastSeenUnix, NowUnix);
+		Device.PairedUnix = FMath::Clamp(Device.PairedUnix, static_cast<int64>(0), Device.LastSeenUnix);
+		const bool bDuplicate = Kept.ContainsByPredicate([&Device](const FRememberedDevice& Other)
+		{
+			return Other.Id == Device.Id || Other.TokenHash == Device.TokenHash;
+		});
+		if (bDuplicate || !IsLowerHex(Device.Id, DeviceIdLength) || !IsLowerHex(Device.TokenHash, TokenHashLength)
+			|| Device.LastSeenUnix <= 0 || NowUnix - Device.LastSeenUnix > RememberSeconds || NowUnix - Device.PairedUnix > MaxPairingAgeSeconds)
+		{
+			++Dropped;
+			continue;
+		}
+		Device.Name = CleanText(Device.Name, MaxDeviceNameLength);
+		Kept.Add(MoveTemp(Device));
+	}
+	if (Kept.Num() > MaxPairedDevices)
+	{
+		Kept.StableSort([](const FRememberedDevice& A, const FRememberedDevice& B) { return A.LastSeenUnix > B.LastSeenUnix; });
+		Dropped += Kept.Num() - MaxPairedDevices;
+		Kept.SetNum(MaxPairedDevices);
+	}
+	Kept.StableSort([](const FRememberedDevice& A, const FRememberedDevice& B) { return A.PairedUnix < B.PairedUnix; });
+	Devices = MoveTemp(Kept);
+	return Dropped;
+}
+
 TArray<FString> StageWebRemote::FPairing::GetDeviceNames() const
 {
 	TArray<FString> Names;
 	Names.Reserve(Devices.Num());
-	for (const FDevice& Device : Devices)
+	for (const FRememberedDevice& Device : Devices)
 	{
 		Names.Add(Device.Name);
 	}
 	return Names;
+}
+
+int32 StageWebRemote::AddressPreference(FStringView Host)
+{
+	TArray<FString> Octets;
+	FString(Host).ParseIntoArray(Octets, TEXT("."));
+	if (Octets.Num() < 2)
+	{
+		return 3;
+	}
+	const int32 First = FCString::Atoi(*Octets[0]);
+	const int32 Second = FCString::Atoi(*Octets[1]);
+	if (First == 192 && Second == 168)
+	{
+		return 0;
+	}
+	if (First == 10)
+	{
+		return 1;
+	}
+	if (First == 172 && Second >= 16 && Second <= 31)
+	{
+		return 2;
+	}
+	return 3;
+}
+
+FString StageWebRemote::HashToken(const FString& Token)
+{
+	if (Token.IsEmpty())
+	{
+		return FString();
+	}
+	const FTCHARToUTF8 Utf8(*Token, Token.Len());
+	uint8 Digest[EVP_MAX_MD_SIZE];
+	unsigned int DigestLength = 0;
+	if (EVP_Digest(Utf8.Get(), Utf8.Length(), Digest, &DigestLength, EVP_sha256(), nullptr) != 1 || DigestLength != 32)
+	{
+		return FString();
+	}
+	return BytesToHex(Digest, DigestLength).ToLower();
+}
+
+FString StageWebRemote::WriteDevicesJson(TConstArrayView<FRememberedDevice> Devices)
+{
+	FString Json;
+	const TSharedRef<TJsonWriter<>> Writer = TJsonWriterFactory<>::Create(&Json);
+	Writer->WriteObjectStart();
+	Writer->WriteValue(TEXT("version"), StageWebRemoteImpl::DevicesFileVersion);
+	Writer->WriteArrayStart(TEXT("devices"));
+	for (const FRememberedDevice& Device : Devices)
+	{
+		Writer->WriteObjectStart();
+		Writer->WriteValue(TEXT("id"), Device.Id);
+		Writer->WriteValue(TEXT("name"), Device.Name);
+		Writer->WriteValue(TEXT("hash"), Device.TokenHash);
+		Writer->WriteValue(TEXT("paired"), Device.PairedUnix);
+		Writer->WriteValue(TEXT("seen"), Device.LastSeenUnix);
+		Writer->WriteObjectEnd();
+	}
+	Writer->WriteArrayEnd();
+	Writer->WriteObjectEnd();
+	Writer->Close();
+	return Json;
+}
+
+bool StageWebRemote::ReadDevicesJson(const FString& Json, TArray<FRememberedDevice>& OutDevices)
+{
+	using namespace StageWebRemoteImpl;
+	OutDevices.Reset();
+	const TSharedPtr<FJsonObject> Object = ParseObject(Json);
+	int32 Version = 0;
+	const TArray<TSharedPtr<FJsonValue>>* Entries = nullptr;
+	if (!Object.IsValid() || !Object->TryGetNumberField(TEXT("version"), Version) || Version != DevicesFileVersion
+		|| !Object->TryGetArrayField(TEXT("devices"), Entries))
+	{
+		return false;
+	}
+	// More entries than can ever be kept are not read at all; Restore keeps MaxPairedDevices of them.
+	for (int32 Index = 0; Index < Entries->Num() && Index < MaxPairedDevices * 4; ++Index)
+	{
+		const TSharedPtr<FJsonObject>* Entry = nullptr;
+		if (!(*Entries)[Index]->TryGetObject(Entry))
+		{
+			continue;
+		}
+		FRememberedDevice Device;
+		double Paired = 0.0;
+		double Seen = 0.0;
+		if (ReadString(**Entry, TEXT("id"), DeviceIdLength, Device.Id, true)
+			&& ReadString(**Entry, TEXT("name"), MaxDeviceNameLength * 4, Device.Name, false)
+			&& ReadString(**Entry, TEXT("hash"), TokenHashLength, Device.TokenHash, true)
+			&& (*Entry)->TryGetNumberField(TEXT("paired"), Paired) && (*Entry)->TryGetNumberField(TEXT("seen"), Seen)
+			&& FMath::IsFinite(Paired) && FMath::IsFinite(Seen) && Paired >= 0.0 && Seen >= 0.0 && Seen < 253402300799.0 && Paired < 253402300799.0)
+		{
+			Device.PairedUnix = static_cast<int64>(Paired);
+			Device.LastSeenUnix = static_cast<int64>(Seen);
+			OutDevices.Add(MoveTemp(Device));
+		}
+	}
+	return true;
 }

@@ -51,6 +51,16 @@ namespace StageWebRemote
 	inline constexpr double LockoutSeconds = 30.0;
 	inline constexpr int32 MaxDeviceNameLength = 48;
 
+	/** Docs/ADR/0036 §11 remembered devices: one unused this long is forgotten, so a lost phone's token does not stay valid forever. */
+	inline constexpr int64 RememberSeconds = 30 * 24 * 60 * 60;
+	/**
+	 * A remembered pairing ends this long after it was made, however often it is used: the token travels in clear over HTTP, so one
+	 * captured hello repeated every few weeks must not keep a device paired forever. Pairing again is one QR scan.
+	 */
+	inline constexpr int64 MaxPairingAgeSeconds = 90 * 24 * 60 * 60;
+	/** The devices file is small; anything larger was not written by StageCraft. */
+	inline constexpr int64 MaxDevicesFileBytes = 64 * 1024;
+
 	/** WebSocket close codes the server sends (RFC 6455 §7.4.1). */
 	namespace CloseCode
 	{
@@ -128,6 +138,8 @@ namespace StageWebRemote
 	{
 		Page,
 		Pair,
+		/** POST /api/unpair with the device's own token: the page's Unpair also forgets it here (Docs/ADR/0036 §11). */
+		Unpair,
 		Command,
 		State,
 		WebSocket,
@@ -142,6 +154,12 @@ namespace StageWebRemote
 
 	/** True without an Origin, or when Origin is "http://" + Host (case-insensitive). */
 	bool IsSameOrigin(FStringView Origin, FStringView Host);
+
+	/**
+	 * Lower is more likely the address a phone on the same Wi-Fi can reach: 192.168.x.x, then 10.x.x.x, then 172.16-31.x.x (Hyper-V,
+	 * WSL and Docker put their virtual switches there), then anything else. Host may carry ":port" and a path; only the IPv4 is read.
+	 */
+	int32 AddressPreference(FStringView Host);
 
 	/** The token of an "Authorization: Bearer <token>" value, or empty. */
 	FString ParseBearer(FStringView Authorization);
@@ -286,6 +304,12 @@ namespace StageWebRemote
 	 */
 	bool Sanitize(FStageWebRemoteSettings& Settings);
 
+	/**
+	 * True when Requested only switches remembering devices off and changes nothing else: it takes access away, so the controller lets
+	 * it through without asking the GameMode (Rules.md: reducing access is always allowed).
+	 */
+	bool OnlyStopsRemembering(const FStageWebRemoteSettings& Current, const FStageWebRemoteSettings& Requested);
+
 	/** PinDigits decimal digits from the platform's GUID generator (cryptographically random on Windows). */
 	FString MakePin();
 
@@ -296,8 +320,41 @@ namespace StageWebRemote
 	bool IsSecretMatch(const FString& Expected, const FString& Presented);
 
 	/**
-	 * PIN pairing (Docs/ADR/0036 §6). Not thread-safe: the server keeps it under its lock. Time comes from the caller, so tests control it.
-	 * The PIN and tokens never leave this class except through GetPin (shown to the user) and Pair's OutToken (sent to the device).
+	 * SHA-256 of the token's UTF-8, as 64 lowercase hex characters. Only this is kept for a paired device, in memory and in the devices
+	 * file, so reading that file (a backup, a synced folder) does not give anyone a working token. Empty for an empty token.
+	 */
+	FString HashToken(const FString& Token);
+
+	/** A paired device as remembered (Docs/ADR/0036 §11). Holds no secret: TokenHash cannot be turned back into the token. */
+	struct FRememberedDevice
+	{
+		/** 32 hex characters, random: how the Preferences list names the device to forget. Not derived from the token. */
+		FString Id;
+		FString Name;
+		FString TokenHash;
+		/** Unix seconds. */
+		int64 PairedUnix = 0;
+		/** Unix seconds of the last pairing or page connection; RememberSeconds after it the device is forgotten. */
+		int64 LastSeenUnix = 0;
+	};
+
+	/** {"version":1,"devices":[{"id","name","hash","paired","seen"}]}: the devices file. */
+	FString WriteDevicesJson(TConstArrayView<FRememberedDevice> Devices);
+
+	/** WriteDevicesJson, or empty when there are no devices (the caller deletes the file then). */
+	inline FString WriteDevicesJsonOrEmpty(TConstArrayView<FRememberedDevice> Devices)
+	{
+		return Devices.IsEmpty() ? FString() : WriteDevicesJson(Devices);
+	}
+
+	/** Reads WriteDevicesJson's format. False for anything else; entries are only parsed here, FPairing::Restore validates them. */
+	bool ReadDevicesJson(const FString& Json, TArray<FRememberedDevice>& OutDevices);
+
+	/**
+	 * PIN pairing (Docs/ADR/0036 §6, §11). Not thread-safe: the server keeps it under its lock. Time comes from the caller, so tests
+	 * control it: Now (FPlatformTime seconds) for lockouts, NowUnix for when a device was paired and last seen.
+	 * The PIN and tokens never leave this class except through GetPin (shown to the user) and Pair's OutToken (sent to the device);
+	 * a device is kept as the hash of its token (HashToken).
 	 */
 	class FPairing
 	{
@@ -323,15 +380,35 @@ namespace StageWebRemote
 		 * (and only that one) for LockoutSeconds, so one host on the LAN cannot keep the real phone from pairing; attempts while locked
 		 * are refused without counting. Every WrongPinsBeforeNewPin wrong PINs from all clients together replace the PIN, which bounds
 		 * guessing from many addresses. A successful pairing resets the client's count. The (MaxPairedDevices + 1)-th device replaces
-		 * the oldest; bOutEvicted says so (its open pages must be closed).
+		 * the one seen longest ago; bOutEvicted says so (its open pages must be closed).
 		 */
-		EResult Pair(const FString& PresentedPin, const FString& DeviceName, const FString& Client, double Now, FString& OutToken,
+		EResult Pair(const FString& PresentedPin, const FString& DeviceName, const FString& Client, double Now, int64 NowUnix, FString& OutToken,
 			double& OutRetryAfterSeconds, bool& bOutEvicted);
 
 		bool IsPaired(const FString& Token) const;
 
+		/** A paired page connected: its device was seen now. Returns the device's Id, or empty when Token is not paired. */
+		FString Touch(const FString& Token, int64 NowUnix);
+
+		/** Forgets the device with this Id (Preferences, FORGET). False when there is none. */
+		bool Forget(const FString& DeviceId);
+
+		/** Forgets the device that holds Token (the page's own Unpair). False when Token is not paired. */
+		bool ForgetToken(const FString& Token);
+
 		/** Forgets every device and replaces the PIN. */
 		void UnpairAll();
+
+		/**
+		 * Replaces the devices with remembered ones (the devices file, read at start). Untrusted input: an entry with a malformed Id or
+		 * hash, a duplicate, one not seen for RememberSeconds or paired more than MaxPairingAgeSeconds ago is dropped; names are cleaned and cut; a time in the future is taken
+		 * as NowUnix (a clock set back must not make a device immortal); at most MaxPairedDevices, the most recently seen. Returns how
+		 * many were dropped.
+		 */
+		int32 Restore(TConstArrayView<FRememberedDevice> Remembered, int64 NowUnix);
+
+		/** The devices as they would be remembered, most recently paired last. */
+		const TArray<FRememberedDevice>& GetDevices() const { return Devices; }
 
 		int32 GetPairedCount() const { return Devices.Num(); }
 		TArray<FString> GetDeviceNames() const;
@@ -340,11 +417,8 @@ namespace StageWebRemote
 		double GetLockedUntil() const { return LatestLockedUntil; }
 
 	private:
-		struct FDevice
-		{
-			FString Token;
-			FString Name;
-		};
+		/** The index of the device whose hash matches Token, or INDEX_NONE; every device is compared, so the time does not tell which. */
+		int32 FindByToken(const FString& Token) const;
 
 		struct FClientAttempts
 		{
@@ -358,7 +432,7 @@ namespace StageWebRemote
 		TFunction<FString()> MakePinFunc;
 		TFunction<FString()> MakeTokenFunc;
 		FString Pin;
-		TArray<FDevice> Devices;
+		TArray<FRememberedDevice> Devices;
 		TMap<FString, FClientAttempts> Clients;
 		int32 WrongPinsSinceNewPin = 0;
 		double LatestLockedUntil = 0.0;

@@ -752,8 +752,9 @@ Gevor's choices: automation tests on a harness game instance (not AFunctionalTes
 - [x] The page (Resources/WebRemote/index.html, staged with the module): pairing, cues, playbacks, masters
 - [x] Preferences WEB REMOTE section, dev console StageCraft.WebRemote.*, help web-remote EN/HY
 - [ ] Gevor: open the page on a real phone over Wi-Fi (scope Network) and run a show
-- [ ] D7: plain HTTP with PIN pairing on the LAN acceptable? Pairings across restarts?
-- [ ] WR2: QR code with address and PIN, remembered devices, page layout options
+- [ ] D7: plain HTTP with PIN pairing on the LAN acceptable? (Pairings across restarts: requested 2026-11-16, built in #95; confirm 30 days unused / 90 days from pairing, default On)
+- [x] WR2: QR code with address and PIN, remembered devices (STATE.md #95, ADR 0036 section 11)
+- [ ] WR4: page layout options (the third item of the old WR2 line)
 - [x] WR3: Pro gate StageCraft.Entitlement.Pro.WebRemote in EvaluateWebRemote (Step 6, STATE.md #93)
 
 ## Phase 43 - Step 6: StageCraft Pro subscription and licence (requested by Gevor 2026-11-16; STATE.md #93; ADR 0034 section 17)
@@ -771,3 +772,10 @@ Gevor's choices: automation tests on a harness game instance (not AFunctionalTes
 - [x] Scripts/Tests/RunLicenceEndToEnd.ps1: online subscribe, offline restart, portal cancel and refresh, DMX IN and OUT limits live, server records, no tokens in logs
 - [ ] Gevor: look at Preferences STAGECRAFT PRO and the Patch panel held-universe line in a -game run
 - [ ] Gevor: real Stripe test-mode subscription once the Prices and portal exist
+
+## Phase 45 - Web Remote WR2 (requested by Gevor 2026-11-16; STATE.md #95; ADR 0036 section 11)
+- [x] StageQrCode encoder (byte mode, level M, v1-10), checked against node-qrcode + jsQR reference symbols
+- [x] Preferences QR code of the address and PIN (fragment), OTHER ADDRESS, LAN address ordering; page pairs from #pin= once and strips it
+- [x] Remembered devices: SHA-256 of tokens only, WebRemoteDevices.json (atomic, deleted when empty or off), 30 days unused / 90 days from pairing, FORGET, POST /api/unpair, Remember devices setting
+- [x] Subagent review: 6 findings fixed; tests isolated from the user's files; help EN/HY
+- [ ] Gevor: scan with a real phone, restart and reconnect without the PIN, Unpair on the phone and FORGET in Preferences

@@ -776,8 +776,8 @@ public:
 	FStageEconomyResultInfo RequestRemoteCommand(const struct FStageRemoteCommand& Command);
 
 	/**
-	 * Replaces this PC's Web Remote settings (Preferences › Web Remote, Docs/ADR/0036 §6): sanitized, saved, and the server restarts
-	 * with a new PIN and no paired devices. Switching it on asks the GameMode (EvaluateWebRemote); switching off is always allowed. A
+	 * Replaces this PC's Web Remote settings (Preferences › Web Remote, Docs/ADR/0036 §6, §11): sanitized, saved, and the server restarts
+	 * with a new PIN; remembered devices stay paired unless remembering was switched off. Switching it on asks the GameMode (EvaluateWebRemote); switching off is always allowed. A
 	 * port that cannot open is reported on OnRequestRejected; the settings are kept.
 	 */
 	FStageEconomyResultInfo RequestSetWebRemote(const struct FStageWebRemoteSettings& Settings);
@@ -785,8 +785,11 @@ public:
 	/** Makes a new Web Remote PIN; paired devices stay. Always allowed (it only takes access away). False while the server is off. */
 	bool RequestWebRemoteNewPin();
 
-	/** Forgets every paired Web Remote device and makes a new PIN. Always allowed. False while the server is off. */
+	/** Forgets every paired Web Remote device, remembered ones too, and makes a new PIN. Always allowed (it only takes access away). */
 	bool RequestWebRemoteUnpairAll();
+
+	/** Forgets one paired Web Remote device (Preferences, FORGET); the PIN stays. Always allowed. False when there is no such device. */
+	bool RequestWebRemoteForgetDevice(const FString& DeviceId);
 
 	// --- StageCraft Pro (Docs/ADR/0034 §17; Preferences › STAGECRAFT PRO) ---
 	// UStageLicenceSubsystem carries these out; each needs a signed-in StageCraft Cloud account and reports a refusal on

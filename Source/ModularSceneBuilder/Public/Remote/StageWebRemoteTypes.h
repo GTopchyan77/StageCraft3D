@@ -32,10 +32,30 @@ struct FStageWebRemoteSettings
 	UPROPERTY(Config)
 	int32 Port = 8080;
 
+	/**
+	 * Paired devices stay paired across restarts (Docs/ADR/0036 §11): a phone used at every show does not need the PIN each time. Only a
+	 * hash of each token is saved, and a device unused for 30 days is forgotten. Off: devices are kept in memory only and the saved list
+	 * is deleted.
+	 */
+	UPROPERTY(Config)
+	bool bRememberDevices = true;
+
 	bool operator==(const FStageWebRemoteSettings& Other) const
 	{
-		return Scope == Other.Scope && Port == Other.Port;
+		return Scope == Other.Scope && Port == Other.Port && bRememberDevices == Other.bRememberDevices;
 	}
+};
+
+/** A paired device as the Preferences list shows it. Holds no secret. */
+struct FStageWebRemoteDeviceInfo
+{
+	/** What FORGET passes back (UStageWebRemoteSubsystem::ForgetDevice). */
+	FString Id;
+	/** What the page sent when pairing ("iPhone", "Gevor's tablet"). */
+	FString Name;
+	FDateTime LastSeenUtc;
+	/** Open pages of this device now. */
+	int32 OpenPages = 0;
 };
 
 /** What the Web Remote is doing, for the Preferences panel and the status command. Game thread. */
@@ -46,8 +66,10 @@ struct FStageWebRemoteStatus
 	TArray<FString> Addresses;
 	/** The PIN a new device must enter; empty while off. Never logged. */
 	FString Pin;
-	/** Devices that paired since the server started (at most StageWebRemote::MaxPairedDevices). */
+	/** Paired devices (at most StageWebRemote::MaxPairedDevices), remembered ones included. */
 	int32 PairedDevices = 0;
+	/** The same devices, most recently paired last. */
+	TArray<FStageWebRemoteDeviceInfo> Devices;
 	/** Open WebSockets of paired pages. */
 	int32 ConnectedPages = 0;
 	/** A device entered too many wrong PINs and waits until this time (FPlatformTime::Seconds); 0 when none is waiting. */

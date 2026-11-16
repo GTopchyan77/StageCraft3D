@@ -12,6 +12,7 @@
 #include "Blueprint/UserWidget.h"
 #include "Blueprint/WidgetTree.h"
 #include "Components/PanelSlot.h"
+#include "Components/PanelWidget.h"
 #include "Components/ScrollBox.h"
 #include "Engine/GameEngine.h"
 #include "Engine/GameInstance.h"
@@ -243,6 +244,30 @@ namespace StageWorkspaceCommands
 	/** Scrolls every vertical panel list (inspector, outliner, patch) to its end or start, so a screenshot can show rows below the fold. */
 	void ScrollPanels(const TArray<FString>& Args, UWorld* World)
 	{
+		// "to=<WidgetName>" brings one named section to the top of the list that holds it (a screenshot of the middle of a long panel).
+		if (!Args.IsEmpty() && Args[0].StartsWith(TEXT("to="), ESearchCase::IgnoreCase))
+		{
+			const FName Target(*Args[0].Mid(3));
+			int32 Scrolled = 0;
+			for (TObjectIterator<UWidget> It; It; ++It)
+			{
+				if (It->GetWorld() != World || It->IsTemplate() || It->GetFName() != Target)
+				{
+					continue;
+				}
+				for (UPanelWidget* Parent = It->GetParent(); Parent; Parent = Parent->GetParent())
+				{
+					if (UScrollBox* Box = Cast<UScrollBox>(Parent))
+					{
+						Box->ScrollWidgetIntoView(*It, /*AnimateScroll*/ false, EDescendantScrollDestination::TopOrLeft);
+						++Scrolled;
+						break;
+					}
+				}
+			}
+			UE_LOG(LogStageWorkspace, Display, TEXT("ScrollPanels to %s: %d lists."), *Target.ToString(), Scrolled);
+			return;
+		}
 		const bool bToEnd = Args.IsEmpty() || !Args[0].Equals(TEXT("start"), ESearchCase::IgnoreCase);
 		// "horizontal" scrolls the side-scrolling lists instead, such as the playback desk (its masters sit at the end).
 		const EOrientation Orientation = Args.Num() > 1 && Args[1].Equals(TEXT("horizontal"), ESearchCase::IgnoreCase) ? Orient_Horizontal : Orient_Vertical;
@@ -523,7 +548,7 @@ namespace StageWorkspaceCommands
 		FConsoleCommandWithWorldAndArgsDelegate::CreateStatic(&ScreenshotWindow));
 	FAutoConsoleCommandWithWorldAndArgs DumpWidgetCommand(TEXT("StageCraft.Workspace.DumpWidget"), TEXT("<ClassNamePart> Logs a live widget's tree (names, classes, slot types)."),
 		FConsoleCommandWithWorldAndArgsDelegate::CreateStatic(&DumpWidget));
-	FAutoConsoleCommandWithWorldAndArgs ScrollPanelsCommand(TEXT("StageCraft.Workspace.ScrollPanels"), TEXT("[end|start] [horizontal] Scrolls every vertical (or horizontal) panel list to its end (default) or start, for screenshots."),
+	FAutoConsoleCommandWithWorldAndArgs ScrollPanelsCommand(TEXT("StageCraft.Workspace.ScrollPanels"), TEXT("[end|start] [horizontal] | to=<WidgetName>: scrolls every vertical (or horizontal) panel list to its end (default) or start, or the list holding that widget until it is at the top, for screenshots."),
 		FConsoleCommandWithWorldAndArgsDelegate::CreateStatic(&ScrollPanels));
 	FAutoConsoleCommandWithWorldAndArgs ViewportOnlyCommand(TEXT("StageCraft.Workspace.ViewportOnly"), TEXT("Shows only the viewport, filling the main window (profiling comparison)."),
 		FConsoleCommandWithWorldAndArgsDelegate::CreateStatic(&ViewportOnly));

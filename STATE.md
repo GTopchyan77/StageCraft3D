@@ -9317,7 +9317,7 @@ All times in ms.
 - **Automation suite:** not rerun. The change is a new dev-only command file and one log line; no runtime code changed.
 - **Still not verified:** a real Stripe test-mode subscription (Gevor's keys and Prices), the Preferences STAGECRAFT PRO section and the Patch panel line looked at on screen, and the remaining follow-ups below.
 
-**Commit:** uncommitted (working tree).
+**Commit:** `f50f585`.
 
 **Known issues / follow-ups**
 - Everything open in #93 stays open: the production key pair (release blocker), the Stripe Prices, the Customer Portal and the webhook events.
@@ -9326,3 +9326,100 @@ All times in ms.
   - WR2: a QR code with the address and PIN for the Web Remote;
   - MR2: MIDI learn editor and feedback;
   - the remote servers on Free closing on a lapse instead of refusing every command.
+
+---
+
+## #95 — Web Remote WR2: QR code pairing and remembered devices (ADR 0036 §11) (2026-11-16)
+
+**What & why**
+- **Context.** Gevor asked (2026-11-16) for WR2 from tasks/todo.md:
+  - a QR code with the LAN address and PIN;
+  - remembered devices.
+  - WR1 (#92) kept pairing tokens in memory only, so every restart meant typing the PIN again on every phone.
+  - "Layout options on the page" (also listed under WR2) was not requested and moves to a later phase.
+- **Housekeeping first.** #94 said "uncommitted"; it now carries `f50f585`.
+- **QR code.**
+  - `StageQrCode` (new, pure): a QR encoder (byte mode, error correction M, versions 1-10, the standard's mask penalty). The engine has none.
+  - `RenderPixels` draws the code with the 4-module quiet zone.
+  - Preferences › WEB REMOTE (Network only) shows the code of `http://<address>:<port>/#pin=NNNNNN` as a transient `UTexture2D`: 4 px per module, nearest filtering, shown at its own size.
+  - The PIN is in the URL fragment, which browsers never send, so it reaches no request line or log.
+  - The page (`Resources/WebRemote/index.html`) reads `#pin=`, removes it from the address bar and history with `history.replaceState`, and pairs once.
+  - **Address order:** `FindAddresses` orders 192.168.x, then 10.x, then 172.16-31.x (Hyper-V/WSL/Docker switches), then others (`StageWebRemote::AddressPreference`). OTHER ADDRESS appears when the PC has several addresses.
+- **Remembered devices.**
+  - **Setting:** `FStageWebRemoteSettings::bRememberDevices` (default On), Preferences "Remember devices".
+  - **What is kept:** `FPairing` now keeps `FRememberedDevice {Id, Name, SHA-256(token), PairedUnix, LastSeenUnix}` and never the token. `HashToken` uses OpenSSL EVP: the engine's `GetSHA256Signature` asserts on Windows, and the module already links OpenSSL.
+  - **Devices file:** the subsystem saves `<UserRoot>/WebRemoteDevices.json` atomically, only when its content changes. Triggers: pairing, a page connecting (last seen), FORGET, the page's Unpair, and server close (snapshot taken after the worker joins). The file is deleted when no device is left or remembering is off.
+  - **Restore:** `FPairing::Restore` treats the file as untrusted. It drops:
+    - malformed ids or hashes, duplicates and wrong versions;
+    - more than 32 entries;
+    - devices unused for 30 days;
+    - devices paired more than 90 days ago;
+    - and it reads future times as now.
+  - **New paths:**
+    - `POST /api/unpair` (bearer) is called by the page's Unpair.
+    - Preferences lists the devices (8 rows built once, shown or hidden, so FORGET never rebuilds widgets inside its own click). FORGET goes through `AModularPlayerController::RequestWebRemoteForgetDevice` → `UStageWebRemoteSubsystem::ForgetDevice` → `FStageWebRemoteServer::ForgetDevice`, which closes that device's pages.
+    - UNPAIR ALL also clears the file while the server is off.
+    - The 9th device replaces the one seen longest ago.
+  - **No GameMode for switching off:** turning remembering off alone needs no GameMode verdict (`StageWebRemote::OnlyStopsRemembering`), because it only takes access away.
+- **Subagent review** (6 findings, all fixed):
+  - **Medium:** a token sniffed on the LAN could stay valid forever by sending a hello every 29 days. Fixed with the 90-day cap from pairing (`MaxPairingAgeSeconds`).
+  - **Low:**
+    - a pairing or unpair landing during Close could be lost or revived (fixed: `Stop(&FinalDevices)`);
+    - remembering switched off while the Web Remote was Off left the file (fixed: delete before the Off check);
+    - remember-off was judged by the GameMode;
+    - automation without a test data root could rewrite the user's file (fixed: `CanUseDevicesFile`, `StageCraftPaths::HasTestOverride`);
+    - `FCode::IsValid` now checks the module count.
+- **Found by my own checks:**
+  - **Settings leak, fixed:** the first test version saved the test's Web Remote settings (This PC, port 48781) into the user's real `Saved/Config/WindowsEditor/GameUserSettings.ini`, because `ApplySettings` saves and the scoped helper restores memory only. I restored the file from the run backup (only that line differed) and changed the test to set the value in memory first, so nothing is saved. RunAutomation's user-data check caught it.
+  - **Layout bug, fixed:** the first `-game` screenshot showed the QR stretched across the panel (Fill alignment). It is now left-aligned at its own size.
+  - **Empty file, fixed:** a Web Remote with no paired device wrote an empty devices file. No device now means no file.
+  - **One-time ini change:** the new Config key `bRememberDevices` appears once in GameUserSettings.ini, with the user's own values (expected, as for earlier keys).
+- **Dev-only:** `StageCraft.Workspace.ScrollPanels to=<WidgetName>` scrolls the list holding a named widget to the top, for screenshots of the middle of a long panel.
+
+**Files changed**
+- New:
+  - `Source/ModularSceneBuilder/Private/Remote/StageQrCode.h`, `StageQrCode.cpp`
+  - `Source/ModularSceneBuilder/Private/Remote/Tests/StageQrCodeTests.cpp`
+- Remote:
+  - `Private/Remote/StageWebRemoteProtocol.h/.cpp` (hashing, devices file, pairing, `/api/unpair` route, `AddressPreference`, `OnlyStopsRemembering`)
+  - `Private/Remote/StageWebRemoteServer.h/.cpp`
+  - `Private/Remote/StageWebRemoteSubsystem.cpp`, `Public/Remote/StageWebRemoteSubsystem.h`, `Public/Remote/StageWebRemoteTypes.h`
+  - `Private/Remote/Tests/StageWebRemoteTests.cpp`
+- Controller: `Public/Player/ModularPlayerController.h`, `Private/Player/ModularPlayerControllerRemote.cpp`
+- UI: `Public/UI/StagePreferencesPanel.h`, `Private/UI/StagePreferencesPanel.cpp`
+- Paths: `Private/IO/StageCraftPaths.h/.cpp` (`HasTestOverride`)
+- Dev-only: `Private/Workspace/StageWorkspaceConsoleCommands.cpp` (`ScrollPanels to=`)
+- `Source/ModularSceneBuilder/Resources/WebRemote/index.html`
+- `Content/StageCraft/Help/{en,hy}/web-remote.md` (QR, OTHER ADDRESS, Remember devices, FORGET)
+- `Docs/ADR/0036-web-remote.md` (status, §6, §7, §9, §10, new §11)
+- `tasks/todo.md`, `STATE.md`
+- No `.uasset`, maps or input actions changed.
+
+**Verification**
+- **QR encoder (Claude):**
+  - 14 reference symbols from node-qrcode 1.5.4 (byte mode, level M, forced mask), each first decoded by jsQR 1.4.0, are embedded in `StageCraft.WebRemote.QrCode`. The C++ output matches every module. Coverage: versions 1, 2, 3, 7 and 10, all eight masks, the 14/15-byte boundary, UTF-8.
+  - The automatic mask equals the reference for that mask. Capacity 14/213 bytes is checked, as are 214 bytes and empty text refused.
+  - The scripts were in the session scratchpad, not the repo.
+- **Automation (Claude):**
+  - `StageCraft.WebRemote.*` 9/9.
+    - **Remember:** the FIPS SHA-256 "abc" vector; hashes only; file round trip; Touch, Forget and ForgetToken; untrusted restore (6 bad entries including the 90-day cap); over the cap; bad files; the `/api/unpair` route; `OnlyStopsRemembering`; `AddressPreference`.
+    - **Loopback:** pair over HTTP, restart, the remembered token still works, the file holds the hash and no token, `/api/unpair` 200 then 401, FORGET by Id, the forgotten token 401, remember-off deletes the file.
+    - Tests run in a temporary UserRoot.
+  - Full suite **296/296** (294 + 2); user data unchanged (127 files).
+- **Scripted `-game` runs (Claude):**
+  - **WR2c/WR2d:** Preferences docked through a temporary Session.json (deleted after). Web Remote Network on port 48790. A PowerShell job paired "Test tablet" over HTTP mid-run.
+  - **Screenshot:** the Window screenshot shows the QR at its size, the caption, Remember devices On, and the row "Test tablet · last used Nov 16, 2026 [FORGET]".
+  - **The QR on screen scans:** jsQR decodes the screenshot to `http://192.168.100.11:48790/#pin=248577`, the run's PIN.
+  - The user's devices file was removed after the run; the harness restored profile, scenes and settings.
+  - WR2a, an earlier attempt, timed out: it was started through nested `powershell -File`, and opening a panel mid-run stops the ticker. Both causes are known from memory.
+- **Builds (Claude):** Editor, Game Development and Game Shipping succeeded with no warnings.
+- **Shipping scan (UTF-16 and ASCII):** `StageCraft.WebRemote.Pin=`, `to=<WidgetName>` and `StageCraft.Licence.Status` are absent. "Remember devices", "OTHER ADDRESS", `WebRemoteDevices.json` and `/api/unpair` are present.
+- **Not verified:** a real phone scanning the code and auto-pairing (the page's fragment handling was syntax-checked, not run in a mobile browser), and the Unpair button on a phone.
+
+**Commit:** uncommitted (working tree).
+
+**Known issues / follow-ups**
+- **Gevor:** scan the QR with a real phone on Wi-Fi (Network scope), check auto-pairing, restart StageCraft and see the phone reconnect without a PIN, then Unpair on the phone and FORGET in Preferences.
+- **Gevor:** confirm the D7 parts in ADR 0036 §9: plain HTTP; remembered by default; 30 days unused and 90 days from pairing.
+- The page's layout options (the third WR2 item) were not done; they stay in tasks/todo.md.
+- **Pre-existing, not changed:** the server opens from saved settings at BeginPlay without asking the GameMode (WR1). Every command is still judged.
