@@ -3,6 +3,7 @@
 #include "Mvr/StageMvrParser.h"
 
 #include "Misc/Paths.h"
+#include "Mvr/StageMvrPreserved.h"
 
 namespace StageMvr
 {
@@ -208,6 +209,11 @@ namespace StageMvr
 				for (const TPair<FString, int32>& Unknown : UnknownElements)
 				{
 					Warn(FString::Printf(TEXT("%d <%s> %s not read."), Unknown.Value, *Unknown.Key, Unknown.Value == 1 ? TEXT("element was") : TEXT("elements were")));
+				}
+				for (const TPair<FString, int32>& Dropped : NotKept)
+				{
+					Warn(FString::Printf(TEXT("%d <%s> %s not kept for export: %s to data StageCraft does not carry."), Dropped.Value, *Dropped.Key,
+						Dropped.Value == 1 ? TEXT("element is") : TEXT("elements are"), Dropped.Value == 1 ? TEXT("it points") : TEXT("they point")));
 				}
 				if (Scene.Objects.IsEmpty() && Result.IsValid())
 				{
@@ -415,8 +421,36 @@ namespace StageMvr
 				{
 					return;
 				}
+				if (Kind == EStageMvrObjectKind::Fixture || Kind == EStageMvrObjectKind::Truss)
+				{
+					KeepUnused(Node, Object);
+				}
 				const int32 Index = Scene.Objects.Add(MoveTemp(Object));
 				ReadChildList(Document.FindChild(Node, TEXT("ChildList")), Layer, Index, Scene.Objects[Index].World, Depth + 1);
+			}
+
+			/** The object's XML StageCraft does not use, kept for export (MV5); what cannot be kept is counted for the report. */
+			void KeepUnused(int32 Node, FStageMvrObject& Object)
+			{
+				StageMvrPreserved::FCaptured Captured = StageMvrPreserved::Capture(Document, Node, Object.Kind);
+				for (const FString& Name : Captured.Dropped)
+				{
+					// A Focus is read (it aims the fixture); only that the export does not write it back is worth no warning.
+					if (Name != TEXT("Focus"))
+					{
+						++NotKept.FindOrAdd(Name);
+					}
+				}
+				if (Captured.bTooLarge)
+				{
+					Warn(FString::Printf(TEXT("\"%s\" (line %d) carries more than %d characters of data StageCraft does not use; it is not kept for export."),
+						*Object.Name, Object.Line, StageMvrPreserved::MaxChars));
+				}
+				if (!Captured.Xml.IsEmpty())
+				{
+					Object.Preserved = MoveTemp(Captured.Xml);
+					++Scene.PreservedObjects;
+				}
 			}
 
 			bool ReadFixture(int32 Node, FStageMvrObject& Fixture)
@@ -543,6 +577,8 @@ namespace StageMvr
 			FStageMvrScene& Scene;
 			TSet<FGuid> UsedIds;
 			TMap<FString, int32> UnknownElements;
+			/** Child elements of fixtures and trusses that are not kept for export because they point at data it does not carry. */
+			TMap<FString, int32> NotKept;
 			int32 FixtureCount = 0;
 			int32 SuppressedWarnings = 0;
 		};

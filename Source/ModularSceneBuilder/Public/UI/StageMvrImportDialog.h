@@ -4,6 +4,7 @@
 
 #include "CoreMinimal.h"
 #include "Blueprint/UserWidget.h"
+#include "Mvr/StageMvrImportTypes.h"
 #include "StageMvrImportDialog.generated.h"
 
 DECLARE_DELEGATE(FOnStageMvrImportDialogClosed);
@@ -11,13 +12,15 @@ DECLARE_DELEGATE(FOnStageMvrImportDialogClosed);
 /**
  * The MVR import review (Docs/ADR/0034 §6, MV3): what an .mvr file holds (layers, fixtures, trusses, focus points, other objects),
  * each GDTF type it uses (new to the Library, already in it, or unusable and placed as a generic fixture), the parser's warnings and
- * the errors that refuse it. While the rig is placed it shows the progress; it closes when the import ends.
+ * the errors that refuse it. For a plot already on the stage (§18, MV5) it shows what is new, changed by the file, unchanged and no
+ * longer in the file, with a toggle to remove or keep the latter, and its confirm reads UPDATE. While the rig is placed it shows the
+ * progress; it closes when the import ends.
  *
  * A view in the project's binding pattern:
  *  - Reads UStageMvrImportSubsystem (ShowState, called by the host when the subsystem changes). Display only: the controller and
  *    the subsystem check everything again on confirm.
- *  - Writes go through the owning controller: IMPORT calls RequestConfirmMvrImport, CANCEL and Esc RequestCancelMvrImport. A refused
- *    confirm keeps the review open with the reason.
+ *  - Writes go through the owning controller: IMPORT calls RequestConfirmMvrImport (with the remove / keep choice), CANCEL and Esc
+ *    RequestCancelMvrImport. A refused confirm keeps the review open with the reason. The remove / keep toggle is view state until then.
  *  - OnClosed fires once the review was cancelled; the host closes the dialog when the subsystem has no review.
  *
  * Built in code from the theme; hosted by UStageWorkspaceSubsystem over the workspace. No tick.
@@ -49,7 +52,7 @@ protected:
 	TObjectPtr<class UStageCraftUITheme> Theme = nullptr;
 
 private:
-	enum class EButton : int32 { Confirm, Cancel, Count };
+	enum class EButton : int32 { Confirm, Cancel, Missing, Count };
 
 	void BuildTree();
 	class UTextBlock* MakeText(const FText& Text, int32 Size, FName Typeface, const FLinearColor& Color, bool bWrap = false);
@@ -61,9 +64,20 @@ private:
 	void HandleButton(int32 Index);
 	void Confirm();
 	void Cancel();
+	void ToggleMissing();
+	/** IMPORT / UPDATE and the remove / keep toggle, from the review and the choice. */
+	void RefreshButtons();
 
 	FGuid ReviewId;
 	bool bCanImport = false;
+	bool bReimport = false;
+	int32 MissingItems = 0;
+	/** Items of the plot the file no longer has: removed unless the user switches the toggle (Docs/ADR/0034 §18). */
+	EStageMvrMissingItems Missing = EStageMvrMissingItems::Remove;
+	/** The review's own verdict and whether confirming would change anything with the current choice. */
+	bool bReviewCanImport = false;
+	bool bHasChangesRemoving = false;
+	bool bHasChangesKeeping = false;
 	bool bPlacing = false;
 	bool bClosed = false;
 	/** Notes the review had when it was last drawn: the review is redrawn only when they change (the plan adds its own), never per frame. */

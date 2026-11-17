@@ -70,6 +70,9 @@ struct FStageMvrObject
 	FGuid Focus;
 	FGuid MultipatchOf;
 
+	/** Fixture and truss: the XML StageCraft does not use, kept for export (StageMvrPreserved); empty when there is none. */
+	FString Preserved;
+
 	/** Line of the element in GeneralSceneDescription.xml, for the report. */
 	int32 Line = 0;
 };
@@ -103,6 +106,9 @@ struct FStageMvrScene
 
 	/** Every file in the archive, lower case; empty when only the XML was read. */
 	TSet<FString> ArchiveFiles;
+
+	/** Fixtures and trusses that keep XML StageCraft does not use (FStageMvrObject::Preserved). */
+	int32 PreservedObjects = 0;
 
 	/** Objects of Kind. */
 	int32 Count(EStageMvrObjectKind Kind) const;

@@ -107,8 +107,8 @@ namespace StageMvrConsoleCommands
 		UE_LOG(LogStageCraft, Display, TEXT("StageCraft.Mvr.Import %s: %s"), *Path, Controller->RequestImportMvr(Path) ? TEXT("reading") : TEXT("refused"));
 	}
 
-	/** "Confirm" / "Cancel": the review's IMPORT or CANCEL. */
-	void Answer(UWorld* World, bool bConfirm)
+	/** "Confirm [KeepMissing]" / "Cancel": the review's IMPORT (or UPDATE; items the file no longer has are removed unless KeepMissing) or CANCEL. */
+	void Answer(UWorld* World, bool bConfirm, EStageMvrMissingItems Missing = EStageMvrMissingItems::Remove)
 	{
 		AModularPlayerController* Controller = FindController(World);
 		const UStageMvrImportSubsystem* Importer = FindImporter(World);
@@ -120,7 +120,7 @@ namespace StageMvrConsoleCommands
 		}
 		if (bConfirm)
 		{
-			const FStageEconomyResultInfo Started = Controller->RequestConfirmMvrImport(Review->ReviewId);
+			const FStageEconomyResultInfo Started = Controller->RequestConfirmMvrImport(Review->ReviewId, Missing);
 			UE_LOG(LogStageCraft, Display, TEXT("StageCraft.Mvr.Confirm: %s"), Started.IsSuccess() ? TEXT("placing") : *Started.Message.ToString());
 		}
 		else
@@ -143,6 +143,11 @@ namespace StageMvrConsoleCommands
 			static const TCHAR* const StateNames[] = { TEXT("Idle"), TEXT("Reading"), TEXT("Review"), TEXT("Placing") };
 			UE_LOG(LogStageCraft, Display, TEXT("StageCraft.Mvr.Status: %s, %d/%d placed%s%s"), StateNames[int32(Importer->GetState())],
 				Done, Total, Review ? TEXT(", review: ") : TEXT(""), Review ? *Review->Description : TEXT(""));
+			if (Review)
+			{
+				UE_LOG(LogStageCraft, Display, TEXT("StageCraft.Mvr.Status: review new %d, changed %d, unchanged %d, missing %d, preserved %d"), Review->NewItems,
+					Review->ChangedItems, Review->UnchangedItems, Review->MissingItems, Review->PreservedItems);
+			}
 		}
 		const UStageSessionSubsystem* Session = World ? UWorld::GetSubsystem<UStageSessionSubsystem>(World) : nullptr;
 		int32 Imported = 0;
@@ -157,10 +162,10 @@ namespace StageMvrConsoleCommands
 			const FVector Location = Item->GetActorLocation();
 			if (Fixture)
 			{
-				UE_LOG(LogStageCraft, Display, TEXT("  fixture %d \"%s\" %s at (%.0f, %.0f, %.0f) rot %s patch %d.%03d pan %.1f tilt %.1f mvr %s"), Fixture->GetFixtureId(),
+				UE_LOG(LogStageCraft, Display, TEXT("  fixture %d \"%s\" %s at (%.0f, %.0f, %.0f) rot %s patch %d.%03d pan %.1f tilt %.1f mvr %s from %s kept %d"), Fixture->GetFixtureId(),
 					*Item->GetInstanceLabel().ToString(), *GetNameSafe(Fixture->GetFixtureData()), Location.X, Location.Y, Location.Z, *Item->GetActorRotation().ToCompactString(),
 					Fixture->GetPatch().Universe, Fixture->GetPatch().Address, Fixture->GetAttribute(StageCraftTags::Attribute_Pan), Fixture->GetAttribute(StageCraftTags::Attribute_Tilt),
-					*Item->GetMvrId().ToString(EGuidFormats::DigitsWithHyphens));
+					*Item->GetMvrId().ToString(EGuidFormats::DigitsWithHyphens), *Item->GetMvrOrigin().SourceFile, Item->GetMvrOrigin().Preserved.Len());
 			}
 			else
 			{
@@ -187,8 +192,13 @@ namespace StageMvrConsoleCommands
 	FAutoConsoleCommandWithWorldAndArgs ImportCommand(TEXT("StageCraft.Mvr.Import"),
 		TEXT("Reads an .mvr file for review through the player's request: StageCraft.Mvr.Import <path>. Then StageCraft.Mvr.Confirm or StageCraft.Mvr.Cancel."),
 		FConsoleCommandWithWorldAndArgsDelegate::CreateStatic(&Import));
-	FAutoConsoleCommandWithWorld ConfirmCommand(TEXT("StageCraft.Mvr.Confirm"), TEXT("Imports the MVR file under review (the review's IMPORT)."),
-		FConsoleCommandWithWorldDelegate::CreateLambda([](UWorld* World) { Answer(World, true); }));
+	FAutoConsoleCommandWithWorldAndArgs ConfirmCommand(TEXT("StageCraft.Mvr.Confirm"),
+		TEXT("Imports the MVR file under review (the review's IMPORT / UPDATE). Items of the plot the file no longer has are removed; StageCraft.Mvr.Confirm KeepMissing keeps them."),
+		FConsoleCommandWithWorldAndArgsDelegate::CreateLambda([](const TArray<FString>& Args, UWorld* World)
+		{
+			const bool bKeep = Args.ContainsByPredicate([](const FString& Arg) { return Arg.Equals(TEXT("KeepMissing"), ESearchCase::IgnoreCase); });
+			Answer(World, true, bKeep ? EStageMvrMissingItems::Keep : EStageMvrMissingItems::Remove);
+		}));
 	FAutoConsoleCommandWithWorld CancelCommand(TEXT("StageCraft.Mvr.Cancel"), TEXT("Drops the MVR file under review (the review's CANCEL)."),
 		FConsoleCommandWithWorldDelegate::CreateLambda([](UWorld* World) { Answer(World, false); }));
 	FAutoConsoleCommandWithWorldAndArgs ExportCommand(TEXT("StageCraft.Mvr.Export"),

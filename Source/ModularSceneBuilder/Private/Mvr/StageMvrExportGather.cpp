@@ -154,6 +154,7 @@ namespace StageMvrExportGather
 				Fixture.Id = Ids.Take(*Light);
 				Fixture.Name = LabelOf(*Light);
 				Fixture.Transform = Light->GetActorTransform();
+				Fixture.Preserved = Light->GetMvrOrigin().Preserved;
 				Fixture.FixtureId = Light->GetFixtureId();
 				const FStageDMXPatch Patch = Light->GetPatch();
 				if (Patch.IsPatched())
@@ -203,6 +204,10 @@ namespace StageMvrExportGather
 					Truss.Layer = GetDefaultLayer();
 					Truss.Transform = FTransform(FRotationMatrix::MakeFromX(Run).ToQuat(), Start) * ActorTransform;
 					Truss.LocalBounds = FBox(FVector(0.0, -Height * 0.5, Bottom), FVector(Run.Size(), Height * 0.5, Bottom + Height));
+					if (Leg == 0)
+					{
+						Truss.Preserved = Item->GetMvrOrigin().Preserved;
+					}
 				}
 				++Out.Trusses;
 				continue;
@@ -221,6 +226,7 @@ namespace StageMvrExportGather
 			Object.Layer = GetDefaultLayer();
 			Object.Transform = Item->GetActorTransform();
 			Object.LocalBounds = Bounds;
+			Object.Preserved = Item->GetMvrOrigin().Preserved;
 			if (bTrussPiece)
 			{
 				++Out.Trusses;

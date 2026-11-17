@@ -80,7 +80,7 @@ The other decisions cover pricing (D3), licence enforcement and offline use (D4)
 
 ## 8. Re-import and preserved data
 
-The spec asks importers to apply only intended changes and to preserve what they do not support. v1 keeps each imported item's `MvrId` and the source file's path in the scene (scene format v13). A re-import of the same file matches by `MvrId`, moves, re-patches, adds and removes items, and shows the differences in the review first. Preserving unsupported nodes for re-export (keeping the original XML of unknown nodes) is a follow-up (MV5) and is listed as a known limitation until then.
+The spec asks importers to apply only intended changes and to preserve what they do not support. v1 keeps each imported item's `MvrId` and the source file's path in the scene (scene format v13). A re-import of the same file matches by `MvrId`, moves, re-patches, adds and removes items, and shows the differences in the review first. Preserving unsupported nodes for re-export (keeping the original XML of unknown nodes) is a follow-up (MV5) and is listed as a known limitation until then. Built in MV5 as §18 describes.
 
 ## 9. Scene format
 
@@ -95,7 +95,7 @@ The spec asks importers to apply only intended changes and to preserve what they
 | **MV2** | Review and import as one undo step (fixtures through the GDTF library, focus, geometry, layers as groups) | World tests, undo and redo, a scripted `-game` run with screenshots |
 | **MV3** | UI: File › Import MVR…, the review dialog (the GD4 dialog pattern), report, help article EN/HY | Scripted `-game` run, Gevor's manual check |
 | **MV4** | Export (Pro gate), round-trip test | Round-trip test; the file opens in a third-party viewer (Gevor's manual check) |
-| **MV5** | Re-import differences, preserved unknown nodes | Tests on edited files |
+| **MV5** | Re-import differences, preserved unknown nodes | Tests on edited files (built: §18) |
 
 Every phase ends with Editor, Game and Shipping builds at 0 warnings and the full test suite green, as for GD0–GD4.
 
@@ -200,3 +200,41 @@ Set `StageCraft.Licence.DevAssumePro=1` (non-Shipping), or remove the five Pro c
 ### 17.6 Open
 - **The production signing key pair:** Gevor generates it with `node scripts/make-licence-key.ts`, keeps the private key in the secret store (`LICENCE_SIGNING_KEY`), and pastes the public key into `StageLicenceToken.cpp`'s production list. Until then, Shipping trusts no key and stays Free.
 - The Stripe Prices (amounts, currencies, tax) and the Billing Portal configuration are set in the Stripe dashboard.
+
+## 18. Amendment: MV5 (re-import and preserved data) as built (STATE.md #99, 2026-11-17)
+
+Supersedes the "skips items already on the stage" rule of §15 and settles §8.
+
+### 18.1 What an imported item remembers
+- **`FStageMvrItemOrigin`** (`Public/Mvr/StageMvrItemOrigin.h`), a `SaveGame` struct on `AModularBaseActor` next to `MvrId`. It holds the MVR layer id, the file name, one fingerprint (CRC-32) per field of what the file said at the last import (placement: the world matrix, and a truss's geometry bounds; name; patch; GDTF file and mode; aim: the fixture's matrix with its focus point's), and the preserved XML. It is tagged data, so undo snapshots and scene files carry it. **No scene format bump:** older scenes load with an empty origin, and older builds skip the tag.
+- **Why fingerprints and not the file's values:** a re-import must apply only what the *file* changed. Comparing the file with the stage would undo every edit made in StageCraft (a rename, a nudged truss) on every re-import. Comparing the file with its own last version tells which fields the designer changed. 20 bytes per item.
+- A duplicate (`PrepareAsDuplicate`) drops the MVR UUID and origin: a copy is the user's own item, so a re-import neither moves it in place of the original nor removes it with it.
+
+### 18.2 Re-import rules (`StageMvrImport::Build` / `Diff`, pure)
+- **Matching** is by MVR UUID (`StageMvrStageReader` reads the stage into `FStageMvrExistingItem`s on the game thread, at read time for the review and again at confirm for the plan).
+- **Per field:** only fields whose fingerprint changed are written. Fields the file did not change keep the stage's value: the user's name, a move, a home look.
+- **Items imported before MV5** (no fingerprints): placement, name and patch are compared with the stage; type and aim are not known and left alone. Every such item is updated once (`EChange::Origin`) so it records its fingerprints, and from then on only the file's own changes apply.
+- **What an update keeps:** an updated item keeps its instance id (earlier undo steps still find it), its fixture ID (cues, groups and palettes find fixtures by it), and its SaveGame state: home look, hidden, locked and the rest. If the file asks for another ID, the note says it was kept. A fixture is re-aimed only when its aim fingerprint changed (its own placement or its focus point moved) or its type changed.
+- **Type changes:** a new GDTF mode or file gives the mode's catalog item, or the generic fixture. A UUID that changed kind (truss to fixture, or back) is replaced by a new item of the new kind, without the old state.
+- **Trusses** keep their own truss type when updated. Only a new run, a changed path or a kind change uses the Sketch window's truss; a rename needs no truss in the Sketch window at all. A truss whose new placement cannot be built as a run stays as it was, with a note.
+- **Locked items** (the Outliner's lock forbids moving and resizing) keep their placement and their aim; the file's other changes still apply. Their origin keeps the last import's placement and aim fingerprints, so the first re-import after unlocking moves them where the file has them.
+- **Missing items:** an item is "of this plot" when its recorded layer is one of the file's layers. A file name match counts only for items recorded without a layer, because two venues' plots are easily both `Plot.mvr`. Items of a layer the new file dropped entirely are therefore kept. Missing items are removed or kept as the review says (`EStageMvrMissingItems`); the dialog offers Remove first because the file is the designer's current plot. A review that showed no missing items never removes any at confirm, even if the stage changed meanwhile. A removed fixture's ID is free for the file's new fixtures, and they take on whatever show data still refers to that ID, as with any delete and place.
+- **New fixtures** join their layer's existing group, by name, instead of a second group of the same name.
+
+### 18.3 Applying (`FStageMvrPlacementJob`)
+Removals first, then trusses, then fixtures, a slice per frame as in MV2. An update takes the old item off (its snapshot is kept), then spawns the new one with `AssignInstanceId` and `RestoreSnapshotState` of the old item (same kind of catalog item only), then the file's changes on top (`PrepareImported` with an optional label, `PrepareImportedPatch`). It is all or nothing: a refusal deletes what was placed and restores what was taken off, newest first. The controller records the result with `RecordReplacement` (removed snapshots, then placed items) plus the group edit, as **one undo step** named "Update from <file>".
+
+### 18.4 Review and UI
+`FStageMvrImportReview` gains the counts new, changed, unchanged, missing and preserved, computed with the same pure `Diff` the plan uses. It is an estimate: the confirm plans again against the stage as it is then, and can skip what cannot be built. The dialog shows a CHANGES line, a REMOVE / KEEP ... NO LONGER IN THE FILE toggle when items are missing, UPDATE instead of IMPORT, and "nothing to update" when the file changes nothing. Development console: `StageCraft.Mvr.Confirm [KeepMissing]`; `.Status` prints the review counts and each item's origin.
+
+### 18.5 Preserved data (`StageMvrPreserved`, pure)
+- **Kept:** for each Fixture and Truss, every attribute except `uuid`, `name` and `multipatch`, and every child element the export does not write itself, in canonical XML `<Keep ...>...</Keep>`. Names are checked, text and values are escaped, and comments and mixed text are dropped. The cap is 16 KB per object; over it, nothing is kept and the file is reported. `<UnitNumber>0</UnitNumber>`, which the export writes by default, is not kept.
+- **Not kept**, because the export does not carry what they point at: Focus, Classing, Position, Mappings, Gobo, Connections, and a non-fixture's GDTFSpec/GDTFMode. They are counted in the review's notes (Focus excepted: it aims the fixture).
+- **Export:** `StageMvrExport::Write` re-reads each fragment as untrusted input (scene files are user-editable): it is parsed again with caps, names are allow-listed and every element and value is rebuilt. Only then are its attributes added to the object's start tag and its elements written after the object's own. A fragment that does not read back is left out and named in the notes. A preserved UnitNumber replaces the default 0.
+- **Round trip:** tested. A file's kept data, exported and imported again, gives the same fragment.
+- **Not preserved in MV5:** objects StageCraft does not place (scene objects, supports, video screens, projectors, focus points, groups), AUXData (classes, positions, symbols, mapping definitions) and their files. Keeping them needs scene-level storage (a scene format bump) and the geometry files' bytes; that is a follow-up.
+
+### 18.6 Verification
+- Tests: `StageCraft.Mvr.Preserved`, `.Diff` and `.Reimport` (a world test: update with user edits kept, removal, a new fixture taking a freed ID, one undo step, redo, a refusal half-way rolled back, duplicates, export gather). `.Plan` and `.Review` were extended.
+- `Scripts/Tests/RunMvrReimportCheck.ps1`: a scripted `-game` run. The plot is re-imported under another file name, the review counts are checked, then the update, undo, redo and the exported XML, with a screenshot of the review.
+- Not verified: real Vectorworks or grandMA3 re-exports of a plot (the UUID and layer stability this relies on comes from the spec), and the dialog clicked with a mouse.

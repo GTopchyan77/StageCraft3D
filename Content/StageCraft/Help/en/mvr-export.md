@@ -9,6 +9,7 @@ Export writes your stage as an MVR file (.mvr), which Vectorworks Spotlight, gra
 - Each fixture group with fixtures on the stage becomes a layer with the group's name; a fixture in several groups goes to the first. Everything else is on a layer named "StageCraft".
 - Trusses are written as trusses, one per straight run, with a simple box for their shape. Other items (decks, set pieces, speakers) are written as boxes of their size, so the plot shows where they stand.
 - Fixtures and trusses that came from an MVR import keep their MVR ids, and everything else keeps the same id each time you export, so the other application can recognise items it has seen before.
+- Fixtures and trusses from an MVR import also take back what their file had that StageCraft does not use (cast shadow, colour, custom commands, other programs' own data), so a plot that goes through StageCraft keeps it.
 - Not written in this version: focus points, video screens, the fixtures' pan and tilt, and the real shapes of trusses and set pieces.
 - Your stage does not change, and an export cannot be undone because nothing on the stage moved.
 - MVR export is part of StageCraft Pro (Help: StageCraft Pro). MVR import is free.

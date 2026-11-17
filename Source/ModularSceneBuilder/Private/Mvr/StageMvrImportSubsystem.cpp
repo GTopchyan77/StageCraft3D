@@ -108,11 +108,12 @@ void UStageMvrImportSubsystem::Reset()
 	Placement = FPlacementRequest();
 	Review = FStageMvrImportReview();
 	ReadingFile.Reset();
+	ReadingStage = FStageMvrStage();
 	++ReadSerial;
 	State = EStageMvrImportState::Idle;
 }
 
-TOptional<FText> UStageMvrImportSubsystem::RequestRead(const FString& Path)
+TOptional<FText> UStageMvrImportSubsystem::RequestRead(const FString& Path, FStageMvrStage Stage)
 {
 	using namespace StageMvrImportPrivate;
 
@@ -140,6 +141,7 @@ TOptional<FText> UStageMvrImportSubsystem::RequestRead(const FString& Path)
 
 	const uint64 Serial = ++ReadSerial;
 	ReadingFile = File;
+	ReadingStage = MoveTemp(Stage);
 	SetState(EStageMvrImportState::Reading);
 	UE_LOG(LogStageCraft, Log, TEXT("MVR import: reading %s (%lld bytes) on a worker."), *File, Size);
 	UE::Tasks::Launch(UE_SOURCE_LOCATION, [WeakThis = TWeakObjectPtr<UStageMvrImportSubsystem>(this), Serial, File, MaxBytes = Limits.Zip.MaxArchiveBytes]()
@@ -174,6 +176,8 @@ void UStageMvrImportSubsystem::FinishRead(uint64 Serial, TSharedPtr<FStageMvrArc
 	}
 	Archive = MoveTemp(InArchive);
 	Review = MakeReview(*Archive);
+	// The confirm reads the stage again; this copy only served the review's comparison.
+	ReadingStage = FStageMvrStage();
 	UE_LOG(LogStageCraft, Log, TEXT("MVR import: %s read in %.1f ms (archive %lld bytes, largest entry %lld bytes): %s; %s."), *Review.SourceFile, Archive->ReadMs,
 		Archive->ArchiveBytes, Archive->LargestEntryBytes, *Review.Description, Review.CanImport() ? TEXT("waiting for review") : TEXT("refused"));
 	for (const FString& Error : Review.Errors)
@@ -272,6 +276,19 @@ FStageMvrImportReview UStageMvrImportSubsystem::MakeReview(const FStageMvrArchiv
 	{
 		Out.Errors.Add(TEXT("The file has no fixtures or trusses to place."));
 	}
+
+	// Against the stage as it was when the import was asked for: the same rules the confirm's plan applies (StageMvrImport::Diff).
+	StageMvrImport::FInputs Compare;
+	Compare.Existing = ReadingStage.Items;
+	Compare.TrussItem = ReadingStage.TrussItem;
+	Compare.GeometryBounds = Read.GeometryBounds;
+	Compare.SourceFile = FPaths::GetCleanFilename(ReadingFile);
+	const StageMvrImport::FDiff Diff = StageMvrImport::Diff(Scene, Compare);
+	Out.NewItems = Diff.New;
+	Out.ChangedItems = Diff.Changed;
+	Out.UnchangedItems = Diff.Unchanged;
+	Out.MissingItems = Diff.Missing;
+	Out.PreservedItems = Scene.PreservedObjects;
 	return Out;
 }
 
@@ -336,23 +353,26 @@ FStageEconomyResultInfo UStageMvrImportSubsystem::StartImport(const FGuid& Revie
 			}
 		}
 	}
-	if (UBaseItemData* Generic = Request.GenericFixture.Get())
+	if (UBaseItemData* Generic = Request.Stage.GenericFixture.Get())
 	{
 		Inputs.Fallback = MakeTarget(*Generic);
 	}
-	Inputs.TrussItem = Request.TrussItem;
+	Inputs.TrussItem = Request.Stage.TrussItem;
 	Inputs.GeometryBounds = Archive->GeometryBounds;
-	Inputs.UsedFixtureIds = Request.UsedFixtureIds;
-	Inputs.ExistingMvrIds = Request.ExistingMvrIds;
+	Inputs.UsedFixtureIds = Request.Stage.UsedFixtureIds;
+	Inputs.Existing = MoveTemp(Request.Stage.Items);
+	Inputs.SourceFile = FPaths::GetCleanFilename(Review.SourceFile);
+	// What the review showed: with no missing items there was no choice to make, so nothing is removed even if the stage changed since.
+	Inputs.Missing = Review.MissingItems > 0 ? Request.Missing : EStageMvrMissingItems::Keep;
 
 	StageMvrImport::FPlan Plan = StageMvrImport::Build(Archive->Parsed.Scene, Inputs);
-	UE_LOG(LogStageCraft, Log, TEXT("MVR import: plan for %s: %d fixtures (%d generic, %d renumbered, %d aimed, %d clamped), %d truss runs; skipped %d fixtures, %d trusses, %d already on the stage; %d other objects not placed."),
-		*Review.SourceFile, Plan.Fixtures.Num(), Plan.FallbackFixtures, Plan.RenumberedFixtures, Plan.AimedFixtures, Plan.ClampedAims, Plan.Trusses.Num(),
-		Plan.SkippedFixtures, Plan.SkippedTrusses, Plan.SkippedExisting, Plan.NotPlacedObjects);
+	UE_LOG(LogStageCraft, Log, TEXT("MVR import: plan for %s: %d added, %d updated, %d removed, %d unchanged, %d missing kept; %d fixtures (%d generic, %d renumbered, %d aimed, %d clamped), %d truss runs; skipped %d fixtures, %d trusses; %d other objects not placed."),
+		*Review.SourceFile, Plan.Added, Plan.Updated, Plan.Removals.Num(), Plan.Unchanged, Plan.KeptMissing, Plan.Fixtures.Num(), Plan.FallbackFixtures, Plan.RenumberedFixtures,
+		Plan.AimedFixtures, Plan.ClampedAims, Plan.Trusses.Num(), Plan.SkippedFixtures, Plan.SkippedTrusses, Plan.NotPlacedObjects);
 	if (Plan.Num() == 0)
 	{
-		return FStageEconomyResultInfo::Fail(EStageEconomyResult::InvalidRequest, Plan.SkippedExisting > 0
-			? LOCTEXT("AllThere", "Everything in this file is already on the stage.")
+		return FStageEconomyResultInfo::Fail(EStageEconomyResult::InvalidRequest, Plan.Unchanged > 0 || Plan.KeptMissing > 0
+			? LOCTEXT("AllThere", "Everything in this file is already on the stage, unchanged.")
 			: LOCTEXT("NothingToPlace", "Nothing in this file can be placed."));
 	}
 
@@ -369,9 +389,9 @@ FStageEconomyResultInfo UStageMvrImportSubsystem::StartImport(const FGuid& Revie
 			AssetIds.AddUnique(Item->GetPrimaryAssetId());
 		}
 	};
-	if (!Plan.Trusses.IsEmpty())
+	for (const StageMvrImport::FTrussPlacement& Truss : Plan.Trusses)
 	{
-		AddItem(Plan.TrussItem.Get());
+		AddItem(Truss.Item.Get());
 	}
 	for (const StageMvrImport::FFixturePlacement& Fixture : Plan.Fixtures)
 	{
@@ -379,6 +399,14 @@ FStageEconomyResultInfo UStageMvrImportSubsystem::StartImport(const FGuid& Revie
 		{
 			AddItem(Fixture.Item.Get());
 			break;
+		}
+	}
+	// An update replaces its item with one of the same kind; a catalog item may have been unloaded since it was placed.
+	for (const StageMvrImport::FFixturePlacement& Fixture : Plan.Fixtures)
+	{
+		if (Fixture.Replaces.IsValid())
+		{
+			AddItem(Fixture.Item.Get());
 		}
 	}
 
@@ -455,13 +483,21 @@ void UStageMvrImportSubsystem::StepPlacement()
 			}
 		}
 		LayerGroups.Sort([](const TPair<FString, TArray<int32>>& A, const TPair<FString, TArray<int32>>& B) { return A.Key < B.Key; });
-		const FText StepName = FText::Format(LOCTEXT("StepName", "Import {0}"), FileLabel(Review.SourceFile));
-		Outcome.Groups = Placement.OnPlaced ? Placement.OnPlaced(Items, LayerGroups, StepName) : 0;
+		const bool bReimport = Plan.Updated + Plan.Unchanged + Plan.Removals.Num() + Plan.KeptMissing > 0;
+		const FText StepName = FText::Format(bReimport ? LOCTEXT("UpdateStepName", "Update from {0}") : LOCTEXT("StepName", "Import {0}"), FileLabel(Review.SourceFile));
+		Outcome.Groups = Placement.OnPlaced ? Placement.OnPlaced(Job->GetRemoved(), Items, LayerGroups, StepName) : 0;
 		Outcome.bSucceeded = true;
 		Outcome.Fixtures = Plan.Fixtures.Num();
 		Outcome.Trusses = Plan.Trusses.Num();
-		Outcome.Message = FText::Format(LOCTEXT("Imported", "Imported {0}: {1} {1}|plural(one=fixture,other=fixtures), {2} truss {2}|plural(one=run,other=runs), {3} {3}|plural(one=group,other=groups)."),
-			FileLabel(Review.SourceFile), FText::AsNumber(Outcome.Fixtures), FText::AsNumber(Outcome.Trusses), FText::AsNumber(Outcome.Groups));
+		Outcome.Added = Plan.Added;
+		Outcome.Updated = Plan.Updated;
+		Outcome.Removed = Plan.Removals.Num();
+		Outcome.Unchanged = Plan.Unchanged;
+		Outcome.Message = bReimport
+			? FText::Format(LOCTEXT("Updated", "Updated from {0}: {1} added, {2} updated, {3} removed, {4} unchanged."), FileLabel(Review.SourceFile),
+				FText::AsNumber(Outcome.Added), FText::AsNumber(Outcome.Updated), FText::AsNumber(Outcome.Removed), FText::AsNumber(Outcome.Unchanged))
+			: FText::Format(LOCTEXT("Imported", "Imported {0}: {1} {1}|plural(one=fixture,other=fixtures), {2} truss {2}|plural(one=run,other=runs), {3} {3}|plural(one=group,other=groups)."),
+				FileLabel(Review.SourceFile), FText::AsNumber(Outcome.Fixtures), FText::AsNumber(Outcome.Trusses), FText::AsNumber(Outcome.Groups));
 	}
 	else
 	{

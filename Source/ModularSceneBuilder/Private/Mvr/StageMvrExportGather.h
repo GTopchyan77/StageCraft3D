@@ -21,6 +21,8 @@
  *  - Fixture types: a GDTF library type is written with its library file under the name the user imported it as (made safe and
  *    unique), and the fixture's DMX mode. Built-in fixtures and session-only types are written without a GDTF type.
  *  - Items without bounds (nothing visible) are not written and counted.
+ *  - An imported item's preserved MVR data (FStageMvrItemOrigin::Preserved, Docs/ADR/0034 §18) goes with it; a truss run's goes
+ *    on its first leg, which carries the item's id.
  */
 namespace StageMvrExportGather
 {

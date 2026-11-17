@@ -15,6 +15,7 @@
 #include "Licence/StageLicenceTypes.h"
 #include "Marketplace/StageDispatchTypes.h"
 #include "Marketplace/StageMarketplaceTypes.h"
+#include "Mvr/StageMvrImportTypes.h"
 #include "Placement/StagePlacementTypes.h"
 #include "Remote/StageRemoteControlTypes.h"
 #include "Scene/StageSceneTypes.h"
@@ -702,12 +703,13 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "StageCraft|Requests")
 	int32 RequestBrowseFixtureFiles();
 
-	// --- MVR scenes (Docs/ADR/0034 §6–§7, MV2 to MV4) ---
+	// --- MVR scenes (Docs/ADR/0034 §6–§7 and §18, MV2 to MV5) ---
 
 	/**
 	 * Reads an .mvr file for review (UStageMvrImportSubsystem::RequestRead). The GameMode decides (EvaluateMvrImport); a refusal
 	 * or a file that cannot be read is reported on OnRequestRejected. True when the read started; the review then waits for
-	 * RequestConfirmMvrImport or RequestCancelMvrImport. Nothing changes before the confirm.
+	 * RequestConfirmMvrImport or RequestCancelMvrImport. Nothing changes before the confirm. The review compares the file with the stage
+	 * as it is now (StageMvrStageReader), so a plot already on it shows what is new, changed and gone.
 	 */
 	bool RequestImportMvr(const FString& File);
 
@@ -715,12 +717,14 @@ public:
 	bool RequestBrowseMvrFile();
 
 	/**
-	 * Imports the reviewed MVR file (the review's IMPORT): its GDTF types into the library, then its fixtures (type, ID, patch, focus
-	 * aim, label) and trusses placed through the GameMode's placement rules, a slice per frame, all or nothing, recorded as ONE undo
-	 * step with a fixture group per layer. Refused (and reported on OnRequestRejected) during a gizmo drag or camera flight, by the
-	 * GameMode, or when nothing can be placed. The outcome arrives on UStageMvrImportSubsystem::OnFinished.
+	 * Imports the reviewed MVR file (the review's IMPORT / UPDATE): its GDTF types into the library, then its fixtures (type, ID,
+	 * patch, focus aim, label) and trusses placed through the GameMode's placement rules, a slice per frame, all or nothing, recorded
+	 * as ONE undo step with a fixture group per layer. Items of the file already on the stage are updated where the file changed them
+	 * (Docs/ADR/0034 §18); items of the same plot the file no longer has are removed or kept as Missing says. Refused (and reported on
+	 * OnRequestRejected) during a gizmo drag or camera flight, by the GameMode, or when nothing would change. The outcome arrives on
+	 * UStageMvrImportSubsystem::OnFinished.
 	 */
-	FStageEconomyResultInfo RequestConfirmMvrImport(const FGuid& ReviewId);
+	FStageEconomyResultInfo RequestConfirmMvrImport(const FGuid& ReviewId, EStageMvrMissingItems Missing);
 
 	/** Drops the MVR file under review (the review's CANCEL). Always allowed: it changes nothing. */
 	void RequestCancelMvrImport(const FGuid& ReviewId);
@@ -1276,8 +1280,11 @@ private:
 	/** Records a group list edit made by Edit (true when it changed something), as one undo step named Description. */
 	bool EditGroups(const FText& Description, TFunctionRef<bool(class UStageShowLibrarySubsystem&)> Edit);
 
-	/** Records an MVR import's placed rig as one undo step with a fixture group per layer; returns the groups made. */
-	int32 RecordMvrImport(TConstArrayView<class AModularBaseActor*> Items, const TArray<TPair<FString, TArray<int32>>>& LayerGroups, const FText& StepName);
+	/**
+	 * Records an MVR import as one undo step: the items it took off (Removed), the items it placed, and its new fixtures joined to a
+	 * fixture group per layer (an existing group of the layer's name, else a new one). Returns the groups made or added to.
+	 */
+	int32 RecordMvrImport(TConstArrayView<struct FStageItemSnapshot> Removed, TConstArrayView<class AModularBaseActor*> Items, const TArray<TPair<FString, TArray<int32>>>& LayerGroups, const FText& StepName);
 
 	/** Records a palette list edit made by Edit (true when it changed something), as one undo step named Description. */
 	bool EditPalettes(const FText& Description, TFunctionRef<bool(class UStageShowLibrarySubsystem&)> Edit);

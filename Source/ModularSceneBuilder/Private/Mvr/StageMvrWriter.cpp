@@ -6,6 +6,7 @@
 #include "Mvr/StageMvrGeometry.h"
 #include "Misc/Paths.h"
 #include "Mvr/StageMvrParser.h"
+#include "Mvr/StageMvrPreserved.h"
 
 namespace StageMvrExport
 {
@@ -99,6 +100,24 @@ namespace StageMvrExport
 		FString ObjectAttributes(const FString& Name, const FGuid& Id)
 		{
 			return Attribute(TEXT("name"), Name) + Attribute(TEXT("uuid"), FormatUuid(Id));
+		}
+
+		/** An object's preserved fragment, read back (untrusted); a note when there is one that does not read. */
+		StageMvrPreserved::FForWriting ReadPreserved(const FString& Preserved, EStageMvrObjectKind Kind, const FString& Name, FWriteResult& Result)
+		{
+			StageMvrPreserved::FForWriting Kept;
+			if (Preserved.IsEmpty())
+			{
+				return Kept;
+			}
+			if (!StageMvrPreserved::ReadForWriting(Preserved, Kind, Kept))
+			{
+				Kept = StageMvrPreserved::FForWriting();
+				Result.Notes.Add(FString::Printf(TEXT("%s: the MVR data it was imported with could not be read back; written without it."), *Name));
+				return Kept;
+			}
+			++Result.PreservedObjects;
+			return Kept;
 		}
 
 		bool CheckScene(const FScene& Scene, FString& OutError)
@@ -263,11 +282,17 @@ namespace StageMvrExport
 				}
 				const TCHAR* Element = Object.Kind == EBoxKind::Truss ? TEXT("Truss") : TEXT("SceneObject");
 				const FTransform Unscaled(Object.Transform.GetRotation().GetNormalized(), Object.Transform.GetLocation());
-				Xml.Open(Element, ObjectAttributes(Object.Name, Object.Id));
+				const StageMvrPreserved::FForWriting Kept = ReadPreserved(Object.Preserved,
+					Object.Kind == EBoxKind::Truss ? EStageMvrObjectKind::Truss : EStageMvrObjectKind::SceneObject, Object.Name, Result);
+				Xml.Open(Element, ObjectAttributes(Object.Name, Object.Id) + Kept.Attributes);
 				Xml.Leaf(TEXT("Matrix"), FormatMatrix(StageMvrUnits::FromUnreal(Unscaled)));
 				Xml.Open(TEXT("Geometries"));
 				Xml.Empty(TEXT("Geometry3D"), Attribute(TEXT("fileName"), GeometryNames[ObjectGeometry[Index]]));
 				Xml.Close(TEXT("Geometries"));
+				for (const FString& Child : Kept.Children)
+				{
+					Xml.Line(Child);
+				}
 				Xml.Close(Element);
 			}
 			for (const FFixture& Fixture : Scene.Fixtures)
@@ -276,7 +301,8 @@ namespace StageMvrExport
 				{
 					continue;
 				}
-				Xml.Open(TEXT("Fixture"), ObjectAttributes(Fixture.Name, Fixture.Id));
+				const StageMvrPreserved::FForWriting Kept = ReadPreserved(Fixture.Preserved, EStageMvrObjectKind::Fixture, Fixture.Name, Result);
+				Xml.Open(TEXT("Fixture"), ObjectAttributes(Fixture.Name, Fixture.Id) + Kept.Attributes);
 				Xml.Leaf(TEXT("Matrix"), FormatMatrix(FixtureMatrix(Fixture.Transform)));
 				if (!Fixture.GdtfSpec.IsEmpty())
 				{
@@ -302,7 +328,14 @@ namespace StageMvrExport
 				{
 					Xml.Leaf(TEXT("FixtureIDNumeric"), FString::FromInt(Fixture.FixtureId));
 				}
-				Xml.Leaf(TEXT("UnitNumber"), TEXT("0"));
+				if (!Kept.ChildNames.Contains(TEXT("UnitNumber")))
+				{
+					Xml.Leaf(TEXT("UnitNumber"), TEXT("0"));
+				}
+				for (const FString& Child : Kept.Children)
+				{
+					Xml.Line(Child);
+				}
 				Xml.Close(TEXT("Fixture"));
 			}
 			Xml.Close(TEXT("ChildList"));

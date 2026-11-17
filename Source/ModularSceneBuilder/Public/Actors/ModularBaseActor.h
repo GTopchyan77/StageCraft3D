@@ -6,6 +6,7 @@
 #include "GameFramework/Actor.h"
 #include "Interaction/InteractableInterface.h"
 #include "Interaction/StageParameterInterface.h"
+#include "Mvr/StageMvrItemOrigin.h"
 #include "ModularBaseActor.generated.h"
 
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_TwoParams(FOnModularActorSelectionChanged, class AModularBaseActor*, Actor, bool, bSelected);
@@ -148,19 +149,24 @@ public:
 	 */
 	const FGuid& GetMvrId() const { return MvrId; }
 
+	/** Where the MVR object came from and what the file said at its last import (Docs/ADR/0034 §18). Empty for items made in StageCraft. */
+	const FStageMvrItemOrigin& GetMvrOrigin() const { return MvrOrigin; }
+
 	/**
-	 * MVR import support: names a spawning item and records the MVR UUID it comes from. Only valid on a deferred actor, before
-	 * BeginPlay (as AssignInstanceId); ignored with an ensure otherwise. The label is cut to MaxLabelLength; an empty one keeps
-	 * the catalog name.
+	 * MVR import support: names a spawning item and records the MVR UUID and origin it comes from. Only valid on a deferred actor,
+	 * before BeginPlay (as AssignInstanceId); ignored with an ensure otherwise. The label is cut to MaxLabelLength; an empty one keeps
+	 * the catalog name, an unset one the label the item has (a re-import whose file did not rename it). An over-long origin source is
+	 * cut and an over-long preserved fragment dropped.
 	 */
-	void PrepareImported(const FText& Label, const FGuid& InMvrId);
+	void PrepareImported(const TOptional<FText>& Label, const FGuid& InMvrId, const FStageMvrItemOrigin& Origin);
 
 	/**
 	 * Duplicate support (USpawnSystemComponent::DuplicateItem): called on a copy after the source's state was restored onto it and
 	 * before its item data is applied and it begins play. A subclass clears what must be unique per item (a fixture's ID and DMX
-	 * address), so registration gives the copy its own. The base keeps everything.
+	 * address), so registration gives the copy its own. The base clears the MVR UUID and origin: a copy is the user's own item, not
+	 * the plot's, so a re-import neither moves it in place of the original nor removes it with it.
 	 */
-	virtual void PrepareAsDuplicate() {}
+	virtual void PrepareAsDuplicate();
 
 	/** Captures id, catalog item, transform and the SaveGame properties, for restoring this item later. */
 	struct FStageItemSnapshot CaptureSnapshot() const;
@@ -296,4 +302,8 @@ private:
 	/** See GetMvrId. Tagged SaveGame data, so scenes written before it load with none and older builds skip it. */
 	UPROPERTY(VisibleInstanceOnly, SaveGame, Category = "StageCraft|Item")
 	FGuid MvrId;
+
+	/** See GetMvrOrigin. A separate tagged property next to MvrId, so scenes that already carry MvrId keep it. */
+	UPROPERTY(VisibleInstanceOnly, SaveGame, Category = "StageCraft|Item")
+	FStageMvrItemOrigin MvrOrigin;
 };

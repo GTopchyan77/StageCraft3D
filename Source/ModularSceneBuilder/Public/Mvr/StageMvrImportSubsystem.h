@@ -16,11 +16,13 @@
  * Flow, one file at a time (GetState):
  *  1. RequestRead: the file is read and checked on a worker (StageMvrArchive: ZIP, scene XML, every GDTF, truss geometry bounds).
  *     The archive bytes never reach the game thread; only the parsed result does, and it is dropped when the review closes.
- *  2. Review: the user sees GetReview (types, counts, warnings, errors). Nothing has changed yet. CancelReview drops it.
+ *  2. Review: the user sees GetReview (types, counts, warnings, errors, and for a plot already on the stage what is new, changed,
+ *     unchanged and gone: §18). Nothing has changed yet. CancelReview drops it.
  *  3. StartImport (called by AModularPlayerController::RequestConfirmMvrImport after the GameMode allowed it): the GDTF types are
  *     added through UStageFixtureLibrarySubsystem::AddEmbeddedFile (a type already in the library is reused), the plan is built
  *     (StageMvrImport::Build), the catalog items it needs stream in, then FStageMvrPlacementJob places it a slice per frame
- *     (PlacementBudgetSeconds), all or nothing. The controller's OnPlaced records the result as one undo step.
+ *     (PlacementBudgetSeconds), all or nothing: removals, updates (the same items, changed only where the file changed) and new
+ *     items. The controller's OnPlaced records the result as one undo step.
  *  Adding fixture types to the library is not undone: the library is outside the stage's history, as for a GDTF import.
  *
  * Views read GetState / GetReview / GetProgress and follow OnChanged; the outcome arrives on OnFinished.
@@ -48,9 +50,9 @@ public:
 	/**
 	 * Starts reading Path for review. Returns why it cannot start (not .mvr, missing, larger than the MVR cap, another import is
 	 * open), or unset when the read started. The review arrives on OnChanged; a file that cannot be read becomes a review with
-	 * errors, so the user sees why.
+	 * errors, so the user sees why. Stage is the stage as it is now: the review compares the file with it (re-import).
 	 */
-	TOptional<FText> RequestRead(const FString& Path);
+	TOptional<FText> RequestRead(const FString& Path, FStageMvrStage Stage);
 
 	EStageMvrImportState GetState() const { return State; }
 
@@ -69,16 +71,17 @@ public:
 		TWeakObjectPtr<class USpawnSystemComponent> Spawner;
 		/** The GameMode's placement rules without reporting (AModularPlayerController::EvaluatePlacementPreview). */
 		TFunction<FStageEconomyResultInfo(const class UBaseItemData&, int32)> Check;
-		/** The truss MVR trusses are built with, and the fixture for fixtures without a usable type. Either may be null. */
-		TWeakObjectPtr<class UStageSpanData> TrussItem;
-		TWeakObjectPtr<class UBaseItemData> GenericFixture;
-		TSet<int32> UsedFixtureIds;
-		TSet<FGuid> ExistingMvrIds;
+		/** The stage now (StageMvrStageReader): items from MVR, fixture IDs in use, the truss and generic fixture to build with. */
+		FStageMvrStage Stage;
+		/** Items of the same plot the file no longer has: removed or kept (the review's choice). */
+		EStageMvrMissingItems Missing = EStageMvrMissingItems::Keep;
 		/**
-		 * Called once the whole rig is placed: Items in plan order, LayerGroups (layer name, fixture IDs) and the undo step's name.
-		 * Returns the number of fixture groups it made. Not called when nothing was placed.
+		 * Called once the whole plan is applied: Removed (snapshots of the items taken off: removed ones and the old state of
+		 * updated ones), Items (placed: new and updated, in plan order), LayerGroups (layer name, fixture IDs of NEW fixtures) and the
+		 * undo step's name. Returns the number of fixture groups it made or added to. Not called when the job failed.
 		 */
-		TFunction<int32(TConstArrayView<class AModularBaseActor*> Items, const TArray<TPair<FString, TArray<int32>>>& LayerGroups, const FText& StepName)> OnPlaced;
+		TFunction<int32(TConstArrayView<struct FStageItemSnapshot> Removed, TConstArrayView<class AModularBaseActor*> Items,
+			const TArray<TPair<FString, TArray<int32>>>& LayerGroups, const FText& StepName)> OnPlaced;
 	};
 
 	/** Confirms the open review: Ok when placing started (the outcome arrives on OnFinished), else why not (nothing changed). */
@@ -103,6 +106,8 @@ private:
 	EStageMvrImportState State = EStageMvrImportState::Idle;
 	uint64 ReadSerial = 0;
 	FString ReadingFile;
+	/** The stage the open read is compared with; dropped once the review is made. */
+	FStageMvrStage ReadingStage;
 	FStageMvrImportReview Review;
 	/** The parsed file behind Review; released when the review closes. */
 	TSharedPtr<struct FStageMvrArchive> Archive;

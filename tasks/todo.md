@@ -801,3 +801,14 @@ Gevor's choices: automation tests on a harness game instance (not AFunctionalTes
 - [x] Tests StageCraft.Remote.Capability and StageCraft.WebRemote.Capability; full suite 301/301; help EN/HY (remote-control, web-remote, pro-licence)
 - [x] Scripts/Tests/RunRemoteLapseCheck.ps1: -game run, the Pro override lapses and returns, ports watched from outside the game (PASS)
 - [ ] Gevor: in Preferences, let a real licence lapse (or DevAssumePro 0) with OSC and the Web Remote on, and read the warning lines
+
+## Phase 49 - MVR MV5: re-import and preserved data (requested by Gevor 2026-11-17; STATE.md #99; ADR 0034 section 18)
+- [x] FStageMvrItemOrigin on every imported item (layer, file, per-field fingerprints, preserved XML; SaveGame, no scene format bump); duplicates drop it
+- [x] Pure re-import: StageMvrImport::Diff / Build apply only fields the file changed (user edits kept), keep instance and fixture IDs, re-aim on aim change, locked items keep place and aim, trusses keep their type, pre-MV5 items updated once to record their origin
+- [x] Items of the same plot (by layer) the file no longer has: removed or kept (review toggle); removed IDs free for new fixtures; new fixtures join the layer's existing group
+- [x] FStageMvrPlacementJob: removals, updates through snapshot restore, all or nothing with rollback; one undo step (RecordReplacement + groups)
+- [x] Review: new / changed / unchanged / missing / preserved counts, UPDATE, REMOVE/KEEP toggle; StageCraft.Mvr.Confirm [KeepMissing]
+- [x] StageMvrPreserved: unknown attributes and elements kept as canonical XML, references that would dangle left out and reported, re-read as untrusted on export
+- [x] Tests StageCraft.Mvr.Preserved, .Diff, .Reimport (+ .Plan, .Review); Scripts/Tests/RunMvrReimportCheck.ps1 (-game, PASS); help EN/HY (mvr-import, mvr-export); subagent review fixes
+- [ ] Preserve objects StageCraft does not place (scene objects, supports, video screens, projectors, focus points) and AUXData with their files (needs scene-level storage: a scene format bump)
+- [ ] Gevor: re-import a real plot that changed in Vectorworks / grandMA3 and check what the review shows

@@ -1,24 +1,23 @@
 // Copyright Epic Games, Inc. All Rights Reserved.
 
-// AModularPlayerController: the MVR scene import and export requests (Docs/ADR/0034 §6–§7, MV2–MV4), kept apart from the main file.
+// AModularPlayerController: the MVR scene import, re-import and export requests (Docs/ADR/0034 §6–§7, §18; MV2–MV5), kept apart from
+// the main file.
 
 #include "Player/ModularPlayerController.h"
 
-#include "Actors/LightingFixtureActor.h"
 #include "Actors/ModularBaseActor.h"
 #include "Components/SpawnSystemComponent.h"
-#include "Data/StageSpanData.h"
 #include "Engine/GameInstance.h"
 #include "Engine/World.h"
 #include "Game/StageCraftGameModeBase.h"
 #include "History/StageEditHistoryComponent.h"
+#include "History/StageItemSnapshot.h"
 #include "Import/StageFileDialog.h"
 #include "Misc/Paths.h"
 #include "ModularSceneBuilder.h"
 #include "Mvr/StageMvrExportSubsystem.h"
 #include "Mvr/StageMvrImportSubsystem.h"
-#include "Sketch/StageSketchSubsystem.h"
-#include "Subsystems/ShowControlSubsystem.h"
+#include "Mvr/StageMvrStageReader.h"
 #include "Subsystems/StageSessionSubsystem.h"
 #include "Subsystems/StageShowLibrarySubsystem.h"
 
@@ -30,6 +29,12 @@ namespace StageControllerMvr
 	{
 		const UGameInstance* GameInstance = Controller.GetGameInstance();
 		return GameInstance ? GameInstance->GetSubsystem<UStageMvrImportSubsystem>() : nullptr;
+	}
+
+	FStageMvrStage ReadStage(const AModularPlayerController& Controller)
+	{
+		const UWorld* World = Controller.GetWorld();
+		return World ? StageMvrStageReader::Read(*World) : FStageMvrStage();
 	}
 }
 
@@ -45,7 +50,7 @@ bool AModularPlayerController::RequestImportMvr(const FString& File)
 		ReportRejection(Verdict);
 		return false;
 	}
-	if (const TOptional<FText> Refusal = Importer->RequestRead(File))
+	if (const TOptional<FText> Refusal = Importer->RequestRead(File, StageControllerMvr::ReadStage(*this)))
 	{
 		ReportRejection(FStageEconomyResultInfo::Fail(EStageEconomyResult::InvalidRequest, *Refusal));
 		return false;
@@ -79,7 +84,7 @@ bool AModularPlayerController::RequestBrowseMvrFile()
 	return RequestImportMvr(Files[0]);
 }
 
-FStageEconomyResultInfo AModularPlayerController::RequestConfirmMvrImport(const FGuid& ReviewId)
+FStageEconomyResultInfo AModularPlayerController::RequestConfirmMvrImport(const FGuid& ReviewId, EStageMvrMissingItems Missing)
 {
 	const auto Refuse = [this](const FStageEconomyResultInfo& Refusal)
 	{
@@ -114,34 +119,14 @@ FStageEconomyResultInfo AModularPlayerController::RequestConfirmMvrImport(const 
 		return Self ? Self->EvaluatePlacementPreview(Item, Quantity)
 			: FStageEconomyResultInfo::Fail(EStageEconomyResult::InvalidRequest, LOCTEXT("MvrNoPlayer", "The player left while the rig was placed."));
 	};
-	// The Sketch window's truss and fixture are the ones a drawing builds with: MVR trusses become runs of that truss, and fixtures
-	// without a usable GDTF type that fixture.
-	if (const UStageSketchSubsystem* Sketch = UWorld::GetSubsystem<UStageSketchSubsystem>(GetWorld()))
-	{
-		Request.TrussItem = Cast<UStageSpanData>(Sketch->GetItem(EStageSketchElement::Truss));
-		Request.GenericFixture = Sketch->GetItem(EStageSketchElement::Fixture);
-	}
-	if (const UShowControlSubsystem* ShowControl = UWorld::GetSubsystem<UShowControlSubsystem>(GetWorld()))
-	{
-		for (const ALightingFixtureActor* Fixture : ShowControl->GetFixtures())
-		{
-			Request.UsedFixtureIds.Add(Fixture->GetFixtureId());
-		}
-	}
-	if (const UStageSessionSubsystem* Session = UWorld::GetSubsystem<UStageSessionSubsystem>(GetWorld()))
-	{
-		for (const AModularBaseActor* Item : Session->GetPlacedItems())
-		{
-			if (Item && Item->GetMvrId().IsValid())
-			{
-				Request.ExistingMvrIds.Add(Item->GetMvrId());
-			}
-		}
-	}
-	Request.OnPlaced = [WeakThis = TWeakObjectPtr<AModularPlayerController>(this)](TConstArrayView<AModularBaseActor*> Items, const TArray<TPair<FString, TArray<int32>>>& LayerGroups, const FText& StepName)
+	// Read again now: the stage may have changed since the review, and the plan must compare with what it will change.
+	Request.Stage = StageControllerMvr::ReadStage(*this);
+	Request.Missing = Missing;
+	Request.OnPlaced = [WeakThis = TWeakObjectPtr<AModularPlayerController>(this)](TConstArrayView<FStageItemSnapshot> Removed, TConstArrayView<AModularBaseActor*> Items,
+		const TArray<TPair<FString, TArray<int32>>>& LayerGroups, const FText& StepName)
 	{
 		AModularPlayerController* Self = WeakThis.Get();
-		return Self ? Self->RecordMvrImport(Items, LayerGroups, StepName) : 0;
+		return Self ? Self->RecordMvrImport(Removed, Items, LayerGroups, StepName) : 0;
 	};
 
 	const FStageEconomyResultInfo Started = Importer->StartImport(ReviewId, MoveTemp(Request));
@@ -208,7 +193,7 @@ bool AModularPlayerController::RequestBrowseMvrExport()
 	return RequestExportMvr(File);
 }
 
-int32 AModularPlayerController::RecordMvrImport(TConstArrayView<AModularBaseActor*> Items, const TArray<TPair<FString, TArray<int32>>>& LayerGroups, const FText& StepName)
+int32 AModularPlayerController::RecordMvrImport(TConstArrayView<FStageItemSnapshot> Removed, TConstArrayView<AModularBaseActor*> Items, const TArray<TPair<FString, TArray<int32>>>& LayerGroups, const FText& StepName)
 {
 	if (!EditHistory)
 	{
@@ -216,7 +201,8 @@ int32 AModularPlayerController::RecordMvrImport(TConstArrayView<AModularBaseActo
 	}
 	// One step for the items and the groups. When another group is open (an assistant plan), the import joins it.
 	const bool bOwnGroup = EditHistory->BeginGroup(StepName);
-	EditHistory->RecordPlacements(Items, StepName);
+	// Removals and the old state of updated items first, as they were applied, so undo restores them after the new state is gone.
+	EditHistory->RecordReplacement(Removed, Items, StepName);
 	int32 Made = 0;
 	if (!LayerGroups.IsEmpty())
 	{
@@ -224,7 +210,21 @@ int32 AModularPlayerController::RecordMvrImport(TConstArrayView<AModularBaseActo
 		{
 			for (const TPair<FString, TArray<int32>>& Layer : LayerGroups)
 			{
-				if (Library.AddGroup(FText::FromString(Layer.Key), Layer.Value).IsValid())
+				// A re-import adds its new fixtures to the layer's group from the first import instead of making a second one.
+				const FStageFixtureGroup* Existing = Library.GetGroups().FindByPredicate([&Layer](const FStageFixtureGroup& Group)
+				{
+					return Group.Name.ToString().Equals(Layer.Key, ESearchCase::IgnoreCase);
+				});
+				if (Existing)
+				{
+					TArray<int32> Fixtures = Existing->FixtureIds;
+					for (const int32 FixtureId : Layer.Value)
+					{
+						Fixtures.AddUnique(FixtureId);
+					}
+					Made += Library.SetGroupFixtures(Existing->Id, Fixtures) ? 1 : 0;
+				}
+				else if (Library.AddGroup(FText::FromString(Layer.Key), Layer.Value).IsValid())
 				{
 					++Made;
 				}

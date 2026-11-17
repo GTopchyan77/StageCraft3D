@@ -159,8 +159,10 @@ void UStageMvrImportDialog::BuildTree()
 	Add(StatusText, 6.f);
 
 	UHorizontalBox* Footer = WidgetTree->ConstructWidget<UHorizontalBox>(UHorizontalBox::StaticClass(), TEXT("Footer"));
-	Footer->AddChildToHorizontalBox(WidgetTree->ConstructWidget<USpacer>(USpacer::StaticClass()))->SetSize(FSlateChildSize(ESlateSizeRule::Fill));
 	Buttons.SetNum(int32(EButton::Count));
+	Buttons[int32(EButton::Missing)] = MakeButton(FText::GetEmpty(), LOCTEXT("MissingTip", "Items of this plot that the file no longer has: click to switch between removing and keeping them."), EButton::Missing);
+	Footer->AddChildToHorizontalBox(Buttons[int32(EButton::Missing)]);
+	Footer->AddChildToHorizontalBox(WidgetTree->ConstructWidget<USpacer>(USpacer::StaticClass()))->SetSize(FSlateChildSize(ESlateSizeRule::Fill));
 	Buttons[int32(EButton::Cancel)] = MakeButton(LOCTEXT("Cancel", "CANCEL"), LOCTEXT("CancelTip", "Close without changing anything (Esc)."), EButton::Cancel);
 	Buttons[int32(EButton::Confirm)] = MakeButton(LOCTEXT("Import", "IMPORT"),
 		LOCTEXT("ImportTip", "Add the file's fixture types to the Library and place its fixtures and trusses on the stage (Enter). One undo step takes it all back; the Library keeps the types."),
@@ -183,11 +185,16 @@ void UStageMvrImportDialog::ShowState(const UStageMvrImportSubsystem& Importer)
 	const UStageCraftUITheme& Palette = GetTheme();
 	const bool bNewReview = Review->ReviewId != ReviewId;
 	ReviewId = Review->ReviewId;
-	bCanImport = Review->CanImport();
+	bReviewCanImport = Review->CanImport();
+	bReimport = Review->IsReimport();
+	MissingItems = Review->MissingItems;
+	bHasChangesRemoving = Review->HasChanges(EStageMvrMissingItems::Remove);
+	bHasChangesKeeping = Review->HasChanges(EStageMvrMissingItems::Keep);
 	bPlacing = Importer.GetState() == EStageMvrImportState::Placing;
 	if (bNewReview)
 	{
 		bClosed = false;
+		Missing = EStageMvrMissingItems::Remove;
 		StatusText->SetText(FText::GetEmpty());
 	}
 
@@ -217,6 +224,17 @@ void UStageMvrImportDialog::ShowState(const UStageMvrImportSubsystem& Importer)
 		{
 			Summary = FText::Format(LOCTEXT("OtherLine", "{0}\n{1} other {1}|plural(one=object,other=objects) (set pieces, supports, screens) {1}|plural(one=is,other=are) not placed in this version."),
 				Summary, FText::AsNumber(Review->OtherObjects));
+		}
+		if (Review->IsReimport())
+		{
+			Summary = FText::Format(LOCTEXT("ReimportLine", "{0}\nCHANGES: {1} already on the stage ({2} changed in the file, {3} unchanged) · {4} new · {5} no longer in the file.\nOnly what the file changed is updated; your own edits to the rest stay."),
+				Summary, FText::AsNumber(Review->ChangedItems + Review->UnchangedItems), FText::AsNumber(Review->ChangedItems), FText::AsNumber(Review->UnchangedItems),
+				FText::AsNumber(Review->NewItems), FText::AsNumber(Review->MissingItems));
+		}
+		if (Review->PreservedItems > 0)
+		{
+			Summary = FText::Format(LOCTEXT("PreservedLine", "{0}\n{1} {1}|plural(one=item carries,other=items carry) MVR data StageCraft does not use; it is kept and written back when you export MVR."),
+				Summary, FText::AsNumber(Review->PreservedItems));
 		}
 		SummaryText->SetText(Summary);
 
@@ -267,8 +285,39 @@ void UStageMvrImportDialog::ShowState(const UStageMvrImportSubsystem& Importer)
 			? FText::Format(LOCTEXT("Placing", "Placing {0} of {1}..."), FText::AsNumber(Done), FText::AsNumber(Total))
 			: LOCTEXT("Preparing", "Adding fixture types and loading items..."));
 	}
-	StyleButton(*Buttons[int32(EButton::Confirm)], true, bCanImport && !bPlacing && !bClosed);
+	RefreshButtons();
+}
+
+void UStageMvrImportDialog::RefreshButtons()
+{
+	const bool bRemove = Missing == EStageMvrMissingItems::Remove;
+	bCanImport = bReviewCanImport && (!bReimport || (bRemove ? bHasChangesRemoving : bHasChangesKeeping));
+
+	UStageChoiceButton& ConfirmButton = *Buttons[int32(EButton::Confirm)];
+	if (UTextBlock* Label = Cast<UTextBlock>(ConfirmButton.GetContent()))
+	{
+		Label->SetText(bReimport ? LOCTEXT("Update", "UPDATE") : LOCTEXT("Import", "IMPORT"));
+	}
+	ConfirmButton.SetToolTipText(bReimport
+		? LOCTEXT("UpdateTip", "Update the stage from the file (Enter): add its new items, change what the file changed, and remove or keep what it no longer has. One undo step takes it all back.")
+		: LOCTEXT("ImportTip", "Add the file's fixture types to the Library and place its fixtures and trusses on the stage (Enter). One undo step takes it all back; the Library keeps the types."));
+	StyleButton(ConfirmButton, true, bCanImport && !bPlacing && !bClosed);
 	StyleButton(*Buttons[int32(EButton::Cancel)], false, !bPlacing);
+
+	UStageChoiceButton& MissingButton = *Buttons[int32(EButton::Missing)];
+	MissingButton.SetVisibility(MissingItems > 0 ? ESlateVisibility::Visible : ESlateVisibility::Collapsed);
+	if (UTextBlock* Label = Cast<UTextBlock>(MissingButton.GetContent()))
+	{
+		Label->SetText(FText::Format(bRemove ? LOCTEXT("RemoveMissing", "REMOVE {0} NO LONGER IN THE FILE") : LOCTEXT("KeepMissing", "KEEP {0} NO LONGER IN THE FILE"),
+			FText::AsNumber(MissingItems)));
+	}
+	StyleButton(MissingButton, false, !bPlacing && !bClosed);
+
+	if (bReviewCanImport && bReimport && !bCanImport && !bPlacing)
+	{
+		StatusText->SetColorAndOpacity(FSlateColor(GetTheme().TextSecondary));
+		StatusText->SetText(LOCTEXT("NothingToUpdate", "Everything in this file is already on the stage as the file has it: there is nothing to update."));
+	}
 }
 
 UWidget* UStageMvrImportDialog::GetInitialFocus() const
@@ -298,6 +347,10 @@ void UStageMvrImportDialog::HandleButton(int32 Index)
 	{
 		Confirm();
 	}
+	else if (Index == int32(EButton::Missing))
+	{
+		ToggleMissing();
+	}
 	else
 	{
 		Cancel();
@@ -311,12 +364,23 @@ void UStageMvrImportDialog::Confirm()
 	{
 		return;
 	}
-	const FStageEconomyResultInfo Started = Controller->RequestConfirmMvrImport(ReviewId);
+	const FStageEconomyResultInfo Started = Controller->RequestConfirmMvrImport(ReviewId, Missing);
 	if (!Started.IsSuccess())
 	{
 		StatusText->SetColorAndOpacity(FSlateColor(GetTheme().WarningColor));
 		StatusText->SetText(Started.Message);
 	}
+}
+
+void UStageMvrImportDialog::ToggleMissing()
+{
+	if (bClosed || bPlacing || MissingItems == 0)
+	{
+		return;
+	}
+	Missing = Missing == EStageMvrMissingItems::Remove ? EStageMvrMissingItems::Keep : EStageMvrMissingItems::Remove;
+	StatusText->SetText(FText::GetEmpty());
+	RefreshButtons();
 }
 
 void UStageMvrImportDialog::Cancel()

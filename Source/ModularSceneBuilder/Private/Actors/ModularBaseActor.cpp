@@ -274,15 +274,30 @@ void AModularBaseActor::AssignInstanceId(const FGuid& RestoredId)
 	InstanceId = RestoredId;
 }
 
-void AModularBaseActor::PrepareImported(const FText& Label, const FGuid& InMvrId)
+void AModularBaseActor::PrepareImported(const TOptional<FText>& Label, const FGuid& InMvrId, const FStageMvrItemOrigin& Origin)
 {
 	if (!ensureMsgf(!HasActorBegunPlay(), TEXT("%s: PrepareImported is only valid before BeginPlay."), *GetName()))
 	{
 		return;
 	}
-	const FString Text = Label.ToString();
-	InstanceLabel = Text.Len() > MaxLabelLength ? FText::FromString(Text.Left(MaxLabelLength)) : Label;
+	if (Label.IsSet())
+	{
+		const FString Text = Label->ToString();
+		InstanceLabel = Text.Len() > MaxLabelLength ? FText::FromString(Text.Left(MaxLabelLength)) : *Label;
+	}
 	MvrId = InMvrId;
+	MvrOrigin = Origin;
+	MvrOrigin.SourceFile.LeftInline(FStageMvrItemOrigin::MaxSourceFileLength);
+	if (MvrOrigin.Preserved.Len() > FStageMvrItemOrigin::MaxPreservedLength)
+	{
+		MvrOrigin.Preserved.Reset();
+	}
+}
+
+void AModularBaseActor::PrepareAsDuplicate()
+{
+	MvrId.Invalidate();
+	MvrOrigin = FStageMvrItemOrigin();
 }
 
 FStageItemSnapshot AModularBaseActor::CaptureSnapshot() const
@@ -327,6 +342,16 @@ bool AModularBaseActor::RestoreSnapshotState(const FStageItemSnapshot& Snapshot)
 	{
 		InstanceLabel = FText::FromString(InstanceLabel.ToString().Left(MaxLabelLength));
 		ReportStateRepair(FString::Printf(TEXT("label longer than %d characters shortened"), MaxLabelLength));
+	}
+	// The MVR origin is only ever read back as text (the export re-reads Preserved as untrusted XML), so a length cap is all it needs.
+	if (MvrOrigin.SourceFile.Len() > FStageMvrItemOrigin::MaxSourceFileLength || MvrOrigin.Preserved.Len() > FStageMvrItemOrigin::MaxPreservedLength)
+	{
+		MvrOrigin.SourceFile.LeftInline(FStageMvrItemOrigin::MaxSourceFileLength);
+		if (MvrOrigin.Preserved.Len() > FStageMvrItemOrigin::MaxPreservedLength)
+		{
+			MvrOrigin.Preserved.Reset();
+		}
+		ReportStateRepair(TEXT("over-long MVR origin shortened"));
 	}
 	return true;
 }

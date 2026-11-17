@@ -15,6 +15,9 @@
  *  - Every GDTF file a fixture names, stored unchanged (the spec asks for the original file). A fixture whose file is not among
  *    the bytes handed in is written without GDTFSpec and GDTFMode (the spec allows that), and named in the notes.
  *  - One .glb box (StageMvrGeometry::WriteBoxGlb) per distinct box size and position, shared by the objects that use it.
+ *  - What an imported object carried that StageCraft does not use (Preserved, StageMvrPreserved; Docs/ADR/0034 §18): its attributes
+ *    on the object's element and its elements after the ones written here. A fragment that does not read back (a damaged scene file)
+ *    is left out and named in the notes. A fixture's UnitNumber is written as 0 only when the fragment has none.
  *  Positions are converted with StageMvrUnits::FromUnreal (mm, right-handed). A fixture is turned back to MVR's hanging rest pose
  *  (the inverse of StageMvrImport::FixtureTransform); scale is not written for fixtures, and a box object's scale is applied to
  *  its box instead of its matrix.
@@ -52,6 +55,8 @@ namespace StageMvrExport
 		/** Universe from 1 and address 1–512; 0 when unpatched (no Addresses written). */
 		int32 Universe = 0;
 		int32 Address = 0;
+		/** The MVR XML it was imported with that StageCraft does not use (FStageMvrItemOrigin::Preserved); empty when none. */
+		FString Preserved;
 	};
 
 	/** What a box object is written as. */
@@ -72,6 +77,8 @@ namespace StageMvrExport
 		FTransform Transform = FTransform::Identity;
 		/** The object's extent in its own space (cm), before Transform's scale. Must be valid. */
 		FBox LocalBounds = FBox(ForceInit);
+		/** As FFixture::Preserved. */
+		FString Preserved;
 	};
 
 	struct FScene
@@ -93,6 +100,8 @@ namespace StageMvrExport
 		TArray<FString> Notes;
 		int32 GeometryFiles = 0;
 		int32 GdtfFiles = 0;
+		/** Objects written with the MVR data they were imported with. */
+		int32 PreservedObjects = 0;
 
 		bool IsValid() const { return Error.IsEmpty(); }
 	};
