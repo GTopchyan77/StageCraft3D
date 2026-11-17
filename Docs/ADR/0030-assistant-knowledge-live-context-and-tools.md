@@ -285,3 +285,19 @@ The wire facts below were checked against the current API reference on 2026-11-0
 - **What applies without asking** (§6 as built in H3) now also covers a selection, and palettes and effects on the selected fixtures or on "them". Palettes, groups or effects on fixtures named by words, IDs or a group wait for APPLY when they are part of a card.
 - **Online schema:** the new intents, `target` fixtures / group / recent, and the fields `group`, `palette`, `palette_kind`, `effect`, `rate_hz`, `effect_size`; validation refuses an empty pool name, an unknown palette kind, rates past 25 Hz, sizes past 270, IDs below 1, a group target without a group, and `recent` on deletes, moves and replaces.
 - **Not in H4:** fixtures added to or taken out of an existing group ("remove the spots from group 2" is not read as deleting the group), renaming palettes and groups, per-fixture palettes, effect settings beyond rate and size, and the online read loop (H3b).
+
+## 18. Anchors inside a dropdown (STATE.md #101)
+
+- **Problem.** Since #100 the Audio panel's sources and background playback are entries of the SOURCE dropdown (ADR 0029 §18). Their anchors resolve to the dropdown, whose label names the source playing, not the entry. Before this change the assistant answered "Off is in the Audio panel" and SHOW ME pulsed a closed dropdown that might read "System Audio".
+- **Decision.**
+  - `FStageUIAnchor` has an optional `Menu`: the caption of the dropdown the control is an entry of ("SOURCE"). It is empty for a control on the panel itself, which covers every other anchor.
+  - The panel takes the dropdown's row caption from the same text, so the name the assistant gives cannot drift from the one on screen. `StageUIAnchors::DescribePath` gives "SOURCE › Off".
+  - **Knowledge (§3).** A dropdown entry's control entry is titled with the whole path ("Audio › SOURCE › Off"); the digest sent to Claude carries that title. Its answer says "Off is in the Audio panel, in the SOURCE dropdown: open SOURCE and pick Off." Its keywords add the dropdown name and "dropdown menu". Panel entries list the controls by path.
+  - **SHOW ME (§7).** For an anchor with a `Menu` whose widget is a `UStageMenuButton`, `UStageWorkspaceSubsystem::PulseAnchor` pulses the dropdown and opens it (`UStageMenuButton::OpenMenu`, which now returns whether it opened), so the entry is in view.
+    - It waits until the button has been laid out, because the popup is placed from its geometry; the existing 0.5 s retry covers a panel that was just opened.
+    - The Problems panel's "go there" for "no music source" uses the same path, so it opens the dropdown too.
+    - Nothing is picked: opening a menu is navigation, not a change.
+- **Alternatives considered.**
+  - Highlighting the single entry inside the open popup. The engine's `FMenuBuilder` has no API to focus or flash one entry from outside; opening the menu shows the entry next to the checked one.
+  - One anchor per dropdown. That would drop the per-source answers ("how do I follow YouTube" → System Audio) that the knowledge search finds by the entry's tooltip.
+- **Consequences.** A future panel that moves a control into a dropdown sets `Menu` on its anchor. The test `StageCraft.UI.AudioMenu` checks that the anchors with a `Menu` and the SOURCE entries are the same set. `StageCraft.Assistant.CheckAnchors` still resolves every anchor (70) to a live widget.

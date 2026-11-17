@@ -174,6 +174,12 @@ namespace StageUIAnchors
 		return Empty;
 	}
 
+	FText DescribePath(const FStageUIAnchor& Anchor)
+	{
+		// The same "›" the Window menu paths and the knowledge titles use.
+		return Anchor.Menu.IsEmpty() ? Anchor.Label : FText::Format(INVTEXT("{0} › {1}"), Anchor.Menu, Anchor.Label);
+	}
+
 	bool IsShown(const UWidget& Widget)
 	{
 		for (const UWidget* Current = &Widget; Current; Current = GetContainer(*Current))

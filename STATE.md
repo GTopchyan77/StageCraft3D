@@ -9822,9 +9822,69 @@ All times in ms.
   - the Items submenu popup on screen;
   - the refused-photo buttons after a real refusal (their logic is unchanged).
 
+**Commit:** `ef7bddb`.
+
+**Known issues / follow-ups**
+- The assistant's "show me" for a source or for background playback pulses the closed SOURCE dropdown, whose label may name another source. Answers could say "SOURCE › Off". **Resolved in #101.**
+- The Items submenu lists the whole fixture catalog (13 now); a large library would want search or grouping.
+- **Gevor:** look at the Sketch window and the Audio panel, and click through the dropdowns.
+
+## #101 — SHOW ME and answers for dropdown entries: the assistant names "SOURCE › Off" and opens the dropdown (ADR 0030 §18) (2026-11-17)
+
+**What & why**
+- **Context.** Gevor asked (2026-11-17) for the next self-contained polish item from `tasks/todo.md`: either the assistant's SHOW ME for the Audio SOURCE dropdown, or search/grouping in the Sketch Items submenu. #100 now carries its commit `ef7bddb`.
+- **Chosen: SHOW ME.** #100 introduced this as a regression; the Items list is a scale concern, with 13 items today.
+  - Since #100 the sources and "Keep Playing in the Background" are entries of the SOURCE dropdown, and their anchors resolve to the dropdown.
+  - The assistant still answered "Off is in the Audio panel. …", and SHOW ME pulsed a closed dropdown whose label names the source playing (say "System Audio").
+  - The user was sent to look for an "Off" button that no longer exists.
+- **Anchor contract (ADR 0030 §18).**
+  - `FStageUIAnchor` gains an optional `Menu`: the caption of the dropdown the control is an entry of. It is empty for every control that sits on its panel.
+  - `StageUIAnchors::DescribePath` gives "SOURCE › Off".
+  - The Audio panel sets `Menu` = "SOURCE" on SourceOff, SourceFile, SourceInput, SourceSystem, SourceTest and Background. The SOURCE row caption now reads that same text, so the name in the answer cannot drift from the name on screen.
+- **Knowledge.**
+  - A dropdown entry's control entry is titled "Audio › SOURCE › Off". The digest in the cached system prompt carries the titles, so Claude sees the path too.
+  - Its answer reads "Off is in the Audio panel, in the SOURCE dropdown: open SOURCE and pick Off. <tooltip>".
+  - Its keywords add the dropdown name and "dropdown menu", and the Audio panel entry lists its controls by path.
+  - Controls on a panel are unchanged ("BLACKOUT is in the Playback panel. …").
+- **SHOW ME.**
+  - `UStageWorkspaceSubsystem::PulseAnchor` checks whether the anchor has a `Menu` and its widget is a `UStageMenuButton`. If so, it pulses the button and then opens the dropdown, so the entry is in view next to the checked one. Nothing is picked; this is navigation.
+  - It waits until the button is laid out (the popup is placed from its geometry); the existing 0.5 s retry covers a panel SHOW ME has just opened.
+  - The Problems panel's go-there for "no music source" uses the same path and now opens the dropdown too.
+  - `UStageMenuButton::OpenMenu` now returns whether it opened (false before its Slate widget exists or while disabled). The log says "(its dropdown opened)" or "(its dropdown is unavailable)", and `StageCraft.Workspace.Menu … Open` logs "NOT opened (disabled)" instead of claiming success.
+- **Why not highlight the single entry:** `FMenuBuilder` has no API to focus or flash one entry from outside the popup.
+
+**Files changed**
+- `Source/ModularSceneBuilder/Public/UI/StageUIAnchors.h`, `Private/UI/StageUIAnchors.cpp` — `FStageUIAnchor::Menu`, `StageUIAnchors::DescribePath`.
+- `Source/ModularSceneBuilder/Private/UI/StageAudioPanel.cpp` — `Menu` on the six SOURCE anchors; the row caption reads it.
+- `Source/ModularSceneBuilder/Public/AI/StageKnowledge.h`, `Private/AI/StageKnowledge.cpp`, `Private/AI/StageKnowledgeSubsystem.cpp` — `FControl::Menu`, path titles, answers and keywords.
+- `Source/ModularSceneBuilder/Private/Workspace/StageWorkspaceSubsystem.cpp` — SHOW ME opens the dropdown.
+- `Source/ModularSceneBuilder/Private/UI/StageMenuButton.h/.cpp` — `OpenMenu` returns bool.
+- `Source/ModularSceneBuilder/Private/Workspace/StageWorkspaceConsoleCommands.cpp` — Menu Open reports a refused open.
+- Tests: `Private/UI/Tests/StageMenuTests.cpp` (`StageCraft.UI.AudioMenu`: the anchors with a `Menu` and the SOURCE entries are the same set, paths), `Private/AI/Tests/StageKnowledgeTests.cpp` (`StageCraft.Assistant.Knowledge`: title, answer, SHOW ME target, plain control unchanged, digest path).
+- `Scripts/Tests/RunShowMeDropdownCheck.ps1` (new, `-game`).
+- `Docs/ADR/0030-assistant-knowledge-live-context-and-tools.md` §18, `tasks/todo.md` (Phase 50 item checked, Phase 51), `STATE.md` (#100 commit, this entry).
+- No Blueprints, content assets, input actions or maps changed.
+
+**Verification**
+- **Automation (Claude):** `StageCraft.UI` 8/8, then the full suite 307/307 (the checks were added to existing tests). User data unchanged (127 files).
+- **`Scripts/Tests/RunShowMeDropdownCheck.ps1` (Claude, `-game`, local only, nothing sent to Claude):**
+  - ShowMeA: the dropdown checks passed, with one FAIL from the script's own choice of control. PLAY is in the file row, which is hidden unless the source is File, so SHOW ME correctly declined it. The script now uses FLASH.
+  - ShowMeB: PASS.
+    - The search "how do I turn the music off" ranks `control.Audio.SourceOff` first, titled "Audio › SOURCE › Off".
+    - SHOW ME for SourceOff with the Audio panel closed opened the panel and the dropdown ("its dropdown opened").
+    - FLASH and Playback BLACKOUT were only pulsed.
+    - Anchor check: 70/70 resolve to live widgets; no SHOW ME gave up.
+  - The screenshot shows the popup under SOURCE with Off checked and Keep Playing in the Background below it.
+- **`Scripts/Tests/RunToolbarMenuCheck.ps1` MenuC (Claude):** PASS, unchanged by the OpenMenu change.
+- **Builds (Claude):** Editor, Game Development and Game Shipping succeeded with no warnings.
+- **Shipping scan (UTF-16):** the new answer strings ("dropdown: open %s and pick %s", the keywords) are present. `StageCraft.Workspace.Menu`, `StageCraft.Assistant.ShowMe` and the SHOW ME log line are absent.
+- **Not verified:**
+  - SHOW ME pressed with a physical mouse click in the assistant panel. The run used `StageCraft.Assistant.ShowMe`, which calls the same `ShowControl`.
+  - An online (Claude) answer naming the path. Only the digest it receives was checked.
+
 **Commit:** uncommitted (working tree).
 
 **Known issues / follow-ups**
-- The assistant's "show me" for a source or for background playback pulses the closed SOURCE dropdown, whose label may name another source. Answers could say "SOURCE › Off".
-- The Items submenu lists the whole fixture catalog (13 now); a large library would want search or grouping.
-- **Gevor:** look at the Sketch window and the Audio panel, and click through the dropdowns.
+- The Items submenu for a large library: the engine popup already shows a "Start typing to search" box (seen in this entry's screenshot). Whether it finds entries inside the Items submenu is unchecked; check that before adding grouping.
+- Armenian control entries do not exist (the anchor tables are English), as before.
+- **Gevor:** ask the assistant "how do I turn the music off", press SHOW ME, and check that the SOURCE dropdown opens under the panel.

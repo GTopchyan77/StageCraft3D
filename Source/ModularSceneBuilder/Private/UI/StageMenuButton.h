@@ -40,8 +40,8 @@ public:
 	/** The menu as it would open now; empty when unbound. Scripted checks read and pick it (StageCraft.Workspace.Menu). */
 	FStageMenu GetMenu() const;
 
-	/** Opens the popup as a click would (no-op before the Slate widget exists or while disabled). */
-	void OpenMenu();
+	/** Opens the popup as a click would; false (nothing opens) before the Slate widget exists or while disabled. */
+	bool OpenMenu();
 
 protected:
 	//~ Begin UWidget Interface

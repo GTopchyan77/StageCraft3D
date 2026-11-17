@@ -58,6 +58,12 @@ namespace StageKnowledge
 		/** Title and keywords count three times the body: a hit on a name beats a passing mention. */
 		constexpr float NameWeight = 3.f;
 
+		/** "Off", or for a dropdown entry "SOURCE › Off" (as StageUIAnchors::DescribePath; the sources here are plain strings). */
+		FString DescribeControlPath(const FStageKnowledgeSources::FControl& Control)
+		{
+			return Control.Menu.IsEmpty() ? Control.Label : FString::Printf(TEXT("%s › %s"), *Control.Menu, *Control.Label);
+		}
+
 		FText Frame(EStageAILanguage Language, const FText& English, const TCHAR* Armenian)
 		{
 			return Language == EStageAILanguage::Armenian ? FText::FromString(Armenian) : English;
@@ -202,7 +208,7 @@ namespace StageKnowledge
 			{
 				if (Control.Panel == Panel.Panel)
 				{
-					Controls.Add(Control.Label);
+					Controls.Add(DescribeControlPath(Control));
 				}
 			}
 			FStageKnowledgeEntry& Entry = Entries.AddDefaulted_GetRef();
@@ -221,9 +227,16 @@ namespace StageKnowledge
 			FStageKnowledgeEntry& Entry = Entries.AddDefaulted_GetRef();
 			Entry.Id = FName(*FString::Printf(TEXT("control.%s.%s"), *LastSegment(Control.Panel), *Control.Control.ToString()));
 			Entry.Kind = EStageKnowledgeKind::Control;
-			Entry.Title = FString::Printf(TEXT("%s › %s"), *Control.PanelName, *Control.Label);
-			Entry.Body = FString::Printf(TEXT("%s is in the %s panel. %s"), *Control.Label, *Control.PanelName, *Control.Tooltip);
-			Entry.Keywords = FString::Printf(TEXT("%s button control"), *Control.Label);
+			// A dropdown entry has no button of its own: the title (which the digest sends to Claude) and the answer name the whole
+			// path, because the dropdown's label shows the current choice, not this entry.
+			Entry.Title = FString::Printf(TEXT("%s › %s"), *Control.PanelName, *DescribeControlPath(Control));
+			Entry.Body = Control.Menu.IsEmpty()
+				? FString::Printf(TEXT("%s is in the %s panel. %s"), *Control.Label, *Control.PanelName, *Control.Tooltip)
+				: FString::Printf(TEXT("%s is in the %s panel, in the %s dropdown: open %s and pick %s. %s"), *Control.Label, *Control.PanelName,
+					*Control.Menu, *Control.Menu, *Control.Label, *Control.Tooltip);
+			Entry.Keywords = Control.Menu.IsEmpty()
+				? FString::Printf(TEXT("%s button control"), *Control.Label)
+				: FString::Printf(TEXT("%s %s dropdown menu control"), *Control.Label, *Control.Menu);
 			Entry.Panel = Control.Panel;
 			Entry.Control = Control.Control;
 		}

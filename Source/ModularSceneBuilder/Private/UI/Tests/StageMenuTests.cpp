@@ -10,8 +10,10 @@
 
 #include "Misc/AutomationTest.h"
 #include "UI/StageAudioMenus.h"
+#include "UI/StageAudioPanel.h"
 #include "UI/StageMenuModel.h"
 #include "UI/StageSketchMenus.h"
+#include "UI/StageUIAnchors.h"
 
 namespace StageMenuTests
 {
@@ -234,6 +236,35 @@ bool FStageAudioMenuTest::RunTest(const FString& Parameters)
 	const FStageMenu NoController = StageAudioMenus::MakeSourceMenu(EStageAudioSource::Off, false, false, PickSource, SetBackground);
 	TestFalse(TEXT("Without a controller nothing is sent"), StageMenu::Pick(NoController, TEXT("Input")) || StageMenu::Pick(NoController, TEXT("Keep Playing in the Background")));
 	TestFalse(TEXT("No request was made"), Source.IsSet() || Background.IsSet());
+
+	// The assistant names an anchor inside the dropdown by its path (STATE.md #101): every anchor that says it is a SOURCE entry is
+	// one, every entry is such an anchor, and the path reads as the panel shows it.
+	TSet<FString> Entries;
+	for (const FStageMenuSection& Section : Menu.Sections)
+	{
+		for (const FStageMenuEntry& Entry : Section.Entries)
+		{
+			Entries.Add(Entry.Label.ToString());
+		}
+	}
+	int32 InMenu = 0;
+	for (const FStageUIAnchor& Anchor : UStageAudioPanel::GetAnchors())
+	{
+		const FString Label = Anchor.Label.ToString();
+		if (Anchor.Menu.IsEmpty())
+		{
+			TestFalse(FString::Printf(TEXT("%s is on the panel, not in the dropdown"), *Label), Entries.Contains(Label));
+			continue;
+		}
+		++InMenu;
+		TestEqual(FString::Printf(TEXT("%s is under SOURCE"), *Label), Anchor.Menu.ToString(), FString(TEXT("SOURCE")));
+		TestTrue(FString::Printf(TEXT("%s is an entry of the dropdown"), *Label), StageMenu::Find(Menu, Label) != nullptr);
+	}
+	TestEqual(TEXT("Every dropdown entry is an anchor under SOURCE"), InMenu, Entries.Num());
+	TestEqual(TEXT("Path of a dropdown entry"), StageUIAnchors::DescribePath(StageUIAnchors::Get(UStageAudioPanel::GetAnchors(), TEXT("SourceOff"))).ToString(),
+		FString(TEXT("SOURCE › Off")));
+	TestEqual(TEXT("Path of a control on the panel"), StageUIAnchors::DescribePath(StageUIAnchors::Get(UStageAudioPanel::GetAnchors(), TEXT("Play"))).ToString(),
+		FString(TEXT("PLAY")));
 	return true;
 }
 

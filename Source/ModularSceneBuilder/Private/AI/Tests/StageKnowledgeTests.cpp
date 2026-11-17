@@ -20,6 +20,7 @@
 #include "GameFramework/WorldSettings.h"
 #include "Misc/AutomationTest.h"
 #include "UI/StageUIAnchors.h"
+#include "Workspace/StageWorkspaceTypes.h"
 
 namespace StageKnowledgeTests
 {
@@ -189,6 +190,15 @@ bool FStageAssistantKnowledgeTest::RunTest(const FString& Parameters)
 	// The cached system prompt's digest: names only, the same every time, and no development console command.
 	const FString Digest = StageKnowledge::BuildDigest(Index);
 	TestTrue(TEXT("Digest names commands and controls"), Digest.Contains(TEXT("Blackout")) && Digest.Contains(TEXT("Playback › BLACKOUT")));
+	// A dropdown entry is named by its whole path (STATE.md #101): the dropdown's label shows the current choice, so "Off is in the
+	// Audio panel" would send the user looking for a button that is not there.
+	const FStageKnowledgeEntry* SourceOff = Index.Find(TEXT("control.Audio.SourceOff"));
+	TestTrue(TEXT("A dropdown entry's title names the dropdown"), SourceOff && SourceOff->Title == TEXT("Audio › SOURCE › Off"));
+	TestTrue(TEXT("... and its answer says to open it"), SourceOff && SourceOff->Body.StartsWith(TEXT("Off is in the Audio panel, in the SOURCE dropdown: open SOURCE and pick Off.")));
+	TestTrue(TEXT("... and SHOW ME still points at it"), SourceOff && SourceOff->Panel == StageCraftTags::Panel_Audio && SourceOff->Control == TEXT("SourceOff"));
+	const FStageKnowledgeEntry* Blackout = Index.Find(TEXT("control.Playback.Blackout"));
+	TestTrue(TEXT("A control on the panel keeps its plain answer"), Blackout && Blackout->Body.StartsWith(TEXT("BLACKOUT is in the Playback panel. ")));
+	TestTrue(TEXT("Digest names the dropdown path"), Digest.Contains(TEXT("Audio › SOURCE › Keep Playing in the Background")));
 	TestFalse(TEXT("Digest has no console command"), Digest.Contains(TEXT("StageCraft.")));
 	TestFalse(TEXT("Digest has no article text"), Digest.Contains(TEXT("A cue list tracks")));
 	TestEqual(TEXT("Built twice, the same digest (byte-stable cache prefix)"), StageKnowledge::BuildDigest(StageKnowledge::Build(UStageKnowledgeSubsystem::GatherStaticSources())), Digest);

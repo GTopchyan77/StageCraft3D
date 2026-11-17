@@ -64,12 +64,14 @@ FStageMenu UStageMenuButton::GetMenu() const
 	return OnGetMenu.IsBound() ? OnGetMenu.Execute() : FStageMenu();
 }
 
-void UStageMenuButton::OpenMenu()
+bool UStageMenuButton::OpenMenu()
 {
-	if (MyComboButton && GetIsEnabled())
+	if (!MyComboButton || !GetIsEnabled())
 	{
-		MyComboButton->SetIsOpen(true);
+		return false;
 	}
+	MyComboButton->SetIsOpen(true);
+	return true;
 }
 
 TSharedRef<SWidget> UStageMenuButton::HandleGetMenuContent()

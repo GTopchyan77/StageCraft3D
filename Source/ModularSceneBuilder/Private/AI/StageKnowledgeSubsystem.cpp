@@ -178,7 +178,7 @@ FStageKnowledgeSources UStageKnowledgeSubsystem::GatherStaticSources(TArray<FStr
 		}
 		for (const FStageUIAnchor& Anchor : Table.Anchors)
 		{
-			Sources.Controls.Add({ Table.Panel, Name, Anchor.ControlId, Anchor.Label.ToString(), Anchor.Tooltip.ToString() });
+			Sources.Controls.Add({ Table.Panel, Name, Anchor.ControlId, Anchor.Label.ToString(), Anchor.Tooltip.ToString(), Anchor.Menu.ToString() });
 		}
 	}
 	for (const FAttributeInfo& Attribute : MakeAttributeTable())

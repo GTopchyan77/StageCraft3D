@@ -253,8 +253,7 @@ namespace StageWorkspaceCommands
 		}
 		if (Args[1].Equals(TEXT("Open"), ESearchCase::IgnoreCase))
 		{
-			Button->OpenMenu();
-			UE_LOG(LogStageWorkspace, Display, TEXT("Menu %s: opened."), *Args[0]);
+			UE_LOG(LogStageWorkspace, Display, TEXT("Menu %s: %s."), *Args[0], Button->OpenMenu() ? TEXT("opened") : TEXT("NOT opened (disabled)"));
 		}
 		else if (Args[1].Equals(TEXT("Pick"), ESearchCase::IgnoreCase))
 		{

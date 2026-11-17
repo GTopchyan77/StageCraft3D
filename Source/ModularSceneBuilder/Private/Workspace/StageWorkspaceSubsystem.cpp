@@ -22,6 +22,7 @@
 #include "Startup/StageStartupSubsystem.h"
 #include "Subsystems/StageSessionSubsystem.h"
 #include "UI/StageFixtureImportDialog.h"
+#include "UI/StageMenuButton.h"
 #include "UI/StageMvrImportDialog.h"
 #include "UI/StageStatusBarWidget.h"
 #include "UI/StageUIAnchors.h"
@@ -885,9 +886,20 @@ bool UStageWorkspaceSubsystem::PulseAnchor(const FGameplayTag& PanelTag, FName C
 	{
 		return false;
 	}
+	// A dropdown entry has no widget of its own, and the dropdown's label shows the current choice, not that entry: SHOW ME opens
+	// the dropdown so the entry is in view. The popup is placed from the button's geometry, so wait until it is laid out (the
+	// caller retries next frame).
+	const FStageUIAnchor* Anchor = StageUIAnchors::Find(PanelTag, ControlId);
+	UStageMenuButton* Dropdown = Anchor && !Anchor->Menu.IsEmpty() ? Cast<UStageMenuButton>(Control) : nullptr;
+	if (Dropdown && Dropdown->GetCachedGeometry().GetLocalSize().IsNearlyZero())
+	{
+		return false;
+	}
 	StageUIAnchors::BringIntoView(*Control);
 	StageUIAnchors::Pulse(*Control);
-	UE_LOG(LogStageWorkspace, Log, TEXT("SHOW ME: %s %s."), *PanelTag.ToString(), *ControlId.ToString());
+	const bool bOpened = Dropdown && Dropdown->OpenMenu();
+	UE_LOG(LogStageWorkspace, Log, TEXT("SHOW ME: %s %s%s."), *PanelTag.ToString(), *ControlId.ToString(),
+		Dropdown ? (bOpened ? TEXT(" (its dropdown opened)") : TEXT(" (its dropdown is unavailable)")) : TEXT(""));
 	return true;
 }
 

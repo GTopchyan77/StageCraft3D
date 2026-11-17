@@ -86,6 +86,8 @@ struct FStageKnowledgeSources
 		FName Control;
 		FString Label;
 		FString Tooltip;
+		/** The dropdown the control is an entry of (FStageUIAnchor::Menu); empty for a control on the panel itself. */
+		FString Menu;
 	};
 
 	struct FParameter

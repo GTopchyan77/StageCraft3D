@@ -207,12 +207,14 @@ void UStageAudioPanel::NativeOnInitialized()
 
 TConstArrayView<FStageUIAnchor> UStageAudioPanel::GetAnchors()
 {
+	// The sources and background playback are entries of the SOURCE dropdown (BuildSourceRow, whose row caption is this text).
+	const FText SourceMenu = LOCTEXT("Source", "SOURCE");
 	static const FStageUIAnchor Anchors[] = {
-		{ TEXT("SourceOff"), LOCTEXT("SourceOff", "Off"), LOCTEXT("SourceOffTip", "No music: effects that follow it hold their pattern, or stay fully lit.") },
-		{ TEXT("SourceFile"), LOCTEXT("SourceFile", "File..."), LOCTEXT("SourceFileTip", "Play a song from this PC (WAV, FLAC, MP3, M4A, AAC or WMA) and follow it.") },
-		{ TEXT("SourceInput"), LOCTEXT("SourceInput", "Input"), LOCTEXT("SourceInputTip", "Follow a line input or microphone. It is only listened to, never played back or recorded.") },
-		{ TEXT("SourceSystem"), LOCTEXT("SourceSystem", "System Audio"), LOCTEXT("SourceSystemTip", "Follow whatever this PC plays: YouTube in a browser, a music app. Listened to in memory only, never recorded.") },
-		{ TEXT("SourceTest"), LOCTEXT("SourceTest", "Test Beat"), LOCTEXT("SourceTestTip", "A built-in beat at a steady tempo, to try effects without music.") },
+		{ TEXT("SourceOff"), LOCTEXT("SourceOff", "Off"), LOCTEXT("SourceOffTip", "No music: effects that follow it hold their pattern, or stay fully lit."), SourceMenu },
+		{ TEXT("SourceFile"), LOCTEXT("SourceFile", "File..."), LOCTEXT("SourceFileTip", "Play a song from this PC (WAV, FLAC, MP3, M4A, AAC or WMA) and follow it."), SourceMenu },
+		{ TEXT("SourceInput"), LOCTEXT("SourceInput", "Input"), LOCTEXT("SourceInputTip", "Follow a line input or microphone. It is only listened to, never played back or recorded."), SourceMenu },
+		{ TEXT("SourceSystem"), LOCTEXT("SourceSystem", "System Audio"), LOCTEXT("SourceSystemTip", "Follow whatever this PC plays: YouTube in a browser, a music app. Listened to in memory only, never recorded."), SourceMenu },
+		{ TEXT("SourceTest"), LOCTEXT("SourceTest", "Test Beat"), LOCTEXT("SourceTestTip", "A built-in beat at a steady tempo, to try effects without music."), SourceMenu },
 		{ TEXT("Play"), LOCTEXT("Play", "PLAY"), LOCTEXT("PlayTip", "Play or pause the song.") },
 		{ TEXT("Stop"), LOCTEXT("Stop", "STOP"), LOCTEXT("StopTip", "Stop and go back to the start.") },
 		{ TEXT("Loop"), LOCTEXT("Loop", "LOOP"), LOCTEXT("LoopTip", "Start again at the end.") },
@@ -222,7 +224,7 @@ TConstArrayView<FStageUIAnchor> UStageAudioPanel::GetAnchors()
 		{ TEXT("Tempo"), LOCTEXT("TempoAnchor", "BPM and beat lamp"), LOCTEXT("TempoTip", "The tempo found in the music, how sure the analyser is of it, and a lamp on every beat (as the audience hears it).") },
 		{ TEXT("Latency"), LOCTEXT("Latency", "LATENCY"), LOCTEXT("LatencyTip", "Moves the lights against the sound for this source, if they land before or after the beat you hear: positive makes them later, negative earlier (-500 .. +500 ms). Remembered per source on this PC.") },
 		{ TEXT("FlashLimit"), LOCTEXT("Flash", "FLASH"), LOCTEXT("FlashTip", "Flash limit for effects that follow the music, on screen and on DMX OUT: a light may flash from dark to bright at most this often, and a strobe may run no faster. Effects programmed without music are not limited. Remembered on this PC.") },
-		{ TEXT("Background"), LOCTEXT("Background", "Keep Playing in the Background"), LOCTEXT("BackgroundTip", "Keep the music playing, and the lights following it, while another window has focus (a browser playing YouTube, say).") },
+		{ TEXT("Background"), LOCTEXT("Background", "Keep Playing in the Background"), LOCTEXT("BackgroundTip", "Keep the music playing, and the lights following it, while another window has focus (a browser playing YouTube, say)."), SourceMenu },
 		{ TEXT("Listening"), LOCTEXT("Listening", "● LISTENING"), LOCTEXT("ListeningTip", "A microphone, line input or this PC's own output is being listened to. It is analysed in memory only: nothing is recorded, saved or sent. Source › Off stops it.") },
 	};
 	return Anchors;
@@ -314,7 +316,7 @@ UWidget* UStageAudioPanel::BuildSourceRow()
 	MenuBox->SetContent(Menu);
 	UHorizontalBox* Line = WidgetTree->ConstructWidget<UHorizontalBox>(UHorizontalBox::StaticClass());
 	Line->AddChildToHorizontalBox(MenuBox);
-	return MakeLabeledRow(LOCTEXT("Source", "SOURCE"), Line);
+	return MakeLabeledRow(StageAudioPanel::Anchor(TEXT("SourceOff")).Menu, Line);
 }
 
 UWidget* UStageAudioPanel::BuildFileRow()

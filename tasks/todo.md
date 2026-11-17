@@ -819,4 +819,12 @@ Gevor's choices: automation tests on a harness game instance (not AFunctionalTes
 - [x] Audio: SOURCE dropdown (Off, File..., Input, System Audio, Test Beat + Keep Playing in the Background) replaces the five buttons and the background row; anchors point at it
 - [x] Tests StageCraft.UI.MenuModel, .SketchMenus, .AudioMenu; StageCraft.Workspace.Menu (dev) + Scripts/Tests/RunToolbarMenuCheck.ps1 (-game); help EN/HY (audio); subagent review fixes
 - [ ] Gevor: look at the Sketch window and the Audio panel and click through the dropdowns
-- [ ] Assistant "show me" for a source now pulses the closed SOURCE dropdown; answers could say "SOURCE > Off"
+- [x] Assistant "show me" for a source now pulses the closed SOURCE dropdown; answers could say "SOURCE > Off" (STATE.md #101, Phase 51)
+- [ ] Items submenu for a large fixture library: the engine popup already has a "Start typing to search" box (seen in the #101 screenshot); check whether it finds Items submenu entries before adding grouping
+
+## Phase 51 - SHOW ME and answers for dropdown entries (requested by Gevor 2026-11-17; STATE.md #101; ADR 0030 section 18)
+- [x] FStageUIAnchor::Menu (the dropdown an anchored control is an entry of) + StageUIAnchors::DescribePath; the Audio SOURCE entries and background playback set it, the row caption reads it
+- [x] Knowledge: dropdown entries titled and answered by path ("Audio > SOURCE > Off", "open SOURCE and pick Off"); the digest sent to Claude carries the path
+- [x] SHOW ME (and the Problems panel's go-there) opens the dropdown after pulsing it, once it is laid out; UStageMenuButton::OpenMenu reports whether it opened
+- [x] Tests StageCraft.UI.AudioMenu (anchors with a Menu == SOURCE entries, paths) and StageCraft.Assistant.Knowledge checks; Scripts/Tests/RunShowMeDropdownCheck.ps1 (-game) PASS; RunToolbarMenuCheck PASS
+- [ ] Gevor: ask the assistant "how do I turn the music off", press SHOW ME and check the SOURCE dropdown opens

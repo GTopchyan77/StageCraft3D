@@ -20,6 +20,12 @@ struct FStageUIAnchor
 	FName ControlId;
 	FText Label;
 	FText Tooltip;
+	/**
+	 * The caption of the toolbar dropdown this control is an entry of ("SOURCE"); empty for a control shown on the panel itself.
+	 * The panel resolves such an anchor to the dropdown, whose own label names the current choice, not this entry: the assistant
+	 * names the whole path ("SOURCE › Off") and SHOW ME opens the dropdown, so the user is never sent to a button that is not there.
+	 */
+	FText Menu;
 };
 
 UINTERFACE(MinimalAPI, meta = (CannotImplementInterfaceInBlueprint))
@@ -69,6 +75,9 @@ namespace StageUIAnchors
 	 * an empty anchor, so the panel still builds.
 	 */
 	MODULARSCENEBUILDER_API const FStageUIAnchor& Get(TConstArrayView<FStageUIAnchor> Anchors, FName ControlId);
+
+	/** Where the control is within its panel: its label, or for a dropdown entry the dropdown's caption and the label ("SOURCE › Off"). */
+	MODULARSCENEBUILDER_API FText DescribePath(const FStageUIAnchor& Anchor);
 
 	/** Whether Widget and everything that contains it are visible: a control in a collapsed section is not shown. */
 	MODULARSCENEBUILDER_API bool IsShown(const UWidget& Widget);
