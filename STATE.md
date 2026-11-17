@@ -9631,7 +9631,7 @@ All times in ms.
   - a real MIDI controller closing on a lapse (MIDI goes through the same `CloseInputs` as MR2's tested paths);
   - the Preferences warning lines looked at on screen.
 
-**Commit:** uncommitted (working tree).
+**Commit:** `e538ea4`.
 
 **Known issues / follow-ups**
 - **Gevor:** with OSC and the Web Remote on, let the licence lapse (or `StageCraft.Licence.DevAssumePro 0`). Read the two warning lines in Preferences; then renew and check that both come back.
