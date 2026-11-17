@@ -5,15 +5,18 @@
 #include "CoreMinimal.h"
 #include "Blueprint/UserWidget.h"
 #include "Sketch/StageSketchTypes.h"
+#include "UI/StageMenuModel.h"
+#include "UI/StageSketchMenus.h"
 #include "StageSketchCanvasWidget.generated.h"
 
 /**
  * The Sketch to Stage window (StageCraft.Panel.Sketch, Docs/ADR/0015-sketch-to-stage.md §2.7): a 2D drawing canvas with tools
- * (freehand, stage shape, truss line, fixture, erase), undo-stroke and clear, the deck height, truss height, grid, snap and
- * smoothing settings, the catalog item used for each element, a live summary of what the sketch will build, and GENERATE 3D. The
- * PHOTO row imports a PNG or JPEG drawing (UStageSketchSubsystem::ImportImage, Docs/ADR/0017 §2.6) at a chosen real width, read on
- * this computer or by Claude, and shows it under the canvas.
- * Opens from Edit › Sketch to Stage..., the Window menu and the viewport toolbar's SKETCH button.
+ * (freehand, stage shape, truss line, fixture, erase), the deck, truss and photo width sliders, a live summary of what the sketch
+ * will build, and GENERATE 3D. The less frequent settings sit in View-menu style dropdowns next to the tools (STATE.md #100):
+ * Edit (undo stroke, clear, frame), Snap (grid step, snap to grid, smoothing), Items (the catalog item per element) and Photo
+ * (import a PNG or JPEG drawing, UStageSketchSubsystem::ImportImage, Docs/ADR/0017 §2.6, read on this computer or by Claude, and
+ * show it under the canvas).
+ * Opens from Edit › Sketch to Stage..., the Window menu and the viewport toolbar's Tools menu.
  *
  * A view in the project's binding pattern:
  *  - The sketch is read from UStageSketchSubsystem and edited through its validated setters (tool state, not stage state).
@@ -61,19 +64,27 @@ private:
 
 	void Refresh();
 
+	/** A toolbar dropdown bound to Builder, themed and in a fixed-width box so the bar does not jump when a label changes. */
+	class UWidget* MakeMenuButton(FName Name, const FText& Tip, float Width, FStageMenu (UStageSketchCanvasWidget::*Builder)(), TObjectPtr<class UStageMenuButton>& OutButton);
+
+	/** The toolbar dropdowns (StageSketchMenus), described from the sketch's state when they open. */
+	FStageMenu BuildEditMenu();
+	FStageMenu BuildSnapMenu();
+	FStageMenu BuildItemsMenu();
+	FStageMenu BuildPhotoMenu();
+	StageSketchMenus::FPhotoState GetPhotoState() const;
+
 	void HandleToolPicked(int32 Index);
-	void HandleActionPicked(int32 Index);
-	void HandleGridPicked(int32 Index);
-	void HandleSnapPicked(int32 Index);
-	void HandleSmoothingPicked(int32 Index);
-	void HandleItemPicked(int32 Element);
+	void HandleEditCommand(StageSketchMenus::EEditCommand Command);
+	void HandleSettingsPicked(const StageSketchMenus::FSettingsEdit& Edit);
+	void HandleItemPicked(EStageSketchElement Element, class UBaseItemData* Item);
 	void HandleGeneratePicked(int32 Unused);
 	void HandleSliderMoved(int32 SliderIndex, float Value);
 
-	/** IMPORT PHOTO... (index 0) opens the file dialog and starts the import; REMOVE (index 1) takes the photo away. */
-	void HandlePhotoPicked(int32 Index);
-	void HandleReaderPicked(int32 Index);
-	void HandleShowPhotoPicked(int32 Index);
+	/** Import opens the file dialog and starts the import; the others change the reference photo or who reads the next one. */
+	void HandlePhotoCommand(StageSketchMenus::EPhotoCommand Command);
+	/** TRACE ANYWAY (index 0) or USE COLOURS (index 1) on the image that was refused as a photograph. */
+	void HandleRefusedPicked(int32 Index);
 
 	UFUNCTION()
 	void HandleImportChanged();
@@ -97,32 +108,20 @@ private:
 	TArray<TObjectPtr<class UStageChoiceButton>> ToolButtons;
 
 	UPROPERTY(Transient)
-	TArray<TObjectPtr<class UStageChoiceButton>> ActionButtons;
+	TObjectPtr<class UStageMenuButton> EditMenuButton = nullptr;
 
 	UPROPERTY(Transient)
-	TArray<TObjectPtr<class UStageChoiceButton>> GridButtons;
+	TObjectPtr<class UStageMenuButton> SnapMenuButton = nullptr;
 
 	UPROPERTY(Transient)
-	TArray<TObjectPtr<class UStageChoiceButton>> SnapButtons;
+	TObjectPtr<class UStageMenuButton> ItemsMenuButton = nullptr;
 
 	UPROPERTY(Transient)
-	TArray<TObjectPtr<class UStageChoiceButton>> SmoothingButtons;
+	TObjectPtr<class UStageMenuButton> PhotoMenuButton = nullptr;
 
-	/** One per EStageSketchElement: shows the item that builds it; a click picks the next candidate. */
+	/** TRACE ANYWAY, USE COLOURS: shown next to the result only while an image is refused as a photograph (its message names them). */
 	UPROPERTY(Transient)
-	TArray<TObjectPtr<class UStageChoiceButton>> ItemButtons;
-
-	/** IMPORT PHOTO..., REMOVE. */
-	UPROPERTY(Transient)
-	TArray<TObjectPtr<class UStageChoiceButton>> PhotoButtons;
-
-	/** Who reads the photo: this computer or Claude. */
-	UPROPERTY(Transient)
-	TArray<TObjectPtr<class UStageChoiceButton>> ReaderButtons;
-
-	/** Photo under the canvas: OFF, ON. */
-	UPROPERTY(Transient)
-	TArray<TObjectPtr<class UStageChoiceButton>> ShowPhotoButtons;
+	TArray<TObjectPtr<class UStageChoiceButton>> RefusedButtons;
 
 	UPROPERTY(Transient)
 	TArray<TObjectPtr<class UStageValueSlider>> Sliders;

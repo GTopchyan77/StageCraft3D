@@ -26,6 +26,7 @@
 #include "Subsystems/StageItemSubsystem.h"
 #include "UI/StageCraftUITheme.h"
 #include "UI/StageCraftWidgetStyle.h"
+#include "UI/StageMenuButton.h"
 #include "UI/StageSketchSurfaceWidget.h"
 #include "UI/StageToolButton.h"
 #include "UI/StageValueSlider.h"
@@ -50,12 +51,13 @@ namespace StageSketchCanvas
 	constexpr float TrussHeightStep = 50.f;
 	constexpr float PhotoWidthStep = 100.f;
 
-	/** Grid presets (cm) and smoothing presets, in button order. */
-	constexpr float GridPresets[] = { 25.f, 50.f, 100.f };
-	constexpr float SmoothingPresets[] = { 0.f, 0.5f, 0.8f };
-
-	/** Undo stroke, Clear, Frame. */
-	enum class EAction : int32 { UndoStroke, Clear, Frame };
+	/** The toolbar dropdowns: their height, the gap between them, and widths with room for the longest label ("Snap 1 m · Smooth High"). */
+	constexpr float MenuHeight = 22.f;
+	constexpr float MenuGap = 4.f;
+	constexpr float EditMenuWidth = 64.f;
+	constexpr float SnapMenuWidth = 168.f;
+	constexpr float ItemsMenuWidth = 70.f;
+	constexpr float PhotoMenuWidth = 92.f;
 
 	constexpr EStageSketchTool Tools[] = { EStageSketchTool::Freehand, EStageSketchTool::Shape, EStageSketchTool::Truss, EStageSketchTool::Fixture, EStageSketchTool::Erase };
 
@@ -69,18 +71,6 @@ namespace StageSketchCanvas
 		case EStageSketchTool::Fixture:		return LOCTEXT("HintFixture", "Click to place a fixture. Near a truss line it hangs from the truss; on a deck it stands on top.");
 		default:							return LOCTEXT("HintErase", "Click a stroke to remove it.");
 		}
-	}
-
-	int32 FindPreset(TConstArrayView<float> Presets, float Value)
-	{
-		for (int32 Index = 0; Index < Presets.Num(); ++Index)
-		{
-			if (FMath::IsNearlyEqual(Presets[Index], Value, 0.01f))
-			{
-				return Index;
-			}
-		}
-		return INDEX_NONE;
 	}
 }
 
@@ -257,89 +247,46 @@ void UStageSketchCanvasWidget::BuildTree()
 		}
 	};
 
-	// Tools and sketch actions.
+	// The toolbar: the drawing tools stay one click away (they change every few strokes); the less frequent settings sit in
+	// View-menu style dropdowns next to them, so the window has one tool row instead of five rows of segments (STATE.md #100).
 	UWidget* ToolSegment = BuildSegment(
 		{ LOCTEXT("ToolFreehand", "FREEHAND"), LOCTEXT("ToolShape", "STAGE SHAPE"), LOCTEXT("ToolTruss", "TRUSS LINE"), LOCTEXT("ToolFixture", "FIXTURE"), LOCTEXT("ToolErase", "ERASE") },
 		{ ToolHint(EStageSketchTool::Freehand), ToolHint(EStageSketchTool::Shape), ToolHint(EStageSketchTool::Truss), ToolHint(EStageSketchTool::Fixture), ToolHint(EStageSketchTool::Erase) },
 		ToolButtons, &ThisClass::HandleToolPicked);
-	UWidget* ActionSegment = BuildSegment({ LOCTEXT("UndoStroke", "UNDO STROKE"), LOCTEXT("Clear", "CLEAR"), LOCTEXT("Frame", "FRAME") },
-		{ LOCTEXT("UndoStrokeTip", "Remove the last stroke from the sketch (the stage is not changed)."),
-		  LOCTEXT("ClearTip", "Remove every stroke from the sketch (the stage is not changed)."),
-		  LOCTEXT("FrameTip", "Fit the view to the sketch. The wheel zooms, the right or middle button pans.") },
-		ActionButtons, &ThisClass::HandleActionPicked);
-	Add(BuildRow({ ToolSegment, ActionSegment }));
+	UHorizontalBox* Menus = WidgetTree->ConstructWidget<UHorizontalBox>(UHorizontalBox::StaticClass(), TEXT("ToolbarMenus"));
+	const auto AddMenu = [Menus](UWidget* Box)
+	{
+		if (UHorizontalBoxSlot* MenuSlot = Menus->AddChildToHorizontalBox(Box))
+		{
+			MenuSlot->SetPadding(FMargin(Menus->GetChildrenCount() == 1 ? 0.f : MenuGap, 0.f, 0.f, 0.f));
+			MenuSlot->SetVerticalAlignment(VAlign_Center);
+		}
+	};
+	AddMenu(MakeMenuButton(TEXT("SketchEditMenu"), LOCTEXT("EditMenuTip", "Undo the last stroke, clear the sketch, or fit the view to it."),
+		EditMenuWidth, &ThisClass::BuildEditMenu, EditMenuButton));
+	AddMenu(MakeMenuButton(TEXT("SketchSnapMenu"), LOCTEXT("SnapMenuTip", "The grid step, snapping clicked points to it, and the freehand smoothing."),
+		SnapMenuWidth, &ThisClass::BuildSnapMenu, SnapMenuButton));
+	AddMenu(MakeMenuButton(TEXT("SketchItemsMenu"), LOCTEXT("ItemsMenuTip", "The catalog items the decks, truss runs and fixtures are built from."),
+		ItemsMenuWidth, &ThisClass::BuildItemsMenu, ItemsMenuButton));
+	AddMenu(MakeMenuButton(TEXT("SketchPhotoMenu"), LOCTEXT("PhotoMenuTip", "Import a photo or scan of a drawing, show it under the sketch, and choose who reads it."),
+		PhotoMenuWidth, &ThisClass::BuildPhotoMenu, PhotoMenuButton));
+	EditMenuButton->SetLabel(LOCTEXT("EditLabel", "Edit"));
+	ItemsMenuButton->SetLabel(LOCTEXT("ItemsLabel", "Items"));
+	Add(BuildRow({ ToolSegment, Menus }));
 
 	HintText = MakeText(ToolHint(EStageSketchTool::Shape), 7, TEXT("Italic"), Palette.TextSecondary);
 	HintText->SetAutoWrapText(true);
 	Add(HintText);
 
-	// Heights, grid, snapping and smoothing.
+	// The heights of what is drawn next, and the real width of the next imported photo.
 	UWidget* DeckSlider = BuildSlider(ESlider::DeckHeight, LOCTEXT("DeckHeight", "DECK"),
 		LOCTEXT("DeckHeightTip", "Height of the next stage shapes you draw (shapes already drawn keep theirs)."), StageSketchMath::MinDeckHeight, 300.f);
 	UWidget* TrussSlider = BuildSlider(ESlider::TrussHeight, LOCTEXT("TrussHeight", "TRUSS"),
 		LOCTEXT("TrussHeightTip", "Height of the generated truss; fixtures near a truss line hang from it."), 200.f, 1500.f);
-	Add(BuildRow({ DeckSlider, TrussSlider }));
-
-	UHorizontalBox* GridGroup = WidgetTree->ConstructWidget<UHorizontalBox>(UHorizontalBox::StaticClass());
-	GridGroup->AddChildToHorizontalBox(MakeText(LOCTEXT("Grid", "GRID  "), 7, TEXT("Bold"), Palette.TextSecondary))->SetVerticalAlignment(VAlign_Center);
-	GridGroup->AddChildToHorizontalBox(BuildSegment({ LOCTEXT("Grid25", "25 cm"), LOCTEXT("Grid50", "50 cm"), LOCTEXT("Grid100", "1 m") },
-		{ LOCTEXT("GridTip", "Grid step: deck corners and fixtures snap to it.") }, GridButtons, &ThisClass::HandleGridPicked));
-	UHorizontalBox* SnapGroup = WidgetTree->ConstructWidget<UHorizontalBox>(UHorizontalBox::StaticClass());
-	SnapGroup->AddChildToHorizontalBox(MakeText(LOCTEXT("Snap", "SNAP  "), 7, TEXT("Bold"), Palette.TextSecondary))->SetVerticalAlignment(VAlign_Center);
-	SnapGroup->AddChildToHorizontalBox(BuildSegment({ LOCTEXT("Off", "OFF"), LOCTEXT("On", "ON") },
-		{ LOCTEXT("SnapTip", "Snap clicked points to the grid. Truss lines always snap to whole sections of their truss.") }, SnapButtons, &ThisClass::HandleSnapPicked));
-	UHorizontalBox* SmoothGroup = WidgetTree->ConstructWidget<UHorizontalBox>(UHorizontalBox::StaticClass());
-	SmoothGroup->AddChildToHorizontalBox(MakeText(LOCTEXT("Smooth", "SMOOTH  "), 7, TEXT("Bold"), Palette.TextSecondary))->SetVerticalAlignment(VAlign_Center);
-	SmoothGroup->AddChildToHorizontalBox(BuildSegment({ LOCTEXT("SmoothOff", "OFF"), LOCTEXT("SmoothLow", "LOW"), LOCTEXT("SmoothHigh", "HIGH") },
-		{ LOCTEXT("SmoothTip", "Freehand stabiliser: higher values trail the cursor for smoother strokes.") }, SmoothingButtons, &ThisClass::HandleSmoothingPicked));
-	Add(BuildRow({ GridGroup, SnapGroup, SmoothGroup }));
-
-	// The catalog item per element.
-	ItemButtons.Reset();
-	TArray<UWidget*> ItemGroups;
-	const FText ItemLabels[] = { LOCTEXT("ItemDeck", "DECK ITEM  "), LOCTEXT("ItemTruss", "TRUSS ITEM  "), LOCTEXT("ItemFixture", "FIXTURE ITEM  ") };
-	for (int32 Element = 0; Element < int32(EStageSketchElement::Count); ++Element)
-	{
-		UHorizontalBox* Group = WidgetTree->ConstructWidget<UHorizontalBox>(UHorizontalBox::StaticClass());
-		Group->AddChildToHorizontalBox(MakeText(ItemLabels[Element], 7, TEXT("Bold"), Palette.TextSecondary))->SetVerticalAlignment(VAlign_Center);
-		UStageChoiceButton* Button = MakeButton(FText::GetEmpty(), LOCTEXT("ItemTip", "The catalog item this element is built from. Click for the next one."), Element, &ThisClass::HandleItemPicked);
-		USizeBox* ButtonBox = WidgetTree->ConstructWidget<USizeBox>(USizeBox::StaticClass());
-		ButtonBox->SetWidthOverride(170.f);
-		ButtonBox->SetClipping(EWidgetClipping::ClipToBounds);
-		ButtonBox->SetContent(Button);
-		// A long item name ends in an ellipsis inside its button instead of running into the next label.
-		if (UButtonSlot* LabelSlot = Cast<UButtonSlot>(Button->GetContentSlot()))
-		{
-			LabelSlot->SetHorizontalAlignment(HAlign_Fill);
-		}
-		Group->AddChildToHorizontalBox(ButtonBox);
-		ItemButtons.Add(Button);
-		ItemGroups.Add(Group);
-	}
-	Add(BuildRow(ItemGroups));
-
-	// A photo or scan of a drawing, read into strokes.
-	// TRACE ANYWAY and USE COLOURS only show after an image was refused as a photograph (Refresh).
-	UWidget* PhotoSegment = BuildSegment({ LOCTEXT("ImportPhoto", "IMPORT PHOTO..."), LOCTEXT("RemovePhoto", "REMOVE"),
-			LOCTEXT("TraceAnyway", "TRACE ANYWAY"), LOCTEXT("UseColours", "USE COLOURS") },
-		{ LOCTEXT("ImportPhotoTip", "Read a PNG or JPEG of a stage drawn from above (paper, whiteboard, printed plan): closed outlines become decks, lines become truss, dots and small circles become fixtures. The strokes are added to the sketch to check before GENERATE 3D."),
-		  LOCTEXT("RemovePhotoTip", "Take the photo away from under the canvas (the strokes stay)."),
-		  LOCTEXT("TraceAnywayTip", "Trace the refused image on this computer after all: for a drawing on textured or graph paper. A real photograph gives random strokes."),
-		  LOCTEXT("UseColoursTip", "Light the selected fixtures with the photo's main colours instead: one colour per fixture, brighter colours brighter, one undo step.") },
-		PhotoButtons, &ThisClass::HandlePhotoPicked);
 	UWidget* PhotoWidthSlider = BuildSlider(ESlider::PhotoWidth, LOCTEXT("PhotoWidth", "PHOTO WIDTH"),
-		LOCTEXT("PhotoWidthTip", "The real width of the whole photo: it sets the drawing's scale. Applies to the next import."), StageSketchMath::MinPhotoWidth, StageSketchMath::MaxPhotoWidth);
-	UHorizontalBox* ReaderGroup = WidgetTree->ConstructWidget<UHorizontalBox>(UHorizontalBox::StaticClass());
-	ReaderGroup->AddChildToHorizontalBox(MakeText(LOCTEXT("Reader", "READ  "), 7, TEXT("Bold"), Palette.TextSecondary))->SetVerticalAlignment(VAlign_Center);
-	ReaderGroup->AddChildToHorizontalBox(BuildSegment({ LOCTEXT("ReaderLocal", "THIS PC"), LOCTEXT("ReaderClaude", "CLAUDE") },
-		{ LOCTEXT("ReaderLocalTip", "Trace the lines on this computer: offline, best with dark lines on plain paper."),
-		  LOCTEXT("ReaderClaudeTip", "Let Claude read the drawing (sends the image to Anthropic); better with photos, labels and messy sketches. Falls back to this computer.") },
-		ReaderButtons, &ThisClass::HandleReaderPicked));
-	UHorizontalBox* ShowGroup = WidgetTree->ConstructWidget<UHorizontalBox>(UHorizontalBox::StaticClass());
-	ShowGroup->AddChildToHorizontalBox(MakeText(LOCTEXT("ShowPhoto", "SHOW  "), 7, TEXT("Bold"), Palette.TextSecondary))->SetVerticalAlignment(VAlign_Center);
-	ShowGroup->AddChildToHorizontalBox(BuildSegment({ LOCTEXT("Off", "OFF"), LOCTEXT("On", "ON") },
-		{ LOCTEXT("ShowPhotoTip", "Show the imported photo faintly under the strokes, to check and correct them.") }, ShowPhotoButtons, &ThisClass::HandleShowPhotoPicked));
-	Add(BuildRow({ PhotoSegment, PhotoWidthSlider, ReaderGroup, ShowGroup }));
+		LOCTEXT("PhotoWidthTip", "The real width of the whole photo: it sets the drawing's scale. Applies to the next import (Photo > Import Photo...)."),
+		StageSketchMath::MinPhotoWidth, StageSketchMath::MaxPhotoWidth);
+	Add(BuildRow({ DeckSlider, TrussSlider, PhotoWidthSlider }));
 
 	// The canvas.
 	UBorder* CanvasFrame = WidgetTree->ConstructWidget<UBorder>(UBorder::StaticClass(), TEXT("CanvasFrame"));
@@ -373,6 +320,16 @@ void UStageSketchCanvasWidget::BuildTree()
 	{
 		ResultSlot->SetSize(FSlateChildSize(ESlateSizeRule::Fill));
 		ResultSlot->SetVerticalAlignment(VAlign_Center);
+	}
+	// The refusal message of an image that looks like a photograph names these two; they show only while it stands (Refresh).
+	UWidget* RefusedSegment = BuildSegment({ LOCTEXT("TraceAnyway", "TRACE ANYWAY"), LOCTEXT("UseColours", "USE COLOURS") },
+		{ LOCTEXT("TraceAnywayTip", "Trace the refused image on this computer after all: for a drawing on textured or graph paper. A real photograph gives random strokes."),
+		  LOCTEXT("UseColoursTip", "Light the selected fixtures with the photo's main colours instead: one colour per fixture, brighter colours brighter, one undo step.") },
+		RefusedButtons, &ThisClass::HandleRefusedPicked);
+	if (UHorizontalBoxSlot* RefusedSlot = Footer->AddChildToHorizontalBox(RefusedSegment))
+	{
+		RefusedSlot->SetPadding(FMargin(GroupGap, 0.f, 0.f, 0.f));
+		RefusedSlot->SetVerticalAlignment(VAlign_Center);
 	}
 	if (UHorizontalBoxSlot* GenerateSlot = Footer->AddChildToHorizontalBox(GenerateButton))
 	{
@@ -452,27 +409,23 @@ void UStageSketchCanvasWidget::Refresh()
 	{
 		StyleChoice(*Button, Tools[Button->GetChoiceIndex()] == Tool);
 	}
-	for (UStageChoiceButton* Button : ActionButtons)
-	{
-		StyleChoice(*Button, false);
-		Button->SetIsEnabled(Sketch && (Button->GetChoiceIndex() == int32(EAction::Frame) || !Sketch->GetStrokes().IsEmpty()));
-	}
 	if (HintText)
 	{
 		HintText->SetText(ToolHint(Tool));
 	}
 
-	const auto StyleGroup = [this, Sketch](TArray<TObjectPtr<UStageChoiceButton>>& Buttons, int32 Selected)
+	// The dropdowns describe their entries when they open; here only their labels and whether they open at all.
+	for (UStageMenuButton* Button : { EditMenuButton.Get(), SnapMenuButton.Get(), ItemsMenuButton.Get() })
 	{
-		for (UStageChoiceButton* Button : Buttons)
+		if (Button)
 		{
-			StyleChoice(*Button, Button->GetChoiceIndex() == Selected);
 			Button->SetIsEnabled(Sketch != nullptr);
 		}
-	};
-	StyleGroup(GridButtons, FindPreset(GridPresets, Settings.GridStep));
-	StyleGroup(SnapButtons, Settings.bSnapToGrid ? 1 : 0);
-	StyleGroup(SmoothingButtons, FindPreset(SmoothingPresets, Settings.Smoothing));
+	}
+	if (SnapMenuButton)
+	{
+		SnapMenuButton->SetLabel(StageSketchMenus::DescribeSnap(Settings));
+	}
 
 	FNumberFormattingOptions TwoDecimals = FNumberFormattingOptions::DefaultNoGrouping();
 	TwoDecimals.SetMinimumFractionalDigits(2).SetMaximumFractionalDigits(2);
@@ -494,65 +447,29 @@ void UStageSketchCanvasWidget::Refresh()
 		}
 	}
 
-	// The photo row.
-	const bool bImporting = Sketch && Sketch->IsImportPending();
-	const bool bHasPhoto = Sketch && Sketch->GetReferenceImage() != nullptr;
-	FText OnlineUnavailable = LOCTEXT("NoSketch", "The sketch is not available in this level.");
-	const bool bOnline = Sketch && Sketch->CanReadOnline(OnlineUnavailable);
-	if (!bOnline && PhotoReader == EStageSketchReader::Claude)
+	// The photo: the Photo dropdown's label, and the refused image's two actions.
+	const StageSketchMenus::FPhotoState Photo = GetPhotoState();
+	if (!Photo.bOnline && PhotoReader == EStageSketchReader::Claude)
 	{
 		PhotoReader = EStageSketchReader::Local;
 	}
+	if (PhotoMenuButton)
+	{
+		PhotoMenuButton->SetLabel(StageSketchMenus::DescribePhoto(Photo));
+		PhotoMenuButton->SetIsEnabled(Photo.bAvailable);
+	}
 	const bool bRefusedPhoto = Sketch && !Sketch->GetRefusedPhotoPath().IsEmpty();
 	const AModularPlayerController* Controller = GetStageController();
-	for (UStageChoiceButton* Button : PhotoButtons)
+	if (UWidget* Segment = RefusedButtons.IsEmpty() ? nullptr : RefusedButtons[0]->GetParent())
 	{
-		const int32 Choice = Button->GetChoiceIndex();
-		const bool bImport = Choice == 0;
+		// The whole segment, so its gap goes with it.
+		Segment->SetVisibility(bRefusedPhoto ? ESlateVisibility::Visible : ESlateVisibility::Collapsed);
+	}
+	for (UStageChoiceButton* Button : RefusedButtons)
+	{
+		const bool bTrace = Button->GetChoiceIndex() == 0;
 		StyleChoice(*Button, false);
-		if (Choice >= 2)
-		{
-			Button->SetVisibility(bRefusedPhoto ? ESlateVisibility::Visible : ESlateVisibility::Collapsed);
-			Button->SetIsEnabled(bRefusedPhoto && !bImporting && (Choice == 2 || (Controller && !Controller->IsColorLookPending())));
-			continue;
-		}
-		Button->SetIsEnabled(Sketch && !bImporting && (bImport ? StageFileDialog::IsAvailable() : bHasPhoto));
-		if (UTextBlock* Label = Cast<UTextBlock>(Button->GetContent()); Label && bImport)
-		{
-			Label->SetText(bImporting ? LOCTEXT("ImportingPhoto", "READING...") : LOCTEXT("ImportPhoto", "IMPORT PHOTO..."));
-		}
-	}
-	for (UStageChoiceButton* Button : ReaderButtons)
-	{
-		const bool bClaude = Button->GetChoiceIndex() == 1;
-		StyleChoice(*Button, (PhotoReader == EStageSketchReader::Claude) == bClaude);
-		Button->SetIsEnabled(Sketch && !bImporting && (!bClaude || bOnline));
-		if (bClaude)
-		{
-			Button->SetToolTipText(bOnline
-				? LOCTEXT("ReaderClaudeTip", "Let Claude read the drawing (sends the image to Anthropic); better with photos, labels and messy sketches. Falls back to this computer.")
-				: OnlineUnavailable);
-		}
-	}
-	for (UStageChoiceButton* Button : ShowPhotoButtons)
-	{
-		StyleChoice(*Button, bHasPhoto && Button->GetChoiceIndex() == (Sketch->IsReferenceVisible() ? 1 : 0));
-		Button->SetIsEnabled(bHasPhoto);
-	}
-
-	for (UStageChoiceButton* Button : ItemButtons)
-	{
-		const EStageSketchElement Element = EStageSketchElement(Button->GetChoiceIndex());
-		const UBaseItemData* Item = Sketch ? Sketch->GetItem(Element) : nullptr;
-		if (UTextBlock* Label = Cast<UTextBlock>(Button->GetContent()))
-		{
-			Label->SetText(Item ? Item->DisplayName : LOCTEXT("NoItem", "none in catalog"));
-		}
-		// The full name, since a long one is cut with an ellipsis.
-		Button->SetToolTipText(FText::Format(LOCTEXT("ItemButtonTip", "{0}\nThe catalog item this element is built from. Click for the next one."),
-			Item ? Item->DisplayName : LOCTEXT("NoItemTip", "No catalog item can build this.")));
-		StyleChoice(*Button, false);
-		Button->SetIsEnabled(Sketch && Sketch->GetCandidateItems(Element).Num() > 1);
+		Button->SetIsEnabled(bRefusedPhoto && !Photo.bImporting && (bTrace || (Controller && !Controller->IsColorLookPending())));
 	}
 
 	const FStageSketchBuildPlan Plan = Sketch ? Sketch->MakePlan() : FStageSketchBuildPlan();
@@ -578,8 +495,8 @@ void UStageSketchCanvasWidget::Refresh()
 	}
 	if (ResultText)
 	{
-		const bool bPending = (Sketch && Sketch->IsGenerationPending()) || bImporting;
-		ResultText->SetText(bImporting ? Sketch->GetImportMessage() : bPending ? LOCTEXT("Generating", "Generating...") : ResultMessage);
+		const bool bPending = (Sketch && Sketch->IsGenerationPending()) || Photo.bImporting;
+		ResultText->SetText(Photo.bImporting ? Sketch->GetImportMessage() : bPending ? LOCTEXT("Generating", "Generating...") : ResultMessage);
 		ResultText->SetColorAndOpacity(FSlateColor(bResultSucceeded || bPending ? Palette.TextSecondary : Palette.WarningColor));
 	}
 	if (GenerateButton)
@@ -587,6 +504,113 @@ void UStageSketchCanvasWidget::Refresh()
 		StyleChoice(*GenerateButton, false, /*bPrimary*/ !Plan.IsEmpty());
 		GenerateButton->SetIsEnabled(!Plan.IsEmpty() && Sketch && !Sketch->IsGenerationPending() && GetStageController());
 	}
+}
+
+UWidget* UStageSketchCanvasWidget::MakeMenuButton(FName Name, const FText& Tip, float Width, FStageMenu (UStageSketchCanvasWidget::*Builder)(),
+	TObjectPtr<UStageMenuButton>& OutButton)
+{
+	UStageMenuButton* Button = WidgetTree->ConstructWidget<UStageMenuButton>(UStageMenuButton::StaticClass(), Name);
+	// Before the button builds its Slate widget: its style is copied then.
+	Button->ApplyTheme(GetTheme());
+	Button->SetToolTipText(Tip);
+	// This window owns the button through its widget tree, so the binding cannot outlive it.
+	Button->OnGetMenu.BindUObject(this, Builder);
+	OutButton = Button;
+	USizeBox* Box = WidgetTree->ConstructWidget<USizeBox>(USizeBox::StaticClass());
+	Box->SetWidthOverride(Width);
+	Box->SetHeightOverride(StageSketchCanvas::MenuHeight);
+	Box->SetContent(Button);
+	return Box;
+}
+
+// --- Dropdowns: described from the state when they open. The lambdas hold this window weakly (the popup is Slate-owned) and
+// call its handlers, which write through the sketch's validated setters and read back, as a button click does. ---
+
+FStageMenu UStageSketchCanvasWidget::BuildEditMenu()
+{
+	const UStageSketchSubsystem* Sketch = GetSketch();
+	return StageSketchMenus::MakeEditMenu(Sketch != nullptr, Sketch && !Sketch->GetStrokes().IsEmpty(),
+		[WeakThis = TWeakObjectPtr<UStageSketchCanvasWidget>(this)](StageSketchMenus::EEditCommand Command)
+		{
+			if (UStageSketchCanvasWidget* This = WeakThis.Get())
+			{
+				This->HandleEditCommand(Command);
+			}
+		});
+}
+
+FStageMenu UStageSketchCanvasWidget::BuildSnapMenu()
+{
+	const UStageSketchSubsystem* Sketch = GetSketch();
+	return StageSketchMenus::MakeSnapMenu(Sketch ? Sketch->GetSettings() : FStageSketchSettings(), Sketch != nullptr,
+		[WeakThis = TWeakObjectPtr<UStageSketchCanvasWidget>(this)](const StageSketchMenus::FSettingsEdit& Edit)
+		{
+			if (UStageSketchCanvasWidget* This = WeakThis.Get())
+			{
+				This->HandleSettingsPicked(Edit);
+			}
+		});
+}
+
+FStageMenu UStageSketchCanvasWidget::BuildItemsMenu()
+{
+	const UStageSketchSubsystem* Sketch = GetSketch();
+	TArray<StageSketchMenus::FItemChoice> Choices;
+	// The candidates as they are now, held weakly: a pick names the item itself, so a catalog change while the menu is open
+	// cannot shift it onto another one (SetItem also refuses an item that is no longer a candidate).
+	TArray<TArray<TWeakObjectPtr<UBaseItemData>>> Candidates;
+	for (int32 Element = 0; Element < int32(EStageSketchElement::Count); ++Element)
+	{
+		StageSketchMenus::FItemChoice& Choice = Choices.AddDefaulted_GetRef();
+		Choice.Element = EStageSketchElement(Element);
+		TArray<TWeakObjectPtr<UBaseItemData>>& Items = Candidates.AddDefaulted_GetRef();
+		const UBaseItemData* Chosen = Sketch ? Sketch->GetItem(Choice.Element) : nullptr;
+		for (UBaseItemData* Item : Sketch ? Sketch->GetCandidateItems(Choice.Element) : TArray<UBaseItemData*>())
+		{
+			if (Item == Chosen)
+			{
+				Choice.Chosen = Items.Num();
+			}
+			Choice.Names.Add(Item->DisplayName);
+			Items.Add(Item);
+		}
+	}
+	return StageSketchMenus::MakeItemsMenu(Choices,
+		[WeakThis = TWeakObjectPtr<UStageSketchCanvasWidget>(this), Candidates](EStageSketchElement Element, int32 Index)
+		{
+			UStageSketchCanvasWidget* This = WeakThis.Get();
+			if (This && Candidates.IsValidIndex(int32(Element)) && Candidates[int32(Element)].IsValidIndex(Index))
+			{
+				This->HandleItemPicked(Element, Candidates[int32(Element)][Index].Get());
+			}
+		});
+}
+
+StageSketchMenus::FPhotoState UStageSketchCanvasWidget::GetPhotoState() const
+{
+	const UStageSketchSubsystem* Sketch = GetSketch();
+	StageSketchMenus::FPhotoState State;
+	State.bAvailable = Sketch != nullptr;
+	State.bCanBrowse = StageFileDialog::IsAvailable();
+	State.bImporting = Sketch && Sketch->IsImportPending();
+	State.bHasPhoto = Sketch && Sketch->GetReferenceImage() != nullptr;
+	State.bShown = Sketch && Sketch->IsReferenceVisible();
+	State.OnlineUnavailable = LOCTEXT("NoSketch", "The sketch is not available in this level.");
+	State.bOnline = Sketch && Sketch->CanReadOnline(State.OnlineUnavailable);
+	State.Reader = State.bOnline ? PhotoReader : EStageSketchReader::Local;
+	return State;
+}
+
+FStageMenu UStageSketchCanvasWidget::BuildPhotoMenu()
+{
+	return StageSketchMenus::MakePhotoMenu(GetPhotoState(),
+		[WeakThis = TWeakObjectPtr<UStageSketchCanvasWidget>(this)](StageSketchMenus::EPhotoCommand Command)
+		{
+			if (UStageSketchCanvasWidget* This = WeakThis.Get())
+			{
+				This->HandlePhotoCommand(Command);
+			}
+		});
 }
 
 // --- Handlers: write through the owner, then read back ---
@@ -600,13 +624,13 @@ void UStageSketchCanvasWidget::HandleToolPicked(int32 Index)
 	Refresh();
 }
 
-void UStageSketchCanvasWidget::HandleActionPicked(int32 Index)
+void UStageSketchCanvasWidget::HandleEditCommand(StageSketchMenus::EEditCommand Command)
 {
-	using StageSketchCanvas::EAction;
+	using StageSketchMenus::EEditCommand;
 	UStageSketchSubsystem* Sketch = GetSketch();
-	switch (EAction(Index))
+	switch (Command)
 	{
-	case EAction::UndoStroke:
+	case EEditCommand::UndoStroke:
 		if (Surface)
 		{
 			Surface->CancelStroke();
@@ -616,7 +640,7 @@ void UStageSketchCanvasWidget::HandleActionPicked(int32 Index)
 			Sketch->RemoveLastStroke();
 		}
 		break;
-	case EAction::Clear:
+	case EEditCommand::Clear:
 		if (Surface)
 		{
 			Surface->CancelStroke();
@@ -626,7 +650,7 @@ void UStageSketchCanvasWidget::HandleActionPicked(int32 Index)
 			Sketch->ClearStrokes();
 		}
 		break;
-	case EAction::Frame:
+	case EEditCommand::Frame:
 		if (Surface)
 		{
 			Surface->FrameSketch();
@@ -636,34 +660,13 @@ void UStageSketchCanvasWidget::HandleActionPicked(int32 Index)
 	Refresh();
 }
 
-void UStageSketchCanvasWidget::HandleGridPicked(int32 Index)
+void UStageSketchCanvasWidget::HandleSettingsPicked(const StageSketchMenus::FSettingsEdit& Edit)
 {
-	if (UStageSketchSubsystem* Sketch = GetSketch(); Sketch && Index >= 0 && Index < UE_ARRAY_COUNT(StageSketchCanvas::GridPresets))
+	// The edit goes onto the settings as they are now; the subsystem sanitizes and broadcasts OnSketchChanged, and the label is read back.
+	if (UStageSketchSubsystem* Sketch = GetSketch(); Sketch && Edit)
 	{
 		FStageSketchSettings Settings = Sketch->GetSettings();
-		Settings.GridStep = StageSketchCanvas::GridPresets[Index];
-		Sketch->SetSettings(Settings);
-	}
-	Refresh();
-}
-
-void UStageSketchCanvasWidget::HandleSnapPicked(int32 Index)
-{
-	if (UStageSketchSubsystem* Sketch = GetSketch())
-	{
-		FStageSketchSettings Settings = Sketch->GetSettings();
-		Settings.bSnapToGrid = Index == 1;
-		Sketch->SetSettings(Settings);
-	}
-	Refresh();
-}
-
-void UStageSketchCanvasWidget::HandleSmoothingPicked(int32 Index)
-{
-	if (UStageSketchSubsystem* Sketch = GetSketch(); Sketch && Index >= 0 && Index < UE_ARRAY_COUNT(StageSketchCanvas::SmoothingPresets))
-	{
-		FStageSketchSettings Settings = Sketch->GetSettings();
-		Settings.Smoothing = StageSketchCanvas::SmoothingPresets[Index];
+		Edit(Settings);
 		Sketch->SetSettings(Settings);
 	}
 	Refresh();
@@ -692,17 +695,12 @@ void UStageSketchCanvasWidget::HandleSliderMoved(int32 SliderIndex, float Value)
 	Refresh();
 }
 
-void UStageSketchCanvasWidget::HandleItemPicked(int32 Element)
+void UStageSketchCanvasWidget::HandleItemPicked(EStageSketchElement Element, UBaseItemData* Item)
 {
-	UStageSketchSubsystem* Sketch = GetSketch();
-	if (Sketch && Element >= 0 && Element < int32(EStageSketchElement::Count))
+	// SetItem refuses an item that is not (or no longer) a candidate for Element.
+	if (UStageSketchSubsystem* Sketch = GetSketch(); Sketch && Item)
 	{
-		const TArray<UBaseItemData*> Candidates = Sketch->GetCandidateItems(EStageSketchElement(Element));
-		const int32 Current = Candidates.IndexOfByKey(Sketch->GetItem(EStageSketchElement(Element)));
-		if (!Candidates.IsEmpty())
-		{
-			Sketch->SetItem(EStageSketchElement(Element), Candidates[(Current + 1) % Candidates.Num()]);
-		}
+		Sketch->SetItem(Element, Item);
 	}
 	Refresh();
 }
@@ -736,74 +734,75 @@ void UStageSketchCanvasWidget::HandleCatalogChanged()
 	Refresh();
 }
 
-void UStageSketchCanvasWidget::HandlePhotoPicked(int32 Index)
+void UStageSketchCanvasWidget::HandlePhotoCommand(StageSketchMenus::EPhotoCommand Command)
 {
+	using StageSketchMenus::EPhotoCommand;
 	UStageSketchSubsystem* Sketch = GetSketch();
 	if (!Sketch)
 	{
 		return;
 	}
-	if (Index == 1)
+	switch (Command)
 	{
+	case EPhotoCommand::Remove:
 		Sketch->ClearReference();
-		Refresh();
-		return;
-	}
-	if (Index == 2 || Index == 3)
+		break;
+	case EPhotoCommand::ToggleShown:
+		Sketch->SetReferenceVisible(!Sketch->IsReferenceVisible());
+		break;
+	case EPhotoCommand::ReadHere:
+		PhotoReader = EStageSketchReader::Local;
+		break;
+	case EPhotoCommand::ReadByClaude:
+		// Refresh falls back to this PC when Claude cannot be reached.
+		PhotoReader = EStageSketchReader::Claude;
+		break;
+	case EPhotoCommand::Import:
 	{
-		const FString Refused = Sketch->GetRefusedPhotoPath();
-		if (Refused.IsEmpty())
+		TArray<FString> Files;
+		if (!StageFileDialog::OpenFiles(LOCTEXT("ImportPhotoTitle", "Import a Stage Drawing"), LastPhotoDirectory, StageSketchImageImport::GetFileDialogFilter(), Files) || Files.IsEmpty())
 		{
 			return;
 		}
+		LastPhotoDirectory = FPaths::GetPath(Files[0]);
 		FText Error;
-		if (Index == 2)
+		if (!Sketch->ImportImage(Files[0], PhotoReader, Error))
 		{
-			if (!Sketch->ImportImage(Refused, EStageSketchReader::Local, Error, EStageSketchPhotoCheck::TraceAnyway))
-			{
-				ResultMessage = Error;
-				bResultSucceeded = false;
-			}
+			ResultMessage = Error;
+			bResultSucceeded = false;
 		}
-		else if (AModularPlayerController* Controller = GetStageController())
-		{
-			// A refusal (nothing selected) goes to the status bar; the message here says what was asked.
-			if (Controller->RequestColorLookFromPhoto(Refused))
-			{
-				ResultMessage = FText::Format(LOCTEXT("ColoursRequested", "The colours of {0} go on the selected fixtures (one undo step)."),
-					FText::FromString(FPaths::GetCleanFilename(Refused)));
-				bResultSucceeded = true;
-			}
-		}
-		Refresh();
-		return;
+		break;
 	}
-	TArray<FString> Files;
-	if (!StageFileDialog::OpenFiles(LOCTEXT("ImportPhotoTitle", "Import a Stage Drawing"), LastPhotoDirectory, StageSketchImageImport::GetFileDialogFilter(), Files) || Files.IsEmpty())
-	{
-		return;
-	}
-	LastPhotoDirectory = FPaths::GetPath(Files[0]);
-	FText Error;
-	if (!Sketch->ImportImage(Files[0], PhotoReader, Error))
-	{
-		ResultMessage = Error;
-		bResultSucceeded = false;
 	}
 	Refresh();
 }
 
-void UStageSketchCanvasWidget::HandleReaderPicked(int32 Index)
+void UStageSketchCanvasWidget::HandleRefusedPicked(int32 Index)
 {
-	PhotoReader = Index == 1 ? EStageSketchReader::Claude : EStageSketchReader::Local;
-	Refresh();
-}
-
-void UStageSketchCanvasWidget::HandleShowPhotoPicked(int32 Index)
-{
-	if (UStageSketchSubsystem* Sketch = GetSketch())
+	UStageSketchSubsystem* Sketch = GetSketch();
+	const FString Refused = Sketch ? Sketch->GetRefusedPhotoPath() : FString();
+	if (Refused.IsEmpty())
 	{
-		Sketch->SetReferenceVisible(Index == 1);
+		return;
+	}
+	if (Index == 0)
+	{
+		FText Error;
+		if (!Sketch->ImportImage(Refused, EStageSketchReader::Local, Error, EStageSketchPhotoCheck::TraceAnyway))
+		{
+			ResultMessage = Error;
+			bResultSucceeded = false;
+		}
+	}
+	else if (AModularPlayerController* Controller = GetStageController())
+	{
+		// A refusal (nothing selected) goes to the status bar; the message here says what was asked.
+		if (Controller->RequestColorLookFromPhoto(Refused))
+		{
+			ResultMessage = FText::Format(LOCTEXT("ColoursRequested", "The colours of {0} go on the selected fixtures (one undo step)."),
+				FText::FromString(FPaths::GetCleanFilename(Refused)));
+			bResultSucceeded = true;
+		}
 	}
 	Refresh();
 }

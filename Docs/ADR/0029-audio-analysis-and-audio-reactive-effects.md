@@ -386,3 +386,11 @@ How G3 realised §6 and §7, and what it settled that they left open.
 ## 17. Amendment: FOLLOW MUSIC starts listening (STATE.md #87)
 
 FOLLOW MUSIC goes through `AModularPlayerController::RequestFollowMusic`. If its effects started and no source is listening (state Off), it also requests the SYSTEM source, the WASAPI loopback of §3. That way music playing on this PC, such as YouTube in a browser, drives the lights without a second click. A source the user chose (File, Input, Test, or SYSTEM already running) is never changed. The source is a setting, not show data, so it is not part of the Follow Music undo step. If SYSTEM cannot start (another platform, no playback device), the refusal goes to the status bar and the effects keep running.
+
+## 18. Amendment: the Source dropdown (STATE.md #100, 2026-11-17)
+
+The SOURCE row's five buttons and the separate KEEP PLAYING IN THE BACKGROUND row are one View-menu style dropdown: Music Source (Off, File..., Input, System Audio, Test Beat, the playing one checked) and Other Windows (Keep Playing in the Background). Its label names the source playing. The panel no longer needs its full width for the source row and is one row shorter when docked.
+- Labels and tooltips still come from the panel's anchor table (now in title case), so the assistant's help, the tooltip and the menu agree. The assistant's "show me" for any source or for background playback points at the dropdown.
+- Picking the source already on still runs: File... picks another song.
+- Requests are unchanged: `RequestSetAudioSource`, `RequestOpenAudioFile` and `RequestSetPlayAudioInBackground` through the controller, judged by the GameMode.
+- The menu is a pure function (`StageAudioMenus::MakeSourceMenu`), tested in `StageCraft.UI.AudioMenu`.

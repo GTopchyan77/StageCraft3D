@@ -23,8 +23,10 @@
 #include "Player/ModularPlayerController.h"
 #include "Subsystems/StageAudioReactiveSubsystem.h"
 #include "TimerManager.h"
+#include "UI/StageAudioMenus.h"
 #include "UI/StageCraftUITheme.h"
 #include "UI/StageCraftWidgetStyle.h"
+#include "UI/StageMenuButton.h"
 #include "UI/StageThemedComboBox.h"
 #include "UI/StageToolButton.h"
 #include "UI/StageValueSlider.h"
@@ -37,6 +39,9 @@ namespace StageAudioPanel
 {
 	constexpr float LabelWidth = 58.f;
 	constexpr float ValueWidth = 92.f;
+	/** The Source dropdown: room for its longest label ("System Audio"). */
+	constexpr float SourceMenuWidth = 140.f;
+	constexpr float SourceMenuHeight = 22.f;
 	constexpr float LampSize = 14.f;
 	/** The lamp is lit for the first part of each beat. */
 	constexpr float LampOnPhase = 0.15f;
@@ -203,11 +208,11 @@ void UStageAudioPanel::NativeOnInitialized()
 TConstArrayView<FStageUIAnchor> UStageAudioPanel::GetAnchors()
 {
 	static const FStageUIAnchor Anchors[] = {
-		{ TEXT("SourceOff"), LOCTEXT("SourceOff", "OFF"), LOCTEXT("SourceOffTip", "No music: effects that follow it hold their pattern, or stay fully lit.") },
-		{ TEXT("SourceFile"), LOCTEXT("SourceFile", "FILE..."), LOCTEXT("SourceFileTip", "Play a song from this PC (WAV, FLAC, MP3, M4A, AAC or WMA) and follow it.") },
-		{ TEXT("SourceInput"), LOCTEXT("SourceInput", "INPUT"), LOCTEXT("SourceInputTip", "Follow a line input or microphone. It is only listened to, never played back or recorded.") },
-		{ TEXT("SourceSystem"), LOCTEXT("SourceSystem", "SYSTEM"), LOCTEXT("SourceSystemTip", "Follow whatever this PC plays: YouTube in a browser, a music app. Listened to in memory only, never recorded.") },
-		{ TEXT("SourceTest"), LOCTEXT("SourceTest", "TEST"), LOCTEXT("SourceTestTip", "A built-in beat at a steady tempo, to try effects without music.") },
+		{ TEXT("SourceOff"), LOCTEXT("SourceOff", "Off"), LOCTEXT("SourceOffTip", "No music: effects that follow it hold their pattern, or stay fully lit.") },
+		{ TEXT("SourceFile"), LOCTEXT("SourceFile", "File..."), LOCTEXT("SourceFileTip", "Play a song from this PC (WAV, FLAC, MP3, M4A, AAC or WMA) and follow it.") },
+		{ TEXT("SourceInput"), LOCTEXT("SourceInput", "Input"), LOCTEXT("SourceInputTip", "Follow a line input or microphone. It is only listened to, never played back or recorded.") },
+		{ TEXT("SourceSystem"), LOCTEXT("SourceSystem", "System Audio"), LOCTEXT("SourceSystemTip", "Follow whatever this PC plays: YouTube in a browser, a music app. Listened to in memory only, never recorded.") },
+		{ TEXT("SourceTest"), LOCTEXT("SourceTest", "Test Beat"), LOCTEXT("SourceTestTip", "A built-in beat at a steady tempo, to try effects without music.") },
 		{ TEXT("Play"), LOCTEXT("Play", "PLAY"), LOCTEXT("PlayTip", "Play or pause the song.") },
 		{ TEXT("Stop"), LOCTEXT("Stop", "STOP"), LOCTEXT("StopTip", "Stop and go back to the start.") },
 		{ TEXT("Loop"), LOCTEXT("Loop", "LOOP"), LOCTEXT("LoopTip", "Start again at the end.") },
@@ -217,8 +222,8 @@ TConstArrayView<FStageUIAnchor> UStageAudioPanel::GetAnchors()
 		{ TEXT("Tempo"), LOCTEXT("TempoAnchor", "BPM and beat lamp"), LOCTEXT("TempoTip", "The tempo found in the music, how sure the analyser is of it, and a lamp on every beat (as the audience hears it).") },
 		{ TEXT("Latency"), LOCTEXT("Latency", "LATENCY"), LOCTEXT("LatencyTip", "Moves the lights against the sound for this source, if they land before or after the beat you hear: positive makes them later, negative earlier (-500 .. +500 ms). Remembered per source on this PC.") },
 		{ TEXT("FlashLimit"), LOCTEXT("Flash", "FLASH"), LOCTEXT("FlashTip", "Flash limit for effects that follow the music, on screen and on DMX OUT: a light may flash from dark to bright at most this often, and a strobe may run no faster. Effects programmed without music are not limited. Remembered on this PC.") },
-		{ TEXT("Background"), LOCTEXT("Background", "KEEP PLAYING IN THE BACKGROUND"), LOCTEXT("BackgroundTip", "Keep the music playing, and the lights following it, while another window has focus (a browser playing YouTube, say).") },
-		{ TEXT("Listening"), LOCTEXT("Listening", "● LISTENING"), LOCTEXT("ListeningTip", "A microphone, line input or this PC's own output is being listened to. It is analysed in memory only: nothing is recorded, saved or sent. OFF stops it.") },
+		{ TEXT("Background"), LOCTEXT("Background", "Keep Playing in the Background"), LOCTEXT("BackgroundTip", "Keep the music playing, and the lights following it, while another window has focus (a browser playing YouTube, say).") },
+		{ TEXT("Listening"), LOCTEXT("Listening", "● LISTENING"), LOCTEXT("ListeningTip", "A microphone, line input or this PC's own output is being listened to. It is analysed in memory only: nothing is recorded, saved or sent. Source › Off stops it.") },
 	};
 	return Anchors;
 }
@@ -291,29 +296,25 @@ void UStageAudioPanel::BuildTree()
 
 UWidget* UStageAudioPanel::BuildSourceRow()
 {
-	UHorizontalBox* Buttons = WidgetTree->ConstructWidget<UHorizontalBox>(UHorizontalBox::StaticClass());
-	const TPair<FText, FText> Sources[] =
+	// One dropdown instead of a row of five buttons, so the panel stays readable when docked narrow (STATE.md #100). Its label
+	// names the source playing; the menu is described when it opens (BuildSourceMenu).
+	UStageMenuButton* Menu = WidgetTree->ConstructWidget<UStageMenuButton>(UStageMenuButton::StaticClass(), TEXT("SourceMenu"));
+	Menu->ApplyTheme(GetTheme()); // Before the button builds its Slate widget: its style is copied then.
+	Menu->SetToolTipText(LOCTEXT("SourceMenuTip", "The music the lights follow, and whether it keeps playing while another window has focus."));
+	Menu->OnGetMenu.BindUObject(this, &ThisClass::BuildSourceMenu);
+	SourceMenu = Menu;
+	// The assistant points at the dropdown for any source and for background playback: they are its entries.
+	for (const TCHAR* ControlId : { TEXT("SourceOff"), TEXT("SourceFile"), TEXT("SourceInput"), TEXT("SourceSystem"), TEXT("SourceTest"), TEXT("Background") })
 	{
-		{ StageAudioPanel::Anchor(TEXT("SourceOff")).Label, StageAudioPanel::Anchor(TEXT("SourceOff")).Tooltip },
-		{ StageAudioPanel::Anchor(TEXT("SourceFile")).Label, StageAudioPanel::Anchor(TEXT("SourceFile")).Tooltip },
-		{ StageAudioPanel::Anchor(TEXT("SourceInput")).Label, StageAudioPanel::Anchor(TEXT("SourceInput")).Tooltip },
-		{ StageAudioPanel::Anchor(TEXT("SourceSystem")).Label, StageAudioPanel::Anchor(TEXT("SourceSystem")).Tooltip },
-		{ StageAudioPanel::Anchor(TEXT("SourceTest")).Label, StageAudioPanel::Anchor(TEXT("SourceTest")).Tooltip },
-	};
-	static_assert(UE_ARRAY_COUNT(Sources) == static_cast<int32>(EStageAudioSource::TestSignal) + 1, "One button per source.");
-	for (int32 Index = 0; Index < UE_ARRAY_COUNT(Sources); ++Index)
-	{
-		UStageChoiceButton* Button = MakeButton(Sources[Index].Key, Sources[Index].Value, Index);
-		Button->OnPicked.BindUObject(this, &ThisClass::HandleSourcePicked);
-		if (UHorizontalBoxSlot* ButtonSlot = Buttons->AddChildToHorizontalBox(Button))
-		{
-			ButtonSlot->SetPadding(FMargin(0.f, 0.f, 3.f, 0.f));
-		}
-		SourceButtons.Add(Button);
-		static const FName SourceAnchors[] = { TEXT("SourceOff"), TEXT("SourceFile"), TEXT("SourceInput"), TEXT("SourceSystem"), TEXT("SourceTest") };
-		AnchorWidgets.Add(SourceAnchors[Index], Button);
+		AnchorWidgets.Add(ControlId, Menu);
 	}
-	return MakeLabeledRow(LOCTEXT("Source", "SOURCE"), Buttons);
+	USizeBox* MenuBox = WidgetTree->ConstructWidget<USizeBox>(USizeBox::StaticClass());
+	MenuBox->SetWidthOverride(StageAudioPanel::SourceMenuWidth);
+	MenuBox->SetHeightOverride(StageAudioPanel::SourceMenuHeight);
+	MenuBox->SetContent(Menu);
+	UHorizontalBox* Line = WidgetTree->ConstructWidget<UHorizontalBox>(UHorizontalBox::StaticClass());
+	Line->AddChildToHorizontalBox(MenuBox);
+	return MakeLabeledRow(LOCTEXT("Source", "SOURCE"), Line);
 }
 
 UWidget* UStageAudioPanel::BuildFileRow()
@@ -579,21 +580,11 @@ UWidget* UStageAudioPanel::BuildFooter()
 {
 	const UStageCraftUITheme& UITheme = GetTheme();
 	UVerticalBox* Block = WidgetTree->ConstructWidget<UVerticalBox>(UVerticalBox::StaticClass());
-	UStageChoiceButton* Background = MakeButton(StageAudioPanel::Anchor(TEXT("Background")).Label, StageAudioPanel::Anchor(TEXT("Background")).Tooltip, 0);
-	AnchorWidgets.Add(TEXT("Background"), Background);
-	Background->OnPicked.BindUObject(this, &ThisClass::HandleBackgroundPicked);
-	BackgroundButton = Background;
-	if (UVerticalBoxSlot* ButtonSlot = Block->AddChildToVerticalBox(Background))
-	{
-		ButtonSlot->SetHorizontalAlignment(HAlign_Left);
-	}
+	// Background playback is in the Source dropdown; the footer keeps the privacy line and the analyser's cost.
 	UTextBlock* Detail = MakeText(FText::GetEmpty(), 7, TEXT("Regular"), UITheme.TextDisabled);
 	Detail->SetAutoWrapText(true);
 	DetailText = Detail;
-	if (UVerticalBoxSlot* DetailSlot = Block->AddChildToVerticalBox(Detail))
-	{
-		DetailSlot->SetPadding(FMargin(0.f, 4.f, 0.f, 0.f));
-	}
+	Block->AddChildToVerticalBox(Detail);
 	return MakeLabeledRow(FText::GetEmpty(), Block);
 }
 
@@ -710,9 +701,9 @@ void UStageAudioPanel::Refresh()
 	StatusText->SetText(Line);
 	StatusText->SetColorAndOpacity(FSlateColor(bFailed ? UITheme.WarningColor : UITheme.TextSecondary));
 
-	for (int32 Index = 0; Index < SourceButtons.Num(); ++Index)
+	if (UStageMenuButton* Menu = SourceMenu.Get())
 	{
-		SetButtonLit(SourceButtons[Index].Get(), Index == static_cast<int32>(LitSource));
+		Menu->SetLabel(StageAudioMenus::DescribeSource(LitSource));
 	}
 
 	// The file: its transport and position.
@@ -800,11 +791,6 @@ void UStageAudioPanel::Refresh()
 		Listening->SetVisibility(bLive && StageAudioReactive::IsCaptureSource(Status.Source) ? ESlateVisibility::HitTestInvisible : ESlateVisibility::Collapsed);
 	}
 
-	// Background playback lives with the other sound preferences (UStageAudioSubsystem).
-	const UGameInstance* GameInstance = GetGameInstance();
-	const UStageAudioSubsystem* Sound = GameInstance ? GameInstance->GetSubsystem<UStageAudioSubsystem>() : nullptr;
-	SetButtonLit(BackgroundButton.Get(), Sound && Sound->IsPlayedInBackground());
-
 	if (UTextBlock* Detail = DetailText.Get())
 	{
 		Detail->SetText(bRunning
@@ -866,14 +852,37 @@ void UStageAudioPanel::UpdateMeters()
 
 // --- Input ---
 
-void UStageAudioPanel::HandleSourcePicked(int32 SourceIndex)
+FStageMenu UStageAudioPanel::BuildSourceMenu()
+{
+	// Background playback lives with the other sound preferences (UStageAudioSubsystem); read when the menu opens.
+	const UGameInstance* GameInstance = GetGameInstance();
+	const UStageAudioSubsystem* Sound = GameInstance ? GameInstance->GetSubsystem<UStageAudioSubsystem>() : nullptr;
+	const TWeakObjectPtr<UStageAudioPanel> WeakThis(this);
+	// The lambdas hold the panel weakly (the popup is Slate-owned) and go through its handlers, which send the controller's requests.
+	return StageAudioMenus::MakeSourceMenu(LitSource, Sound && Sound->IsPlayedInBackground(), GetStageController() != nullptr,
+		[WeakThis](EStageAudioSource Source)
+		{
+			if (UStageAudioPanel* This = WeakThis.Get())
+			{
+				This->HandleSourcePicked(Source);
+			}
+		},
+		[WeakThis](bool bPlayInBackground)
+		{
+			if (UStageAudioPanel* This = WeakThis.Get())
+			{
+				This->HandleBackgroundPicked(bPlayInBackground);
+			}
+		});
+}
+
+void UStageAudioPanel::HandleSourcePicked(EStageAudioSource Source)
 {
 	AModularPlayerController* Controller = GetStageController();
-	if (!Controller || SourceIndex < 0 || SourceIndex > static_cast<int32>(EStageAudioSource::TestSignal))
+	if (!Controller || static_cast<int32>(Source) > static_cast<int32>(EStageAudioSource::TestSignal))
 	{
 		return;
 	}
-	const EStageAudioSource Source = static_cast<EStageAudioSource>(SourceIndex);
 	if (Source == EStageAudioSource::File)
 	{
 		// The song is chosen here, per session; it is never remembered (ADR 0029 §5).
@@ -924,13 +933,11 @@ void UStageAudioPanel::HandleTransportPicked(int32 CommandIndex)
 	RequestRefresh();
 }
 
-void UStageAudioPanel::HandleBackgroundPicked(int32 ChoiceIndex)
+void UStageAudioPanel::HandleBackgroundPicked(bool bPlayInBackground)
 {
-	const UGameInstance* GameInstance = GetGameInstance();
-	const UStageAudioSubsystem* Sound = GameInstance ? GameInstance->GetSubsystem<UStageAudioSubsystem>() : nullptr;
-	if (AModularPlayerController* Controller = GetStageController(); Controller && Sound)
+	if (AModularPlayerController* Controller = GetStageController())
 	{
-		Controller->RequestSetPlayAudioInBackground(!Sound->IsPlayedInBackground());
+		Controller->RequestSetPlayAudioInBackground(bPlayInBackground);
 	}
 	RequestRefresh();
 }

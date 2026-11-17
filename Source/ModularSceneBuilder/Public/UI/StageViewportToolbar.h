@@ -5,6 +5,7 @@
 #include "CoreMinimal.h"
 #include "Actors/ModularTransformGizmo.h"
 #include "Blueprint/UserWidget.h"
+#include "UI/StageMenuModel.h"
 #include "StageViewportToolbar.generated.h"
 
 /**
@@ -50,7 +51,7 @@ private:
 	class UStageThemedComboBox* MakeCombo(FName Name, TConstArrayView<FText> Options, const FText& Tip);
 	class UWidget* MakeSegment(TConstArrayView<FText> Labels, TConstArrayView<FText> Tips, TArray<TObjectPtr<class UStageChoiceButton>>& OutButtons,
 		void (UStageViewportToolbar::*Handler)(int32));
-	class UStageMenuButton* MakeMenuButton(FName Name, const FText& Tip, TSharedRef<class SWidget> (UStageViewportToolbar::*Builder)());
+	class UStageMenuButton* MakeMenuButton(FName Name, const FText& Tip, FStageMenu (UStageViewportToolbar::*Builder)());
 	class UWidget* MakeSeparator() const;
 	class UTextBlock* MakeText(const FText& Text, int32 Size, FName Typeface, const FLinearColor& Color) const;
 	const class UStageCraftUITheme& GetTheme() const;
@@ -61,17 +62,17 @@ private:
 
 	class AModularPlayerController* GetStageController() const;
 
-	/** The View menu's popup: the view modes (radio) and Show > Grid (toggle), from the viewport's state at this moment. */
-	TSharedRef<class SWidget> BuildViewMenu();
+	/** The View menu's entries: the view modes (radio) and Show > Grid (toggle), from the viewport's state at this moment. */
+	FStageMenu BuildViewMenu();
 
 	/** Grid snap and angle snap presets (radio) and Snap to Items (toggle). */
-	TSharedRef<class SWidget> BuildSnapMenu();
+	FStageMenu BuildSnapMenu();
 
 	/** Move / Rotate / Scale (radio). */
-	TSharedRef<class SWidget> BuildTransformMenu();
+	FStageMenu BuildTransformMenu();
 
 	/** Opens (or brings forward) the Sketch to Stage and AI Assistant panels. */
-	TSharedRef<class SWidget> BuildToolsMenu();
+	FStageMenu BuildToolsMenu();
 
 	void HandleCollapsePicked(int32 Index);
 

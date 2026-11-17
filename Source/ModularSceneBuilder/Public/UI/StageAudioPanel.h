@@ -8,17 +8,18 @@
 #include "Engine/TimerHandle.h"
 #include "Styling/SlateTypes.h"
 #include "Types/SlateEnums.h"
+#include "UI/StageMenuModel.h"
 #include "UI/StageUIAnchors.h"
 #include "StageAudioPanel.generated.h"
 
 /**
  * The Audio panel (StageCraft.Panel.Audio, Docs/ADR/0029-audio-analysis-and-audio-reactive-effects.md §5): the music audio effects
  * follow.
- *  - the source: OFF, FILE... (a song from disk, played here), INPUT (a line or microphone, analysed only), SYSTEM (whatever this PC
- *    plays, such as YouTube in a browser) or TEST (a built-in beat);
+ *  - the Source dropdown (View-menu style, STATE.md #100): Off, File... (a song from disk, played here), Input (a line or
+ *    microphone, analysed only), System Audio (whatever this PC plays, such as YouTube in a browser) or Test Beat, and "Keep Playing
+ *    in the Background", so music and analysis go on while another window has focus;
  *  - for a file: play / pause, stop, loop and a seek bar with the position; for the input: the device and its gain;
  *  - meters for the four bands and the level, the tempo with its confidence and a lamp on the beat;
- *  - "keep playing in the background", so music and analysis go on while another window has focus;
  *  - the latency offset of the source playing (the lights earlier or later than the sound), the flash limit of this PC with a
  *    warning above 3 per second, and LISTENING while a microphone, line input or the PC's own output is being analysed (Phase G3,
  *    ADR 0029 §6, §7).
@@ -90,10 +91,13 @@ private:
 	void UpdateMeterTimer(bool bRunning);
 	void UpdateMeters();
 
+	/** The Source dropdown (StageAudioMenus), described from the status when it opens. */
+	FStageMenu BuildSourceMenu();
+
 	void HandleStatusChanged();
-	void HandleSourcePicked(int32 SourceIndex);
+	void HandleSourcePicked(EStageAudioSource Source);
 	void HandleTransportPicked(int32 CommandIndex);
-	void HandleBackgroundPicked(int32 ChoiceIndex);
+	void HandleBackgroundPicked(bool bPlayInBackground);
 	void HandleFollowMusicPicked(int32 Unused);
 	void HandleSliderMoved(int32 SliderIndex, float Value);
 
@@ -104,7 +108,7 @@ private:
 	void HandleDeviceChanged(FString SelectedItem, ESelectInfo::Type SelectionType);
 
 	/** Built once in BuildTree; the widget tree owns the widgets (weak references here). */
-	TArray<TWeakObjectPtr<class UStageChoiceButton>> SourceButtons;
+	TWeakObjectPtr<class UStageMenuButton> SourceMenu;
 	TWeakObjectPtr<class UWidget> FileRow;
 	TWeakObjectPtr<class UWidget> InputRow;
 	TWeakObjectPtr<class UTextBlock> FileName;
@@ -125,7 +129,6 @@ private:
 	TWeakObjectPtr<class UProgressBar> Meters[MeterCount];
 	TWeakObjectPtr<class UTextBlock> TempoText;
 	TWeakObjectPtr<class UBorder> BeatLamp;
-	TWeakObjectPtr<class UStageChoiceButton> BackgroundButton;
 	TWeakObjectPtr<class UTextBlock> DetailText;
 
 	UPROPERTY(Transient)

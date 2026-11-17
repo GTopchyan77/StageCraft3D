@@ -143,7 +143,7 @@ namespace StageSketchCommands
 		Status({}, World);
 	}
 
-	/** "Import C:/plans/stage.jpg [claude]": the IMPORT PHOTO... path without the dialog (no spaces in the path inside -ExecCmds). */
+	/** "Import C:/plans/stage.jpg [claude]": the Photo menu's Import Photo... path without the dialog (no spaces in the path inside -ExecCmds). */
 	void Import(const TArray<FString>& Args, UWorld* World)
 	{
 		UStageSketchSubsystem* Sketch = GetSketch(World);
@@ -262,7 +262,7 @@ namespace StageSketchCommands
 	FAutoConsoleCommandWithWorldAndArgs SetCommand(TEXT("StageCraft.Sketch.Set"),
 		TEXT("DeckHeight|TrussHeight|Grid|PhotoWidth <cm> | Snap 0|1 | Smoothing <0..0.9>  Changes a sketch setting."), FConsoleCommandWithWorldAndArgsDelegate::CreateStatic(&Set));
 	FAutoConsoleCommandWithWorldAndArgs ImportCommand(TEXT("StageCraft.Sketch.Import"),
-		TEXT("<png or jpg path> [claude] [anyway]  Reads a drawing into the sketch, like IMPORT PHOTO... (anyway = TRACE ANYWAY)"), FConsoleCommandWithWorldAndArgsDelegate::CreateStatic(&Import));
+		TEXT("<png or jpg path> [claude] [anyway]  Reads a drawing into the sketch, like Photo > Import Photo... (anyway = TRACE ANYWAY)"), FConsoleCommandWithWorldAndArgsDelegate::CreateStatic(&Import));
 	FAutoConsoleCommandWithWorldAndArgs PhotoCheckCommand(TEXT("StageCraft.Sketch.PhotoCheck"),
 		TEXT("<png or jpg path>  Logs the photo check's numbers and verdict for a file."), FConsoleCommandWithWorldAndArgsDelegate::CreateStatic(&PhotoCheck));
 	FAutoConsoleCommandWithWorldAndArgs ColorLookCommand(TEXT("StageCraft.Sketch.ColorLook"),

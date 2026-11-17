@@ -367,8 +367,8 @@ namespace StageShowDiagnostics
 				INVTEXT("Երաժշտության աղբյուրը ձախողվեց{0}։ Ընտրեք այն նորից Audio վահանակում։")), Error);
 		case EStageDiagnosticCode::AudioNoSource:
 			return Pick(Language,
-				LOCTEXT("AudioNoSource", "Effects follow the music, but no music source is chosen: they hold their pattern or stay fully lit. Pick FILE, INPUT, SYSTEM or TEST in the Audio panel."),
-				INVTEXT("Էֆեկտները հետևում են երաժշտությանը, բայց աղբյուր ընտրված չէ. դրանք պահում են իրենց նախշը կամ մնում են լրիվ վառ։ Audio վահանակում ընտրեք FILE, INPUT, SYSTEM կամ TEST։"));
+				LOCTEXT("AudioNoSource", "Effects follow the music, but no music source is chosen: they hold their pattern or stay fully lit. Pick File..., Input, System Audio or Test Beat in the Audio panel's SOURCE dropdown."),
+				INVTEXT("Էֆեկտները հետևում են երաժշտությանը, բայց աղբյուր ընտրված չէ. դրանք պահում են իրենց նախշը կամ մնում են լրիվ վառ։ Audio վահանակի SOURCE ցանկում ընտրեք File..., Input, System Audio կամ Test Beat։"));
 		case EStageDiagnosticCode::AudioNoSignal:
 			return Pick(Language,
 				LOCTEXT("AudioNoSignal", "Effects follow the music, but the source hears nothing. Check that the music plays, the input device and its GAIN in the Audio panel."),

@@ -9736,7 +9736,7 @@ All times in ms.
   - the dialog clicked with a mouse;
   - a large rig re-imported (the per-item cost is the MV2 placement's plus one snapshot each).
 
-**Commit:** uncommitted (working tree).
+**Commit:** `05b25c5`.
 
 **Known issues / follow-ups**
 - Objects StageCraft does not place (scene objects, supports, video screens, projectors, focus points) and AUXData (classes, positions, symbols, mapping definitions) are not preserved. That needs scene-level storage (a scene format bump) and the geometry files' bytes.
@@ -9745,3 +9745,86 @@ All times in ms.
 - Review counts are an estimate: a truss whose new placement cannot be built, or a fixture whose new type is unavailable, shows as changed but is left as it is (with a note).
 - A new fixture that takes a removed fixture's ID inherits the show data still pointing at that ID (as with any delete and place).
 - **Gevor:** re-import a real plot that was changed in Vectorworks or grandMA3 and check the review and the result.
+
+## #100 — Toolbar dropdowns for the Sketch to Stage window and the Audio panel (View-menu style), one menu path for every toolbar (2026-11-17)
+
+**What & why**
+- **Context.** Gevor asked (2026-11-17) for the remaining UI polish item of `tasks/todo.md` (Phase 38b): give the crowded Sketch window toolbar and the Audio panel the dropdown treatment the viewport bar got in #87. #99 now carries its commit `05b25c5`.
+- **Before:**
+  - The Sketch window had five rows of segment buttons above the canvas: tools and actions, heights, grid/snap/smoothing, three click-to-cycle item buttons, and the photo row.
+  - The Audio panel had a row of five source buttons and a separate KEEP PLAYING IN THE BACKGROUND row.
+- **One menu path (ADR 0008 amendment).**
+  - A dropdown's content is now data: `FStageMenu` (`Public/UI/StageMenuModel.h`), with sections of Action, Radio, Toggle and SubMenu entries. Each entry carries its label, tooltip, checked and enabled state and the action to run.
+  - `UStageMenuButton::OnGetMenu` returns it when the menu opens, and `StageMenu::MakeWidget` builds the same themed `FMenuBuilder` popup as before.
+  - The viewport's View, Snap, Transform and Tools menus were converted with the same entries; the screenshot shows the same popup.
+  - **Why data:** the panels' menus are pure functions that tests call without a widget or a world, and a dev console command can read and pick a live dropdown by label for scripted runs.
+- **Sketch to Stage (ADR 0015 amendment).** One tool row, then one slider row (DECK, TRUSS, PHOTO WIDTH):
+  - **Tools:** the five-button segment stays; tools change every few strokes, so they stay one click away.
+  - **Edit:** Undo Stroke and Clear Sketch (greyed out on an empty sketch), Frame Sketch.
+  - **Snap** ("Snap 50 cm · Smooth Low"): grid 25 cm / 50 cm / 1 m, Snap to Grid, smoothing Off / Low / High. A pick is an edit applied to the settings as they are at pick time.
+  - **Items:** a submenu per element listing every catalog candidate, instead of click-to-cycle. The pick names the item, held weakly, and `SetItem` still validates.
+  - **Photo** ("Photo", "Reading..." while importing): Import Photo..., Remove Photo, Show Under the Sketch, Read By This PC / Claude. Claude is greyed out, with the reason, when it cannot be reached.
+  - **TRACE ANYWAY / USE COLOURS** stay buttons next to the result line, shown only while an image is refused as a photograph, because the refusal message names them.
+- **Audio (ADR 0029 §18).** One SOURCE dropdown replaces the five buttons and the background row:
+  - Music Source: Off, File..., Input, System Audio, Test Beat, with the one playing checked. Other Windows: Keep Playing in the Background.
+  - The label names the source playing. Picking the source already on still runs, because File... chooses another song.
+  - Labels and tooltips still come from the anchor table, now in title case. The assistant's "show me" anchors for the sources and background playback point at the dropdown.
+  - Requests are unchanged (controller → GameMode).
+  - The "no music source" diagnostic (EN/HY) now names the dropdown.
+- **Dev tooling (compiled out of Shipping):**
+  - `StageCraft.Workspace.Menu <Dropdown> Describe | Open | Pick <Label/Submenu label>` uses only dropdowns with a live Slate widget. The first run showed that a rebuilt panel leaves unbound copies until garbage collection.
+  - `ScreenshotWindow All` now also saves windows of floating windows, such as a floating panel's open dropdown.
+- **Review (subagent, read-only):** no blocking defects. Three fixed, one recorded:
+  - **Medium:** `class SWidget` was declared inside a namespace in `StageMenuModel.h`, and compiled only through the PCH. Fixed: the header now includes `Widgets/SWidget.h`.
+  - **Low:** the Snap menu wrote a copy of every sketch setting taken when it opened, so a change made elsewhere meanwhile was reverted. Fixed: edits are applied to the settings at pick time, with a test.
+  - **Low:** the AudioNoSource diagnostic named the old buttons. Fixed.
+  - **Low, follow-up:** "show me" for a source pulses the closed dropdown; see Known issues.
+
+**Files changed**
+- New:
+  - `Source/ModularSceneBuilder/Public/UI/StageMenuModel.h`, `Private/UI/StageMenuModel.cpp`
+  - `Public/UI/StageSketchMenus.h`, `Private/UI/StageSketchMenus.cpp`
+  - `Public/UI/StageAudioMenus.h`, `Private/UI/StageAudioMenus.cpp`
+  - `Private/UI/Tests/StageMenuTests.cpp`
+  - `Scripts/Tests/RunToolbarMenuCheck.ps1`
+- Changed:
+  - Menu button: `Private/UI/StageMenuButton.h/.cpp` (OnGetMenu returns FStageMenu; GetMenu, OpenMenu, GetLabel)
+  - Viewport toolbar: `Public/UI/StageViewportToolbar.h`, `Private/UI/StageViewportToolbar.cpp`
+  - Sketch window: `Public/UI/StageSketchCanvasWidget.h`, `Private/UI/StageSketchCanvasWidget.cpp`
+  - Audio panel: `Public/UI/StageAudioPanel.h`, `Private/UI/StageAudioPanel.cpp`
+  - Diagnostics: `Private/Show/StageShowDiagnostics.cpp` (AudioNoSource text)
+  - Console commands: `Private/Sketch/StageSketchConsoleCommands.cpp` (help text), `Private/Workspace/StageWorkspaceConsoleCommands.cpp` (Menu, ScreenshotWindow All)
+  - Help: `Content/StageCraft/Help/{en,hy}/audio.md`
+  - Docs: ADR 0008, 0015 and 0029 amendments; `tasks/todo.md` (Phase 38b item, Phase 50); `STATE.md` (#99 commit, #100)
+- No `.uasset`, maps or input actions changed.
+
+**Verification**
+- **Automation (Claude):** 307/307 (304 + `StageCraft.UI.MenuModel`, `.SketchMenus`, `.AudioMenu`), after the review fixes. User data unchanged (127 files).
+- **`Scripts/Tests/RunToolbarMenuCheck.ps1` (Claude, `-game`, real panels):**
+  - MenuA: one FAIL. The command found an unbound copy of the viewport toolbar (all entries greyed out); the command was fixed to use only dropdowns with a live Slate widget.
+  - MenuB, on the final code: PASS. It checked every dropdown's entries:
+    - Edit greys out undo and clear on an empty sketch.
+    - Items lists 13 fixture candidates.
+    - Photo greys out Claude offline.
+    - Source shows Off checked.
+  - Picks:
+    - 1 m, High and Test Beat ran, and the labels followed ("Snap 1 m · Smooth High", "Test Beat").
+    - A greyed-out Undo Stroke was refused.
+    - The settings were put back to Off, 50 cm and Low.
+  - Screenshots:
+    - The Sketch window shows one tool row with Edit, Snap, Items and Photo, and one slider row.
+    - The Audio panel shows the SOURCE dropdown with the background row gone.
+    - The Sketch Snap, Audio Source and viewport View popups render themed, with the right entries checked.
+- **Builds (Claude):** Editor, Game Development and Game Shipping succeeded with no warnings.
+- **Shipping scan (UTF-16):** `StageCraft.Workspace.Menu` and its messages are absent. "Keep Playing in the Background", "System Audio", "Snap {0} · Smooth {1}", "Import Photo...", "Show Under the Sketch", "SOURCE dropdown" and "TRACE ANYWAY" are present.
+- **Not verified:**
+  - dropdowns opened and picked with a physical mouse click (the run opens and picks them through the same description a click uses);
+  - the Items submenu popup on screen;
+  - the refused-photo buttons after a real refusal (their logic is unchanged).
+
+**Commit:** uncommitted (working tree).
+
+**Known issues / follow-ups**
+- The assistant's "show me" for a source or for background playback pulses the closed SOURCE dropdown, whose label may name another source. Answers could say "SOURCE › Off".
+- The Items submenu lists the whole fixture catalog (13 now); a large library would want search or grouping.
+- **Gevor:** look at the Sketch window and the Audio panel, and click through the dropdowns.

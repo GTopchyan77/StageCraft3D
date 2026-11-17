@@ -113,3 +113,16 @@ The sketch is kept after generating, so a shape can be corrected and generated a
 - The truss height is one value per generation; truss legs are level. Towers, motors and ground supports are not generated.
 - The sketch is not saved with the scene, and there is no 3D preview of the plan.
 - A fixture on a deck counts as rigged in the cable schedule when the deck top is 2 m or higher (existing rule, ADR 0014).
+
+## Amendment: toolbar dropdowns (STATE.md #100, 2026-11-17)
+
+The window had five rows of segments above the canvas (tools and actions; heights; grid, snap and smoothing; the three item buttons; the photo row). It now has one tool row and one slider row, as the viewport bar did in #87 (ADR 0008 amendments):
+- **Tools** stay as the five-button segment (FREEHAND ... ERASE): they change every few strokes, so they stay one click away.
+- **Edit**: Undo Stroke and Clear Sketch (greyed out on an empty sketch), Frame Sketch.
+- **Snap** ("Snap 50 cm · Smooth Low"): grid step 25 cm / 50 cm / 1 m, Snap to Grid, freehand smoothing Off / Low / High. A pick changes that one setting through `UStageSketchSubsystem::SetSettings`.
+- **Items**: one submenu per element ("Deck: Stage Deck 2x1") listing every catalog candidate. This replaces click-to-cycle: any item is one pick away. The pick names the item itself (held weakly), and `SetItem` still refuses one that is no longer a candidate.
+- **Photo** ("Photo", "Reading..." during an import): Import Photo..., Remove Photo, Show Under the Sketch, and Read By This PC / Claude (Claude greyed out with the reason when it cannot be reached).
+- Sliders: DECK, TRUSS and PHOTO WIDTH share one row.
+- TRACE ANYWAY and USE COLOURS stay buttons, next to the result line, shown only while an image is refused as a photograph: the refusal message names them, so they must be visible then.
+
+The menus are pure functions of the sketch's state (`StageSketchMenus`), tested in `StageCraft.UI.SketchMenus`.

@@ -11,7 +11,6 @@
 #include "Components/SizeBox.h"
 #include "Components/TextBlock.h"
 #include "Engine/LocalPlayer.h"
-#include "Framework/MultiBox/MultiBoxBuilder.h"
 #include "Input/StageInputPreferencesSubsystem.h"
 #include "Placement/StageSnappingComponent.h"
 #include "Player/ModularPlayerController.h"
@@ -300,13 +299,13 @@ void UStageViewportToolbar::BuildTree()
 	AddMenu(ToolsMenuButton, TEXT("ToolsMenuBox"), ToolsMenuWidth);
 }
 
-UStageMenuButton* UStageViewportToolbar::MakeMenuButton(FName Name, const FText& Tip, TSharedRef<SWidget> (UStageViewportToolbar::*Builder)())
+UStageMenuButton* UStageViewportToolbar::MakeMenuButton(FName Name, const FText& Tip, FStageMenu (UStageViewportToolbar::*Builder)())
 {
 	UStageMenuButton* Button = WidgetTree->ConstructWidget<UStageMenuButton>(UStageMenuButton::StaticClass(), Name);
 	// Before the button builds its Slate widget: its style is copied then.
 	Button->ApplyTheme(GetTheme());
 	Button->SetToolTipText(Tip);
-	Button->OnGetMenuContent.BindUObject(this, Builder);
+	Button->OnGetMenu.BindUObject(this, Builder);
 	return Button;
 }
 
@@ -475,123 +474,89 @@ void UStageViewportToolbar::HandleProjectionSelected(FString SelectedItem, ESele
 	Refresh();
 }
 
-TSharedRef<SWidget> UStageViewportToolbar::BuildViewMenu()
+FStageMenu UStageViewportToolbar::BuildViewMenu()
 {
 	using namespace StageViewportToolbar;
 
-	// Built from the state at this moment; picking an entry closes the menu, so nothing in it needs to stay live. The
+	// Described from the state at this moment; picking an entry closes the menu, so nothing in it needs to stay live. The
 	// lambdas hold the viewport weakly: the popup is Slate-owned and must not keep it alive or touch it after teardown.
 	const TWeakObjectPtr<UStageViewportComponent> WeakViewport = BoundViewport;
 	const UStageViewportComponent* Viewport = WeakViewport.Get();
 	const EStageViewMode CurrentMode = Viewport ? Viewport->GetViewMode() : EStageViewMode::Lit;
 
-	FMenuBuilder Menu(/*bInShouldCloseWindowAfterMenuSelection*/ true, /*InCommandList*/ nullptr);
-
-	Menu.BeginSection(TEXT("ViewMode"), LOCTEXT("ViewModeSection", "View Mode"));
+	FStageMenu Menu;
+	FStageMenuSection& Modes = Menu.AddSection(TEXT("ViewMode"), LOCTEXT("ViewModeSection", "View Mode"));
 	for (const EStageViewMode Mode : ViewModes)
 	{
 		const bool bAvailable = StageViewMath::IsViewModeAvailable(Mode);
-		const bool bCanPick = Viewport && bAvailable;
-		const bool bChecked = Viewport && Mode == CurrentMode;
 		const FText Tip = bAvailable ? GetViewModeTip(Mode)
 			: FText::Format(LOCTEXT("UnavailableTip", "{0}\nNot available in this build: Shipping compiles out this engine view mode."), GetViewModeTip(Mode));
-
-		Menu.AddMenuEntry(GetViewModeName(Mode), Tip, FSlateIcon(),
-			FUIAction(
-				FExecuteAction::CreateLambda([WeakViewport, Mode]()
-				{
-					if (UStageViewportComponent* Target = WeakViewport.Get())
-					{
-						Target->SetViewMode(Mode); // Refused modes are logged by the component; the read-back keeps the label true.
-					}
-				}),
-				FCanExecuteAction::CreateLambda([bCanPick]() { return bCanPick; }),
-				FIsActionChecked::CreateLambda([bChecked]() { return bChecked; })),
-			NAME_None, EUserInterfaceActionType::RadioButton);
-	}
-	Menu.EndSection();
-
-	const bool bGridVisible = Viewport && Viewport->IsGridVisible();
-	Menu.BeginSection(TEXT("Show"), LOCTEXT("ShowSection", "Show"));
-	Menu.AddMenuEntry(LOCTEXT("Grid", "Grid"), LOCTEXT("GridTip", "Show or hide the reference grid (it follows the grid snap size)."), FSlateIcon(),
-		FUIAction(
-			FExecuteAction::CreateLambda([WeakViewport]()
+		Modes.Entries.Add(StageMenu::MakeRadio(GetViewModeName(Mode), Tip, Viewport && Mode == CurrentMode, Viewport && bAvailable,
+			[WeakViewport, Mode]()
 			{
 				if (UStageViewportComponent* Target = WeakViewport.Get())
 				{
-					Target->SetGridVisible(!Target->IsGridVisible());
+					Target->SetViewMode(Mode); // Refused modes are logged by the component; the read-back keeps the label true.
 				}
-			}),
-			FCanExecuteAction::CreateLambda([bCanToggle = Viewport != nullptr]() { return bCanToggle; }),
-			FIsActionChecked::CreateLambda([bGridVisible]() { return bGridVisible; })),
-		NAME_None, EUserInterfaceActionType::ToggleButton);
-	Menu.EndSection();
+			}));
+	}
 
-	return Menu.MakeWidget();
+	Menu.AddSection(TEXT("Show"), LOCTEXT("ShowSection", "Show")).Entries.Add(StageMenu::MakeToggle(LOCTEXT("Grid", "Grid"),
+		LOCTEXT("GridTip", "Show or hide the reference grid (it follows the grid snap size)."), Viewport && Viewport->IsGridVisible(), Viewport != nullptr,
+		[WeakViewport]()
+		{
+			if (UStageViewportComponent* Target = WeakViewport.Get())
+			{
+				Target->SetGridVisible(!Target->IsGridVisible());
+			}
+		}));
+	return Menu;
 }
 
-TSharedRef<SWidget> UStageViewportToolbar::BuildSnapMenu()
+FStageMenu UStageViewportToolbar::BuildSnapMenu()
 {
 	using namespace StageViewportToolbar;
 
-	// As BuildViewMenu: built from the state now, the lambdas hold the component weakly. The entries are radio buttons that
-	// set a step directly (SetGridSnap), not the old segment's toggle semantics: in a menu, picking the checked entry keeps it.
-	// The component broadcasts OnSnapSettingsChanged, which redraws the button label.
+	// As BuildViewMenu: described from the state now, the lambdas hold the component weakly. The entries are radio buttons that
+	// set a step directly (SetGridSnap): in a menu, picking the checked entry keeps it. The component broadcasts
+	// OnSnapSettingsChanged, which redraws the button label.
 	const TWeakObjectPtr<UStageSnappingComponent> WeakSnapping = BoundSnapping;
 	const UStageSnappingComponent* Snapping = WeakSnapping.Get();
 
-	FMenuBuilder Menu(/*bInShouldCloseWindowAfterMenuSelection*/ true, /*InCommandList*/ nullptr);
-	const auto AddPresets = [&Menu, &WeakSnapping, Snapping](TConstArrayView<float> Presets, float Current, const FText& Units, const FText& Tip, bool bGrid)
+	FStageMenu Menu;
+	const auto AddPresets = [&WeakSnapping, Snapping](FStageMenuSection& Section, TConstArrayView<float> Presets, float Current, const FText& Units, const FText& Tip, bool bGrid)
 	{
 		for (const float Preset : Presets)
 		{
-			const bool bChecked = Snapping && FMath::IsNearlyEqual(Preset, Current, 1.e-3f);
-			Menu.AddMenuEntry(DescribePreset(Preset, Units), Tip, FSlateIcon(),
-				FUIAction(
-					FExecuteAction::CreateLambda([WeakSnapping, Preset, bGrid]()
+			Section.Entries.Add(StageMenu::MakeRadio(DescribePreset(Preset, Units), Tip, Snapping && FMath::IsNearlyEqual(Preset, Current, 1.e-3f), Snapping != nullptr,
+				[WeakSnapping, Preset, bGrid]()
+				{
+					if (UStageSnappingComponent* Target = WeakSnapping.Get())
 					{
-						if (UStageSnappingComponent* Target = WeakSnapping.Get())
-						{
-							bGrid ? Target->SetGridSnap(Preset) : Target->SetAngleSnap(Preset);
-						}
-					}),
-					FCanExecuteAction::CreateLambda([bCanPick = Snapping != nullptr]() { return bCanPick; }),
-					FIsActionChecked::CreateLambda([bChecked]() { return bChecked; })),
-				NAME_None, EUserInterfaceActionType::RadioButton);
+						bGrid ? Target->SetGridSnap(Preset) : Target->SetAngleSnap(Preset);
+					}
+				}));
 		}
 	};
-
-	Menu.BeginSection(TEXT("GridSnap"), LOCTEXT("GridSnapSection", "Grid Snap"));
-	AddPresets(StageViewMath::GetGridSnapPresets(), Snapping ? Snapping->GetGridSnap() : 0.f, LOCTEXT("Cm", " cm"),
+	AddPresets(Menu.AddSection(TEXT("GridSnap"), LOCTEXT("GridSnapSection", "Grid Snap")), StageViewMath::GetGridSnapPresets(),
+		Snapping ? Snapping->GetGridSnap() : 0.f, LOCTEXT("Cm", " cm"),
 		LOCTEXT("GridSnapTip", "Grid step for placing and moving items; positions land on the grid, which the reference grid shows."), true);
-	Menu.EndSection();
+	AddPresets(Menu.AddSection(TEXT("AngleSnap"), LOCTEXT("AngleSnapSection", "Angle Snap")), StageViewMath::GetAngleSnapPresets(),
+		Snapping ? Snapping->GetAngleSnap() : 0.f, LOCTEXT("Degrees", "°"), LOCTEXT("AngleSnapTip", "Rotation step for the rotate tool."), false);
 
-	Menu.BeginSection(TEXT("AngleSnap"), LOCTEXT("AngleSnapSection", "Angle Snap"));
-	AddPresets(StageViewMath::GetAngleSnapPresets(), Snapping ? Snapping->GetAngleSnap() : 0.f, LOCTEXT("Degrees", "°"),
-		LOCTEXT("AngleSnapTip", "Rotation step for the rotate tool."), false);
-	Menu.EndSection();
-
-	const bool bSnapToItems = Snapping && Snapping->IsSnapToItemsEnabled();
-	Menu.BeginSection(TEXT("Items"), LOCTEXT("ItemsSection", "Items"));
-	Menu.AddMenuEntry(LOCTEXT("SnapToItems", "Snap to Items"),
-		LOCTEXT("SnapToItemsTip", "Placed and moved items snap to the edges and faces of nearby items."), FSlateIcon(),
-		FUIAction(
-			FExecuteAction::CreateLambda([WeakSnapping]()
+	Menu.AddSection(TEXT("Items"), LOCTEXT("ItemsSection", "Items")).Entries.Add(StageMenu::MakeToggle(LOCTEXT("SnapToItems", "Snap to Items"),
+		LOCTEXT("SnapToItemsTip", "Placed and moved items snap to the edges and faces of nearby items."), Snapping && Snapping->IsSnapToItemsEnabled(), Snapping != nullptr,
+		[WeakSnapping]()
+		{
+			if (UStageSnappingComponent* Target = WeakSnapping.Get())
 			{
-				if (UStageSnappingComponent* Target = WeakSnapping.Get())
-				{
-					Target->SetSnapToItemsEnabled(!Target->IsSnapToItemsEnabled());
-				}
-			}),
-			FCanExecuteAction::CreateLambda([bCanToggle = Snapping != nullptr]() { return bCanToggle; }),
-			FIsActionChecked::CreateLambda([bSnapToItems]() { return bSnapToItems; })),
-		NAME_None, EUserInterfaceActionType::ToggleButton);
-	Menu.EndSection();
-
-	return Menu.MakeWidget();
+				Target->SetSnapToItemsEnabled(!Target->IsSnapToItemsEnabled());
+			}
+		}));
+	return Menu;
 }
 
-TSharedRef<SWidget> UStageViewportToolbar::BuildTransformMenu()
+FStageMenu UStageViewportToolbar::BuildTransformMenu()
 {
 	using namespace StageViewportToolbar;
 
@@ -600,55 +565,45 @@ TSharedRef<SWidget> UStageViewportToolbar::BuildTransformMenu()
 	const AModularTransformGizmo* Gizmo = WeakGizmo.Get();
 	const EGizmoMode CurrentMode = Gizmo ? Gizmo->GetMode() : EGizmoMode::Translate;
 
-	FMenuBuilder Menu(/*bInShouldCloseWindowAfterMenuSelection*/ true, /*InCommandList*/ nullptr);
-	Menu.BeginSection(TEXT("Transform"), LOCTEXT("TransformSection", "Transform Tool (Space cycles)"));
+	FStageMenu Menu;
+	FStageMenuSection& Section = Menu.AddSection(TEXT("Transform"), LOCTEXT("TransformSection", "Transform Tool (Space cycles)"));
 	for (const EGizmoMode Mode : GizmoModes)
 	{
-		const bool bChecked = Gizmo && Mode == CurrentMode;
-		Menu.AddMenuEntry(GetGizmoModeName(Mode), GetGizmoModeTip(Mode), FSlateIcon(),
-			FUIAction(
-				FExecuteAction::CreateLambda([WeakGizmo, Mode]()
+		Section.Entries.Add(StageMenu::MakeRadio(GetGizmoModeName(Mode), GetGizmoModeTip(Mode), Gizmo && Mode == CurrentMode, Gizmo != nullptr,
+			[WeakGizmo, Mode]()
+			{
+				if (AModularTransformGizmo* Target = WeakGizmo.Get())
 				{
-					if (AModularTransformGizmo* Target = WeakGizmo.Get())
-					{
-						Target->SetMode(Mode);
-					}
-				}),
-				FCanExecuteAction::CreateLambda([bCanPick = Gizmo != nullptr]() { return bCanPick; }),
-				FIsActionChecked::CreateLambda([bChecked]() { return bChecked; })),
-			NAME_None, EUserInterfaceActionType::RadioButton);
+					Target->SetMode(Mode);
+				}
+			}));
 	}
-	Menu.EndSection();
-	return Menu.MakeWidget();
+	return Menu;
 }
 
-TSharedRef<SWidget> UStageViewportToolbar::BuildToolsMenu()
+FStageMenu UStageViewportToolbar::BuildToolsMenu()
 {
 	// Opening a panel is workspace layout, not stage state. The workspace lives on the game instance; held weakly.
 	const UGameInstance* GameInstance = GetGameInstance();
 	const TWeakObjectPtr<UStageWorkspaceSubsystem> WeakWorkspace = GameInstance ? GameInstance->GetSubsystem<UStageWorkspaceSubsystem>() : nullptr;
 
-	FMenuBuilder Menu(/*bInShouldCloseWindowAfterMenuSelection*/ true, /*InCommandList*/ nullptr);
-	const auto AddPanel = [&Menu, &WeakWorkspace](const FText& Label, const FText& Tip, FGameplayTag Panel)
+	FStageMenu Menu;
+	FStageMenuSection& Section = Menu.AddSection(TEXT("Tools"), LOCTEXT("ToolsSection", "Tool Windows"));
+	const auto AddPanel = [&Section, &WeakWorkspace](const FText& Label, const FText& Tip, FGameplayTag Panel)
 	{
-		Menu.AddMenuEntry(Label, Tip, FSlateIcon(),
-			FUIAction(
-				FExecuteAction::CreateLambda([WeakWorkspace, Panel]()
-				{
-					if (UStageWorkspaceSubsystem* Workspace = WeakWorkspace.Get())
-					{
-						Workspace->OpenPanel(Panel);
-					}
-				}),
-				FCanExecuteAction::CreateLambda([bCanOpen = WeakWorkspace.IsValid()]() { return bCanOpen; })));
+		Section.Entries.Add(StageMenu::MakeAction(Label, Tip, WeakWorkspace.IsValid(), [WeakWorkspace, Panel]()
+		{
+			if (UStageWorkspaceSubsystem* Workspace = WeakWorkspace.Get())
+			{
+				Workspace->OpenPanel(Panel);
+			}
+		}));
 	};
-	Menu.BeginSection(TEXT("Tools"), LOCTEXT("ToolsSection", "Tool Windows"));
 	AddPanel(LOCTEXT("Sketch", "Sketch to Stage"),
 		LOCTEXT("SketchTip", "Draw stage shapes, truss lines and fixtures from above, or import a plan, and generate them in 3D."), StageCraftTags::Panel_Sketch);
 	AddPanel(LOCTEXT("Assist", "AI Assistant"),
 		LOCTEXT("AssistTip", "Ask about the stage, or ask for fixtures, cues, weather and reports in plain language."), StageCraftTags::Panel_Assistant);
-	Menu.EndSection();
-	return Menu.MakeWidget();
+	return Menu;
 }
 
 // --- Pushed changes ---

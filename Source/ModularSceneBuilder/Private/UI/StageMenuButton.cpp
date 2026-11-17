@@ -58,12 +58,22 @@ void UStageMenuButton::ReleaseSlateResources(bool bReleaseChildren)
 	MyLabel.Reset();
 }
 
+FStageMenu UStageMenuButton::GetMenu() const
+{
+	// Unbound only if the owner was torn down while the button was still clickable; an empty popup is harmless.
+	return OnGetMenu.IsBound() ? OnGetMenu.Execute() : FStageMenu();
+}
+
+void UStageMenuButton::OpenMenu()
+{
+	if (MyComboButton && GetIsEnabled())
+	{
+		MyComboButton->SetIsOpen(true);
+	}
+}
+
 TSharedRef<SWidget> UStageMenuButton::HandleGetMenuContent()
 {
-	if (OnGetMenuContent.IsBound())
-	{
-		return OnGetMenuContent.Execute();
-	}
-	// Unbound only if the owner was torn down while the button was still clickable; an empty popup is harmless.
-	return SNew(SSpacer);
+	const FStageMenu Menu = GetMenu();
+	return Menu.IsEmpty() ? StaticCastSharedRef<SWidget>(SNew(SSpacer)) : StageMenu::MakeWidget(Menu);
 }

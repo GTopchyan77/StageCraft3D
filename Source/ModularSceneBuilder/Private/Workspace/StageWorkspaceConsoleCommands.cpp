@@ -32,6 +32,8 @@
 #include "UnrealClient.h"
 #include "Widgets/SWindow.h"
 #include "Startup/SStageBrandedLoader.h"
+#include "UI/StageMenuButton.h"
+#include "UI/StageMenuModel.h"
 #include "Workspace/StageWorkspaceShell.h"
 #include "Workspace/StageWorkspaceSubsystem.h"
 
@@ -200,13 +202,74 @@ namespace StageWorkspaceCommands
 		SaveWindowShot(Window.ToSharedRef(), TEXT("Window"));
 		if (Args.Contains(TEXT("All")))
 		{
+			// Their children too: an open dropdown of a floating panel is a window of that panel's window.
 			int32 Floating = 0;
-			for (const TSharedRef<SWindow>& Child : Window->GetChildWindows())
+			TArray<TSharedRef<SWindow>> Pending = Window->GetChildWindows();
+			while (!Pending.IsEmpty())
 			{
+				const TSharedRef<SWindow> Child = Pending[0];
+				Pending.RemoveAt(0);
 				if (Child->IsVisible())
 				{
 					SaveWindowShot(Child, FString::Printf(TEXT("Floating%d"), ++Floating));
+					Pending.Append(Child->GetChildWindows());
 				}
+			}
+		}
+	}
+
+	/**
+	 * The live toolbar dropdown of this world whose widget name is Name (SketchSnapMenu, SourceMenu, SnapMenuButton...). Only one
+	 * with a Slate widget counts: a panel rebuilt by a layout change leaves its old, unbound widgets until garbage collection.
+	 */
+	UStageMenuButton* FindMenuButton(UWorld* World, const FString& Name)
+	{
+		for (TObjectIterator<UStageMenuButton> It; It; ++It)
+		{
+			if (!It->IsTemplate() && It->GetWorld() == World && It->GetName() == Name && It->GetCachedWidget().IsValid())
+			{
+				return *It;
+			}
+		}
+		return nullptr;
+	}
+
+	/**
+	 * "<Dropdown> Describe | Open | Pick <Label/Submenu label>": logs a toolbar dropdown's label and entries as it would open now,
+	 * opens it (for a screenshot), or picks an entry through the same description a click runs. Labels may contain spaces.
+	 */
+	void Menu(const TArray<FString>& Args, UWorld* World)
+	{
+		if (Args.Num() < 2)
+		{
+			UE_LOG(LogStageWorkspace, Display, TEXT("Usage: StageCraft.Workspace.Menu <Dropdown> Describe | Open | Pick <Label/Submenu label>"));
+			return;
+		}
+		UStageMenuButton* Button = FindMenuButton(World, Args[0]);
+		if (!Button)
+		{
+			UE_LOG(LogStageWorkspace, Display, TEXT("Menu: no dropdown named %s."), *Args[0]);
+			return;
+		}
+		if (Args[1].Equals(TEXT("Open"), ESearchCase::IgnoreCase))
+		{
+			Button->OpenMenu();
+			UE_LOG(LogStageWorkspace, Display, TEXT("Menu %s: opened."), *Args[0]);
+		}
+		else if (Args[1].Equals(TEXT("Pick"), ESearchCase::IgnoreCase))
+		{
+			const FString Path = FString::Join(TArrayView<const FString>(Args).RightChop(2), TEXT(" "));
+			UE_LOG(LogStageWorkspace, Display, TEXT("Menu %s: pick \"%s\" %s."), *Args[0], *Path,
+				StageMenu::Pick(Button->GetMenu(), Path) ? TEXT("ran") : TEXT("REFUSED (missing, greyed out or a submenu)"));
+		}
+		else
+		{
+			UE_LOG(LogStageWorkspace, Display, TEXT("Menu %s: label \"%s\"%s."), *Args[0], *Button->GetLabel().ToString(), Button->GetIsEnabled() ? TEXT("") : TEXT(", disabled"));
+			TArray<FString> Lines;
+			StageMenu::Describe(Button->GetMenu()).ParseIntoArrayLines(Lines);
+			for (const FString& Line : Lines)
+			{
+				UE_LOG(LogStageWorkspace, Display, TEXT("Menu %s: %s"), *Args[0], *Line);
 			}
 		}
 	}
@@ -546,6 +609,8 @@ namespace StageWorkspaceCommands
 		FConsoleCommandWithWorldAndArgsDelegate::CreateStatic(&Screenshot));
 	FAutoConsoleCommandWithWorldAndArgs ScreenshotWindowCommand(TEXT("StageCraft.Workspace.ScreenshotWindow"), TEXT("[All] Saves the main window as Slate draws it, dialogs and overlays included (All: and every floating panel window), to Saved/Screenshots."),
 		FConsoleCommandWithWorldAndArgsDelegate::CreateStatic(&ScreenshotWindow));
+	FAutoConsoleCommandWithWorldAndArgs MenuCommand(TEXT("StageCraft.Workspace.Menu"), TEXT("<Dropdown> Describe | Open | Pick <Label/Submenu label>: a toolbar dropdown's entries, opened, or one picked as a click would (SketchEditMenu, SketchSnapMenu, SketchItemsMenu, SketchPhotoMenu, SourceMenu, ViewMenuButton, SnapMenuButton, TransformMenuButton, ToolsMenuButton)."),
+		FConsoleCommandWithWorldAndArgsDelegate::CreateStatic(&Menu));
 	FAutoConsoleCommandWithWorldAndArgs DumpWidgetCommand(TEXT("StageCraft.Workspace.DumpWidget"), TEXT("<ClassNamePart> Logs a live widget's tree (names, classes, slot types)."),
 		FConsoleCommandWithWorldAndArgsDelegate::CreateStatic(&DumpWidget));
 	FAutoConsoleCommandWithWorldAndArgs ScrollPanelsCommand(TEXT("StageCraft.Workspace.ScrollPanels"), TEXT("[end|start] [horizontal] | to=<WidgetName>: scrolls every vertical (or horizontal) panel list to its end (default) or start, or the list holding that widget until it is at the top, for screenshots."),

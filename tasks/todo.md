@@ -696,7 +696,7 @@ Gevor's choices: automation tests on a harness game instance (not AFunctionalTes
 - [x] AI chat: reply text selectable (mouse selection, Ctrl+C, context menu), COPY kept
 - [x] Viewport toolbar: SNAP / ANGLE / MOVE-ROTATE-SCALE / SKETCH-ASSIST segments folded into Snap, Transform and Tools dropdowns (View menu pattern)
 - [x] Sketch import accuracy: Regularize squares near-rectilinear decks and straightens near-axis truss (both readers); Claude reports a written dimension (scale) that sets the plan's real width
-- [ ] Other crowded panels (Sketch window toolbar, Audio panel) for the same dropdown treatment, after Gevor's look at the viewport bar
+- [x] Other crowded panels (Sketch window toolbar, Audio panel) for the same dropdown treatment (STATE.md #100, Phase 50)
 - [x] Entitlement tags StageCraft.Entitlement.Pro.* and GameMode gates (Step 6, STATE.md #93)
 
 ## Phase 38c - MV2-MV3 with performance and memory work (requested by Gevor 2026-11-10; STATE.md #88)
@@ -812,3 +812,11 @@ Gevor's choices: automation tests on a harness game instance (not AFunctionalTes
 - [x] Tests StageCraft.Mvr.Preserved, .Diff, .Reimport (+ .Plan, .Review); Scripts/Tests/RunMvrReimportCheck.ps1 (-game, PASS); help EN/HY (mvr-import, mvr-export); subagent review fixes
 - [ ] Preserve objects StageCraft does not place (scene objects, supports, video screens, projectors, focus points) and AUXData with their files (needs scene-level storage: a scene format bump)
 - [ ] Gevor: re-import a real plot that changed in Vectorworks / grandMA3 and check what the review shows
+
+## Phase 50 - Toolbar dropdowns for the Sketch window and the Audio panel (requested by Gevor 2026-11-17; STATE.md #100; ADR 0008, 0015, 0029 amendments)
+- [x] FStageMenu: toolbar dropdowns described as data (sections; action, radio, toggle, submenu entries), UStageMenuButton builds the themed popup; viewport View / Snap / Transform / Tools converted unchanged
+- [x] Sketch to Stage: one tool row (FREEHAND ... ERASE) + Edit / Snap / Items / Photo dropdowns, DECK / TRUSS / PHOTO WIDTH sliders in one row; Items lists every candidate (no click-to-cycle); TRACE ANYWAY / USE COLOURS shown only after a refused photo
+- [x] Audio: SOURCE dropdown (Off, File..., Input, System Audio, Test Beat + Keep Playing in the Background) replaces the five buttons and the background row; anchors point at it
+- [x] Tests StageCraft.UI.MenuModel, .SketchMenus, .AudioMenu; StageCraft.Workspace.Menu (dev) + Scripts/Tests/RunToolbarMenuCheck.ps1 (-game); help EN/HY (audio); subagent review fixes
+- [ ] Gevor: look at the Sketch window and the Audio panel and click through the dropdowns
+- [ ] Assistant "show me" for a source now pulses the closed SOURCE dropdown; answers could say "SOURCE > Off"

@@ -6,17 +6,18 @@
 #include "Components/Widget.h"
 #include "Fonts/SlateFontInfo.h"
 #include "Styling/SlateTypes.h"
+#include "UI/StageMenuModel.h"
 #include "StageMenuButton.generated.h"
 
-/** Builds the popup each time the menu opens. Must return a valid widget. */
-DECLARE_DELEGATE_RetVal(TSharedRef<class SWidget>, FOnStageMenuButtonGetContent);
+/** Describes the menu each time it opens, from the owner's state at that moment. */
+DECLARE_DELEGATE_RetVal(FStageMenu, FOnStageMenuButtonGetMenu);
 
 /**
  * A dropdown button that opens a popup menu, drawn with the StageCraft theme: the UMG counterpart of the Unreal Editor's
  * viewport "Lit" menu button. It shows a label and an arrow; clicking it asks the owner for the menu content.
  *
- * - The owner builds the menu fresh on every open (OnGetMenuContent), normally with FMenuBuilder, so the popup shows the
- *   state at that moment and needs no bindings of its own. Picking an entry closes the menu.
+ * - The owner describes the menu fresh on every open (OnGetMenu, an FStageMenu), so the popup shows the state at that moment
+ *   and needs no bindings of its own. Picking an entry closes the menu.
  * - Never keyboard-focusable, like UStageToolButton, so viewport shortcuts keep working after a click.
  * - Call ApplyTheme before the Slate widget is built (the style is copied into it then).
  */
@@ -31,8 +32,16 @@ public:
 	/** Updates the shown label; safe before and after the Slate widget exists. */
 	void SetLabel(const FText& InLabel);
 
+	const FText& GetLabel() const { return Label; }
+
 	/** Bound by the owning panel; it owns this widget, so the binding cannot outlive its target. */
-	FOnStageMenuButtonGetContent OnGetMenuContent;
+	FOnStageMenuButtonGetMenu OnGetMenu;
+
+	/** The menu as it would open now; empty when unbound. Scripted checks read and pick it (StageCraft.Workspace.Menu). */
+	FStageMenu GetMenu() const;
+
+	/** Opens the popup as a click would (no-op before the Slate widget exists or while disabled). */
+	void OpenMenu();
 
 protected:
 	//~ Begin UWidget Interface
