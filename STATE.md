@@ -9882,9 +9882,88 @@ All times in ms.
   - SHOW ME pressed with a physical mouse click in the assistant panel. The run used `StageCraft.Assistant.ShowMe`, which calls the same `ShowControl`.
   - An online (Claude) answer naming the path. Only the digest it receives was checked.
 
-**Commit:** uncommitted (working tree).
+**Commit:** `1e91a78`.
 
 **Known issues / follow-ups**
 - The Items submenu for a large library: the engine popup already shows a "Start typing to search" box (seen in this entry's screenshot). Whether it finds entries inside the Items submenu is unchecked; check that before adding grouping.
 - Armenian control entries do not exist (the anchor tables are English), as before.
 - **Gevor:** ask the assistant "how do I turn the music off", press SHOW ME, and check that the SOURCE dropdown opens under the panel.
+
+## #102 — Typing searches the toolbar dropdowns (submenus included); the Sketch Items list groups a large library by fixture type (2026-11-17)
+
+**What & why**
+- **Context.** Gevor asked (2026-11-17) for two things:
+  - check whether the engine's "Start typing to search" box finds entries inside the Sketch window's Items submenus, and add grouping or search if not, or if a large library stays hard to scan;
+  - review `tasks/todo.md` for other self-contained code items.
+  #101 now carries its commit `1e91a78`.
+- **Finding 1, from the engine source (UE 5.8 `MultiBox.cpp`).** The search does reach submenus:
+  - `FMenuBuilder` is searchable and recursively searchable by default, and `SMultiBoxWidget::FlattenSubMenusRecursive` expands up to 5 levels of submenus on the first typed character.
+  - The box is always shown, because `FMultiBoxSettings::MenuSearchFieldVisibilityThreshold` is unset (0).
+- **Finding 2, in-game (`StageCraft.Workspace.Type`, which sends key events through `FSlateApplication` like a keyboard).** Typing never reached the menu: run ItemsSearchA showed "0 of 3 characters handled".
+  - **A click** (`SComboButton::OnButtonClicked`) opens the menu without focusing it. It focuses content only when the button is focusable or a widget-to-focus is set. `UStageMenuButton` is deliberately non-focusable, so viewport shortcuts keep working after a click, and nothing was set: the menu never had keyboard focus.
+  - **`OpenMenu`** (SetIsOpen) focused the menu stack's `SMenuContentWrapper`, which is a parent of the `SMultiBoxWidget`. Key events bubble up from the focused widget, so they never reached it.
+  - So the search box existed in every dropdown (#101's screenshot showed one) but could not be used, in the Items submenus or anywhere else.
+- **Fix: `UStageMenuButton` (one place, every toolbar dropdown).**
+  - **On open:** `HandleGetMenuContent` records the menu widget and sets it as the combo button's widget-to-focus, so a click focuses the menu itself. `OpenMenu` (SHOW ME, scripts) focuses it explicitly. The button stays non-focusable.
+  - **On close:** the menu leaves focus nowhere. Escape runs `DismissAllMenus` and then `ClearUserFocus`, and a pick destroys the focused menu. The engine gives focus back only when the OS re-activates the owner window, which a scripted run showed does not always happen. `HandleMenuOpenChanged(false)` therefore restores the widget that had focus before the menu, one tick later and only if nothing has taken focus since, so a click into a text field keeps it.
+  - The pending restore is a weak one-shot `FTSTicker`, removed in `ReleaseSlateResources`.
+  - Escape now clears the search first, then closes the menu.
+- **Grouping (`StageSketchMenus`, pure).**
+  - `FItemChoice::Groups` is optional, one kind per candidate. The canvas fills it with the fixture type (`EStageFixtureKind` display name); other items get no kind.
+  - Past `MaxUngroupedItems` (20) candidates with more than one kind, an element's list becomes one submenu per kind, sorted by name, with "Other" for no kind and each candidate once in catalog order. A pick still reports the candidate's index in the full list.
+  - **Why a threshold:** 20 rows fit on screen, and today's 13 fixtures across 11 kinds would only gain a click per pick. The live menu therefore stays flat, and a GDTF library past 20 groups automatically.
+  - **Why only fixtures:** decks and trusses are few, and their kinds have no display names.
+  - Search reaches the grouped entries too (two submenu levels, well under the engine's five).
+- **Dev commands (non-Shipping):**
+  - `StageCraft.Workspace.Type <text> | {Escape} | {Enter} | {Down} | {Up} | {Focus}`.
+  - `StageCraft.Workspace.Menu <Dropdown> Click` sends a synthetic left click through `FSlateApplication` at the button's centre, so the real click path runs.
+
+**todo.md review (the second request)**
+- **Stale boxes ticked:**
+  - Feature knowledge base and reply buttons / flashing panels: built in H1, STATE.md #72, as the code-generated index and SHOW ME / OPEN PANEL.
+  - MV4 export and MV5 re-import, twice: #90, #93, #99.
+- **Not only manual and hardware/Stripe items remain.** Self-contained code follow-ups are still open. They are not re-verified here, and some may be stale like the four above.
+  - **Robustness (audit):** partial scene load stays dirty and waits for imports (R2); sanitise restored SaveGame state (R6); move a corrupt Imports.json aside (R8); world-based tests for GameMode rules, the request bridge, cues and economy (R11).
+  - **Tests:** find the existing test that saves GameUserSettings (todo line 555).
+  - **UI:** 1 px header lines in code-built panels (ADR 0009 E7); `DisableNativeTick` / invalidation for idle panels.
+  - **Performance:** a fixture ID index (O(n²) registration on load); batched `OnParameterChanged` during fades.
+  - **Features:** undo for attribute edits; GO shortcut and tracking cues; auto-numbered labels; hover highlight / local-space gizmo; Sketch saved with scenes; BOM answers and export completion in chat (H4 follow-ups); H3b online tool loop; MVR set pieces / preserved scene objects (needs a scene format bump); GDTF logo next to "Powered by GDTF" (required before release).
+  - **Blueprint / designer:** HUD layout, catalog and show panel WBPs; these are Blueprint work.
+  - **Needs Gevor or hardware:** benchmarks with the second editor closed, real GDTF/MVR corpora, real controllers and phones, Stripe keys and Prices, the production licence key, and decisions D1-D8 / M1-M4 / D7.
+
+**Files changed**
+- `Source/ModularSceneBuilder/Private/UI/StageMenuButton.h/.cpp` — menu focus on open, restore on close.
+- `Source/ModularSceneBuilder/Public/UI/StageSketchMenus.h`, `Private/UI/StageSketchMenus.cpp` — `FItemChoice::Groups`, `MaxUngroupedItems`, grouped Items.
+- `Source/ModularSceneBuilder/Private/UI/StageSketchCanvasWidget.cpp` — fixture types as kinds.
+- `Source/ModularSceneBuilder/Private/Workspace/StageWorkspaceConsoleCommands.cpp` — `Type`, `Menu … Click`, usage texts (dev only).
+- `Source/ModularSceneBuilder/Private/UI/Tests/StageMenuTests.cpp` — `StageCraft.UI.SketchMenus` grouping cases: split by kind in name order, each candidate once, chosen checked, pick index in the whole list; flat at 20, flat with one kind, flat when kinds do not match.
+- `Scripts/Tests/RunMenuSearchCheck.ps1` (new, `-game`).
+- `tasks/todo.md` (Phase 52, stale boxes), `STATE.md` (#101 commit, this entry).
+- No Blueprints, content assets, input actions or maps changed.
+
+**Verification**
+- **Automation (Claude):** `StageCraft.UI` 8/8; full suite 307/307 (the grouping cases are in the existing SketchMenus test). User data unchanged (127 files).
+- **Exploration runs (Claude, `-game`):**
+  - ItemsSearchA, before the fix: Open, then typing "LED" was handled 0 of 3, with focus on `SMenuContentWrapper`.
+  - ItemsSearchB, focus on open: "LED" and "wash" were handled, and the screenshots show the Fixture submenu's entries filtered ("LED" leaves five, "wash" leaves two). Focus ended at "nothing" after Escape.
+  - ItemsSearchC, with the restore: focus `SWindow` before opening and `SWindow` again after Escape ×2.
+- **`Scripts/Tests/RunMenuSearchCheck.ps1` SearchA (Claude): PASS.**
+  - A synthetic click on Items: down and up handled, focus `SMultiBoxWidget`.
+  - "LED" handled 3 of 3, with focus moving to the search box. Escape cleared the search, then closed the menu, and focus went back to `SWindow`.
+  - SOURCE through Open (the SHOW ME path): "beat" handled 4 of 4, filtered to Test Beat, focus back afterwards. Nothing was picked (the source is still Off).
+  - Both open menus are in the screenshots.
+- **Regression runs (Claude):** `RunToolbarMenuCheck.ps1` MenuD PASS; `RunShowMeDropdownCheck.ps1` ShowMeC PASS.
+- **Builds (Claude):** Editor, Game Development and Game Shipping succeeded with no warnings.
+- **Shipping scan (UTF-16):** "{0} catalog items of this kind." is present. `StageCraft.Workspace.Type`, `StageCraft.Workspace.Menu`, "{Escape}" and the click log line are absent. A "clicked at" match is the engine's `UClickDragTool` string.
+- **Not verified:**
+  - a physical mouse click and real keyboard typing;
+  - focus returning to `SViewport` specifically: in scripted runs the baseline focus is the `SWindow`, and the restore puts back whatever was there;
+  - a viewport shortcut right after closing a menu;
+  - the grouped Items submenu on screen: the live catalog has 13 fixtures, so the grouping is covered only by the unit tests.
+
+**Commit:** uncommitted (working tree).
+
+**Known issues / follow-ups**
+- Search results are headed by the submenu's label, which includes the current item ("Fixture: Beam 280 (Moving Head)"). It reads as a path but could suggest the results belong to that item.
+- Decks and trusses are never grouped (no display kinds); revisit if their catalogs grow.
+- **Gevor:** click Items in the Sketch window, type "led", press Escape twice, then press a viewport shortcut.

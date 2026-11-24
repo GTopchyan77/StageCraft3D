@@ -442,8 +442,8 @@ Decisions (Gevor, 2026-10-30): the symptom is thin geometry crawling during came
 ## Phase 26 — Offline-first assistant: knowledge base, multi-step, memory (requested by Gevor 2026-10-30; next free STATE.md entry, ADR 0022)
 Decisions (Gevor, 2026-10-30): the free offline engine is the full default; Claude (ANTHROPIC_API_KEY) only extends it.
 Gevor's fixture-suite request took #49 (Phase 27) and the marketplace took #50 / ADR 0021 (Phase 28); this phase follows them unchanged.
-- [ ] Feature knowledge base (DataTable + CSV, English and Armenian), `StageAIFeatureSearch`, `how_to` / `where_is` / `open_panel`
-- [ ] Reply action buttons; open and flash panels
+- [x] Feature knowledge base (DataTable + CSV, English and Armenian), `StageAIFeatureSearch`, `how_to` / `where_is` / `open_panel` (superseded and built in H1, STATE.md #72: StageKnowledge index from the code's tables and help articles; box found stale in #102)
+- [x] Reply action buttons; open and flash panels (SHOW ME / OPEN PANEL and the anchor pulse, H1, STATE.md #72; box found stale in #102)
 - [x] Multi-step prompts (splitter, queued plan, stop on first refusal) — Phase H4, STATE.md #75
 - [x] Conversation memory (last affected items, repeat with replaced slots) — Phase H4, STATE.md #75
 - [ ] New actions: selection, cue update/delete, BOM answers, export completion in chat (fixture parameters: done in #49 as set_fixture; cue update/delete in #74, selection in #75; BOM answers and export completion in chat still open)
@@ -689,7 +689,7 @@ Gevor's choices: automation tests on a harness game instance (not AFunctionalTes
 - [x] MV2 import: review, GDTF types through the library (AddEmbeddedFile), fixtures (type, ID, patch, focus aim, label, MVR UUID) and trusses (runs from geometry bounds) placed a slice per frame, all or nothing, ONE undo step with a fixture group per layer (STATE.md #88)
 - [x] MV3 UI: File > Import MVR Scene..., drag and drop, the review dialog with progress, status bar outcome, help article EN/HY (STATE.md #88)
 - [ ] MV2 follow-ups: set pieces / supports / video screens (needs M2: .glb through the runtime model import), upright truss towers, Geometry3D's own Matrix, GDTF revision check on reuse
-- [ ] MV4 export (Pro gate), MV5 re-import (update by MVR UUID, preserved nodes)
+- [x] MV4 export (Pro gate), MV5 re-import (update by MVR UUID, preserved nodes) (STATE.md #90, #93, #99; box found stale in #102)
 
 ## Phase 38b - UX and quality pass before MV2 (requested by Gevor 2026-11-10; STATE.md #87)
 - [x] FOLLOW MUSIC starts the SYSTEM source (WASAPI loopback: YouTube, any player) when no source is listening (RequestFollowMusic)
@@ -727,7 +727,7 @@ Gevor's choices: automation tests on a harness game instance (not AFunctionalTes
 - [ ] Gevor: open an exported .mvr in Vectorworks, grandMA3 or an MVR viewer (ADR 0034 section 10)
 - [ ] Real meshes for trusses and set pieces instead of boxes (DCC bridge exporter per item; M3 follow-up)
 - [x] Step 6: Pro entitlement StageCraft.Entitlement.Pro.MvrExport in EvaluateMvrExport (STATE.md #93)
-- [ ] MV5: re-import differences, preserved unknown nodes
+- [x] MV5: re-import differences, preserved unknown nodes (STATE.md #99; box found stale in #102)
 
 ## Phase 41 - Step 4: GDTF Share downloads, download manager, package FIXT section (requested by Gevor 2026-11-11; STATE.md #91; ADR 0033 section 18)
 - [x] GDTF Share API terms checked (per-user accounts, 2 h session, 120 min list refresh, 24 h cache, uploader shown, attribution); ADR 0033 section 18.1
@@ -820,7 +820,7 @@ Gevor's choices: automation tests on a harness game instance (not AFunctionalTes
 - [x] Tests StageCraft.UI.MenuModel, .SketchMenus, .AudioMenu; StageCraft.Workspace.Menu (dev) + Scripts/Tests/RunToolbarMenuCheck.ps1 (-game); help EN/HY (audio); subagent review fixes
 - [ ] Gevor: look at the Sketch window and the Audio panel and click through the dropdowns
 - [x] Assistant "show me" for a source now pulses the closed SOURCE dropdown; answers could say "SOURCE > Off" (STATE.md #101, Phase 51)
-- [ ] Items submenu for a large fixture library: the engine popup already has a "Start typing to search" box (seen in the #101 screenshot); check whether it finds Items submenu entries before adding grouping
+- [x] Items submenu for a large fixture library: the engine search does reach submenu entries, but typing never reached it (focus); fixed, and long lists group by fixture type (STATE.md #102, Phase 52)
 
 ## Phase 51 - SHOW ME and answers for dropdown entries (requested by Gevor 2026-11-17; STATE.md #101; ADR 0030 section 18)
 - [x] FStageUIAnchor::Menu (the dropdown an anchored control is an entry of) + StageUIAnchors::DescribePath; the Audio SOURCE entries and background playback set it, the row caption reads it
@@ -828,3 +828,12 @@ Gevor's choices: automation tests on a harness game instance (not AFunctionalTes
 - [x] SHOW ME (and the Problems panel's go-there) opens the dropdown after pulsing it, once it is laid out; UStageMenuButton::OpenMenu reports whether it opened
 - [x] Tests StageCraft.UI.AudioMenu (anchors with a Menu == SOURCE entries, paths) and StageCraft.Assistant.Knowledge checks; Scripts/Tests/RunShowMeDropdownCheck.ps1 (-game) PASS; RunToolbarMenuCheck PASS
 - [ ] Gevor: ask the assistant "how do I turn the music off", press SHOW ME and check the SOURCE dropdown opens
+
+## Phase 52 - Typing searches the toolbar dropdowns; Items grouped for a large library (requested by Gevor 2026-11-17; STATE.md #102)
+- [x] Finding: the engine's "Start typing to search" already searches inside submenus (FMenuBuilder recursive search), but no typed key ever reached it: a click left focus outside the menu (non-focusable button), OpenMenu focused the menu stack's wrapper above it
+- [x] UStageMenuButton focuses the menu widget on open (click: SComboButton widget-to-focus; OpenMenu: explicit) and gives focus back one tick after it closes when nothing else took it; the button stays non-focusable
+- [x] Items: past StageSketchMenus::MaxUngroupedItems (20) candidates with more than one kind, one submenu per fixture type (name order, "Other" for no kind); picks keep the candidate's index
+- [x] Dev: StageCraft.Workspace.Type (text, {Escape} {Enter} {Down} {Up}, {Focus}) and Menu <Dropdown> Click (synthetic left click); Scripts/Tests/RunMenuSearchCheck.ps1 (-game) PASS; StageCraft.UI.SketchMenus grouping cases
+- [x] todo review: four stale boxes ticked (knowledge base and reply buttons, #72; MV4/MV5, #90/#99); the open code follow-ups are listed in STATE.md #102
+- [ ] Gevor: click Items in the Sketch window, type "led", Escape twice, then press a viewport shortcut (focus should be back)
+- [ ] Search results are headed by the submenu's label, which includes the current item ("Fixture: Beam 280 (Moving Head)"): readable as a path, but could suggest the results belong to it

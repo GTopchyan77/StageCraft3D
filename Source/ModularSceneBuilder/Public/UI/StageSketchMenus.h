@@ -46,9 +46,25 @@ namespace StageSketchMenus
 		EStageSketchElement Element = EStageSketchElement::Deck;
 		TArray<FText> Names;
 		int32 Chosen = INDEX_NONE;
+		/**
+		 * Optional, one per name: the kind each candidate is listed under when the list is long (the fixture type, "LED Par"). Left
+		 * empty, or of another length, the list is never grouped. An empty kind is listed under "Other".
+		 */
+		TArray<FText> Groups;
 	};
 
-	/** One submenu per element ("Deck: Stage Deck 2x1") listing its candidates (radio). A pick calls Pick with the candidate's index. */
+	/**
+	 * The most candidates an element lists directly. A longer list (a large fixture library) is split into one submenu per kind,
+	 * sorted by name, when FItemChoice::Groups names more than one. Up to this many fit on a screen without scrolling, and a short
+	 * list split by kind would only add a click.
+	 */
+	constexpr int32 MaxUngroupedItems = 20;
+
+	/**
+	 * One submenu per element ("Deck: Stage Deck 2x1") listing its candidates (radio), grouped by kind when the list is long (see
+	 * MaxUngroupedItems). A pick calls Pick with the candidate's index in Names, grouped or not. Typing in the open menu searches
+	 * every candidate, inside the submenus too.
+	 */
 	FStageMenu MakeItemsMenu(TConstArrayView<FItemChoice> Choices, TFunction<void(EStageSketchElement, int32)> Pick);
 
 	struct FPhotoState

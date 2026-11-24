@@ -4,6 +4,7 @@
 
 #include "CoreMinimal.h"
 #include "Components/Widget.h"
+#include "Containers/Ticker.h"
 #include "Fonts/SlateFontInfo.h"
 #include "Styling/SlateTypes.h"
 #include "UI/StageMenuModel.h"
@@ -18,7 +19,8 @@ DECLARE_DELEGATE_RetVal(FStageMenu, FOnStageMenuButtonGetMenu);
  *
  * - The owner describes the menu fresh on every open (OnGetMenu, an FStageMenu), so the popup shows the state at that moment
  *   and needs no bindings of its own. Picking an entry closes the menu.
- * - Never keyboard-focusable, like UStageToolButton, so viewport shortcuts keep working after a click.
+ * - The button is never keyboard-focusable, like UStageToolButton, so viewport shortcuts keep working after a click. The open
+ *   menu is focused instead, so typing searches it (submenus included) and Escape closes it.
  * - Call ApplyTheme before the Slate widget is built (the style is copied into it then).
  */
 UCLASS(MinimalAPI)
@@ -59,4 +61,12 @@ private:
 
 	TSharedPtr<class SComboButton> MyComboButton;
 	TSharedPtr<class STextBlock> MyLabel;
+	void HandleMenuOpenChanged(bool bOpen);
+
+	/** The open menu's widget (owned by the popup), focused so typing searches it; null when the menu was empty. */
+	TWeakPtr<class SWidget> MenuWidget;
+	/** What had keyboard focus when the menu opened (the viewport, usually), given back when the menu closes. */
+	TWeakPtr<class SWidget> FocusBeforeMenu;
+	/** The one-shot restore after a close; at most one pending. */
+	FTSTicker::FDelegateHandle RestoreFocusTicker;
 };

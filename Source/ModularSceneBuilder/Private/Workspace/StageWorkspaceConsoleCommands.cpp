@@ -8,6 +8,7 @@
 
 #if !UE_BUILD_SHIPPING
 
+#include "Algo/Find.h"
 #include "CollisionQueryParams.h"
 #include "Blueprint/UserWidget.h"
 #include "Blueprint/WidgetTree.h"
@@ -235,14 +236,14 @@ namespace StageWorkspaceCommands
 	}
 
 	/**
-	 * "<Dropdown> Describe | Open | Pick <Label/Submenu label>": logs a toolbar dropdown's label and entries as it would open now,
+	 * "<Dropdown> Describe | Open | Click | Pick <Label/Submenu label>": logs a toolbar dropdown's label and entries as it would open now,
 	 * opens it (for a screenshot), or picks an entry through the same description a click runs. Labels may contain spaces.
 	 */
 	void Menu(const TArray<FString>& Args, UWorld* World)
 	{
 		if (Args.Num() < 2)
 		{
-			UE_LOG(LogStageWorkspace, Display, TEXT("Usage: StageCraft.Workspace.Menu <Dropdown> Describe | Open | Pick <Label/Submenu label>"));
+			UE_LOG(LogStageWorkspace, Display, TEXT("Usage: StageCraft.Workspace.Menu <Dropdown> Describe | Open | Click | Pick <Label/Submenu label>"));
 			return;
 		}
 		UStageMenuButton* Button = FindMenuButton(World, Args[0]);
@@ -251,7 +252,25 @@ namespace StageWorkspaceCommands
 			UE_LOG(LogStageWorkspace, Display, TEXT("Menu: no dropdown named %s."), *Args[0]);
 			return;
 		}
-		if (Args[1].Equals(TEXT("Open"), ESearchCase::IgnoreCase))
+		if (Args[1].Equals(TEXT("Click"), ESearchCase::IgnoreCase))
+		{
+			// A left click at the button's centre through the same Slate entry points the mouse uses, so the real click path runs
+			// (SComboButton::OnButtonClicked and the focus it hands to the menu), not OpenMenu.
+			const TSharedPtr<SWidget> Widget = Button->GetCachedWidget();
+			FSlateApplication& Slate = FSlateApplication::Get();
+			const FGeometry& Geometry = Widget ? Widget->GetTickSpaceGeometry() : FGeometry();
+			const FVector2D Centre = FVector2D(Geometry.LocalToAbsolute(Geometry.GetLocalSize() * 0.5f));
+			const uint32 User = Slate.GetUserIndexForMouse();
+			const FPointerEvent Down(User, FSlateApplication::CursorPointerIndex, Centre, Centre, TSet<FKey>({ EKeys::LeftMouseButton }), EKeys::LeftMouseButton, 0.f, FModifierKeysState());
+			const FPointerEvent Up(User, FSlateApplication::CursorPointerIndex, Centre, Centre, TSet<FKey>(), EKeys::LeftMouseButton, 0.f, FModifierKeysState());
+			Slate.ProcessMouseMoveEvent(FPointerEvent(User, FSlateApplication::CursorPointerIndex, Centre, Centre, TSet<FKey>(), EKeys::Invalid, 0.f, FModifierKeysState()));
+			const bool bDown = Slate.ProcessMouseButtonDownEvent(nullptr, Down);
+			const bool bUp = Slate.ProcessMouseButtonUpEvent(Up);
+			const TSharedPtr<SWidget> Focused = Slate.GetUserFocusedWidget(Slate.GetUserIndexForKeyboard());
+			UE_LOG(LogStageWorkspace, Display, TEXT("Menu %s: clicked at (%.0f, %.0f) (down %s, up %s), focus %s."), *Args[0], Centre.X, Centre.Y,
+				bDown ? TEXT("handled") : TEXT("unhandled"), bUp ? TEXT("handled") : TEXT("unhandled"), Focused ? *Focused->GetTypeAsString() : TEXT("nothing"));
+		}
+		else if (Args[1].Equals(TEXT("Open"), ESearchCase::IgnoreCase))
 		{
 			UE_LOG(LogStageWorkspace, Display, TEXT("Menu %s: %s."), *Args[0], Button->OpenMenu() ? TEXT("opened") : TEXT("NOT opened (disabled)"));
 		}
@@ -271,6 +290,52 @@ namespace StageWorkspaceCommands
 				UE_LOG(LogStageWorkspace, Display, TEXT("Menu %s: %s"), *Args[0], *Line);
 			}
 		}
+	}
+
+	/**
+	 * "<Text...> | {Escape} | {Enter} | {Down} | {Up}": sends the text, one character at a time, or the named key, to whatever has
+	 * keyboard focus, through the same Slate entry points a keyboard uses. Scripted runs use it to type into an open menu's search
+	 * ("Start typing to search"), close the menu, and see where focus goes.
+	 */
+	void Type(const TArray<FString>& Args, UWorld* World)
+	{
+		const FString Text = FString::Join(Args, TEXT(" "));
+		if (Text.IsEmpty() || !FSlateApplication::IsInitialized())
+		{
+			UE_LOG(LogStageWorkspace, Display, TEXT("Usage: StageCraft.Workspace.Type <Text...> | {Escape} | {Enter} | {Down} | {Up}"));
+			return;
+		}
+		FSlateApplication& Slate = FSlateApplication::Get();
+		const uint32 User = Slate.GetUserIndexForKeyboard();
+		const TSharedPtr<SWidget> Focused = Slate.GetUserFocusedWidget(User);
+		const FString Before = Focused ? Focused->GetTypeAsString() : TEXT("nothing");
+		if (Text.Equals(TEXT("{Focus}"), ESearchCase::IgnoreCase))
+		{
+			UE_LOG(LogStageWorkspace, Display, TEXT("Type {Focus}: focus %s."), *Before);
+			return;
+		}
+		int32 Handled = 0;
+		int32 Sent = 0;
+		const TPair<const TCHAR*, FKey> Keys[] = { { TEXT("{Escape}"), EKeys::Escape }, { TEXT("{Enter}"), EKeys::Enter }, { TEXT("{Down}"), EKeys::Down }, { TEXT("{Up}"), EKeys::Up } };
+		const TPair<const TCHAR*, FKey>* Key = Algo::FindByPredicate(Keys, [&Text](const TPair<const TCHAR*, FKey>& Candidate) { return Text.Equals(Candidate.Key, ESearchCase::IgnoreCase); });
+		if (Key)
+		{
+			const FKeyEvent Event(Key->Value, FModifierKeysState(), User, /*bIsRepeat*/ false, /*CharacterCode*/ 0, /*KeyCode*/ 0);
+			Handled = Slate.ProcessKeyDownEvent(Event) ? 1 : 0;
+			Slate.ProcessKeyUpEvent(Event);
+			Sent = 1;
+		}
+		else
+		{
+			for (const TCHAR Character : Text)
+			{
+				Handled += Slate.ProcessKeyCharEvent(FCharacterEvent(Character, FModifierKeysState(), User, /*bIsRepeat*/ false)) ? 1 : 0;
+				++Sent;
+			}
+		}
+		const TSharedPtr<SWidget> After = Slate.GetUserFocusedWidget(User);
+		UE_LOG(LogStageWorkspace, Display, TEXT("Type \"%s\": %d of %d handled, focus %s -> %s."), *Text, Handled, Sent, *Before,
+			After ? *After->GetTypeAsString() : TEXT("nothing"));
 	}
 
 	/** Logs the widget tree of the first live user widget whose class name contains the argument: names, classes and slot types, for layout debugging. */
@@ -608,8 +673,10 @@ namespace StageWorkspaceCommands
 		FConsoleCommandWithWorldAndArgsDelegate::CreateStatic(&Screenshot));
 	FAutoConsoleCommandWithWorldAndArgs ScreenshotWindowCommand(TEXT("StageCraft.Workspace.ScreenshotWindow"), TEXT("[All] Saves the main window as Slate draws it, dialogs and overlays included (All: and every floating panel window), to Saved/Screenshots."),
 		FConsoleCommandWithWorldAndArgsDelegate::CreateStatic(&ScreenshotWindow));
-	FAutoConsoleCommandWithWorldAndArgs MenuCommand(TEXT("StageCraft.Workspace.Menu"), TEXT("<Dropdown> Describe | Open | Pick <Label/Submenu label>: a toolbar dropdown's entries, opened, or one picked as a click would (SketchEditMenu, SketchSnapMenu, SketchItemsMenu, SketchPhotoMenu, SourceMenu, ViewMenuButton, SnapMenuButton, TransformMenuButton, ToolsMenuButton)."),
+	FAutoConsoleCommandWithWorldAndArgs MenuCommand(TEXT("StageCraft.Workspace.Menu"), TEXT("<Dropdown> Describe | Open | Click | Pick <Label/Submenu label>: a toolbar dropdown's entries, opened, or one picked as a click would (SketchEditMenu, SketchSnapMenu, SketchItemsMenu, SketchPhotoMenu, SourceMenu, ViewMenuButton, SnapMenuButton, TransformMenuButton, ToolsMenuButton)."),
 		FConsoleCommandWithWorldAndArgsDelegate::CreateStatic(&Menu));
+	FAutoConsoleCommandWithWorldAndArgs TypeCommand(TEXT("StageCraft.Workspace.Type"), TEXT("<Text...> | {Escape} | {Enter} | {Down} | {Up} | {Focus}: types the text, or presses the key (Focus only logs it), in the widget with keyboard focus as the keyboard would (an open menu's search, for example)."),
+		FConsoleCommandWithWorldAndArgsDelegate::CreateStatic(&Type));
 	FAutoConsoleCommandWithWorldAndArgs DumpWidgetCommand(TEXT("StageCraft.Workspace.DumpWidget"), TEXT("<ClassNamePart> Logs a live widget's tree (names, classes, slot types)."),
 		FConsoleCommandWithWorldAndArgsDelegate::CreateStatic(&DumpWidget));
 	FAutoConsoleCommandWithWorldAndArgs ScrollPanelsCommand(TEXT("StageCraft.Workspace.ScrollPanels"), TEXT("[end|start] [horizontal] | to=<WidgetName>: scrolls every vertical (or horizontal) panel list to its end (default) or start, or the list holding that widget until it is at the top, for screenshots."),

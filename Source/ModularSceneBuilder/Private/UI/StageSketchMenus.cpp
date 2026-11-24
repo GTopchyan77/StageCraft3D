@@ -130,18 +130,52 @@ namespace StageSketchMenus
 		FStageMenuSection& Section = Menu.AddSection(TEXT("Items"), LOCTEXT("ItemsSection", "Built From"));
 		for (const FItemChoice& Choice : Choices)
 		{
-			TArray<FStageMenuEntry> Candidates;
-			Candidates.Reserve(Choice.Names.Num());
-			for (int32 Index = 0; Index < Choice.Names.Num(); ++Index)
+			const auto MakeCandidate = [&Choice, &Pick](int32 Index)
 			{
-				Candidates.Add(StageMenu::MakeRadio(Choice.Names[Index], LOCTEXT("ItemTip", "The catalog item this element is built from."),
+				return StageMenu::MakeRadio(Choice.Names[Index], LOCTEXT("ItemTip", "The catalog item this element is built from."),
 					Index == Choice.Chosen, true, [Pick, Element = Choice.Element, Index]()
 					{
 						if (Pick)
 						{
 							Pick(Element, Index);
 						}
-					}));
+					});
+			};
+
+			// Kinds in name order, each with its candidates in catalog order. Only a long list with more than one kind is grouped.
+			TArray<TPair<FText, TArray<int32>>> Kinds;
+			if (Choice.Names.Num() > MaxUngroupedItems && Choice.Groups.Num() == Choice.Names.Num())
+			{
+				for (int32 Index = 0; Index < Choice.Names.Num(); ++Index)
+				{
+					const FText Kind = Choice.Groups[Index].IsEmpty() ? LOCTEXT("OtherKind", "Other") : Choice.Groups[Index];
+					TPair<FText, TArray<int32>>* Existing = Kinds.FindByPredicate([&Kind](const TPair<FText, TArray<int32>>& Candidate) { return Candidate.Key.EqualTo(Kind); });
+					(Existing ? *Existing : Kinds.Emplace_GetRef(Kind, TArray<int32>())).Value.Add(Index);
+				}
+				Kinds.StableSort([](const TPair<FText, TArray<int32>>& A, const TPair<FText, TArray<int32>>& B) { return A.Key.CompareTo(B.Key) < 0; });
+			}
+
+			TArray<FStageMenuEntry> Candidates;
+			if (Kinds.Num() > 1)
+			{
+				for (const TPair<FText, TArray<int32>>& Kind : Kinds)
+				{
+					TArray<FStageMenuEntry> Members;
+					Members.Reserve(Kind.Value.Num());
+					for (const int32 Index : Kind.Value)
+					{
+						Members.Add(MakeCandidate(Index));
+					}
+					Candidates.Add(StageMenu::MakeSubMenu(Kind.Key, FText::Format(LOCTEXT("KindTip", "{0} catalog items of this kind."), Kind.Value.Num()), MoveTemp(Members)));
+				}
+			}
+			else
+			{
+				Candidates.Reserve(Choice.Names.Num());
+				for (int32 Index = 0; Index < Choice.Names.Num(); ++Index)
+				{
+					Candidates.Add(MakeCandidate(Index));
+				}
 			}
 			const FText Current = Choice.Names.IsValidIndex(Choice.Chosen) ? Choice.Names[Choice.Chosen] : LOCTEXT("NoItem", "none in catalog");
 			Section.Entries.Add(StageMenu::MakeSubMenu(FText::Format(LOCTEXT("ItemLabel", "{0}: {1}"), DescribeElement(Choice.Element), Current),

@@ -14,6 +14,7 @@
 #include "Components/VerticalBox.h"
 #include "Components/VerticalBoxSlot.h"
 #include "Data/BaseItemData.h"
+#include "Data/LightingFixtureData.h"
 #include "Engine/GameInstance.h"
 #include "Engine/World.h"
 #include "Import/StageFileDialog.h"
@@ -572,6 +573,10 @@ FStageMenu UStageSketchCanvasWidget::BuildItemsMenu()
 				Choice.Chosen = Items.Num();
 			}
 			Choice.Names.Add(Item->DisplayName);
+			// The fixture type groups a long list (a large GDTF library). Other items have no kind: they all land in one group, and a
+			// single group is never split, so decks and trusses stay one list.
+			const ULightingFixtureData* Fixture = Cast<ULightingFixtureData>(Item);
+			Choice.Groups.Add(Fixture ? StaticEnum<EStageFixtureKind>()->GetDisplayNameTextByValue(static_cast<int64>(Fixture->FixtureKind)) : FText::GetEmpty());
 			Items.Add(Item);
 		}
 	}

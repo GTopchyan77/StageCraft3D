@@ -162,6 +162,58 @@ bool FStageSketchMenusTest::RunTest(const FString& Parameters)
 	TestTrue(TEXT("Pick the other deck"), StageMenu::Pick(Items, TEXT("Deck: Deck 2x2/Deck 2x1")));
 	TestTrue(TEXT("The pick names the deck element and candidate 0"), Picked.IsSet() && Picked->Key == EStageSketchElement::Deck && Picked->Value == 0);
 
+	// A large library (STATE.md #102): past MaxUngroupedItems the candidates are split by kind, kinds in name order, each candidate
+	// once, and a pick still names the candidate's index in the full list.
+	const auto MakeLibrary = [](int32 Count, bool bOneKind)
+	{
+		const TCHAR* Kinds[] = { TEXT("Wash"), TEXT("Spot"), TEXT("LED Par"), TEXT("") };
+		FItemChoice Library{ EStageSketchElement::Fixture, {}, 7, {} };
+		for (int32 Index = 0; Index < Count; ++Index)
+		{
+			Library.Names.Add(FText::FromString(FString::Printf(TEXT("Fixture %02d"), Index)));
+			Library.Groups.Add(Text(bOneKind ? TEXT("Wash") : Kinds[Index % UE_ARRAY_COUNT(Kinds)]));
+		}
+		return Library;
+	};
+	const auto CountRadios = [](TConstArrayView<FStageMenuEntry> Entries)
+	{
+		int32 Count = 0;
+		for (const FStageMenuEntry& Entry : Entries)
+		{
+			Count += Entry.Kind == EStageMenuEntryKind::Radio;
+			for (const FStageMenuEntry& Sub : Entry.SubEntries)
+			{
+				Count += Sub.Kind == EStageMenuEntryKind::Radio;
+			}
+		}
+		return Count;
+	};
+	const int32 Large = MaxUngroupedItems + 5;
+	Picked.Reset();
+	const FStageMenu Grouped = MakeItemsMenu({ MakeLibrary(Large, false) }, [&Picked](EStageSketchElement Element, int32 Index) { Picked.Emplace(Element, Index); });
+	const FStageMenuEntry* Fixtures = StageMenu::Find(Grouped, TEXT("Fixture: Fixture 07"));
+	TArray<FString> KindLabels;
+	for (const FStageMenuEntry& Kind : Fixtures ? TConstArrayView<FStageMenuEntry>(Fixtures->SubEntries) : TConstArrayView<FStageMenuEntry>())
+	{
+		KindLabels.Add(Kind.Kind == EStageMenuEntryKind::SubMenu ? Kind.Label.ToString() : TEXT("(not a submenu)"));
+	}
+	TestEqual(TEXT("A long list is split by kind, in name order, no kind under Other"), FString::Join(KindLabels, TEXT(", ")), FString(TEXT("LED Par, Other, Spot, Wash")));
+	TestEqual(TEXT("Every candidate is listed once"), Fixtures ? CountRadios(Fixtures->SubEntries) : 0, Large);
+	TestTrue(TEXT("The fixture in use is checked in its kind"), IsChecked(Grouped, TEXT("Fixture: Fixture 07/Other/Fixture 07")));
+	TestTrue(TEXT("Pick a fixture inside a kind"), StageMenu::Pick(Grouped, TEXT("Fixture: Fixture 07/Spot/Fixture 21")));
+	TestTrue(TEXT("The pick names its index in the whole list"), Picked.IsSet() && Picked->Key == EStageSketchElement::Fixture && Picked->Value == 21);
+
+	const auto IsFlat = [&CountRadios](const FStageMenu& Menu, int32 Count)
+	{
+		const FStageMenuEntry* Entry = Menu.Sections.IsEmpty() || Menu.Sections[0].Entries.IsEmpty() ? nullptr : &Menu.Sections[0].Entries[0];
+		return Entry && Entry->SubEntries.Num() == Count && CountRadios(Entry->SubEntries) == Count;
+	};
+	TestTrue(TEXT("Up to MaxUngroupedItems stays one list"), IsFlat(MakeItemsMenu({ MakeLibrary(MaxUngroupedItems, false) }, nullptr), MaxUngroupedItems));
+	TestTrue(TEXT("A long list of one kind stays one list"), IsFlat(MakeItemsMenu({ MakeLibrary(Large, true) }, nullptr), Large));
+	FItemChoice Unknown = MakeLibrary(Large, false);
+	Unknown.Groups.Pop();
+	TestTrue(TEXT("Kinds that do not match the names are ignored"), IsFlat(MakeItemsMenu({ Unknown }, nullptr), Large));
+
 	// Photo: the label, what an import in progress greys out, and Claude only when it can be reached.
 	FPhotoState Photo;
 	Photo.bAvailable = true;
