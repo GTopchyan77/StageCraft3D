@@ -10032,9 +10032,77 @@ All times in ms.
 - **Builds:** Editor Development, Game Development and Game Shipping succeeded with no warnings. Shipping scan (UTF-16): the file names `Published.json`, `Fixtures.json` and `.bak` are present; both new test names are absent, and so are the new log lines, because Shipping compiles `UE_LOG` out; the test hold is under `WITH_DEV_AUTOMATION_TESTS`.
 - **Not verified:** no scripted `-game` run, since the paths are covered by integration tests on real subsystems; no hand test with a damaged file in a packaged build.
 
-**Commit:** uncommitted (working tree).
+**Commit:** `cc0012a` (committed by Gevor, 2026-11-25).
 
 **Known issues / follow-ups**
 - `MoveAside` replaces an older `.bak`: a file damaged twice keeps only the latest damaged copy (unchanged since #40).
 - Other code items from the #102 list remain: R11 world tests, the GameUserSettings test, 1 px header lines, the fixture ID index, batched broadcasts, undo for attribute edits, GO and tracking cues, Sketch saved with scenes, the GDTF logo, and others.
+- The Obsidian vault on S: is still unreachable, so there is no session log.
+
+## #104 — Fixture ID index: the show control finds a fixture by its ID without scanning the rig (2026-11-25)
+
+**What & why**
+- **Request (Gevor, 2026-11-25).** Take the next self-contained code item from the open robustness, UI and performance follow-ups (todo Phase 37, "Fixture ID index (O(n^2) registration on load)"; STATE.md #78 follow-ups; #102 list).
+- **Root cause.** `UShowControlSubsystem` kept its fixtures in a `TArray<TWeakObjectPtr<ALightingFixtureActor>>`.
+  - `FindFixture` scanned it, and so did `IsFixtureIdFree`, which calls `FindFixture`.
+  - `RegisterFixture` called both, plus `Contains`, for every fixture that began play. Loading a scene of n fixtures was therefore O(n²).
+  - Every other lookup by ID was O(n) per call too: cues, the programmer, effects, remotes, the AI runner, and the patch panel.
+- **Baseline, measured first** (the new test, run on the old code, `-NullRHI`, best of three):
+  - registration cost 3.09 µs per fixture at 64 fixtures and 7.16 µs at 512 (3.67 ms in all);
+  - one `FindFixture` cost about 2 µs at 512.
+  - The quadratic part is real but small at today's rig sizes (about 2 ms of a 500-fixture load). The per-fixture fixed cost, mostly the "Fixture N registered" log line, dominates. It grows with the square of the rig size.
+- **Fix.**
+  - **One registry, keyed by ID.** `FixturesById` (`TMap<int32, TWeakObjectPtr<ALightingFixtureActor>>`) replaces the array. It is the only registry, so there is no second source of truth to keep in sync.
+  - IDs are unique among registered fixtures, because `RegisterFixture` already renumbers a taken or missing ID before adding the fixture.
+  - **Renumbering re-keys.** After registration, `ALightingFixtureActor::SetFixtureId` is the only way a fixture's ID changes:
+    - Every snapshot restore, `PrepareImportedPatch` and `PrepareAsDuplicate` run on deferred spawns before BeginPlay; all callers were checked.
+    - `SetFixtureId` now calls the new `UShowControlSubsystem::HandleFixtureIdChanged(Fixture, OldId)` before its `NotifyParameterChanged`, so a listener that looks the fixture up by its new ID finds it.
+    - A fixture that is not registered is ignored.
+  - **`IsRegistered`** (private) compares identity with `HasSameIndexAndSerialNumber`, not validity. Unregistering in EndPlay therefore still matches while the actor is being destroyed, as the old `TArray::Remove` did.
+  - **`FindFixture` checks the invariant.** It `ensure`s that the entry's fixture still has the ID it is keyed by. A future path that changes an ID without `SetFixtureId` is reported by name instead of silently returning the wrong fixture.
+  - **Unchanged:**
+    - `GetFixtures` still returns the fixtures sorted by ID;
+    - `GetNextFreeFixtureId` still returns the highest registered ID + 1 (linear; only called for a fixture without a usable ID);
+    - `GetShadowedFixtureCount` iterates the map.
+  - A stale weak entry (a fixture destroyed without EndPlay) resolves to null, so its ID counts as free. The next fixture that takes that ID overwrites the entry, as before.
+- **After** (same test, full suite run):
+  - registration costs 2.37 µs per fixture at both 64 and 512 (1.21 ms for 512), so per-fixture cost no longer grows with the rig;
+  - one lookup costs 0.006–0.007 µs at both sizes.
+
+**Files changed**
+- `Source/ModularSceneBuilder/Public/Subsystems/ShowControlSubsystem.h`: `FixturesById`, `IsRegistered`, public `HandleFixtureIdChanged` (contract documented).
+- `Source/ModularSceneBuilder/Private/Subsystems/ShowControlSubsystem.cpp`: register, unregister, find, sorted list, next free ID, shadow count, re-key.
+- `Source/ModularSceneBuilder/Private/Actors/LightingFixtureActor.cpp`: `SetFixtureId` re-keys before notifying.
+- `Source/ModularSceneBuilder/Private/Show/Tests/StageFixtureRegistryTests.cpp` (new): `StageCraft.Show.FixtureRegistry`.
+- `tasks/todo.md`: Phase 37 box ticked, Phase 54. `STATE.md`: this entry.
+- No Blueprints, content assets, input actions, maps or config changed. The Blueprint API (`GetFixtures`, `FindFixture`, `IsFixtureIdFree`, `GetNextFreeFixtureId`) keeps its signatures and behaviour.
+
+**Verification (Claude, 2026-11-25)**
+- **New test `StageCraft.Show.FixtureRegistry`** (real game world, real fixtures):
+  - IDs assigned 1, 2, 3, and each is found by its ID; ID 0 and unused IDs find nothing;
+  - registering twice changes nothing;
+  - renumbering 2 → 10 moves the entry: the old ID is free, the new one is taken except for the fixture itself, and the next free ID is 11;
+  - a renumber to a taken ID is refused (expected warning) and nothing moves;
+  - a fixture arriving with a taken ID is renumbered and the original keeps its ID; one arriving with a free, lower ID keeps it;
+  - removal frees the ID, including the renumbered fixture under its new ID, and the next free ID drops;
+  - a fixture renumbered while unregistered is found by its new ID once it registers again;
+  - `GetFixtures` is sorted;
+  - with a 512-fixture rig, every fixture is found;
+  - **regression guard:** lookup cost at 512 fixtures stays under 3× the cost at 64. Registration time is logged, not asserted, because its fixed cost hides the lookup.
+- **Mutation checks** (both reverted, and the source checked free of markers):
+  - A, `FindFixture` scanning again: the test fails on the guard (0.34 µs at 64 against 2.42 µs at 512, about 7×).
+  - B, `SetFixtureId` not re-keying: the test fails ("Found by its new ID"), and the new `ensure` names the fixture ("LightingFixtureActor_1 is registered as fixture 2 but has ID 10").
+- **Automation:** focused run 1/1, and the full suite **310/310** (309 + 1 new), `-NullRHI`, with `-ExpectedCount 310`. User data unchanged (127 files).
+- **Builds:** Editor Development, Game Development and Game Shipping succeeded with no warnings.
+- **Shipping scan (UTF-16 and ASCII):** the test name and both new `ensure` messages ("is registered as fixture", "still holds") are absent; Shipping compiles `ensure` out.
+- **Not verified:** a real scene load of a large rig timed end to end (the bench spawns through `SpawnItem`, not a scene load); no `-game` run, since nothing user-facing changed.
+
+**Commit:** uncommitted (working tree). STATE #103 now carries cc0012a.
+
+**Known issues / follow-ups**
+- Registration still has O(n) parts per fixture, unchanged and not measured on a scene load:
+  - `GetNextFreeFixtureId`, only for fixtures without a usable ID;
+  - `RefreshPlaybackReferences` while a cue with palette references plays (`GetCueState` per registration);
+  - DMX auto-patch, where `FindNextFreePatch` builds every slot per fixture (only for unpatched fixtures).
+- The "Fixture N registered" Log line is now most of the remaining per-fixture cost.
 - The Obsidian vault on S: is still unreachable, so there is no session log.

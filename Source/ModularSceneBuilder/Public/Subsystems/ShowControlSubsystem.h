@@ -52,6 +52,12 @@ public:
 	void RegisterFixture(class ALightingFixtureActor* Fixture);
 	void UnregisterFixture(class ALightingFixtureActor* Fixture);
 
+	/**
+	 * Called by ALightingFixtureActor::SetFixtureId after it took a new ID, so FindFixture follows the renumbering. The setter checked
+	 * IsFixtureIdFree first; a fixture that is not registered (before BeginPlay, after EndPlay) is ignored.
+	 */
+	void HandleFixtureIdChanged(class ALightingFixtureActor& Fixture, int32 OldFixtureId);
+
 	UFUNCTION(BlueprintCallable, Category = "StageCraft|Show")
 	TArray<class ALightingFixtureActor*> GetFixtures() const;
 
@@ -585,7 +591,16 @@ private:
 	UFUNCTION()
 	void HandlePalettesChanged();
 
-	TArray<TWeakObjectPtr<class ALightingFixtureActor>> Fixtures;
+	/**
+	 * Every registered fixture, keyed by its fixture ID: the only registry, so lookups by ID (cues, the programmer, remotes, each
+	 * registration during a scene load) do not scan the rig. IDs are unique among registered fixtures (RegisterFixture renumbers a
+	 * taken one) and a registered fixture changes its ID only through SetFixtureId, which re-keys it (HandleFixtureIdChanged).
+	 * Weak: a fixture destroyed without EndPlay leaves an entry that resolves to null and is overwritten by the next owner of its ID.
+	 */
+	TMap<int32, TWeakObjectPtr<class ALightingFixtureActor>> FixturesById;
+
+	/** Whether Fixture is the entry under its own ID. Compares identity, not validity, so it still holds while the fixture is being destroyed. */
+	bool IsRegistered(const class ALightingFixtureActor& Fixture) const;
 
 	/** The addressing this show reads and writes DMX by. Resolved in Initialize; same world, so it outlives every use. */
 	UPROPERTY(Transient)

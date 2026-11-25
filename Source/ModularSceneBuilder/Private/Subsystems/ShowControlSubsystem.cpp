@@ -96,7 +96,7 @@ void UShowControlSubsystem::Deinitialize()
 	PlaybackValues.Reset();
 	Playbacks.Reset();
 	PlaybackRuntime.Reset();
-	Fixtures.Reset();
+	FixturesById.Reset();
 	Fades.Reset();
 	Strobes.Reset();
 	LastInputFrames.Reset();
@@ -214,17 +214,18 @@ void UShowControlSubsystem::TickStrobes(float DeltaTime)
 
 void UShowControlSubsystem::RegisterFixture(ALightingFixtureActor* Fixture)
 {
-	if (!Fixture || Fixtures.Contains(Fixture))
+	if (!Fixture || IsRegistered(*Fixture))
 	{
 		return;
 	}
 
+	// Not registered yet, so SetFixtureId's re-key ignores it; the entry is added under the final ID below.
 	if (Fixture->GetFixtureId() <= 0 || !IsFixtureIdFree(Fixture->GetFixtureId(), Fixture))
 	{
 		Fixture->SetFixtureId(GetNextFreeFixtureId());
 	}
 
-	Fixtures.Add(Fixture);
+	FixturesById.Add(Fixture->GetFixtureId(), Fixture);
 	UE_LOG(LogStageCraft, Log, TEXT("Fixture %d registered (%s)."), Fixture->GetFixtureId(), *Fixture->GetName());
 	// A fixture the show already has data for (a re-spawn, an undone delete, a reused ID) takes its place in the mix at once; a colour
 	// palette the playing cue refers to could only be mixed now that the fixture is here.
@@ -258,8 +259,9 @@ void UShowControlSubsystem::RegisterFixture(ALightingFixtureActor* Fixture)
 
 void UShowControlSubsystem::UnregisterFixture(ALightingFixtureActor* Fixture)
 {
-	if (Fixtures.Remove(Fixture) > 0)
+	if (Fixture && IsRegistered(*Fixture))
 	{
+		FixturesById.Remove(Fixture->GetFixtureId());
 		if (EffectRunner.IsRunning())
 		{
 			RefreshEffectFixtures();
@@ -338,9 +340,9 @@ void UShowControlSubsystem::UpdateShadowBudget()
 int32 UShowControlSubsystem::GetShadowedFixtureCount() const
 {
 	int32 Count = 0;
-	for (const TWeakObjectPtr<ALightingFixtureActor>& Fixture : Fixtures)
+	for (const TPair<int32, TWeakObjectPtr<ALightingFixtureActor>>& Pair : FixturesById)
 	{
-		Count += Fixture.IsValid() && Fixture->AreBeamShadowsEnabled() ? 1 : 0;
+		Count += Pair.Value.IsValid() && Pair.Value->AreBeamShadowsEnabled() ? 1 : 0;
 	}
 	return Count;
 }
@@ -348,10 +350,10 @@ int32 UShowControlSubsystem::GetShadowedFixtureCount() const
 TArray<ALightingFixtureActor*> UShowControlSubsystem::GetFixtures() const
 {
 	TArray<ALightingFixtureActor*> Result;
-	Result.Reserve(Fixtures.Num());
-	for (const TWeakObjectPtr<ALightingFixtureActor>& Fixture : Fixtures)
+	Result.Reserve(FixturesById.Num());
+	for (const TPair<int32, TWeakObjectPtr<ALightingFixtureActor>>& Pair : FixturesById)
 	{
-		if (ALightingFixtureActor* Resolved = Fixture.Get())
+		if (ALightingFixtureActor* Resolved = Pair.Value.Get())
 		{
 			Result.Add(Resolved);
 		}
@@ -362,14 +364,34 @@ TArray<ALightingFixtureActor*> UShowControlSubsystem::GetFixtures() const
 
 ALightingFixtureActor* UShowControlSubsystem::FindFixture(int32 FixtureId) const
 {
-	for (const TWeakObjectPtr<ALightingFixtureActor>& Fixture : Fixtures)
+	const TWeakObjectPtr<ALightingFixtureActor>* Found = FixturesById.Find(FixtureId);
+	ALightingFixtureActor* Fixture = Found ? Found->Get() : nullptr;
+	// A mismatch means a registered fixture's ID changed without SetFixtureId: the index would be wrong for it from then on.
+	if (Fixture && !ensureMsgf(Fixture->GetFixtureId() == FixtureId, TEXT("Show control: %s is registered as fixture %d but has ID %d."),
+		*Fixture->GetName(), FixtureId, Fixture->GetFixtureId()))
 	{
-		if (Fixture.IsValid() && Fixture->GetFixtureId() == FixtureId)
-		{
-			return Fixture.Get();
-		}
+		return nullptr;
 	}
-	return nullptr;
+	return Fixture;
+}
+
+bool UShowControlSubsystem::IsRegistered(const ALightingFixtureActor& Fixture) const
+{
+	const TWeakObjectPtr<ALightingFixtureActor>* Found = FixturesById.Find(Fixture.GetFixtureId());
+	return Found && Found->HasSameIndexAndSerialNumber(TWeakObjectPtr<const ALightingFixtureActor>(&Fixture));
+}
+
+void UShowControlSubsystem::HandleFixtureIdChanged(ALightingFixtureActor& Fixture, int32 OldFixtureId)
+{
+	const TWeakObjectPtr<ALightingFixtureActor>* Found = FixturesById.Find(OldFixtureId);
+	if (!Found || !Found->HasSameIndexAndSerialNumber(TWeakObjectPtr<ALightingFixtureActor>(&Fixture)))
+	{
+		return; // Not registered: RegisterFixture adds it under whatever ID it has then.
+	}
+	const ALightingFixtureActor* Occupant = FindFixture(Fixture.GetFixtureId());
+	ensureMsgf(!Occupant, TEXT("Show control: %s took fixture ID %d, which %s still holds."), *Fixture.GetName(), Fixture.GetFixtureId(), *GetNameSafe(Occupant));
+	FixturesById.Remove(OldFixtureId);
+	FixturesById.Add(Fixture.GetFixtureId(), &Fixture);
 }
 
 bool UShowControlSubsystem::IsFixtureIdFree(int32 FixtureId, const ALightingFixtureActor* Ignore) const
@@ -381,11 +403,12 @@ bool UShowControlSubsystem::IsFixtureIdFree(int32 FixtureId, const ALightingFixt
 int32 UShowControlSubsystem::GetNextFreeFixtureId() const
 {
 	int32 Highest = 0;
-	for (const TWeakObjectPtr<ALightingFixtureActor>& Fixture : Fixtures)
+	// Linear, and only asked for when a fixture arrives without a usable ID (new, duplicated, or a taken one).
+	for (const TPair<int32, TWeakObjectPtr<ALightingFixtureActor>>& Pair : FixturesById)
 	{
-		if (Fixture.IsValid())
+		if (Pair.Value.IsValid())
 		{
-			Highest = FMath::Max(Highest, Fixture->GetFixtureId());
+			Highest = FMath::Max(Highest, Pair.Key);
 		}
 	}
 	return Highest + 1;

@@ -1225,14 +1225,20 @@ bool ALightingFixtureActor::SetFixtureId(int32 NewFixtureId)
 		return NewFixtureId == FixtureId;
 	}
 
-	const UShowControlSubsystem* ShowControl = GetShowControl();
+	UShowControlSubsystem* ShowControl = GetShowControl();
 	if (ShowControl && !ShowControl->IsFixtureIdFree(NewFixtureId, this))
 	{
 		UE_LOG(LogStageCraft, Warning, TEXT("%s: fixture ID %d is already in use."), *GetName(), NewFixtureId);
 		return false;
 	}
 
+	const int32 OldFixtureId = FixtureId;
 	FixtureId = NewFixtureId;
+	// Before the notification, so a listener looking the fixture up by its new ID finds it.
+	if (ShowControl)
+	{
+		ShowControl->HandleFixtureIdChanged(*this, OldFixtureId);
+	}
 	NotifyParameterChanged(StageCraftTags::Param_Patch_FixtureId);
 	return true;
 }

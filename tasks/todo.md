@@ -657,7 +657,7 @@ Gevor's choices: automation tests on a harness game instance (not AFunctionalTes
 - [x] Support screenshot PNG encode on a worker; StageCraft.Support.Screenshot test
 - [ ] UI: DisableNativeTick / invalidation for panels with no per-frame work (A/B each; Slate is about 6.5 ms a frame at 500 fixtures)
 - [ ] Fixture moving-part physics bodies (SetBodyTransform about 1.5 ms per show tick at 500)
-- [ ] Fixture ID index (O(n^2) registration on load)
+- [x] Fixture ID index (O(n^2) registration on load) (STATE.md #104: FixturesById map, registration 7.2 -> 2.2 us per fixture at 512)
 - [ ] Decide: in-app graphics quality settings (scalability, screen percentage, frame cap)
 - [ ] Gevor: tick INCLUDE SCREENSHOT at 4K; Patch panel live channel values while a show plays
 
@@ -845,3 +845,9 @@ Gevor's choices: automation tests on a harness game instance (not AFunctionalTes
 - [x] Marketplace publish record (Published.json: which listings this install may unpublish): damaged kept as .bak, unreadable not written that session
 - [x] Tests: StageCraft.Fixtures.LibraryIndexFile, StageCraft.Marketplace.PublishRecordFile (both shown to fail with the guards removed)
 - [ ] Not done (left as is, by choice): a damaged Web Remote devices file is ignored and rewritten (devices pair again, as #95 decided); the local marketplace stand-in's download counts; scene loads during imports stay refused, not queued (ADR 0013 §3.1)
+
+## Phase 54 - Fixture ID index (requested by Gevor 2026-11-25; STATE.md #104)
+- [x] Baseline measured first (new test on the old code): registration 3.09 us per fixture at 64, 7.16 us at 512 (3.67 ms); one FindFixture about 2 us at 512 (a scan of the rig)
+- [x] UShowControlSubsystem::FixturesById (TMap<int32, TWeakObjectPtr>) replaces the fixture array as the only registry; SetFixtureId re-keys a registered fixture (HandleFixtureIdChanged) before its change notification; FindFixture ensures the key matches the fixture's ID
+- [x] Test StageCraft.Show.FixtureRegistry: assignment, renumbering, refused taken ID, duplicate on arrival, removal, re-register, sorted GetFixtures, lookup cost flat with rig size; both mutations (scan lookup, no re-key) fail it
+- [ ] Still O(n) per registration, not changed: GetNextFreeFixtureId (only for fixtures without a usable ID), RefreshPlaybackReferences while a cue with palette references plays (GetCueState per fixture), DMX auto-patch FindNextFreePatch (MakeSlots per fixture); measure with a scene load before changing
