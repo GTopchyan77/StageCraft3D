@@ -18,6 +18,7 @@
 #include "Misc/Paths.h"
 #include "ModularSceneBuilder.h"
 #include "Placement/StagePlacementToolComponent.h"
+#include "ProfilingDebugging/CpuProfilerTrace.h"
 #include "Scene/StageSceneStore.h"
 #include "Subsystems/ShowControlSubsystem.h"
 #include "Subsystems/StageItemSubsystem.h"
@@ -341,6 +342,9 @@ void UStageSceneComponent::FinishLoad(EStageSceneResult Result, const FStageScen
 
 FStageSceneOperationResult UStageSceneComponent::ApplyDocument(const FStageSceneDocument& InDocument, const FStageSceneParseReport& Report, ELoadSource Source)
 {
+	TRACE_CPUPROFILER_EVENT_SCOPE(StageScene_ApplyDocument);
+	// Logged with the result: how long the stage was blocked replacing itself (most of it spawning items).
+	const double StartSeconds = FPlatformTime::Seconds();
 	// A starter stage becomes a new stage: its items get ids of their own, so two stages started from it never share one.
 	FStageSceneDocument TemplateCopy;
 	if (Source == ELoadSource::Template)
@@ -518,7 +522,7 @@ FStageSceneOperationResult UStageSceneComponent::ApplyDocument(const FStageScene
 			? FText::Format(LOCTEXT("TemplateOpened", "Started a new stage from \"{0}\" ({1} items). Save it to keep your changes."), FText::FromString(Document.Name), FText::AsNumber(Outcome.ItemCount))
 			: FText::Format(LOCTEXT("TemplatePartial", "Started a new stage from \"{0}\": {1} items placed, {2} not available."), FText::FromString(Document.Name), FText::AsNumber(Outcome.ItemCount), FText::AsNumber(Outcome.SkippedCount));
 		Outcome.Message = WithMissingTypes(Outcome.Message);
-		UE_LOG(LogStageCraft, Log, TEXT("Starter stage \"%s\" opened: %d placed, %d refused, %d unknown, %d invalid."), *Document.Name, Outcome.ItemCount, RefusedItems, UnknownItems, Report.InvalidItems);
+		UE_LOG(LogStageCraft, Log, TEXT("Starter stage \"%s\" opened: %d placed, %d refused, %d unknown, %d invalid, in %.1f ms."), *Document.Name, Outcome.ItemCount, RefusedItems, UnknownItems, Report.InvalidItems, (FPlatformTime::Seconds() - StartSeconds) * 1000.0);
 		return Outcome;
 	}
 
@@ -533,8 +537,8 @@ FStageSceneOperationResult UStageSceneComponent::ApplyDocument(const FStageScene
 		Outcome.Message = FText::Format(LOCTEXT("Recovered", "Recovered the autosave of \"{0}\" ({1} items, {2} skipped). Save it to keep the changes."),
 			bUntitled ? LOCTEXT("UntitledStage", "Untitled stage") : FText::FromString(Document.Name), FText::AsNumber(Outcome.ItemCount), FText::AsNumber(Outcome.SkippedCount));
 		Outcome.Message = WithMissingTypes(Outcome.Message);
-		UE_LOG(LogStageCraft, Log, TEXT("Autosave \"%s\" recovered: %d placed, %d refused, %d unknown, %d invalid."), *Document.Name,
-			Outcome.ItemCount, RefusedItems, UnknownItems, Report.InvalidItems);
+		UE_LOG(LogStageCraft, Log, TEXT("Autosave \"%s\" recovered: %d placed, %d refused, %d unknown, %d invalid, in %.1f ms."), *Document.Name,
+			Outcome.ItemCount, RefusedItems, UnknownItems, Report.InvalidItems, (FPlatformTime::Seconds() - StartSeconds) * 1000.0);
 		return Outcome;
 	}
 
@@ -556,8 +560,8 @@ FStageSceneOperationResult UStageSceneComponent::ApplyDocument(const FStageScene
 		Outcome.Message = WithMissingTypes(MakePartialLoadMessage(Document.Name, Outcome, RefusedItems, UnknownItems, Report.InvalidItems));
 	}
 
-	UE_LOG(LogStageCraft, Log, TEXT("Scene \"%s\" loaded: %d placed, %d refused, %d unknown, %d invalid, %d kept for saving, %d values repaired, %d ids repaired."), *Document.Name,
-		Outcome.ItemCount, RefusedItems, UnknownItems, Report.InvalidItems, Outcome.KeptCount, Outcome.RepairedCount, Report.RepairedIds);
+	UE_LOG(LogStageCraft, Log, TEXT("Scene \"%s\" loaded: %d placed, %d refused, %d unknown, %d invalid, %d kept for saving, %d values repaired, %d ids repaired, in %.1f ms."), *Document.Name,
+		Outcome.ItemCount, RefusedItems, UnknownItems, Report.InvalidItems, Outcome.KeptCount, Outcome.RepairedCount, Report.RepairedIds, (FPlatformTime::Seconds() - StartSeconds) * 1000.0);
 	return Outcome;
 }
 

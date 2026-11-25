@@ -13,7 +13,8 @@
 #include "Components/HorizontalBox.h"
 #include "Components/HorizontalBoxSlot.h"
 #include "Components/Image.h"
-#include "Components/ScrollBox.h"
+// SObjectTableRow keeps a weak pointer to a UMG list view, so it needs the complete type even when there is none.
+#include "Components/ListViewBase.h"
 #include "Components/SelectionComponent.h"
 #include "Components/Spacer.h"
 #include "Components/TextBlock.h"
@@ -23,11 +24,13 @@
 #include "Engine/World.h"
 #include "Framework/Application/SlateApplication.h"
 #include "Player/ModularPlayerController.h"
+#include "Slate/SObjectTableRow.h"
 #include "Subsystems/StageSessionSubsystem.h"
 #include "TimerManager.h"
 #include "UI/StageCraftUITheme.h"
 #include "UI/StageCraftWidgetStyle.h"
 #include "UI/StageToolButton.h"
+#include "Widgets/Views/SListView.h"
 
 #include UE_INLINE_GENERATED_CPP_BY_NAME(StageOutlinerPanel)
 
@@ -37,6 +40,8 @@ namespace StageOutlinerPanel
 {
 	constexpr float IconSize = 12.f;
 	constexpr float ItemIndent = 14.f;
+	/** Item rows have no chevron; they are indented past the header's chevron column, so their eye sits under the header's name. */
+	constexpr float ItemRowIndent = ItemIndent + IconSize + 6.f;
 	/** Partially set group flags (some items hidden / locked) draw their icon at this opacity. */
 	constexpr float MixedOpacity = 0.5f;
 	/** Unlocked items show a faint open lock, so the column reads as a toggle without shouting. */
@@ -86,11 +91,18 @@ namespace StageOutlinerPanel
 
 // --- Row ---
 
-void UStageOutlinerRow::BuildTree(bool bWithChevron, float Indent)
+void UStageOutlinerRow::NativeOnInitialized()
 {
-	using namespace StageCraftWidgetStyle;
-	check(Theme);
+	Super::NativeOnInitialized();
+	// The list builds the row's Slate widget from this tree right after creating it; entries only change what the tree shows.
+	if (WidgetTree && !WidgetTree->RootWidget)
+	{
+		BuildTree();
+	}
+}
 
+void UStageOutlinerRow::BuildTree()
+{
 	RowBorder = WidgetTree->ConstructWidget<UBorder>(UBorder::StaticClass(), TEXT("RowBorder"));
 	RowBorder->SetPadding(FMargin(4.f, 0.f));
 	WidgetTree->RootWidget = RowBorder;
@@ -98,8 +110,7 @@ void UStageOutlinerRow::BuildTree(bool bWithChevron, float Indent)
 	UHorizontalBox* Line = WidgetTree->ConstructWidget<UHorizontalBox>(UHorizontalBox::StaticClass(), TEXT("Line"));
 	RowBorder->SetContent(Line);
 
-	USpacer* IndentSpacer = WidgetTree->ConstructWidget<USpacer>(USpacer::StaticClass());
-	IndentSpacer->SetSize(FVector2D(Indent, 1.f));
+	IndentSpacer = WidgetTree->ConstructWidget<USpacer>(USpacer::StaticClass());
 	Line->AddChildToHorizontalBox(IndentSpacer);
 
 	const auto AddFixed = [Line](UWidget* Widget)
@@ -110,23 +121,20 @@ void UStageOutlinerRow::BuildTree(bool bWithChevron, float Indent)
 		}
 	};
 
-	if (bWithChevron)
-	{
-		ExpandButton = MakeIconButton(TEXT("Icons.ChevronDown"), LOCTEXT("ExpandTip", "Show or hide the items of this group."), 1.f, ExpandImage);
-		ExpandButton->OnClicked.AddUniqueDynamic(this, &ThisClass::HandleExpandClicked);
-		AddFixed(ExpandButton);
-	}
+	ExpandButton = MakeIconButton(ExpandImage);
+	ExpandButton->SetToolTipText(LOCTEXT("ExpandTip", "Show or hide the items of this group."));
+	ExpandButton->OnClicked.AddUniqueDynamic(this, &ThisClass::HandleExpandClicked);
+	AddFixed(ExpandButton);
 
-	VisibilityButton = MakeIconButton(TEXT("Icons.Visible"), FText::GetEmpty(), 1.f, VisibilityImage);
+	VisibilityButton = MakeIconButton(VisibilityImage);
 	VisibilityButton->OnClicked.AddUniqueDynamic(this, &ThisClass::HandleVisibilityClicked);
 	AddFixed(VisibilityButton);
 
-	LockButton = MakeIconButton(TEXT("Icons.Unlock"), FText::GetEmpty(), 1.f, LockImage);
+	LockButton = MakeIconButton(LockImage);
 	LockButton->OnClicked.AddUniqueDynamic(this, &ThisClass::HandleLockClicked);
 	AddFixed(LockButton);
 
 	RowButton = WidgetTree->ConstructWidget<UButton>(UStageToolButton::StaticClass(), TEXT("RowButton"));
-	RowButton->SetStyle(MakeFlatButton(FLinearColor::Transparent, Theme->RowHover, Theme->Divider));
 	RowButton->OnClicked.AddUniqueDynamic(this, &ThisClass::HandleRowClicked);
 	if (UHorizontalBoxSlot* ButtonSlot = Line->AddChildToHorizontalBox(RowButton))
 	{
@@ -141,7 +149,8 @@ void UStageOutlinerRow::BuildTree(bool bWithChevron, float Indent)
 		LabelSlot->SetHorizontalAlignment(HAlign_Fill);
 	}
 
-	NameText = StageOutlinerPanel::MakeText(*WidgetTree, 8, TEXT("Regular"), Theme->TextPrimary);
+	// Colours and the name's weight come with each entry (ShowGroup / ShowItem): a recycled row may switch between header and item.
+	NameText = StageOutlinerPanel::MakeText(*WidgetTree, 8, TEXT("Regular"), FLinearColor::White);
 	NameText->SetTextOverflowPolicy(ETextOverflowPolicy::Ellipsis);
 	NameText->SetClipping(EWidgetClipping::ClipToBounds);
 	if (UHorizontalBoxSlot* NameSlot = Label->AddChildToHorizontalBox(NameText))
@@ -150,7 +159,7 @@ void UStageOutlinerRow::BuildTree(bool bWithChevron, float Indent)
 		NameSlot->SetVerticalAlignment(VAlign_Center);
 	}
 
-	DetailText = StageOutlinerPanel::MakeText(*WidgetTree, 7, TEXT("Regular"), Theme->TextSecondary);
+	DetailText = StageOutlinerPanel::MakeText(*WidgetTree, 7, TEXT("Regular"), FLinearColor::White);
 	DetailText->SetTextOverflowPolicy(ETextOverflowPolicy::Ellipsis);
 	DetailText->SetClipping(EWidgetClipping::ClipToBounds);
 	if (UHorizontalBoxSlot* DetailSlot = Label->AddChildToHorizontalBox(DetailText))
@@ -165,15 +174,11 @@ void UStageOutlinerRow::BuildTree(bool bWithChevron, float Indent)
 	}
 }
 
-UButton* UStageOutlinerRow::MakeIconButton(FName BrushName, const FText& ToolTip, float Opacity, TObjectPtr<UImage>& OutImage)
+UButton* UStageOutlinerRow::MakeIconButton(TObjectPtr<UImage>& OutImage)
 {
 	UButton* Button = WidgetTree->ConstructWidget<UButton>(UStageToolButton::StaticClass());
-	Button->SetStyle(StageCraftWidgetStyle::MakeFlatButton(FLinearColor::Transparent, Theme->RowHover, Theme->Divider));
-	Button->SetToolTipText(ToolTip);
-
 	OutImage = WidgetTree->ConstructWidget<UImage>(UImage::StaticClass());
 	OutImage->SetDesiredSizeOverride(FVector2D(StageOutlinerPanel::IconSize));
-	SetIcon(OutImage, BrushName, Opacity);
 	if (UButtonSlot* IconSlot = Cast<UButtonSlot>(Button->AddChild(OutImage)))
 	{
 		IconSlot->SetPadding(FMargin(3.f));
@@ -181,55 +186,76 @@ UButton* UStageOutlinerRow::MakeIconButton(FName BrushName, const FText& ToolTip
 	return Button;
 }
 
+void UStageOutlinerRow::ApplyTheme(const UStageCraftUITheme& InTheme)
+{
+	Theme = &InTheme;
+	const FButtonStyle Flat = StageCraftWidgetStyle::MakeFlatButton(FLinearColor::Transparent, InTheme.RowHover, InTheme.Divider);
+	for (UButton* Button : { RowButton.Get(), ExpandButton.Get(), VisibilityButton.Get(), LockButton.Get() })
+	{
+		if (Button)
+		{
+			Button->SetStyle(Flat);
+		}
+	}
+}
+
 void UStageOutlinerRow::SetIcon(UImage* Image, FName BrushName, float Opacity) const
 {
-	if (Image)
+	if (Image && Theme)
 	{
 		Image->SetBrush(*StageCraftWidgetStyle::AppBrush(BrushName));
 		Image->SetColorAndOpacity(StageCraftWidgetStyle::WithAlpha(Theme->TextPrimary, Opacity));
 	}
 }
 
-void UStageOutlinerRow::InitializeGroup(const FStageOutlinerGroup& Group, bool bExpanded, const UStageCraftUITheme& InTheme)
+void UStageOutlinerRow::SetEntry(UStageOutlinerEntry* InEntry)
 {
-	using namespace StageOutlinerPanel;
-	if (!ensureMsgf(!WidgetTree->RootWidget, TEXT("%s: an outliner row is initialized once."), *GetName()))
+	Entry = InEntry;
+	if (!Entry || !RowBorder)
 	{
 		return;
 	}
+	const UStageCraftUITheme& EntryTheme = StageCraftWidgetStyle::ResolveTheme(Entry->Theme);
+	if (Theme != &EntryTheme)
+	{
+		ApplyTheme(EntryTheme);
+	}
+	if (Entry->bGroupRow)
+	{
+		ShowGroup(*Entry);
+	}
+	else
+	{
+		ShowItem(*Entry);
+	}
+}
 
-	Theme = &InTheme;
-	bGroupRow = true;
-	GroupCategory = Group.Category;
-	BuildTree(/*bWithChevron*/ true, 0.f);
+void UStageOutlinerRow::ShowGroup(const UStageOutlinerEntry& Group)
+{
+	using namespace StageOutlinerPanel;
+	IndentSpacer->SetSize(FVector2D(0.f, 1.f));
+	ExpandButton->SetVisibility(ESlateVisibility::Visible);
+	SetIcon(ExpandImage, Group.bExpanded ? TEXT("Icons.ChevronDown") : TEXT("Icons.ChevronRight"), 1.f);
+	SetIcon(VisibilityImage, GetVisibilityBrush(Group.GroupHidden), GetVisibilityOpacity(Group.GroupHidden));
+	SetIcon(LockImage, GetLockBrush(Group.GroupLocked), GetLockOpacity(Group.GroupLocked));
+	VisibilityButton->SetToolTipText(FText::Format(LOCTEXT("GroupVisibilityTip", "Show or hide every {0} item."), Group.GroupLabel));
+	LockButton->SetToolTipText(FText::Format(LOCTEXT("GroupLockTip", "Lock or unlock every {0} item against moving and resizing."), Group.GroupLabel));
+	RowButton->SetToolTipText(FText::Format(LOCTEXT("GroupSelectTip", "Select every {0} item listed (Ctrl: add to or remove from the selection)."), Group.GroupLabel));
 
-	SetIcon(ExpandImage, bExpanded ? TEXT("Icons.ChevronDown") : TEXT("Icons.ChevronRight"), 1.f);
-	SetIcon(VisibilityImage, GetVisibilityBrush(Group.Hidden), GetVisibilityOpacity(Group.Hidden));
-	SetIcon(LockImage, GetLockBrush(Group.Locked), GetLockOpacity(Group.Locked));
-	VisibilityButton->SetToolTipText(FText::Format(LOCTEXT("GroupVisibilityTip", "Show or hide every {0} item."), Group.Label));
-	LockButton->SetToolTipText(FText::Format(LOCTEXT("GroupLockTip", "Lock or unlock every {0} item against moving and resizing."), Group.Label));
-	RowButton->SetToolTipText(FText::Format(LOCTEXT("GroupSelectTip", "Select every {0} item listed (Ctrl: add to or remove from the selection)."), Group.Label));
-
-	NameText->SetText(Group.Label.ToUpper());
+	NameText->SetText(Group.GroupLabel.ToUpper());
 	NameText->SetFont(StageCraftWidgetStyle::MakeFont(8, TEXT("Bold")));
-	NameText->SetColorAndOpacity(FSlateColor(InTheme.TextSecondary));
-	DetailText->SetText(FText::AsNumber(Group.Items.Num()));
+	NameText->SetColorAndOpacity(FSlateColor(Theme->TextSecondary));
+	DetailText->SetText(FText::AsNumber(Group.GroupItemCount));
+	DetailText->SetColorAndOpacity(FSlateColor(Theme->TextSecondary));
 	ApplyRowStyle();
 }
 
-void UStageOutlinerRow::InitializeItem(const FStageOutlinerItem& Item, const UStageCraftUITheme& InTheme)
+void UStageOutlinerRow::ShowItem(const UStageOutlinerEntry& ItemEntry)
 {
 	using namespace StageOutlinerPanel;
-	if (!ensureMsgf(!WidgetTree->RootWidget, TEXT("%s: an outliner row is initialized once."), *GetName()))
-	{
-		return;
-	}
-
-	Theme = &InTheme;
-	bGroupRow = false;
-	InstanceId = Item.InstanceId;
-	BuildTree(/*bWithChevron*/ false, ItemIndent + IconSize + 6.f);
-
+	const FStageOutlinerItem& Item = ItemEntry.Item;
+	IndentSpacer->SetSize(FVector2D(ItemRowIndent, 1.f));
+	ExpandButton->SetVisibility(ESlateVisibility::Collapsed);
 	SetIcon(VisibilityImage, GetVisibilityBrush(ToFlagState(Item.bHidden)), 1.f);
 	SetIcon(LockImage, GetLockBrush(ToFlagState(Item.bLocked)), GetLockOpacity(ToFlagState(Item.bLocked)));
 	VisibilityButton->SetToolTipText(Item.bHidden ? LOCTEXT("ShowTip", "Hidden: click to show it on stage.") : LOCTEXT("HideTip", "Visible: click to hide it on stage."));
@@ -237,30 +263,28 @@ void UStageOutlinerRow::InitializeItem(const FStageOutlinerItem& Item, const USt
 	RowButton->SetToolTipText(LOCTEXT("ItemSelectTip", "Select it (Ctrl: add to or remove from the selection)."));
 
 	NameText->SetText(Item.Label);
-	NameText->SetColorAndOpacity(FSlateColor(Item.bHidden ? InTheme.TextDisabled : InTheme.TextPrimary));
+	NameText->SetFont(StageCraftWidgetStyle::MakeFont(8, TEXT("Regular")));
+	NameText->SetColorAndOpacity(FSlateColor(Item.bHidden ? Theme->TextDisabled : Theme->TextPrimary));
 	DetailText->SetText(Item.Quantity > 1
 		? FText::Format(LOCTEXT("ItemDetailQuantity", "{0} · {1} {1}|plural(one=segment,other=segments)"), Item.ModelName, Item.Quantity)
 		: Item.ModelName);
+	DetailText->SetColorAndOpacity(FSlateColor(Theme->TextSecondary));
 	ApplyRowStyle();
 }
 
-void UStageOutlinerRow::SetSelected(bool bInSelected)
+void UStageOutlinerRow::RefreshSelected()
 {
-	if (bSelected != bInSelected)
-	{
-		bSelected = bInSelected;
-		ApplyRowStyle();
-	}
+	ApplyRowStyle();
 }
 
 void UStageOutlinerRow::ApplyRowStyle()
 {
-	if (!RowBorder || !Theme)
+	if (!RowBorder || !Theme || !Entry)
 	{
 		return;
 	}
-	const FLinearColor Fill = bSelected ? StageCraftWidgetStyle::WithAlpha(Theme->SelectionColor, 0.35f)
-		: (bGroupRow ? Theme->PanelHeader : FLinearColor::Transparent);
+	const FLinearColor Fill = Entry->bSelected ? StageCraftWidgetStyle::WithAlpha(Theme->SelectionColor, 0.35f)
+		: (Entry->bGroupRow ? Theme->PanelHeader : FLinearColor::Transparent);
 	RowBorder->SetBrush(StageCraftWidgetStyle::MakeBox(Fill));
 }
 
@@ -282,6 +306,110 @@ void UStageOutlinerRow::HandleLockClicked()
 void UStageOutlinerRow::HandleExpandClicked()
 {
 	OnExpandClicked.ExecuteIfBound(this);
+}
+
+// --- List ---
+
+namespace StageOutlinerPanel
+{
+	using FEntryPtr = TObjectPtr<UStageOutlinerEntry>;
+	using SEntryListView = SListView<FEntryPtr>;
+	using SEntryTableRow = SObjectTableRow<FEntryPtr>;
+}
+
+UStageOutlinerList::UStageOutlinerList(const FObjectInitializer& ObjectInitializer)
+	: Super(ObjectInitializer)
+	, RowPool(*this)
+{
+	// Rows scrolled partly out of the list would otherwise draw over the filter box and the footer (UListView clips the same way).
+	SetClipping(EWidgetClipping::ClipToBounds);
+}
+
+void UStageOutlinerList::SetListStyle(const FScrollBarStyle& InScrollBarStyle)
+{
+	ScrollBarStyle = InScrollBarStyle;
+	ScrollBarStyle.SetThickness(6.f);
+}
+
+TSharedRef<SWidget> UStageOutlinerList::RebuildWidget()
+{
+	using namespace StageOutlinerPanel;
+	ListWidget = SNew(SEntryListView)
+		.ListItemsSource(&Items)
+		// The rows show the stage's selection (the panel restyles them); a list selection of its own would be a second, conflicting one.
+		.SelectionMode(ESelectionMode::None)
+		.ScrollBarStyle(&ScrollBarStyle)
+		.ScrollBarPadding(FMargin(2.f))
+		.OnGenerateRow_UObject(this, &ThisClass::GenerateRow)
+		.OnRowReleased_UObject(this, &ThisClass::HandleRowReleased);
+	return ListWidget.ToSharedRef();
+}
+
+void UStageOutlinerList::ReleaseSlateResources(bool bReleaseChildren)
+{
+	Super::ReleaseSlateResources(bReleaseChildren);
+	ListWidget.Reset();
+	RowPool.ResetPool();
+}
+
+TSharedRef<ITableRow> UStageOutlinerList::GenerateRow(TObjectPtr<UStageOutlinerEntry> Entry, const TSharedRef<STableViewBase>& OwnerTable)
+{
+	using namespace StageOutlinerPanel;
+	// As UListView does: the row's own Slate widget is the table row, so a pooled row is never inside two table rows at once.
+	UStageOutlinerRow* Row = RowPool.GetOrCreateInstance<UStageOutlinerRow>(UStageOutlinerRow::StaticClass(),
+		[&OwnerTable](UUserWidget* Widget, TSharedRef<SWidget> Content)
+		{
+			return SNew(SEntryTableRow, OwnerTable, *Widget)[Content];
+		});
+	check(Row);
+	OnRowGenerated.ExecuteIfBound(*Row);
+	Row->SetEntry(Entry);
+	return StaticCastSharedRef<SEntryTableRow>(Row->TakeWidget());
+}
+
+void UStageOutlinerList::HandleRowReleased(const TSharedRef<ITableRow>& TableRow)
+{
+	if (UUserWidget* Row = StaticCastSharedRef<IObjectTableRow>(TableRow)->GetUserWidget(); ensure(Row))
+	{
+		RowPool.Release(Row);
+	}
+}
+
+void UStageOutlinerList::SetEntries(TConstArrayView<TObjectPtr<UStageOutlinerEntry>> InEntries)
+{
+	Items = TArray<TObjectPtr<UStageOutlinerEntry>>(InEntries);
+	if (ListWidget.IsValid())
+	{
+		// Regenerates the rows on screen: an entry object a row already shows may now describe another line.
+		ListWidget->RebuildList();
+	}
+}
+
+void UStageOutlinerList::ForEachDisplayedRow(TFunctionRef<void(UStageOutlinerRow&)> Visit) const
+{
+	for (UUserWidget* Widget : RowPool.GetActiveWidgets())
+	{
+		if (UStageOutlinerRow* Row = Cast<UStageOutlinerRow>(Widget))
+		{
+			Visit(*Row);
+		}
+	}
+}
+
+void UStageOutlinerList::ScrollToStart()
+{
+	if (ListWidget.IsValid())
+	{
+		ListWidget->ScrollToTop();
+	}
+}
+
+void UStageOutlinerList::ScrollToEnd()
+{
+	if (ListWidget.IsValid())
+	{
+		ListWidget->ScrollToBottom();
+	}
 }
 
 // --- Panel ---
@@ -306,6 +434,10 @@ void UStageOutlinerPanel::NativeOnInitialized()
 	if (FilterBox)
 	{
 		FilterBox->OnTextChanged.AddUniqueDynamic(this, &ThisClass::HandleFilterChanged);
+	}
+	if (RowList)
+	{
+		RowList->OnRowGenerated.BindUObject(this, &ThisClass::HandleRowGenerated);
 	}
 }
 
@@ -332,16 +464,12 @@ void UStageOutlinerPanel::BuildTree()
 		EmptySlot->SetPadding(FMargin(12.f, 16.f));
 	}
 
-	UScrollBox* Scroll = WidgetTree->ConstructWidget<UScrollBox>(UScrollBox::StaticClass(), TEXT("Scroll"));
-	Scroll->SetWidgetBarStyle(MakeScrollBar(Palette));
-	Scroll->SetScrollbarThickness(FVector2D(6.f, 6.f));
-	Scroll->SetScrollbarPadding(FMargin(2.f));
-	if (UVerticalBoxSlot* ScrollSlot = Column->AddChildToVerticalBox(Scroll))
+	RowList = WidgetTree->ConstructWidget<UStageOutlinerList>(UStageOutlinerList::StaticClass(), TEXT("RowList"));
+	RowList->SetListStyle(MakeScrollBar(Palette));
+	if (UVerticalBoxSlot* ListSlot = Column->AddChildToVerticalBox(RowList))
 	{
-		ScrollSlot->SetSize(FSlateChildSize(ESlateSizeRule::Fill));
+		ListSlot->SetSize(FSlateChildSize(ESlateSizeRule::Fill));
 	}
-	RowList = WidgetTree->ConstructWidget<UVerticalBox>(UVerticalBox::StaticClass(), TEXT("RowList"));
-	Scroll->AddChild(RowList);
 
 	UImage* Divider = WidgetTree->ConstructWidget<UImage>(UImage::StaticClass(), TEXT("FooterDivider"));
 	Divider->SetBrush(MakeBox(Palette.Divider));
@@ -439,7 +567,11 @@ void UStageOutlinerPanel::NativeDestruct()
 	}
 	Session.Reset();
 	Selection.Reset();
-	ClearRows();
+	if (RowList)
+	{
+		RowList->SetEntries({});
+	}
+	Entries.Reset();
 	Super::NativeDestruct();
 }
 
@@ -454,33 +586,41 @@ void UStageOutlinerPanel::RequestRebuild()
 	RebuildTimer = World->GetTimerManager().SetTimerForNextTick(FTimerDelegate::CreateUObject(this, &ThisClass::Rebuild));
 }
 
-void UStageOutlinerPanel::ClearRows()
+void UStageOutlinerPanel::HandleRowGenerated(UStageOutlinerRow& Row)
 {
-	if (RowList)
-	{
-		RowList->ClearChildren();
-	}
-	Rows.Reset();
+	Row.OnClicked.BindUObject(this, &ThisClass::HandleRowClicked);
+	Row.OnVisibilityClicked.BindUObject(this, &ThisClass::HandleVisibilityClicked);
+	Row.OnLockClicked.BindUObject(this, &ThisClass::HandleLockClicked);
+	Row.OnExpandClicked.BindUObject(this, &ThisClass::HandleExpandClicked);
 }
 
-void UStageOutlinerPanel::AddRow(TFunctionRef<void(UStageOutlinerRow&)> Initialize)
+void UStageOutlinerPanel::FillEntry(UStageOutlinerEntry& Entry, const FStageOutlinerRowRef& Row) const
 {
-	UStageOutlinerRow* Row = CreateWidget<UStageOutlinerRow>(this, UStageOutlinerRow::StaticClass());
-	Row->OnClicked.BindUObject(this, &ThisClass::HandleRowClicked);
-	Row->OnVisibilityClicked.BindUObject(this, &ThisClass::HandleVisibilityClicked);
-	Row->OnLockClicked.BindUObject(this, &ThisClass::HandleLockClicked);
-	Row->OnExpandClicked.BindUObject(this, &ThisClass::HandleExpandClicked);
-
-	// Built before it joins the list: adding a row to a live panel creates its Slate widget from the tree it has at that moment.
-	Initialize(*Row);
-	RowList->AddChildToVerticalBox(Row);
-	Rows.Add(Row);
+	const FStageOutlinerGroup& Group = Groups[Row.GroupIndex];
+	Entry.Theme = &GetTheme();
+	Entry.bGroupRow = Row.IsGroupRow();
+	Entry.GroupCategory = Group.Category;
+	Entry.bExpanded = Row.bExpanded;
+	Entry.bSelected = false;
+	if (Entry.bGroupRow)
+	{
+		Entry.GroupLabel = Group.Label;
+		Entry.GroupItemCount = Group.Items.Num();
+		Entry.GroupHidden = Group.Hidden;
+		Entry.GroupLocked = Group.Locked;
+		Entry.Item = FStageOutlinerItem();
+	}
+	else
+	{
+		Entry.GroupLabel = FText::GetEmpty();
+		Entry.GroupItemCount = 0;
+		Entry.Item = Group.Items[Row.ItemIndex];
+	}
 }
 
 void UStageOutlinerPanel::Rebuild()
 {
 	RebuildTimer.Invalidate();
-	ClearRows();
 	ItemsById.Reset();
 	if (!RowList)
 	{
@@ -510,41 +650,18 @@ void UStageOutlinerPanel::Rebuild()
 	}
 	const int32 TotalItems = Items.Num();
 	Groups = StageOutliner::BuildGroups(MoveTemp(Items));
+	const FStageOutlinerListing Listing = StageOutliner::BuildListing(Groups, CollapsedGroups, FilterQuery);
 
-	const UStageCraftUITheme& Palette = GetTheme();
-	const bool bFiltering = !FilterQuery.TrimStartAndEnd().IsEmpty();
-	int32 Listed = 0;
-	int32 Hidden = 0;
-	int32 Locked = 0;
-	for (const FStageOutlinerGroup& Group : Groups)
+	Entries.SetNum(Listing.Rows.Num());
+	for (int32 Index = 0; Index < Listing.Rows.Num(); ++Index)
 	{
-		TArray<const FStageOutlinerItem*> Matching;
-		for (const FStageOutlinerItem& Item : Group.Items)
+		if (!Entries[Index])
 		{
-			Hidden += Item.bHidden ? 1 : 0;
-			Locked += Item.bLocked ? 1 : 0;
-			if (StageOutliner::MatchesFilter(Item, Group.Label, FilterQuery))
-			{
-				Matching.Add(&Item);
-			}
+			Entries[Index] = NewObject<UStageOutlinerEntry>(this);
 		}
-		if (Matching.IsEmpty())
-		{
-			continue;
-		}
-
-		// While filtering every matching group is open, as in the Library's search.
-		const bool bExpanded = bFiltering || !CollapsedGroups.Contains(Group.Category);
-		AddRow([&Group, bExpanded, &Palette](UStageOutlinerRow& Row) { Row.InitializeGroup(Group, bExpanded, Palette); });
-		Listed += Matching.Num();
-		if (bExpanded)
-		{
-			for (const FStageOutlinerItem* Item : Matching)
-			{
-				AddRow([Item, &Palette](UStageOutlinerRow& Row) { Row.InitializeItem(*Item, Palette); });
-			}
-		}
+		FillEntry(*Entries[Index], Listing.Rows[Index]);
 	}
+	RowList->SetEntries(Entries);
 
 	if (CountText)
 	{
@@ -552,11 +669,11 @@ void UStageOutlinerPanel::Rebuild()
 	}
 	if (FooterText)
 	{
-		FooterText->SetText(FText::Format(LOCTEXT("Footer", "{0} listed   ·   {1} hidden   ·   {2} locked"), Listed, Hidden, Locked));
+		FooterText->SetText(FText::Format(LOCTEXT("Footer", "{0} listed   ·   {1} hidden   ·   {2} locked"), Listing.Listed, Listing.Hidden, Listing.Locked));
 	}
 	if (EmptyText)
 	{
-		const bool bEmpty = Listed == 0;
+		const bool bEmpty = Listing.Listed == 0;
 		EmptyText->SetVisibility(bEmpty ? ESlateVisibility::HitTestInvisible : ESlateVisibility::Collapsed);
 		EmptyText->SetText(TotalItems == 0 ? LOCTEXT("EmptyStage", "The stage is empty. Place items from the Library.") : LOCTEXT("NoMatch", "No items match the filter."));
 	}
@@ -566,24 +683,30 @@ void UStageOutlinerPanel::Rebuild()
 void UStageOutlinerPanel::RefreshSelection()
 {
 	const USelectionComponent* SelectionComponent = Selection.Get();
-	for (UStageOutlinerRow* Row : Rows)
+	for (UStageOutlinerEntry* Entry : Entries)
 	{
-		if (!Row)
+		if (!Entry)
 		{
 			continue;
 		}
 		if (!SelectionComponent)
 		{
-			Row->SetSelected(false);
-			continue;
+			Entry->bSelected = false;
 		}
-		if (!Row->IsGroupRow())
+		else if (!Entry->bGroupRow)
 		{
-			Row->SetSelected(SelectionComponent->IsActorSelected(ResolveItem(Row->GetInstanceId())));
-			continue;
+			Entry->bSelected = SelectionComponent->IsActorSelected(ResolveItem(Entry->Item.InstanceId));
 		}
-		const TArray<AModularBaseActor*> GroupItems = ResolveGroupItems(Row->GetGroupCategory());
-		Row->SetSelected(!GroupItems.IsEmpty() && Algo::AllOf(GroupItems, [SelectionComponent](const AModularBaseActor* Item) { return SelectionComponent->IsActorSelected(Item); }));
+		else
+		{
+			const TArray<AModularBaseActor*> GroupItems = ResolveGroupItems(Entry->GroupCategory);
+			Entry->bSelected = !GroupItems.IsEmpty() && Algo::AllOf(GroupItems, [SelectionComponent](const AModularBaseActor* Item) { return SelectionComponent->IsActorSelected(Item); });
+		}
+	}
+	// Only the rows on screen are widgets; the others pick their flag up from their entry when they scroll into view.
+	if (RowList)
+	{
+		RowList->ForEachDisplayedRow([](UStageOutlinerRow& Row) { Row.RefreshSelected(); });
 	}
 }
 
@@ -637,7 +760,7 @@ void UStageOutlinerPanel::SetFlag(const TArray<AModularBaseActor*>& Items, const
 void UStageOutlinerPanel::HandleRowClicked(UStageOutlinerRow* Row)
 {
 	AModularPlayerController* Controller = GetStageController();
-	if (!Controller || !Row)
+	if (!Controller || !Row || !Row->GetEntry())
 	{
 		return;
 	}
@@ -659,7 +782,7 @@ void UStageOutlinerPanel::HandleRowClicked(UStageOutlinerRow* Row)
 
 void UStageOutlinerPanel::HandleVisibilityClicked(UStageOutlinerRow* Row)
 {
-	if (!Row)
+	if (!Row || !Row->GetEntry())
 	{
 		return;
 	}
@@ -680,7 +803,7 @@ void UStageOutlinerPanel::HandleVisibilityClicked(UStageOutlinerRow* Row)
 
 void UStageOutlinerPanel::HandleLockClicked(UStageOutlinerRow* Row)
 {
-	if (!Row)
+	if (!Row || !Row->GetEntry())
 	{
 		return;
 	}

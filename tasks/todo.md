@@ -655,7 +655,7 @@ Gevor's choices: automation tests on a harness game instance (not AFunctionalTes
 - [x] Audit ticks, timers, async work, GC, caps on growth, AI context size (nothing unbounded or leaking found)
 - [x] CPU trace of the 500-fixture bench; native parameter delegate for C++ listeners; ResolveFixture scratch reuse (show tick about 35 % lower)
 - [x] Support screenshot PNG encode on a worker; StageCraft.Support.Screenshot test
-- [ ] UI: DisableNativeTick / invalidation for panels with no per-frame work (A/B each; Slate is about 6.5 ms a frame at 500 fixtures)
+- [ ] UI: DisableNativeTick / invalidation for panels with no per-frame work (A/B each; Slate is about 6.5 ms a frame at 500 fixtures) (STATE.md #105: the Outliner, a widget per item, was 2 ms of it at 500 items and is now a virtualized list; Slate is about 2.7 ms a frame idle at 500 fixtures, prepass 1.2 ms; other panels not yet measured one by one)
 - [ ] Fixture moving-part physics bodies (SetBodyTransform about 1.5 ms per show tick at 500)
 - [x] Fixture ID index (O(n^2) registration on load) (STATE.md #104: FixturesById map, registration 7.2 -> 2.2 us per fixture at 512)
 - [ ] Decide: in-app graphics quality settings (scalability, screen percentage, frame cap)
@@ -850,4 +850,13 @@ Gevor's choices: automation tests on a harness game instance (not AFunctionalTes
 - [x] Baseline measured first (new test on the old code): registration 3.09 us per fixture at 64, 7.16 us at 512 (3.67 ms); one FindFixture about 2 us at 512 (a scan of the rig)
 - [x] UShowControlSubsystem::FixturesById (TMap<int32, TWeakObjectPtr>) replaces the fixture array as the only registry; SetFixtureId re-keys a registered fixture (HandleFixtureIdChanged) before its change notification; FindFixture ensures the key matches the fixture's ID
 - [x] Test StageCraft.Show.FixtureRegistry: assignment, renumbering, refused taken ID, duplicate on arrival, removal, re-register, sorted GetFixtures, lookup cost flat with rig size; both mutations (scan lookup, no re-key) fail it
-- [ ] Still O(n) per registration, not changed: GetNextFreeFixtureId (only for fixtures without a usable ID), RefreshPlaybackReferences while a cue with palette references plays (GetCueState per fixture), DMX auto-patch FindNextFreePatch (MakeSlots per fixture); measure with a scene load before changing
+- [x] Still O(n) per registration, not changed: GetNextFreeFixtureId (only for fixtures without a usable ID), RefreshPlaybackReferences while a cue with palette references plays (GetCueState per fixture), DMX auto-patch FindNextFreePatch (MakeSlots per fixture); measure with a scene load before changing (STATE.md #105: measured on 128/512/1024-fixture loads, together under 0.5 % of load time; left as they are)
+
+## Phase 55 - Large-rig scene load measured; virtualized Outliner (requested by Gevor 2026-11-25; STATE.md #105)
+- [x] Scene load measured first (BenchRig scenes of 128 / 512 / 1024 Beam fixtures, all on one fixture ID and patch, then saved with unique ones; Insights trace with new CPU scopes): linear, about 0.53 ms per fixture (1024 in 534-554 ms); about 80 % is the engine spawning the actor; GetNextFreeFixtureId 4.3 ms over 1,663 calls, FindNextFreePatch 2 calls, RefreshPlaybackReferences never runs on load (the cue is restored after the items); nothing changed there
+- [x] Permanent CPU trace scopes on the load path (StageScene_ApplyDocument, SpawnSystem_SpawnValidated, ShowControl_*, DMXPatch_*); the scene load / starter stage / autosave log lines carry their time ("in N ms")
+- [x] Crossfade trace at 500 fixtures and an Outliner open / closed A/B: the Outliner (a widget per placed item in a scroll box) cost 2.0 ms of Slate a frame at 500 items, idle or not
+- [x] UStageOutlinerList: a virtualized SListView with pooled UStageOutlinerRow rows (UListView refuses a native entry class in editor builds); lines are UStageOutlinerEntry data, reused across rebuilds; StageOutliner::BuildListing (pure) decides the lines; Slate 4.99 -> 2.75 ms a frame idle at 500 fixtures (prepass 3.41 -> 1.21 ms), the same as with the panel closed
+- [x] Test StageCraft.Outliner.Listing (collapse, filter opens groups, counts, 500 items = 501 lines; mutation fails it); -game checks: screenshots of groups, selection, scroll to end, clipping; real OS clicks on a group eye, a group name and item names
+- [ ] Gevor: click through the Outliner on a large stage (scroll, collapse, filter, eye / lock on items and groups, Ctrl+Click)
+- [ ] Next measured costs at 500 fixtures crossfading: moving-head pivot transforms about 3.3 ms and deferred render updates about 2.8 ms of a 19.8 ms frame (todo Phase 37 physics bodies item); Slate prepass 1.2 ms

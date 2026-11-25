@@ -102,5 +102,43 @@ namespace StageOutliner
 		const FString Name = FString::Printf(TEXT("%s %s"), *Item.Label.ToString(), *Item.ModelName.ToString());
 		return StageItemLibrary::MatchesSearch(Name, GroupLabel.ToString(), Query);
 	}
+
+	FStageOutlinerListing BuildListing(TConstArrayView<FStageOutlinerGroup> Groups, const TSet<FGameplayTag>& CollapsedGroups, const FString& Query)
+	{
+		FStageOutlinerListing Listing;
+		const bool bFiltering = !Query.TrimStartAndEnd().IsEmpty();
+		TArray<int32> Matching;
+		for (int32 GroupIndex = 0; GroupIndex < Groups.Num(); ++GroupIndex)
+		{
+			const FStageOutlinerGroup& Group = Groups[GroupIndex];
+			Matching.Reset();
+			for (int32 ItemIndex = 0; ItemIndex < Group.Items.Num(); ++ItemIndex)
+			{
+				const FStageOutlinerItem& Item = Group.Items[ItemIndex];
+				Listing.Hidden += Item.bHidden ? 1 : 0;
+				Listing.Locked += Item.bLocked ? 1 : 0;
+				if (MatchesFilter(Item, Group.Label, Query))
+				{
+					Matching.Add(ItemIndex);
+				}
+			}
+			if (Matching.IsEmpty())
+			{
+				continue;
+			}
+
+			const bool bExpanded = bFiltering || !CollapsedGroups.Contains(Group.Category);
+			Listing.Rows.Add({ GroupIndex, INDEX_NONE, bExpanded });
+			Listing.Listed += Matching.Num();
+			if (bExpanded)
+			{
+				for (const int32 ItemIndex : Matching)
+				{
+					Listing.Rows.Add({ GroupIndex, ItemIndex, true });
+				}
+			}
+		}
+		return Listing;
+	}
 }
 

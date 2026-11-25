@@ -8,6 +8,7 @@
 #include "Misc/FileHelper.h"
 #include "Misc/Paths.h"
 #include "ModularSceneBuilder.h"
+#include "ProfilingDebugging/CpuProfilerTrace.h"
 
 #include UE_INLINE_GENERATED_CPP_BY_NAME(StageDMXPatchSubsystem)
 
@@ -27,6 +28,7 @@ void UStageDMXPatchSubsystem::Deinitialize()
 
 void UStageDMXPatchSubsystem::RegisterFixture(ALightingFixtureActor* Fixture)
 {
+	TRACE_CPUPROFILER_EVENT_SCOPE(DMXPatch_RegisterFixture);
 	if (!Fixture || Fixtures.Contains(Fixture))
 	{
 		return;
@@ -73,11 +75,13 @@ void UStageDMXPatchSubsystem::HandlePatchChanged()
 {
 	bIndexStale = true;
 	++PatchRevision;
+	TRACE_CPUPROFILER_EVENT_SCOPE(DMXPatch_OnPatchChanged);
 	OnPatchChanged.Broadcast();
 }
 
 FStageDMXPatch UStageDMXPatchSubsystem::FindNextFreePatch(int32 Footprint, int32 StartUniverse, int32 StartAddress) const
 {
+	TRACE_CPUPROFILER_EVENT_SCOPE(DMXPatch_FindNextFreePatch);
 	FStageDMXPatch Start;
 	Start.Universe = StartUniverse;
 	Start.Address = StartAddress;

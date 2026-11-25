@@ -8,6 +8,7 @@
 #include "Engine/World.h"
 #include "GameFramework/PlayerController.h"
 #include "ModularSceneBuilder.h"
+#include "ProfilingDebugging/CpuProfilerTrace.h"
 #include "Show/StageDMXBridge.h"
 #include "Show/StageCueTracking.h"
 #include "Show/StageDMXPatching.h"
@@ -214,6 +215,7 @@ void UShowControlSubsystem::TickStrobes(float DeltaTime)
 
 void UShowControlSubsystem::RegisterFixture(ALightingFixtureActor* Fixture)
 {
+	TRACE_CPUPROFILER_EVENT_SCOPE(ShowControl_RegisterFixture);
 	if (!Fixture || IsRegistered(*Fixture))
 	{
 		return;
@@ -254,6 +256,7 @@ void UShowControlSubsystem::RegisterFixture(ALightingFixtureActor* Fixture)
 		}
 	}
 	MarkShadowBudgetDirty();
+	TRACE_CPUPROFILER_EVENT_SCOPE(ShowControl_OnFixturesChanged);
 	OnFixturesChanged.Broadcast();
 }
 
@@ -402,6 +405,7 @@ bool UShowControlSubsystem::IsFixtureIdFree(int32 FixtureId, const ALightingFixt
 
 int32 UShowControlSubsystem::GetNextFreeFixtureId() const
 {
+	TRACE_CPUPROFILER_EVENT_SCOPE(ShowControl_GetNextFreeFixtureId);
 	int32 Highest = 0;
 	// Linear, and only asked for when a fixture arrives without a usable ID (new, duplicated, or a taken one).
 	for (const TPair<int32, TWeakObjectPtr<ALightingFixtureActor>>& Pair : FixturesById)
@@ -1741,6 +1745,7 @@ void UShowControlSubsystem::RefreshPlaybackReferences(int32 OnlyFixtureId)
 	{
 		return;
 	}
+	TRACE_CPUPROFILER_EVENT_SCOPE(ShowControl_RefreshPlaybackReferences);
 	// The playing cue's tracked look: a reference set by an earlier cue reaches this one too.
 	StageCueTracking::FFixtureStates Look;
 	GetCueState(ActiveCueNumber, Look);

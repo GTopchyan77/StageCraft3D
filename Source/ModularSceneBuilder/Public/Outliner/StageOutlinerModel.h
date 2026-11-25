@@ -39,6 +39,29 @@ struct FStageOutlinerGroup
 	EStageOutlinerFlagState Locked = EStageOutlinerFlagState::None;
 };
 
+/** One line of the outliner's list: a discipline header or one of its items, as indices into the groups it was listed from. */
+struct FStageOutlinerRowRef
+{
+	int32 GroupIndex = INDEX_NONE;
+	/** INDEX_NONE for the group's header row. */
+	int32 ItemIndex = INDEX_NONE;
+	/** Header rows: whether the group shows its items (always while filtering). */
+	bool bExpanded = true;
+
+	bool IsGroupRow() const { return ItemIndex == INDEX_NONE; }
+};
+
+/** What the outliner lists for a set of groups, a filter and the groups the user collapsed. */
+struct FStageOutlinerListing
+{
+	TArray<FStageOutlinerRowRef> Rows;
+	/** Items that pass the filter, whether their group is expanded or not. */
+	int32 Listed = 0;
+	/** Hidden and locked items on the whole stage, filtered or not. */
+	int32 Hidden = 0;
+	int32 Locked = 0;
+};
+
 /**
  * The outliner's hierarchy (Docs/ADR/0005-spans-outliner-and-bill-of-materials.md §4): placed items grouped by discipline, the
  * way production drawings are layered (rigging, lighting, sound...). Groups are derived from each item's catalog category, so
@@ -70,4 +93,10 @@ namespace StageOutliner
 
 	/** Whether an item row passes the filter box: every word of Query in the label, model or group name (as the Library's search). */
 	MODULARSCENEBUILDER_API bool MatchesFilter(const FStageOutlinerItem& Item, const FText& GroupLabel, const FString& Query);
+
+	/**
+	 * The rows of the list, in order: every group with an item that passes the filter, each followed by those items unless the
+	 * group is collapsed. While filtering (a Query with more than spaces) every listed group is expanded, as in the Library's search.
+	 */
+	MODULARSCENEBUILDER_API FStageOutlinerListing BuildListing(TConstArrayView<FStageOutlinerGroup> Groups, const TSet<FGameplayTag>& CollapsedGroups, const FString& Query);
 }

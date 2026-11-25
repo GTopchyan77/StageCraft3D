@@ -110,4 +110,69 @@ bool FStageOutlinerModelTest::RunTest(const FString& Parameters)
 	return true;
 }
 
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FStageOutlinerListingTest, "StageCraft.Outliner.Listing", StageOutlinerTests::Flags)
+
+bool FStageOutlinerListingTest::RunTest(const FString& Parameters)
+{
+	using namespace StageOutlinerTests;
+
+	TArray<FStageOutlinerItem> Items;
+	Items.Add(MakeItem(TEXT("Truss Run 1"), StageCraftTags::Category_Truss_Straight, /*bHidden*/ true, /*bLocked*/ true));
+	Items.Add(MakeItem(TEXT("Spot 1"), StageCraftTags::Category_Lighting_MovingHead));
+	Items.Add(MakeItem(TEXT("Spot 2"), StageCraftTags::Category_Lighting_MovingHead, false, /*bLocked*/ true));
+	Items.Add(MakeItem(TEXT("Crate"), StageCraftTags::Category_Prop, /*bHidden*/ true));
+	const TArray<FStageOutlinerGroup> Groups = StageOutliner::BuildGroups(Items);
+	if (!TestEqual(TEXT("Truss, Lighting, Prop"), Groups.Num(), 3))
+	{
+		return false;
+	}
+
+	// Lines as "G<group>" for a header (with "+" when expanded) and "<group>.<item>" for an item.
+	const auto Describe = [](const FStageOutlinerListing& Listing)
+	{
+		TArray<FString> Lines;
+		for (const FStageOutlinerRowRef& Row : Listing.Rows)
+		{
+			Lines.Add(Row.IsGroupRow() ? FString::Printf(TEXT("G%d%s"), Row.GroupIndex, Row.bExpanded ? TEXT("+") : TEXT(""))
+				: FString::Printf(TEXT("%d.%d"), Row.GroupIndex, Row.ItemIndex));
+		}
+		return FString::Join(Lines, TEXT(" "));
+	};
+
+	// Everything expanded: each header followed by its items, in model order.
+	const FStageOutlinerListing All = StageOutliner::BuildListing(Groups, {}, TEXT(""));
+	TestEqual(TEXT("All lines"), Describe(All), FString(TEXT("G0+ 0.0 G1+ 1.0 1.1 G2+ 2.0")));
+	TestEqual(TEXT("All listed"), All.Listed, 4);
+	TestEqual(TEXT("Hidden on stage"), All.Hidden, 2);
+	TestEqual(TEXT("Locked on stage"), All.Locked, 2);
+
+	// A collapsed group keeps its header (closed) and its count; its items are not lines.
+	const TSet<FGameplayTag> Collapsed = { FGameplayTag(StageCraftTags::Category_Lighting) };
+	const FStageOutlinerListing Closed = StageOutliner::BuildListing(Groups, Collapsed, TEXT(""));
+	TestEqual(TEXT("Collapsed lines"), Describe(Closed), FString(TEXT("G0+ 0.0 G1 G2+ 2.0")));
+	TestEqual(TEXT("Collapsed items still count as listed"), Closed.Listed, 4);
+
+	// Filtering lists only matching items, drops groups without one, and opens collapsed groups. Flags count the whole stage.
+	const FStageOutlinerListing Filtered = StageOutliner::BuildListing(Groups, Collapsed, TEXT("spot 2"));
+	TestEqual(TEXT("Filtered lines"), Describe(Filtered), FString(TEXT("G1+ 1.1")));
+	TestEqual(TEXT("Filtered listed"), Filtered.Listed, 1);
+	TestEqual(TEXT("Filtered hidden counts the stage"), Filtered.Hidden, 2);
+	TestEqual(TEXT("Blank filter is no filter"), Describe(StageOutliner::BuildListing(Groups, Collapsed, TEXT("   "))), Describe(Closed));
+
+	const FStageOutlinerListing None = StageOutliner::BuildListing(Groups, {}, TEXT("nothing matches this"));
+	TestEqual(TEXT("No match, no lines"), None.Rows.Num(), 0);
+	TestEqual(TEXT("No match, none listed"), None.Listed, 0);
+	TestEqual(TEXT("Empty stage, no lines"), StageOutliner::BuildListing({}, {}, TEXT("")).Rows.Num(), 0);
+
+	// A large stage is one header per group plus one line per item; the list makes widgets only for the lines on screen.
+	TArray<FStageOutlinerItem> Rig;
+	for (int32 Index = 0; Index < 500; ++Index)
+	{
+		Rig.Add(MakeItem(*FString::Printf(TEXT("Beam %d"), Index + 1), StageCraftTags::Category_Lighting_MovingHead));
+	}
+	const TArray<FStageOutlinerGroup> RigGroups = StageOutliner::BuildGroups(Rig);
+	TestEqual(TEXT("500 items, 501 lines"), StageOutliner::BuildListing(RigGroups, {}, TEXT("")).Rows.Num(), 501);
+	return true;
+}
+
 #endif // WITH_DEV_AUTOMATION_TESTS

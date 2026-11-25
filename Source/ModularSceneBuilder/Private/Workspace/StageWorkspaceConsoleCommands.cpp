@@ -35,6 +35,7 @@
 #include "Startup/SStageBrandedLoader.h"
 #include "UI/StageMenuButton.h"
 #include "UI/StageMenuModel.h"
+#include "UI/StageOutlinerPanel.h"
 #include "Workspace/StageWorkspaceShell.h"
 #include "Workspace/StageWorkspaceSubsystem.h"
 
@@ -402,6 +403,15 @@ namespace StageWorkspaceCommands
 		for (TObjectIterator<UScrollBox> It; It; ++It)
 		{
 			if (It->GetWorld() == World && It->GetOrientation() == Orientation && !It->IsTemplate())
+			{
+				bToEnd ? It->ScrollToEnd() : It->ScrollToStart();
+				++Count;
+			}
+		}
+		// The outliner's virtualized list scrolls itself; it is not a scroll box.
+		for (TObjectIterator<UStageOutlinerList> It; It; ++It)
+		{
+			if (It->GetWorld() == World && Orientation == Orient_Vertical && !It->IsTemplate())
 			{
 				bToEnd ? It->ScrollToEnd() : It->ScrollToStart();
 				++Count;

@@ -10097,7 +10097,7 @@ All times in ms.
 - **Shipping scan (UTF-16 and ASCII):** the test name and both new `ensure` messages ("is registered as fixture", "still holds") are absent; Shipping compiles `ensure` out.
 - **Not verified:** a real scene load of a large rig timed end to end (the bench spawns through `SpawnItem`, not a scene load); no `-game` run, since nothing user-facing changed.
 
-**Commit:** uncommitted (working tree). STATE #103 now carries cc0012a.
+**Commit:** `ae9eaed` (committed by Gevor, 2026-11-25).
 
 **Known issues / follow-ups**
 - Registration still has O(n) parts per fixture, unchanged and not measured on a scene load:
@@ -10105,4 +10105,113 @@ All times in ms.
   - `RefreshPlaybackReferences` while a cue with palette references plays (`GetCueState` per registration);
   - DMX auto-patch, where `FindNextFreePatch` builds every slot per fixture (only for unpatched fixtures).
 - The "Fixture N registered" Log line is now most of the remaining per-fixture cost.
+- The Obsidian vault on S: is still unreachable, so there is no session log.
+
+## #105 — Large-rig scene load measured (registration paths are negligible); the Outliner becomes a virtualized list (2026-11-25)
+
+**What & why**
+- Gevor asked (2026-11-25) to measure a real scene load with a large rig before touching the per-fixture O(n) paths left open by #104, and to move on to the next high-value item if they proved negligible. Rules §22 applied: measure, change only what the numbers justify.
+- **Scene load, measured** (scripted `-game` run, Insights trace with new CPU scopes):
+  - Generated scenes of 128, 512 and 1024 Beam fixtures, every copy carrying the same saved fixture ID and DMX patch. This is the worst case for registration: all but one copy must be renumbered. Each was loaded, saved (unique IDs now), and loaded again.
+  - Load time is linear: about 0.53 ms per fixture.
+
+    | Fixtures | Clashing IDs | Unique IDs |
+    |---|---|---|
+    | 128 | 281.0 ms (first load, cold) | 67.8 ms |
+    | 512 | 236.3 ms | 271.1 ms |
+    | 1024 | 534.1 ms | 554.3 ms |
+
+  - Over all six loads (3,328 fixtures spawned, `StageScene_ApplyDocument` 1,944.6 ms in total):
+    - `SpawnSystem_SpawnValidated` 1,544.3 ms (0.46 ms per fixture, about 80 %). This is the engine spawning and registering the actor and its components.
+    - `ShowControl_RegisterFixture` 45.9 ms (14 µs each) and `DMXPatch_RegisterFixture` 29.2 ms (9 µs each).
+    - `GetNextFreeFixtureId` 4.3 ms over 1,663 calls (2.6 µs each, at most 22 µs).
+    - `FindNextFreePatch` 2 calls, 0.03 ms.
+    - `RefreshPlaybackReferences` never runs during a load: `ApplyDocument` restores the active cue after the items.
+  - Together the three #104 follow-ups are under 0.5 % of a load. **Not changed.**
+  - Side finding, existing behaviour: copies that share a patch are not re-patched on load (auto-patch only covers unpatched fixtures). They load as patch conflicts, which Problems and `StageCraft.DMX.FixConflicts` report.
+- **Next item, chosen by measurement.**
+  - A 500-fixture crossfade trace (`StageCraft.Bench.Fixtures 500`, crossfade window only) gave a 19.8 ms game-thread frame. Of that:
+    - `UWorld_Tick` 9.2 ms;
+    - moving-head pivot transforms (`PanPivot` inclusive) 3.3 ms;
+    - deferred render updates 2.8 ms;
+    - Slate 3.9 ms, of which `Slate::Prepass` alone was 2.3 ms.
+  - The Outliner built one widget (about 15 Slate widgets) per placed item inside a `ScrollBox`, so every row was laid out every frame, scrolled into view or not.
+  - An A/B in one run (Outliner open, then `ClosePanel`, the same bench repeated) measured it at **2.0 ms of Slate per frame at 500 items, idle or not**. Slate tick went from 4.99 to 2.95 ms and prepass from 3.41 to 1.18 ms.
+  - That is the largest single cost a contained change could remove (todo Phase 37, the UI item).
+- **Change: the Outliner lists through a virtualized list.**
+  1. **`StageOutliner::BuildListing` (new, pure).** It decides the lines (`FStageOutlinerRowRef`: group header or item, as indices; whether expanded) and the footer counts. It took over the loop from `UStageOutlinerPanel::Rebuild` unchanged:
+     - groups without a matching item are dropped;
+     - collapsed groups keep their header;
+     - filtering opens every group;
+     - hidden and locked counts cover the whole stage.
+  2. **`UStageOutlinerList` (new `UWidget`).** It owns an `SListView` over `UStageOutlinerEntry` objects, with `SelectionMode None`. Only the rows on screen exist as widgets, and rows scrolled away wait in a `FUserWidgetPool` for the next line.
+     - It is built like `UListView`: each row's own Slate widget is the table row (`SObjectTableRow`), so a pooled row is never inside two table rows.
+     - It is not a `UListView` because, in editor builds, `UListViewBase::RebuildWidget` (final) refuses an entry class that is not a Blueprint. The first attempt subclassed `UListView` and showed that error in the panel; the rows here are built in code.
+     - It clips to its bounds. Without that, partly scrolled rows drew over the filter box and the footer; this was found in the screenshots and fixed.
+  3. **`UStageOutlinerEntry` (new, `Transient` UObject).** One per line, holding a copy of the header or item data plus the selection flag. The panel keeps them in `Entries` and reuses them across rebuilds (grown or trimmed only), and the list regenerates the rows on screen after each rebuild.
+  4. **`UStageOutlinerRow` is now a recyclable entry** (`IUserListEntry`).
+     - It builds its tree once in `NativeOnInitialized`, so the list can create its Slate widget at once.
+     - `SetEntry` shows a header or an item: indent, chevron shown or collapsed, icons, tooltips, name weight and colours.
+     - It takes its button styles from the entry's theme.
+  5. **`UStageOutlinerPanel`.**
+     - It binds each generated row's clicks (`OnRowGenerated`, again for every reuse).
+     - `RefreshSelection` sets the flag on every entry and restyles only the rows on screen.
+     - Behaviour is unchanged: the click rules, the eye and lock group rules, the request bridge, the rebuild on the next tick, and collapsed groups kept for the life of the panel.
+  6. **`StageCraft.Workspace.ScrollPanels`** also scrolls the Outliner's list (needed for the `-game` screenshots).
+- **Observability added on the load path.**
+  - CPU trace scopes: `StageScene_ApplyDocument`, `SpawnSystem_SpawnValidated`, `ShowControl_RegisterFixture`, `ShowControl_GetNextFreeFixtureId`, `ShowControl_RefreshPlaybackReferences` (after its early-out), `ShowControl_OnFixturesChanged`, `DMXPatch_RegisterFixture`, `DMXPatch_FindNextFreePatch` and `DMXPatch_OnPatchChanged`.
+  - They cost nothing unless a trace with the cpu channel runs, and they are absent from Shipping.
+  - The "Scene loaded", "Starter stage opened" and "Autosave recovered" log lines now end with "in N ms" (`ApplyDocument` wall time).
+
+**Files changed**
+- `Source/ModularSceneBuilder/Public/UI/StageOutlinerPanel.h`, `Private/UI/StageOutlinerPanel.cpp` (entry, row, list, panel)
+- `Source/ModularSceneBuilder/Public/Outliner/StageOutlinerModel.h`, `Private/Outliner/StageOutlinerModel.cpp` (`FStageOutlinerRowRef`, `FStageOutlinerListing`, `BuildListing`)
+- `Source/ModularSceneBuilder/Private/Outliner/Tests/StageOutlinerTests.cpp` (new test `StageCraft.Outliner.Listing`)
+- `Source/ModularSceneBuilder/Private/Workspace/StageWorkspaceConsoleCommands.cpp` (`ScrollPanels` reaches the Outliner list)
+- `Source/ModularSceneBuilder/Private/Scene/StageSceneComponent.cpp` (scope, load time in the log lines)
+- `Source/ModularSceneBuilder/Private/Components/SpawnSystemComponent.cpp`, `Private/Subsystems/ShowControlSubsystem.cpp`, `Private/Subsystems/StageDMXPatchSubsystem.cpp` (trace scopes)
+- `tasks/todo.md` (Phase 54 item ticked, the Phase 37 UI item annotated, Phase 55), STATE.md (this entry; #104 carries `ae9eaed`)
+- No Blueprints, assets or maps. The bench scenes were generated into `Saved/StageCraft/Scenes` and deleted afterwards. The scripted runs restored the profile, scenes, marketplace and imports (all reported unchanged).
+
+**Verification**
+- **Outliner A/B, before and after** (`RunGameScripted.ps1`: `StageCraft.Bench.Fixtures 500`, `ClosePanel StageCraft.Panel.Outliner`, the bench again; `-trace=cpu,frame`; idle window of each bench; same machine and session):
+
+  | Per idle frame at 500 fixtures | Old Outliner open | Old Outliner closed | New Outliner open | New Outliner closed |
+  |---|---|---|---|---|
+  | Game thread (bench) | 7.09 ms | 5.13 ms | 4.87 ms | 5.08 ms |
+  | Slate tick and paint | 4.99 ms | 2.95 ms | 2.75 ms | 2.93 ms |
+  | `Slate::Prepass` | 3.41 ms | 1.18 ms | 1.21 ms | 1.17 ms |
+  | Outliner paint | 0.41 ms | – | 0.03 ms | – |
+
+  - Crossfade game thread with the Outliner open went from 17.36 to 15.21 ms.
+  - The idle frame mean did not change on this machine (13.2 ms against 13.1 ms), because the idle frame is not game-thread bound here (GPU about 9.7 ms). The 2 ms is game-thread time given back, and it shows wherever the game thread is the limit (crossfades, weaker CPUs).
+  - Before: CSVs `Saved/StageCraft/Benchmarks/FixtureBench_20261125-155237.csv` (open) and `-155312.csv` (closed). After: `-160243.csv` and `-160318.csv`.
+- **Tests:**
+  - New `StageCraft.Outliner.Listing`: all lines; a collapsed group (header kept, still counted as listed); a filter (only matches, groups without one dropped, collapsed groups opened, flags counted over the stage); a blank filter; no match; an empty stage; 500 items giving 501 lines.
+  - Mutation (filtering no longer opens collapsed groups) fails it with "Filtered lines: expected G1+ 1.1, got G1". Reverted; no "MUTATION" left in the source.
+  - Full suite: `RunAutomation.ps1 -Filter StageCraft -NullRHI -ExpectedCount 311`, 311/311 passed, user data unchanged.
+- **`-game` checks of the panel** (326-item scene: the Concert template plus 300 Beams; ScreenshotWindow):
+  - group headers with chevrons, indented items, Truss selection highlight on header and items, lock icons, footer counts;
+  - `ScrollPanels end` shows the last group (People) with recycled rows;
+  - after the clipping fix, the list stops above the footer.
+- **Real OS clicks** in the `-game` window (SetCursorPos and mouse_event):
+  - the TRUSS header eye hid the group (`Outliner.List`: Truss hidden all);
+  - the TRUSS header name selected both trusses;
+  - a Beam item name selected that fixture, and a Truss item name selected that span.
+  - Two earlier attempts selected nothing because Windows refused the harness's `SetForegroundWindow`, so the click only activated the window. A first click on the panel title avoids that.
+  - An item eye was not separately confirmed by a click (it uses the same binding as the header eye).
+- **Builds:** Editor Development, Game Development and Game Shipping succeeded with no warnings.
+- **Shipping scan** (UTF-16 at both byte alignments, and ASCII):
+  - the test names, "Filtered lines", "in %.1f ms", `ScrollPanels` and all nine trace scope names are absent;
+  - the Outliner's UI strings ("Show or hide the items of this group.", "No items match the filter.") are present.
+- **Not verified by hand:** Gevor clicking through the Outliner on a large stage (scroll, collapse, filter, Ctrl+Click, item eye and lock).
+
+**Commit:** uncommitted (working tree). STATE #104 now carries `ae9eaed`.
+
+**Known issues / follow-ups**
+- **Measured, not changed:**
+  - At 500 crossfading fixtures, moving-head pivot transforms take about 3.3 ms and deferred render updates 2.8 ms of a 19.8 ms frame. This is the Phase 37 physics-bodies item; check whether moving parts need collision for picking first.
+  - Slate prepass is 1.2 ms with the Outliner fixed; the other panels have not been measured one by one.
+- **Load time is spawn-bound** (0.46 ms per fixture, engine actor and component creation). A 1024-fixture show loads in about 0.55 s. Pooling or lighter fixture actors would be an architecture change; no need is known yet.
+- **Fade broadcast batching** (todo Phase 37) was not visible in this trace: the C++ listeners use the native delegate since #78, and there are no named scopes there. Left open.
 - The Obsidian vault on S: is still unreachable, so there is no session log.

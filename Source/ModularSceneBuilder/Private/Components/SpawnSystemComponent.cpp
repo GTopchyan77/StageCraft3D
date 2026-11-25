@@ -8,6 +8,7 @@
 #include "History/StageItemSnapshot.h"
 #include "Interaction/InteractableInterface.h"
 #include "ModularSceneBuilder.h"
+#include "ProfilingDebugging/CpuProfilerTrace.h"
 
 #include UE_INLINE_GENERATED_CPP_BY_NAME(SpawnSystemComponent)
 
@@ -72,6 +73,7 @@ AModularBaseActor* USpawnSystemComponent::DuplicateItem(const FStageItemSnapshot
 
 AModularBaseActor* USpawnSystemComponent::SpawnValidated(UBaseItemData& Item, const FTransform& Transform, TFunctionRef<void(AModularBaseActor&)> Prepare, const TCHAR* LogVerb)
 {
+	TRACE_CPUPROFILER_EVENT_SCOPE(SpawnSystem_SpawnValidated);
 	UWorld* World = GetWorld();
 	if (!World)
 	{
