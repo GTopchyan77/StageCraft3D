@@ -10357,7 +10357,7 @@ All times in ms.
 - **No source change**, so no new test. The source tree equals `9cda4b7`, which #106 verified (suite 311/311; Editor, Game Development and Shipping with 0 warnings; Shipping scan clean). The Editor target was rebuilt after the revert and succeeded.
 - **Not verified:** the look of 16 against 64 shadowed beams on a real show (screenshots or Gevor's eye).
 
-**Commit:** uncommitted (working tree). STATE #106 now carries `9cda4b7`.
+**Commit:** `a806a13` (committed by Gevor, 2026-11-25).
 
 **Known issues / follow-ups**
 - **Gevor to decide** one of:
@@ -10365,5 +10365,105 @@ All times in ms.
   - lower `MaxShadowedFixtures` (16 measured best for moving rigs; 32 is half the gain);
   - a separate, smaller budget for fixtures whose heads are moving (keeps static looks at 64; needs an ADR 0018 §4 amendment, tests for the selection, and an A/B).
 - **If the budget comes down**, the moving crossfade becomes game-thread bound. The #106 game-thread items are then the next measured costs.
+- The Slate prepass (1.2 ms) is still not measured panel by panel.
+- The Obsidian vault on S: is still unreachable, so there is no session log.
+
+## #108 — Moving-caster shadow limit: still looks keep 64 shadowed fixtures, moving heads at most 16 (ADR 0018 §4.1); the shadow budget's retry timer fixed (2026-11-25)
+
+**What & why**
+- Gevor chose (2026-11-25) the third option from #107: keep up to 64 shadowed fixtures on still looks, but cap moving shadow casters more tightly while heads move. Amend ADR 0018 §4, test, and A/B it.
+  - **Why it pays:** a still shadowed light keeps its cached shadow depths, while a moving one re-renders them every frame.
+  - In #107, 64 moving casters took 19.6–20.4 ms a frame and 16 took 17.5 ms.
+  - Lowering the whole budget would also have cost still looks their nearly free shadows.
+- **The rule** (pure, `Show/StageShadowBudget`):
+  - `FStageShadowLimits { Total, Moving }` replaces the single budget in `SelectCasters` and `SelectCastersWithHold`.
+  - `FStageShadowCandidate` gains `bMoving`.
+  - Candidates are taken by rank until `Total` cast. A moving one is passed over once `Moving` moving ones cast, so its place goes to the next candidate (still fixtures further down fill the budget).
+  - `Moving` above `Total` counts as `Total`; below 0 there is no moving limit; with the budget off every lit fixture casts.
+  - Under the hold both limits are hard: held casters count first, and held casters over a limit drop lowest-ranked first (moving limit before total). For example, a held caster whose head starts moving drops at once if the moving limit is full.
+  - `StageShadowBudget::IsMoving(SecondsSinceMove, MovingSeconds)`: a NaN, negative or backwards clock counts as still.
+- **Settings** (`UStageShowPerformanceSettings`, Project Settings › Game › StageCraft Performance):
+  - `MaxShadowedMovingFixtures`, default 16, 0..2000, -1 with the budget off;
+  - `MovingSeconds`, default 1 s, 0.1..10: how long after its last pan/tilt step a fixture counts as moving, so a chase with pauses does not switch shadows every step;
+  - `GetShadowLimits()` returns both limits.
+  - `MaxShadowedFixtures` stays 64.
+- **Wiring:**
+  - `ALightingFixtureActor` records the world time of its last pivot move (`GetLastHeadMoveTime`, set in `NoteHeadMoved` from `ApplyOutputs`' pivot branch).
+    - Only after BeginPlay: applying item data on spawn is not a movement.
+    - On a still-to-moving change it calls `MarkShadowBudgetDirty`, once per movement rather than per frame.
+  - `UShowControlSubsystem::UpdateShadowBudget` marks candidates moving and passes `GetShadowLimits()`.
+    - It also arms a re-ranking for when the first moving fixture counts as still again, so the shadows come back with no other event.
+- **Bug found by the in-game A/B, fixed.**
+  - **Symptom:** the first `-game` A/B ended its idle phase with 18 casters instead of 64.
+  - **Cause:** while a timer's callback runs, UE reports it active with 0 s remaining (`ETimerStatus::Executing`, `InternalGetTimerRemaining`).
+    - `ArmShadowBudgetTimer` returned early when the timer was active, so every retry armed from inside `UpdateShadowBudget` was dropped.
+    - This also hit the hold retry of STATE.md #48: it never fired, and a held fixture followed its rank only at the next unrelated event.
+  - **Fix:**
+    - `UpdateShadowBudget` clears its timer handle first.
+    - `ArmShadowBudgetTimer` returns only when the armed re-ranking is at or before the asked delay; otherwise it re-arms earlier. Without this, the movement retry (up to 1 s away) would have delayed the 0.25 s re-rankings a fade asks for.
+- **Observability:** each bench phase now logs "Bench N <phase> ended with X of Y fixtures casting shadows." (Development only).
+- **ADR 0018 §4.1** records the decision, the timer fix, the consequences and the rollback (set `MaxShadowedMovingFixtures` to 64).
+
+**Files changed**
+- `Source/ModularSceneBuilder/Public/Show/StageShadowBudget.h`, `Private/Show/StageShadowBudget.cpp`: limits struct, `bMoving`, `IsMoving`, the moving limit in both selections, settings and getters.
+- `Source/ModularSceneBuilder/Public/Actors/LightingFixtureActor.h`, `Private/Actors/LightingFixtureActor.cpp`: `GetLastHeadMoveTime`, `NoteHeadMoved`.
+- `Source/ModularSceneBuilder/Public/Subsystems/ShowControlSubsystem.h` (doc comment), `Private/Subsystems/ShowControlSubsystem.cpp`: moving candidates, limits, the movement retry, and the timer fix.
+- `Source/ModularSceneBuilder/Private/Diagnostics/StageFixtureBenchmark.cpp`: shadow count at the end of each phase.
+- `Source/ModularSceneBuilder/Private/Show/Tests/StageShadowBudgetTests.cpp`: existing tests moved to the limits struct; new `StageCraft.Show.ShadowBudgetMoving`.
+- `Source/ModularSceneBuilder/Private/Show/Tests/StageShadowBudgetWorldTests.cpp` (new): `StageCraft.Show.ShadowBudgetWorld`.
+- `Docs/ADR/0018-ue-camera-shadow-budget-shapes-and-assistant-edits.md` (§4.1), `tasks/todo.md` (Phase 57 decision ticked, Phase 58), `STATE.md` (this entry; #107 carries `a806a13`).
+- No Blueprints, assets, maps or ini files (defaults are in C++).
+
+**Verification**
+- **Tests:**
+  - `StageCraft.Show.ShadowBudgetMoving` (pure) covers:
+    - one mover and three still in a budget of 4;
+    - a moving limit of 0;
+    - a moving limit above the total;
+    - no moving limit;
+    - budget off;
+    - no movers equals total only;
+    - a head stopping gets its shadows back;
+    - 500 candidates with the 100 brightest moving under 64/16 giving 64 casters, 16 of them moving and still ones at ranks 100–147;
+    - held movers over the limit (the lower drops);
+    - a held mover keeping its place, with a retry at 0.9 s;
+    - `IsMoving` edges.
+  - `StageCraft.Show.ShadowBudgetWorld` (a game world, 20 fixtures, the subsystem's real timer, latent ticks of 0.1 s):
+    - still and lit gives 20 casters;
+    - after a pan, 16 within a second;
+    - stopped with no outside call, 20 again within 3.5 s of world time.
+    - It reads the project limits and skips with a warning if they cannot cap 20 movers.
+  - **Mutations** (each reverted; no "MUTATION" left in `Source/`):
+    - passing a moving candidate ends the walk (`break` for `continue`): ShadowBudgetMoving fails (one mover, three still; moving limit 0; 500: 64 cast got 16);
+    - no hard moving limit for held casters: ShadowBudgetMoving fails (held movers over the limit);
+    - no `ClearTimer` in `UpdateShadowBudget`: ShadowBudgetWorld fails ("Stopped: expected 20, got 16").
+  - **Full suite:** `RunAutomation.ps1 -Filter StageCraft -NullRHI -ExpectedCount 313`, 313/313 passed, user data unchanged (164 files).
+- **`-game` A/B with the final build** (`StageCraft.Bench.Fixtures 500 Seconds=10 Fade=2`, then `Move=0`, then again; old behaviour via `-ini:Game:[/Script/ModularSceneBuilder.StageShowPerformanceSettings]:MaxShadowedMovingFixtures=64`):
+
+  | 500 fixtures | Moving limit 64 (before) | Moving limit 16 (now) |
+  |---|---|---|
+  | Moving crossfade, run 1 | 19.99 ms, 358 over budget, 64 casters | 18.24 ms, 92 over budget, 18 casters |
+  | Moving crossfade, run 3 | 20.33 ms, 249 over budget, 64 casters | 19.04 ms, 101 over budget, 18 casters |
+  | Still crossfade (`Move=0`) | 13.48 ms, 64 casters | 14.32 ms, 64 casters |
+  | Idle (heads still) | 12.9–13.6 ms, 64 casters | 13.4–13.9 ms, 64 casters |
+
+  - The 18 casters are 16 moving bench fixtures plus the stage's 2 still fixtures.
+  - The moving crossfade gained 1.3–1.8 ms; frames over budget fell by about two thirds.
+  - Still looks keep 64 casters. Their frame times differ by up to 0.8 ms between the sessions, which is the drift seen within a session in #107 (one run each).
+  - The gain is smaller than #107's budget-16 sweep (about 2.1 ms), which also capped still casters. The frame is now close to game-thread bound (game 16.3–17.8 ms).
+  - CSVs in `Saved/StageCraft/Benchmarks/`: `FixtureBench_20261125-184726`, `-184814`, `-184902` (limit 64) and `-185021`, `-185109`, `-185157` (limit 16).
+  - An earlier pair (`-183834` … `-184310`) ran before the timer fix and is superseded: there the idle phase ended with 18 casters.
+- **Builds:** Editor Development, Game Development and Game Shipping succeeded with no warnings. The `ShowControlSubsystem.h` doc-comment edit came after the Game builds and changes no code.
+- **Shipping scan** (UTF-16 at both byte alignments, and ASCII):
+  - absent: the new test names, "casting shadows.", "one mover, three still", `StageCraft.Bench.Fixtures`, "MUTATION" and "TempExp";
+  - `MaxShadowedMovingFixtures` is present as an ASCII reflection name, like the other config properties;
+  - the Outliner UI string is present as a control.
+- **Not verified by hand:** how the switch looks on a real show (beams beyond the 16 brightest moving lose shadows while moving and get them back about a second after stopping).
+
+**Commit:** uncommitted (working tree). STATE #107 now carries `a806a13`.
+
+**Known issues / follow-ups**
+- **Gevor to watch** a moving cue on a large rig and say whether the shadow switch at movement start and end is visible enough to matter. Tuning is `MaxShadowedMovingFixtures` and `MovingSeconds`; rollback is a moving limit of 64.
+- **With the cap the moving crossfade is near game-thread bound:** the #106 items (pivot propagation 3.5 ms, deferred render updates 2.4 ms, part bodies 1–2 ms) are next if a measurement asks for them.
 - The Slate prepass (1.2 ms) is still not measured panel by panel.
 - The Obsidian vault on S: is still unreachable, so there is no session log.

@@ -872,5 +872,14 @@ Gevor's choices: automation tests on a harness game instance (not AFunctionalTes
 ## Phase 57 - Render-thread levers on the 500-fixture moving crossfade (requested by Gevor 2026-11-25; STATE.md #107)
 - [x] A/B with temporary switches (reverted): shadow budget 64 -> 32 / 16 / 0 gives 19.6-19.9 -> 18.3 / 17.5 / 17.2 ms a frame (dropped frames 397 -> 57 at 16); beam reach x0.5 no change, x0.25 about -1.4 ms (changes the look a lot); no lens mesh about -2 ms (changes the look); idle frames unchanged
 - [x] Nothing changed: each lever changes what the user sees
-- [ ] Gevor: decide the default MaxShadowedFixtures (64 now; 16 measured best for moving rigs), or a separate smaller budget for moving fixtures (an ADR 0018 §4 amendment)
+- [x] Gevor: decide the default MaxShadowedFixtures (64 now; 16 measured best for moving rigs), or a separate smaller budget for moving fixtures (an ADR 0018 §4 amendment) (decided 2026-11-25: a moving limit; done in STATE.md #108)
+
+## Phase 58 - Moving-caster shadow limit (requested by Gevor 2026-11-25; STATE.md #108; ADR 0018 §4.1)
+- [x] FStageShadowLimits { Total, Moving }: a moving candidate over its limit is passed over and its place goes to the next one; both limits hard under the hold; MaxShadowedMovingFixtures 16 (64 still), MovingSeconds 1 s
+- [x] Fixtures record their last pivot move after BeginPlay and mark the ranking dirty on a still-to-moving change; the ranking arms a re-ranking for when a movement ends
+- [x] Timer fix: retries armed from inside UpdateShadowBudget were dropped (an executing timer reads as active), including the STATE #48 hold retry; ArmShadowBudgetTimer brings a later re-ranking forward
+- [x] Tests: StageCraft.Show.ShadowBudgetMoving (pure; two mutations fail it), StageCraft.Show.ShadowBudgetWorld (world + timers; fails without the timer fix); ShadowBudget / ShadowBudgetHold moved to the limits struct
+- [x] -game A/B at 500 fixtures: moving crossfade 20.0 / 20.3 -> 18.2 / 19.0 ms, over-budget frames 358 / 249 -> 92 / 101; still looks keep 64 casters (idle and Move=0 crossfade)
+- [ ] Gevor: watch a moving cue on a large rig: beams beyond the 16 brightest moving lose shadows while moving and get them back about a second after stopping; say if that switch is visible enough to matter
+- [ ] The frame is near game-thread bound now (game 16-18 ms): the #106 game-thread items are next if a measurement asks for them
 - [ ] With 16 or fewer shadowed fixtures the moving crossfade becomes game-thread bound (game 16.8 ms ≈ frame 17.5 ms): the #106 game-thread items (pivot propagation 3.5 ms, deferred render updates 2.4 ms, part bodies 1-2 ms) then matter

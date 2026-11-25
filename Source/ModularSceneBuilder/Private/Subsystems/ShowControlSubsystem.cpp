@@ -286,15 +286,28 @@ void UShowControlSubsystem::MarkShadowBudgetDirty()
 void UShowControlSubsystem::ArmShadowBudgetTimer(float DelaySeconds)
 {
 	UWorld* World = GetWorld();
-	if (!World || World->GetTimerManager().IsTimerActive(ShadowBudgetTimer))
+	if (!World)
 	{
-		return; // Already armed: one re-ranking covers every change until it runs.
+		return;
+	}
+	// Already armed at or before this delay: one re-ranking covers every change until it runs. A later one (the retry for a moving
+	// fixture to count as still) is brought forward, so a change during a fade is still followed within the update interval.
+	FTimerManager& Timers = World->GetTimerManager();
+	if (Timers.IsTimerActive(ShadowBudgetTimer) && Timers.GetTimerRemaining(ShadowBudgetTimer) <= DelaySeconds)
+	{
+		return;
 	}
 	World->GetTimerManager().SetTimer(ShadowBudgetTimer, FTimerDelegate::CreateUObject(this, &ThisClass::UpdateShadowBudget), DelaySeconds, /*bLoop*/ false);
 }
 
 void UShowControlSubsystem::UpdateShadowBudget()
 {
+	// This runs as the timer's callback, and the engine reports a timer that is executing as active with 0 s remaining, so a retry
+	// armed below (a hold or a movement ending) would be dropped as "already armed". Nothing is armed once the ranking runs.
+	if (UWorld* TimerWorld = GetWorld())
+	{
+		TimerWorld->GetTimerManager().ClearTimer(ShadowBudgetTimer);
+	}
 	const UStageShowPerformanceSettings* Settings = GetDefault<UStageShowPerformanceSettings>();
 	const TArray<ALightingFixtureActor*> Current = GetFixtures();
 
@@ -305,6 +318,10 @@ void UShowControlSubsystem::UpdateShadowBudget()
 		? TOptional<FVector>(Viewer->PlayerCameraManager->GetCameraLocation()) : TOptional<FVector>();
 
 	const double Now = World ? World->GetTimeSeconds() : 0.0;
+	const double MovingSeconds = Settings->GetMovingSeconds();
+	// When the first moving fixture will count as still again: its place under the wider budget has to be re-ranked then, even if
+	// nothing else changes (a head that stopped no longer calls in).
+	TOptional<double> StillAfterSeconds;
 	TArray<FStageShadowCandidate> Candidates;
 	Candidates.Reserve(Current.Num());
 	for (ALightingFixtureActor* Fixture : Current)
@@ -317,9 +334,15 @@ void UShowControlSubsystem::UpdateShadowBudget()
 		{
 			Candidate.SecondsSinceSwitch = FMath::Max(0.0, Now - *SwitchedAt);
 		}
+		if (const TOptional<double> MovedAt = Fixture->GetLastHeadMoveTime(); MovedAt.IsSet() && StageShadowBudget::IsMoving(Now - MovedAt.GetValue(), MovingSeconds))
+		{
+			Candidate.bMoving = true;
+			const double Remaining = MovingSeconds - (Now - MovedAt.GetValue());
+			StillAfterSeconds = FMath::Min(StillAfterSeconds.Get(Remaining), Remaining);
+		}
 	}
 
-	const FStageShadowSelection Selection = StageShadowBudget::SelectCastersWithHold(Candidates, Settings->GetShadowBudget(), Settings->GetHysteresis(), Settings->GetMinHoldSeconds());
+	const FStageShadowSelection Selection = StageShadowBudget::SelectCastersWithHold(Candidates, Settings->GetShadowLimits(), Settings->GetHysteresis(), Settings->GetMinHoldSeconds());
 	int32 Switched = 0;
 	for (int32 Index = 0; Index < Current.Num(); ++Index)
 	{
@@ -334,10 +357,16 @@ void UShowControlSubsystem::UpdateShadowBudget()
 	{
 		UE_LOG(LogStageCraft, Verbose, TEXT("Shadow budget: %d of %d fixtures cast shadows (%d switched)."), GetShadowedFixtureCount(), Current.Num(), Switched);
 	}
-	// A held fixture still has to follow its rank once its hold ends, even if nothing else changes by then.
-	if (Selection.RetryAfterSeconds > 0.0)
+	// A held fixture still has to follow its rank once its hold ends, and a moving one once it counts as still, even if nothing
+	// else changes by then. The small margin lands the re-ranking just past the boundary rather than on it.
+	double RetryAfterSeconds = Selection.RetryAfterSeconds;
+	if (StillAfterSeconds.IsSet())
 	{
-		ArmShadowBudgetTimer(static_cast<float>(Selection.RetryAfterSeconds) + 0.01f);
+		RetryAfterSeconds = RetryAfterSeconds > 0.0 ? FMath::Min(RetryAfterSeconds, StillAfterSeconds.GetValue()) : StillAfterSeconds.GetValue();
+	}
+	if (RetryAfterSeconds > 0.0)
+	{
+		ArmShadowBudgetTimer(static_cast<float>(RetryAfterSeconds) + 0.01f);
 	}
 }
 

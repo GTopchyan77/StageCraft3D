@@ -127,6 +127,35 @@ A « segment at the left of `UStageViewportToolbar` collapses it to a 14 px stri
 - A one-shot timer (0.25 s, coalescing) re-ranks, and only fixtures whose choice changed get `SetCastShadows`.
 - The settings are in **Project Settings › Game › StageCraft Performance** (`UStageShowPerformanceSettings`): on / off, the budget (0..2000, default 64), the interval, the hysteresis and the minimum hold. Off is the previous look and cost.
 
+### 4.1 Amendment (STATE.md #108): a tighter limit for moving casters
+
+**Problem.** A still shadowed light keeps its cached shadow depths; a moving one re-renders them every frame.
+- At 500 crossfading moving heads the render thread set the frame (STATE.md #106).
+- With all 64 casters moving, a frame took 19.6–20.4 ms; with 16 casters, 17.5 ms (STATE.md #107).
+- Lowering the budget for everything would also cost still looks their shadows, where shadows are nearly free.
+
+**Decision.**
+- `FStageShadowLimits { Total, Moving }` replaces the single budget in `SelectCasters` / `SelectCastersWithHold`.
+- Candidates are taken by rank until `Total` cast. A **moving** candidate (`FStageShadowCandidate::bMoving`) is passed over once `Moving` moving ones cast, and its place goes to the next candidate, so still fixtures further down fill the budget.
+- `Moving` above `Total` counts as `Total`; below 0 there is no moving limit. With the budget off (`Total` < 0) every lit fixture casts, moving or not.
+- **Both limits are hard under the hold.** Held casters count against both first. A held caster whose head starts moving drops at once if the moving limit is full (lowest ranked first), the moving limit before the total.
+- **Moving** means a pan or tilt step within `MovingSeconds` (default 1 s, 0.1..10), so a chase with short pauses does not switch shadows on every step (`StageShadowBudget::IsMoving`).
+- `ALightingFixtureActor` records the world time of its last pivot move. Moves before BeginPlay do not count: applying item data on spawn is not a movement.
+- On a still-to-moving change the fixture marks the ranking dirty, once per movement and not every frame.
+- The ranking arms one more re-ranking for when the first moving fixture counts as still again, so shadows come back with no other event.
+- `MaxShadowedMovingFixtures` defaults to **16**; `MaxShadowedFixtures` stays 64 for still looks.
+
+**Timer fix found on the way.**
+- While a timer's callback runs, the engine reports it active with 0 s remaining. `ArmShadowBudgetTimer` therefore dropped every retry armed from inside `UpdateShadowBudget` as "already armed". That covered the hold retry of STATE.md #48 and the new movement retry; nothing re-ranked until some other event did.
+- `UpdateShadowBudget` now clears its handle first.
+- `ArmShadowBudgetTimer` brings a later armed re-ranking forward when a nearer one is asked for. Otherwise the movement retry (up to `MovingSeconds` away) would delay the 0.25 s re-rankings a fade asks for.
+
+**Consequences.**
+- When a cue moves more than 16 lit heads, the lowest ranked moving ones lose their beam shadows for the movement plus about a second, then get them back (subject to the 1 s hold).
+- Still looks are unchanged.
+- At 500 moving heads the crossfade frame fell by 1.3–1.8 ms and the over-budget frames from about 250–360 to about 100 (STATE.md #108).
+- **Rollback:** set `MaxShadowedMovingFixtures` to `MaxShadowedFixtures` (64), which is the previous behaviour.
+
 ## 5. Procedural stage shapes
 
 `StageProceduralShapes` is pure, deterministic geometry with no world and no UObjects; the StageCraft.Shapes tests cover it.

@@ -16,6 +16,7 @@
 #include "Show/StageDMXPatching.h"
 #include "Show/StageFixtureCells.h"
 #include "Show/StageGelLibrary.h"
+#include "Show/StageShadowBudget.h"
 #include "Subsystems/ShowControlSubsystem.h"
 #include "Subsystems/StageDMXPatchSubsystem.h"
 #include "TextureResource.h"
@@ -729,6 +730,7 @@ void ALightingFixtureActor::ApplyOutputs(EFixtureOutputs Outputs)
 		// change (USpotLightComponent::SetOuterConeAngle). Docs/ADR/0012-production-reports-and-fixture-benchmark.md §3.
 		// Re-measured in STATE.md #106: without the rebuild a 500-fixture crossfade took 111 ms a frame instead of 20.5 ms.
 		BeamLight->MarkRenderStateDirty();
+		NoteHeadMoved();
 	}
 
 	if (EnumHasAnyFlags(Outputs, EFixtureOutputs::Color))
@@ -1157,6 +1159,24 @@ float ALightingFixtureActor::GetShadowRankingFlux() const
 {
 	const ULightingFixtureData* Fixture = GetFixtureData();
 	return Fixture ? static_cast<float>(Fixture->LuminousFlux * GetAttribute(StageCraftTags::Attribute_Dimmer) * GetBeamMix().LuminousFraction) : 0.f;
+}
+
+void ALightingFixtureActor::NoteHeadMoved()
+{
+	UShowControlSubsystem* ShowControl = HasActorBegunPlay() ? GetShowControl() : nullptr;
+	if (!ShowControl)
+	{
+		return;
+	}
+	const double Now = GetWorld()->GetTimeSeconds();
+	// Only the start of a movement needs a re-ranking: while the head keeps moving it stays moving, and the budget arms its own
+	// re-ranking for the moment a moving fixture counts as still again. Checking here keeps 500 moving heads from arming per frame.
+	const bool bWasStill = !LastHeadMoveTime.IsSet() || !StageShadowBudget::IsMoving(Now - LastHeadMoveTime.GetValue(), GetDefault<UStageShowPerformanceSettings>()->GetMovingSeconds());
+	LastHeadMoveTime = Now;
+	if (bWasStill)
+	{
+		ShowControl->MarkShadowBudgetDirty();
+	}
 }
 
 void ALightingFixtureActor::UpdateStrobeRegistration()

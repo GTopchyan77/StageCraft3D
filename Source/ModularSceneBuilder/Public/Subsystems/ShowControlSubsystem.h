@@ -498,7 +498,10 @@ private:
 
 	/** Scales Fixture's intensity attributes by the masters (External DMX input, which bypasses the mix). */
 	void ApplyMastersToInput(class ALightingFixtureActor& Fixture) const;
-	/** Ranks the fixtures (StageShadowBudget::SelectCasters) and switches only those whose shadows change. */
+	/**
+	 * Ranks the fixtures (StageShadowBudget::SelectCastersWithHold, with the moving-caster limit) and switches only those whose
+	 * shadows change. Arms its own next ranking when a hold or a movement ends (Docs/ADR/0018 §4.1).
+	 */
 	void UpdateShadowBudget();
 	void AssignSanitizedCues(const TArray<FShowCue>& InCues, const TCHAR* Source);
 	int32 FindCueIndex(float CueNumber) const;

@@ -638,6 +638,9 @@ namespace StageFixtureBenchmark
 			TRACE_END_REGION(*GetRegionName());
 			const UShowControlSubsystem* Show = UWorld::GetSubsystem<UShowControlSubsystem>(World.Get());
 			Samples.ShowTick = Show->GetTickCostStats();
+			// The shadow budget decides much of a moving crossfade's render cost (STATE.md #107, #108), so each phase says where it ended.
+			UE_LOG(LogStageCraft, Display, TEXT("StageCraft.Bench: %s ended with %d of %d fixtures casting shadows."),
+				*GetRegionName(), Show->GetShadowedFixtureCount(), Show->GetFixtures().Num());
 		}
 
 		/** Continuous crossfades: the next Go as soon as the previous fade completed. */

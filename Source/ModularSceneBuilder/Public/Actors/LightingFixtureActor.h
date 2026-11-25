@@ -114,6 +114,9 @@ public:
 	/** Luminous flux at the current dimmer, ignoring the strobe gate, so a strobing beam keeps its rank between flashes. */
 	float GetShadowRankingFlux() const;
 
+	/** World time (s) of the last pan or tilt step since play began; unset if the head has not moved. Read by the moving-caster limit. */
+	TOptional<double> GetLastHeadMoveTime() const { return LastHeadMoveTime; }
+
 	// --- Photometrics ---
 
 	/** Approximate beam photometrics for the current attributes and position. Traces for the throw once after a move. */
@@ -408,6 +411,12 @@ private:
 
 	/** Throw distance in cm from the last trace; unset after pan, tilt or the transform changed. */
 	mutable TOptional<double> CachedThrowCm;
+
+	/** See GetLastHeadMoveTime. Only moves after BeginPlay count: applying item data on spawn is not the head moving. */
+	TOptional<double> LastHeadMoveTime;
+
+	/** Records a pan/tilt step and, when the head was still until now, asks the shadow budget to re-rank (moving casters are capped). */
+	void NoteHeadMoved();
 };
 
 ENUM_CLASS_FLAGS(ALightingFixtureActor::EFixtureOutputs);
