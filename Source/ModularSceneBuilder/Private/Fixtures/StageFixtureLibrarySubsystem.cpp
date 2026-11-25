@@ -148,7 +148,12 @@ void UStageFixtureLibrarySubsystem::Deinitialize()
 	Pending.Reset();
 	Reviews.Reset();
 	ReviewFiles.Reset();
+	// A save deferred by an unfinished restore is dropped: the copied .gdtf files are restored at the next start with inferred kinds.
 	bRestoring = false;
+	bIndexSaveDeferred = false;
+#if WITH_DEV_AUTOMATION_TESTS
+	HeldRestoreForTesting = nullptr;
+#endif
 	OnImportFinished.Clear();
 	OnLibraryChanged.Clear();
 	OnReviewsChanged.Clear();
@@ -828,12 +833,20 @@ void UStageFixtureLibrarySubsystem::RestoreLibrary()
 		const double Start = FPlatformTime::Seconds();
 		TArray<StageFixtureLibrary::FIndexEntry> Index;
 		int32 Skipped = 0;
-		FString IndexJson;
-		const bool bIndexRead = IFileManager::Get().FileExists(*IndexPath) && FFileHelper::LoadFileToString(IndexJson, *IndexPath)
-			&& StageFixtureLibrary::ReadIndex(IndexJson, Index, Skipped);
-		if (IFileManager::Get().FileExists(*IndexPath) && !bIndexRead)
+		// The index is the only record of the user's kind corrections and import names, and the next import rewrites it: a damaged
+		// one is moved aside, and one that cannot be read at all is never written this session (audit risk R8).
+		const StageAtomicFile::EReadResult IndexRead = StageAtomicFile::ReadOrSetAside(IndexPath,
+			[&Index, &Skipped](const FString& Json) { return StageFixtureLibrary::ReadIndex(Json, Index, Skipped); });
+		const bool bIndexWritable = IndexRead != StageAtomicFile::EReadResult::Unreadable;
+		if (IndexRead == StageAtomicFile::EReadResult::Damaged)
 		{
-			UE_LOG(LogStageCraft, Warning, TEXT("Fixture library: %s is not a valid index; fixture types load with their inferred kind."), *IndexPath);
+			Index.Reset();
+			UE_LOG(LogStageCraft, Warning, TEXT("Fixture library: %s is not a valid index; it was kept as %s.bak and fixture types load with their inferred kind."), *IndexPath, *IndexPath);
+		}
+		else if (!bIndexWritable)
+		{
+			Index.Reset();
+			UE_LOG(LogStageCraft, Warning, TEXT("Fixture library: %s cannot be read; fixture types load with their inferred kind and the index is not written this session."), *IndexPath);
 		}
 		else if (Skipped > 0)
 		{
@@ -867,17 +880,44 @@ void UStageFixtureLibrarySubsystem::RestoreLibrary()
 			Files.Add(MoveTemp(File));
 		}
 		const double WorkerMs = (FPlatformTime::Seconds() - Start) * 1000.0;
-		AsyncTask(ENamedThreads::GameThread, [WeakThis, Files = MoveTemp(Files), WorkerMs]() mutable
+		AsyncTask(ENamedThreads::GameThread, [WeakThis, Files = MoveTemp(Files), WorkerMs, bIndexWritable]() mutable
 		{
 			if (UStageFixtureLibrarySubsystem* Self = WeakThis.Get())
 			{
-				Self->HandleLibraryRestored(MoveTemp(Files), WorkerMs);
+#if WITH_DEV_AUTOMATION_TESTS
+				if (bHoldRestoreForTesting)
+				{
+					Self->HeldRestoreForTesting = [Self, Files = MoveTemp(Files), WorkerMs, bIndexWritable]() mutable
+					{
+						Self->HandleLibraryRestored(MoveTemp(Files), WorkerMs, bIndexWritable);
+					};
+					return;
+				}
+#endif
+				Self->HandleLibraryRestored(MoveTemp(Files), WorkerMs, bIndexWritable);
 			}
 		});
 	});
 }
 
-void UStageFixtureLibrarySubsystem::HandleLibraryRestored(TArray<TSharedPtr<FParsedFile>> Files, double WorkerMs)
+#if WITH_DEV_AUTOMATION_TESTS
+bool UStageFixtureLibrarySubsystem::bHoldRestoreForTesting = false;
+
+bool UStageFixtureLibrarySubsystem::ReleaseRestoreForTesting()
+{
+	if (!HeldRestoreForTesting)
+	{
+		return false;
+	}
+	// Moved out first: the held call owns the only reference to the restore's files, and this member is reset by Deinitialize.
+	TUniqueFunction<void()> Restore = MoveTemp(HeldRestoreForTesting);
+	HeldRestoreForTesting = nullptr;
+	Restore();
+	return true;
+}
+#endif
+
+void UStageFixtureLibrarySubsystem::HandleLibraryRestored(TArray<TSharedPtr<FParsedFile>> Files, double WorkerMs, bool bIndexWritable)
 {
 	using namespace StageFixtureLibraryPrivate;
 
@@ -886,6 +926,7 @@ void UStageFixtureLibrarySubsystem::HandleLibraryRestored(TArray<TSharedPtr<FPar
 		return;
 	}
 	bRestoring = false;
+	bIndexReadOnly = !bIndexWritable;
 
 	const double Start = FPlatformTime::Seconds();
 	int32 Restored = 0;
@@ -924,6 +965,11 @@ void UStageFixtureLibrarySubsystem::HandleLibraryRestored(TArray<TSharedPtr<FPar
 
 	UE_LOG(LogStageCraft, Log, TEXT("Fixture library: %d of %d fixture types restored from %s; read and parsed in %.1f ms on a worker (slowest file %.2f ms), built in %.1f ms on the game thread."),
 		Restored, Files.Num(), *StageFixtureLibrary::GetLibraryDirectory(), WorkerMs, SlowestMs, (FPlatformTime::Seconds() - Start) * 1000.0);
+	if (bIndexSaveDeferred)
+	{
+		bIndexSaveDeferred = false;
+		SaveIndex();
+	}
 	if (Restored > 0)
 	{
 		RefreshReviews();
@@ -933,6 +979,18 @@ void UStageFixtureLibrarySubsystem::HandleLibraryRestored(TArray<TSharedPtr<FPar
 
 void UStageFixtureLibrarySubsystem::SaveIndex()
 {
+	// Until the restore has finished, Types lacks the restored types, and the worker may not have read the index yet: writing now
+	// would drop their entries (kind corrections, import names) or even be read back as the index. The restore saves instead.
+	if (bRestoring)
+	{
+		bIndexSaveDeferred = true;
+		return;
+	}
+	if (bIndexReadOnly)
+	{
+		UE_LOG(LogStageCraft, Log, TEXT("Fixture library: the index was unreadable at start, so it is not written this session."));
+		return;
+	}
 	TArray<StageFixtureLibrary::FIndexEntry> Entries;
 	Entries.Reserve(Types.Num());
 	for (const FStageFixtureLibraryType& Type : Types)

@@ -284,12 +284,12 @@ See `STATE.md` for detailed history of completed work.
 - [x] PROJECT_AUDIT.md + CURRENT_SYSTEMS.md; 46/46 automation
 - [ ] Review the audit and answer its open questions (Gevor; PROJECT_AUDIT.md §10)
 - [ ] Untrack `Config/UserEngine.ini`, rotate the UnrealNGGMCP token; confirm the #29 Anthropic key was rotated (R1)
-- [ ] Partial scene load stays dirty, does not silently drop items on re-save; load waits for pending imports (R2)
+- [x] Partial scene load stays dirty, does not silently drop items on re-save; load waits for pending imports (R2) — STATE.md #40 (stale box, re-checked in #103: loads are refused with ImportsPending while models or fixture types load)
 - [x] Undo/redo transforms checked by the GameMode (lock) (R3) — STATE.md #37
 - [x] Coalesce inspector spin-box drags into one undo step (R4) — STATE.md #37
 - [x] Quit prompt when dirty; timed autosave (R5) — STATE.md #37
-- [ ] Sanitise restored SaveGame state: fixture attributes, patch, loudspeaker gain/delay (R6)
-- [ ] Move a corrupt Imports.json aside instead of overwriting it (R8)
+- [x] Sanitise restored SaveGame state: fixture attributes, patch, loudspeaker gain/delay (R6) — STATE.md #40 (stale box; #103 re-checked the state added since: home look, gel, patch options, decks, stairs, audience, curved truss, MVR origin)
+- [x] Move a corrupt Imports.json aside instead of overwriting it (R8) — STATE.md #40 (stale box); #103 extends it to the fixture library index and the marketplace publish record
 - [ ] World-based tests: GameMode rules, request bridge, selection, ApplyDocument, patch conflicts, cues, economy (R11)
 - [ ] Docs: Rules.md subsystem table + foreign RunEditor/DamenTools8/UnrealClaude sections; ADR 0001 §3; stale todo boxes; Content/Python setup script (R12)
 
@@ -837,3 +837,11 @@ Gevor's choices: automation tests on a harness game instance (not AFunctionalTes
 - [x] todo review: four stale boxes ticked (knowledge base and reply buttons, #72; MV4/MV5, #90/#99); the open code follow-ups are listed in STATE.md #102
 - [ ] Gevor: click Items in the Sketch window, type "led", Escape twice, then press a viewport shortcut (focus should be back)
 - [ ] Search results are headed by the submenu's label, which includes the current item ("Fixture: Beam 280 (Moving Head)"): readable as a path, but could suggest the results belong to it
+
+## Phase 53 - Audit R2/R6/R8 re-check; damaged-file safety for the newer files (requested by Gevor 2026-11-24; STATE.md #103)
+- [x] R2, R6, R8 were built in #40 (Phase 17); the three Phase 13 boxes were stale and are ticked. Re-checked against the code added since
+- [x] StageAtomicFile::ReadOrSetAside: one shared read for files the app rewrites (Missing / Read / Damaged moved to .bak / Unreadable never written); the import list uses it
+- [x] Fixture library index (Fixtures.json: kind corrections, import names): damaged kept as .bak, unreadable not written that session; a save asked for during the start-up restore waits for it (it wrote an index without the restored types)
+- [x] Marketplace publish record (Published.json: which listings this install may unpublish): damaged kept as .bak, unreadable not written that session
+- [x] Tests: StageCraft.Fixtures.LibraryIndexFile, StageCraft.Marketplace.PublishRecordFile (both shown to fail with the guards removed)
+- [ ] Not done (left as is, by choice): a damaged Web Remote devices file is ignored and rewritten (devices pair again, as #95 decided); the local marketplace stand-in's download counts; scene loads during imports stay refused, not queued (ADR 0013 §3.1)

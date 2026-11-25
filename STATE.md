@@ -9961,9 +9961,80 @@ All times in ms.
   - a viewport shortcut right after closing a menu;
   - the grouped Items submenu on screen: the live catalog has 13 fixtures, so the grouping is covered only by the unit tests.
 
-**Commit:** uncommitted (working tree).
+**Commit:** `4a02505`.
 
 **Known issues / follow-ups**
 - Search results are headed by the submenu's label, which includes the current item ("Fixture: Beam 280 (Moving Head)"). It reads as a path but could suggest the results belong to that item.
 - Decks and trusses are never grouped (no display kinds); revisit if their catalogs grow.
 - **Gevor:** click Items in the Sketch window, type "led", press Escape twice, then press a viewport shortcut.
+
+## #103 — Audit R2/R6/R8 re-checked (already done in #40); a damaged fixture library index or publish record is now kept, not overwritten (2026-11-24)
+
+**What & why**
+- **Request (Gevor, 2026-11-24).** Work through the robustness follow-ups from the #102 todo review, with tests and Editor/Game/Shipping builds:
+  - keep a partially loaded scene dirty until pending imports finish (R2);
+  - sanitise restored SaveGame state (R6);
+  - move a corrupt `Imports.json` aside instead of overwriting it (R8).
+- **Finding: R2, R6 and R8 were built in #40 (2026-10-21, ADR 0013).** The Phase 13 boxes at `tasks/todo.md` lines 287/291/292 were never ticked. #102's review listed them as open without checking the code; that was wrong, and those boxes are ticked now.
+  - **R2:** a load that skipped or repaired items stays unsaved (`MarkUnsaved`), and the skipped items are written back on save. A scene file with damaged entries is backed up to `.json.bak` before the first save over it. Loads are refused with `ImportsPending` while models import or, since the GDTF library, while fixture types load (`UStageSceneComponent::LoadScene`). Every load is user-started (File menu, recover, marketplace open, console), so a refusal is shown to the user ("Try again in a moment"); none is silently lost.
+  - **R6:** every actor with SaveGame state repairs and counts it on restore. That includes state added after #40: the fixture home look (`SanitizeHomeAttributes`), the gel (cleared when the fixture takes none), patch options (bools, always valid), decks, stairs, audience, curved truss, and the MVR origin (length caps).
+  - **R8:** `Imports.json` is moved to `.bak` when damaged, and the list is never written when unreadable (`StageMeshImport::LoadImportListFile`).
+- **New gap found in the re-check: two files added after #40 had the R8 problem.** Each is rewritten from memory by the app, so a damaged copy read as empty was replaced at the next write:
+  - **Fixture library index** (`Saved/StageCraft/Fixtures/Fixtures.json`, #84+). It holds the user's kind corrections and the names of imported files. A damaged index was logged and replaced by the next import or removal.
+  - **Marketplace publish record** (`Saved/StageCraft/Marketplace/Published.json`, ADR 0021 §15). It is the only proof of which listings this install may unpublish. A damaged record was treated as empty and replaced by the next publish, so earlier listings could no longer be unpublished from here.
+- **Race found in the same code.** `SaveIndex` ran while the start-up restore was still running: an import confirmed then, or a GDTF carried by an MVR or marketplace scene, wrote an index holding only the new type. The restored types' entries (kind, file name, import date) were lost on disk. The mutation run below shows it: 1 entry instead of 2.
+- **Fix.**
+  - `StageAtomicFile::ReadOrSetAside(Path, Parse)` (new, any thread) is one shared read for such files, with four results:
+    - Missing;
+    - Read;
+    - Damaged: Parse refused it, so it is moved to `Path.bak`;
+    - Unreadable: it exists but cannot be read, or could not be moved; the caller must not write it that session.
+  - `LoadImportListFile` now uses it; its behaviour is unchanged (the `IO.ImportListFile` test still passes).
+  - **Fixture library:**
+    - The restore worker reads the index through the helper and passes whether it may be written to `HandleLibraryRestored`.
+    - `SaveIndex` while `bRestoring` sets `bIndexSaveDeferred`; the restore writes the index once all types are back.
+    - After an unreadable index, `bIndexReadOnly` skips writes for the session.
+    - A save deferred when the game quits during the restore is dropped: the copied `.gdtf` files come back at the next start with their inferred kind.
+  - **Marketplace:** `LoadLocalRecords` reads the record through the helper. When it is unreadable, `bPublishRecordReadOnly` makes `SavePublishRecord` skip; publishing still works, but the new listing is not recorded in that session.
+  - **Test-only hook** (`WITH_DEV_AUTOMATION_TESTS`, as `SetPinForTesting`): `UStageFixtureLibrarySubsystem::bHoldRestoreForTesting` / `ReleaseRestoreForTesting`. The first test version showed that a fast restore can finish during start-up, so the "added during the restore" case depended on timing; the hold makes it deterministic.
+- **Left as is, by choice:**
+  - Scene loads during imports stay refused, not queued (ADR 0013 §3.1).
+  - A damaged Web Remote devices file is ignored and rewritten; devices pair again, as #95 decided.
+  - The local marketplace stand-in's download counts are not protected.
+
+**Files changed**
+- `Source/ModularSceneBuilder/Private/IO/StageAtomicFile.h/.cpp`: `EReadResult`, `ReadOrSetAside`.
+- `Source/ModularSceneBuilder/Private/Import/StageMeshImportTypes.cpp`: `LoadImportListFile` uses the helper.
+- `Source/ModularSceneBuilder/Public/Fixtures/StageFixtureLibrarySubsystem.h`, `Private/Fixtures/StageFixtureLibrarySubsystem.cpp`: index read, deferred and read-only saves, test hold.
+- `Source/ModularSceneBuilder/Public/Marketplace/StageMarketplaceSubsystem.h`, `Private/Marketplace/StageMarketplaceSubsystem.cpp`: record read, read-only save.
+- Tests:
+  - `Private/Fixtures/Tests/StageFixtureLibraryTests.cpp`: new `StageCraft.Fixtures.LibraryIndexFile`.
+  - `Private/Marketplace/Tests/StageMarketplaceFetchTests.cpp`: new `StageCraft.Marketplace.PublishRecordFile`.
+- `tasks/todo.md`: the R2/R6/R8 boxes and Phase 53. `STATE.md`: #102 commit and this entry.
+- No Blueprints, content assets, input actions, maps or config changed.
+
+**Verification (Claude, 2026-11-24)**
+- **New tests:**
+  - `Fixtures.LibraryIndexFile`, four sessions on one temporary root:
+    1. A type is added while the restore is held. The index is written after the restore and lists both types, with the spot's corrected kind (Blinder) and its "My Spot.gdtf" name.
+    2. A damaged index is moved to `.bak` byte for byte, and the types come back with their inferred kind. A removal writes a new index, and the `.bak` is untouched.
+    3. An index locked during start-up gives the inferred kind. After the lock is released, an added type does not change the file.
+    4. The next session reads the user's kind again.
+  - `Marketplace.PublishRecordFile`:
+    - A damaged record goes to `.bak` and a publish starts a new record.
+    - A record locked during start-up: the earlier listing is not known, publishing still works, and the file is unchanged.
+    - The next session knows the earlier listing again.
+- **Mutation checks:**
+  - With all three guards removed, both tests fail: the user's index and record are overwritten and lost the next session.
+  - With only the restore deferral removed, `LibraryIndexFile` fails: "lists both types" was 1, and the corrected kind was lost.
+  - The guards were restored before the final builds (checked).
+- **Automation:** focused run 7/7. Full suite **309/309** (307 + 2 new), `-NullRHI`; user data unchanged (127 files).
+- **Builds:** Editor Development, Game Development and Game Shipping succeeded with no warnings. Shipping scan (UTF-16): the file names `Published.json`, `Fixtures.json` and `.bak` are present; both new test names are absent, and so are the new log lines, because Shipping compiles `UE_LOG` out; the test hold is under `WITH_DEV_AUTOMATION_TESTS`.
+- **Not verified:** no scripted `-game` run, since the paths are covered by integration tests on real subsystems; no hand test with a damaged file in a packaged build.
+
+**Commit:** uncommitted (working tree).
+
+**Known issues / follow-ups**
+- `MoveAside` replaces an older `.bak`: a file damaged twice keeps only the latest damaged copy (unchanged since #40).
+- Other code items from the #102 list remain: R11 world tests, the GameUserSettings test, 1 px header lines, the fixture ID index, batched broadcasts, undo for attribute edits, GO and tracking cues, Sketch saved with scenes, the GDTF logo, and others.
+- The Obsidian vault on S: is still unreachable, so there is no session log.

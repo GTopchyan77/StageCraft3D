@@ -218,6 +218,8 @@ private:
 
 	/** Listings this install published (ADR 0021 §15). Loaded at Initialize, saved after each publish and unpublish. */
 	TSet<FGuid> PublishedByMe;
+	/** The record existed but could not be read at Initialize: SavePublishRecord skips, so a publish cannot replace the user's record. */
+	bool bPublishRecordReadOnly = false;
 	/** Listings with a copy in the library. Filled at Initialize, kept in step with imports and removals. */
 	TSet<FGuid> LibraryListings;
 	bool bUnpublishing = false;

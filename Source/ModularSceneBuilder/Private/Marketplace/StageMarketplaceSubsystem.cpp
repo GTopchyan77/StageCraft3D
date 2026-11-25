@@ -770,28 +770,37 @@ void UStageMarketplaceSubsystem::LoadLocalRecords()
 	LibraryListings.Reset();
 
 	// Bounded start-up reads (one small file and one folder listing), done once so every later question is answered from memory.
-	FString Contents;
-	TSharedPtr<FJsonObject> Root;
+	// The record is the only proof of which listings this install may unpublish, and every publish rewrites it from memory: a damaged
+	// one is moved aside and one that cannot be read is never written this session, so the next publish cannot erase it (audit R8).
 	const FString RecordPath = GetPublishRecordPath();
-	if (FFileHelper::LoadFileToString(Contents, *RecordPath, FFileHelper::EHashOptions::None, FILEREAD_Silent))
+	bPublishRecordReadOnly = false;
+	const StageAtomicFile::EReadResult RecordRead = StageAtomicFile::ReadOrSetAside(RecordPath, [this](const FString& Contents)
 	{
+		TSharedPtr<FJsonObject> Root;
 		const TArray<TSharedPtr<FJsonValue>>* Ids = nullptr;
-		if (FJsonSerializer::Deserialize(TJsonReaderFactory<TCHAR>::Create(Contents), Root) && Root.IsValid() && Root->TryGetArrayField(ListingsField, Ids))
+		if (!FJsonSerializer::Deserialize(TJsonReaderFactory<TCHAR>::Create(Contents), Root) || !Root.IsValid() || !Root->TryGetArrayField(ListingsField, Ids))
 		{
-			for (const TSharedPtr<FJsonValue>& Value : *Ids)
+			return false;
+		}
+		for (const TSharedPtr<FJsonValue>& Value : *Ids)
+		{
+			FGuid Id;
+			if (Value.IsValid() && Value->Type == EJson::String && FGuid::Parse(Value->AsString(), Id) && Id.IsValid())
 			{
-				FGuid Id;
-				if (Value.IsValid() && Value->Type == EJson::String && FGuid::Parse(Value->AsString(), Id) && Id.IsValid())
-				{
-					PublishedByMe.Add(Id);
-				}
+				PublishedByMe.Add(Id);
 			}
 		}
-		else
-		{
-			// Unreadable: nothing can be unpublished from here until the next publish rewrites it. Never a reason to fail start-up.
-			UE_LOG(LogStageCraft, Warning, TEXT("Marketplace: the publish record %s could not be read; treating it as empty."), *RecordPath);
-		}
+		return true;
+	});
+	// Never a reason to fail start-up: without the record, only the listings published from now on can be unpublished from here.
+	if (RecordRead == StageAtomicFile::EReadResult::Damaged)
+	{
+		UE_LOG(LogStageCraft, Warning, TEXT("Marketplace: the publish record %s was damaged; it was kept as %s.bak and a new record is started."), *RecordPath, *RecordPath);
+	}
+	else if (RecordRead == StageAtomicFile::EReadResult::Unreadable)
+	{
+		bPublishRecordReadOnly = true;
+		UE_LOG(LogStageCraft, Warning, TEXT("Marketplace: the publish record %s cannot be read; it is not written this session."), *RecordPath);
 	}
 
 	TArray<FString> Files;
@@ -809,6 +818,11 @@ void UStageMarketplaceSubsystem::LoadLocalRecords()
 void UStageMarketplaceSubsystem::SavePublishRecord()
 {
 	using namespace StageMarketplacePublishRecord;
+	if (bPublishRecordReadOnly)
+	{
+		UE_LOG(LogStageCraft, Log, TEXT("Marketplace: the publish record was unreadable at start, so it is not written this session."));
+		return;
+	}
 	const TSharedRef<FJsonObject> Root = MakeShared<FJsonObject>();
 	Root->SetNumberField(VersionField, Version);
 	TArray<TSharedPtr<FJsonValue>> Ids;

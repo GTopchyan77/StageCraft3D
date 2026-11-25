@@ -3,6 +3,7 @@
 #pragma once
 
 #include "CoreMinimal.h"
+#include "Templates/Function.h"
 
 /** Whether a write may replace a file that already exists at the target path. */
 enum class EStageFileWrite : uint8
@@ -34,4 +35,24 @@ namespace StageAtomicFile
 	 * .bak is replaced. Returns false if the file could not be moved (it is then still at Path).
 	 */
 	bool MoveAside(const FString& Path);
+
+	/** What ReadOrSetAside found. */
+	enum class EReadResult : uint8
+	{
+		/** No file yet (first run): start empty, write freely. */
+		Missing,
+		Read,
+		/** Parse refused the text (damaged, truncated, another version): moved to Path.bak; start empty, write freely. */
+		Damaged,
+		/** The file exists but could not be read, or was damaged and could not be moved: the caller must not write Path this session. */
+		Unreadable,
+	};
+
+	/**
+	 * Reads a file the app rewrites later and the user cannot rebuild (the import list, the fixture library index, the publish
+	 * record), so that a damaged copy is never silently replaced by the next write (Docs/ADR/0013 §3.3, audit risk R8). Parse gets
+	 * the whole text and returns false when it is not what the caller expects; on false the caller's output is its own to reset.
+	 * File system only: any thread.
+	 */
+	EReadResult ReadOrSetAside(const FString& Path, TFunctionRef<bool(const FString& Text)> Parse);
 }

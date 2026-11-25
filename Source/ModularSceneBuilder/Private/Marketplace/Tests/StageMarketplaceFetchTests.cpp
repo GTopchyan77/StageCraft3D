@@ -7,7 +7,8 @@
 //    cleanly.
 //  - UnpublishFlow (ADR 0021 §15): only listings this install published can be unpublished; removing a library copy keeps
 //    ownership, takes the export rights with it until the listing is got again, and waits while the listing is being acquired.
-// Run: UnrealEditor-Cmd <project> -ExecCmds="Automation RunTests StageCraft.Marketplace.FetchTimeout+StageCraft.Marketplace.UnpublishFlow; Quit" -unattended
+//  - PublishRecordFile (audit R8): a damaged publish record is kept as .bak; an unreadable one is not written over that session.
+// Run: UnrealEditor-Cmd <project> -ExecCmds="Automation RunTests StageCraft.Marketplace.FetchTimeout+StageCraft.Marketplace.UnpublishFlow+StageCraft.Marketplace.PublishRecordFile; Quit" -unattended
 
 #include "CoreMinimal.h"
 
@@ -15,11 +16,13 @@
 
 #include "Economy/Tests/StageTestCommerceBackend.h"
 #include "HAL/FileManager.h"
+#include "HAL/PlatformFileManager.h"
 #include "Marketplace/StageLocalMarketplaceStore.h"
 #include "Marketplace/Tests/StageTestMarketplaceBackend.h"
 #include "Misc/AutomationTest.h"
 #include "Misc/FileHelper.h"
 #include "Misc/Paths.h"
+#include "Misc/ScopeExit.h"
 #include "Scene/StageSceneStore.h"
 #include "Tests/StageTestEventRecorder.h"
 #include "Tests/StageTestFixtures.h"
@@ -211,6 +214,102 @@ bool FStageMarketplaceUnpublishFlowTest::RunTest(const FString& Parameters)
 	TestTrue(TEXT("The record was written"), FFileHelper::LoadFileToString(Record, *RecordPath));
 	TestTrue(TEXT("It lists the listing still published"), Record.Contains(Mine[1].ToString(EGuidFormats::Digits)));
 	TestFalse(TEXT("and not the unpublished one"), Record.Contains(Mine[0].ToString(EGuidFormats::Digits)));
+	return true;
+}
+
+// The publish record is the only proof of which listings this install may unpublish, and every publish rewrites it from memory
+// (audit risk R8, STATE.md #103): a damaged record is kept as .bak, and one that cannot be read is never written over that session.
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FStageMarketplacePublishRecordFileTest, "StageCraft.Marketplace.PublishRecordFile", StageTestFixtures::Flags)
+
+bool FStageMarketplacePublishRecordFileTest::RunTest(const FString& Parameters)
+{
+	using namespace StageTestFixtures;
+
+	AddExpectedMessage(TEXT("was damaged; it was kept as"), EAutomationExpectedMessageFlags::Contains, 1);
+	AddExpectedMessage(TEXT("cannot be read; it is not written this session"), EAutomationExpectedMessageFlags::Contains, 1);
+
+	FStageTestGameInstanceOptions Options;
+	Options.Root = FPaths::ConvertRelativePathToFull(FPaths::Combine(FPaths::AutomationTransientDir(), TEXT("StagePublishRecord"), FGuid::NewGuid().ToString()));
+	ON_SCOPE_EXIT { IFileManager::Get().DeleteDirectory(*Options.Root, /*RequireExists*/ false, /*Tree*/ true); };
+	const FString RecordPath = FPaths::Combine(Options.Root, TEXT("Marketplace"), TEXT("Published.json"));
+	const auto ReadBack = [](const FString& Path)
+	{
+		FString Text;
+		FFileHelper::LoadFileToString(Text, *Path);
+		return Text;
+	};
+	// Publishes one scene and returns its listing (invalid on failure).
+	const auto PublishOne = [this](FStageTestGameInstance& Game, const TCHAR* Name)
+	{
+		UStageMarketplaceSubsystem* Marketplace = Game.Subsystem<UStageMarketplaceSubsystem>();
+		TStrongObjectPtr<UStageTestEventRecorder> Recorder(NewObject<UStageTestEventRecorder>());
+		Recorder->Bind(Game.Get());
+		ON_SCOPE_EXIT { Recorder->Unbind(); };
+		FStageMarketplacePublishRequest Request;
+		Request.SceneName = Name;
+		Request.Title = Name;
+		Request.Category = StageCraftTags::Marketplace_Category_Concert;
+		if (!Marketplace || FStageSceneStore(FStageSceneStore::GetDefaultDirectory()).Save(MakeScene(Name)) != EStageSceneResult::Success
+			|| !Marketplace->RequestPublish(Request).IsSuccess()
+			|| !Game.Pump([&Recorder]() { return Recorder->Publishes.Num() > 0; }, 10.0)
+			|| !Recorder->Publishes.Last().Result.IsSuccess())
+		{
+			AddError(FString::Printf(TEXT("%s was not published"), Name));
+			return FGuid();
+		}
+		return Recorder->Publishes.Last().ListingId;
+	};
+
+	AddInfo(TEXT("A damaged record is kept as .bak, and the next publish starts a new one."));
+	const FString Damaged = TEXT("{\"version\":1,\"listings\":[\"0A1B2C3D");
+	IFileManager::Get().MakeDirectory(*FPaths::GetPath(RecordPath), /*Tree*/ true);
+	FFileHelper::SaveStringToFile(Damaged, *RecordPath);
+	FGuid First;
+	{
+		FStageTestGameInstance Game(Options);
+		if (!TestTrue(TEXT("The test game instance starts"), Game.IsValid()))
+		{
+			return false;
+		}
+		TestEqual(TEXT("The record is where the test put it"), UStageMarketplaceSubsystem::GetPublishRecordPath(), RecordPath);
+		TestFalse(TEXT("The damaged record left the name the next publish writes"), IFileManager::Get().FileExists(*RecordPath));
+		TestEqual(TEXT("It is kept byte for byte as .bak"), ReadBack(RecordPath + TEXT(".bak")), Damaged);
+		First = PublishOne(Game, TEXT("Record Arena"));
+		Game.Shutdown();
+		TestTrue(TEXT("The new record lists the new listing"), First.IsValid() && ReadBack(RecordPath).Contains(First.ToString(EGuidFormats::Digits)));
+		TestEqual(TEXT("The .bak is untouched"), ReadBack(RecordPath + TEXT(".bak")), Damaged);
+	}
+
+	AddInfo(TEXT("A record that cannot be read (held open by another program) is not written over in that session."));
+	const FString UserRecord = ReadBack(RecordPath);
+	{
+		// Locked while the marketplace starts (it reads the record in Initialize), then released.
+		TUniquePtr<IFileHandle> Lock(FPlatformFileManager::Get().GetPlatformFile().OpenWrite(*RecordPath, /*bAppend*/ true, /*bAllowRead*/ false));
+		if (!TestNotNull(TEXT("The record can be locked"), Lock.Get()))
+		{
+			return false;
+		}
+		FStageTestGameInstance Game(Options);
+		Lock.Reset();
+		if (!TestTrue(TEXT("The second game instance starts"), Game.IsValid()))
+		{
+			return false;
+		}
+		UStageMarketplaceSubsystem* Marketplace = Game.Subsystem<UStageMarketplaceSubsystem>();
+		TestFalse(TEXT("The earlier listing is not known as this install's"), Marketplace && Marketplace->IsPublishedByMe(First));
+		// The lock is gone: a write now would succeed, so only the session's read-only state keeps the user's record.
+		const FGuid Second = PublishOne(Game, TEXT("Record Club"));
+		TestTrue(TEXT("Publishing still works"), Second.IsValid() && Marketplace && Marketplace->IsPublishedByMe(Second));
+		Game.Shutdown();
+		TestEqual(TEXT("The user's record is unchanged"), ReadBack(RecordPath), UserRecord);
+	}
+
+	AddInfo(TEXT("The next session reads it again."));
+	{
+		FStageTestGameInstance Game(Options);
+		UStageMarketplaceSubsystem* Marketplace = Game.Subsystem<UStageMarketplaceSubsystem>();
+		TestTrue(TEXT("The earlier listing is this install's again"), Game.IsValid() && Marketplace && Marketplace->IsPublishedByMe(First));
+	}
 	return true;
 }
 

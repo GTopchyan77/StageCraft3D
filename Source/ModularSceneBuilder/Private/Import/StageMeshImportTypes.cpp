@@ -245,22 +245,20 @@ namespace StageMeshImport
 	EImportListRead LoadImportListFile(const FString& Path, TArray<FString>& OutSourceFiles)
 	{
 		OutSourceFiles.Reset();
-		if (!IFileManager::Get().FileExists(*Path))
+		const StageAtomicFile::EReadResult Result = StageAtomicFile::ReadOrSetAside(Path, [&OutSourceFiles](const FString& Json) { return ReadImportList(Json, OutSourceFiles); });
+		switch (Result)
 		{
+		case StageAtomicFile::EReadResult::Missing:
 			return EImportListRead::Missing;
-		}
-
-		FString Json;
-		if (!FFileHelper::LoadFileToString(Json, *Path))
-		{
+		case StageAtomicFile::EReadResult::Read:
+			return EImportListRead::Read;
+		case StageAtomicFile::EReadResult::Damaged:
+			OutSourceFiles.Reset();
+			return EImportListRead::Damaged;
+		default:
+			OutSourceFiles.Reset();
 			return EImportListRead::Unreadable;
 		}
-		if (ReadImportList(Json, OutSourceFiles))
-		{
-			return EImportListRead::Read;
-		}
-		// Set aside before anything can save over it: it may be the only record of the user's imports.
-		return StageAtomicFile::MoveAside(Path) ? EImportListRead::Damaged : EImportListRead::Unreadable;
 	}
 }
 

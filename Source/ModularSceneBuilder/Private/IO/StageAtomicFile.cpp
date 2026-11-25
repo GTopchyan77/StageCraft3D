@@ -4,6 +4,7 @@
 
 #include "HAL/FileManager.h"
 #include "HAL/PlatformFileManager.h"
+#include "Misc/FileHelper.h"
 #include "Misc/Paths.h"
 
 namespace StageAtomicFile
@@ -47,5 +48,25 @@ namespace StageAtomicFile
 	bool MoveAside(const FString& Path)
 	{
 		return IFileManager::Get().Move(*(Path + TEXT(".bak")), *Path, /*bReplace*/ true, /*bEvenIfReadOnly*/ false, /*bAttributes*/ false, /*bDoNotRetryOrError*/ true);
+	}
+
+	EReadResult ReadOrSetAside(const FString& Path, TFunctionRef<bool(const FString& Text)> Parse)
+	{
+		if (!IFileManager::Get().FileExists(*Path))
+		{
+			return EReadResult::Missing;
+		}
+		// Silent: the callers log what the result means for the user (models not restored, kinds inferred, and so on).
+		FString Text;
+		if (!FFileHelper::LoadFileToString(Text, *Path, FFileHelper::EHashOptions::None, FILEREAD_Silent))
+		{
+			return EReadResult::Unreadable;
+		}
+		if (Parse(Text))
+		{
+			return EReadResult::Read;
+		}
+		// Set aside before anything can write over it: it may be the only record of what the user did.
+		return MoveAside(Path) ? EReadResult::Damaged : EReadResult::Unreadable;
 	}
 }

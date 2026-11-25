@@ -179,6 +179,17 @@ public:
 	FStageFixtureImportOutcome AddSessionType(TConstArrayView<uint8> Bytes, const FString& Label);
 #endif
 
+#if WITH_DEV_AUTOMATION_TESTS
+	/**
+	 * Tests only, game thread: while true, a start-up restore that finishes keeps its result instead of applying it, until
+	 * ReleaseRestoreForTesting. Set it before the game instance starts, so a test can act while the restore is certainly running.
+	 */
+	static bool bHoldRestoreForTesting;
+
+	/** Tests only: applies a restore result held by bHoldRestoreForTesting. False when none has arrived yet. */
+	bool ReleaseRestoreForTesting();
+#endif
+
 	UPROPERTY(BlueprintAssignable, Category = "StageCraft|Fixtures")
 	FOnStageFixtureImportFinished OnImportFinished;
 
@@ -192,7 +203,8 @@ public:
 
 private:
 	void RestoreLibrary();
-	void HandleLibraryRestored(TArray<TSharedPtr<FParsedFile>> Files, double WorkerMs);
+	/** bIndexWritable is false when the index existed but could not be read or moved aside (see bIndexReadOnly). */
+	void HandleLibraryRestored(TArray<TSharedPtr<FParsedFile>> Files, double WorkerMs, bool bIndexWritable);
 	void FinishImport(uint64 Serial, TSharedPtr<FParsedFile> File);
 
 	/** Builds and registers every usable mode as a new type. Null when nothing could be built. */
@@ -217,7 +229,10 @@ private:
 
 	void WriteLibraryFile(const FGuid& FixtureTypeId, TArray<uint8> Bytes);
 
-	/** Writes Fixtures.json from the library types (session-only types are left out). Not called by the start-up restore. */
+	/**
+	 * Writes Fixtures.json from the library types (session-only types are left out). While the start-up restore runs, the write
+	 * waits for it to finish; after an unreadable index it is skipped for the session.
+	 */
 	void SaveIndex();
 
 	TWeakObjectPtr<class UStageItemSubsystem> ItemSubsystem;
@@ -233,6 +248,17 @@ private:
 	TArray<TSharedPtr<FParsedFile>> ReviewFiles;
 	uint64 NextSerial = 0;
 	bool bRestoring = false;
+
+	/** SaveIndex was asked for while bRestoring; the restore writes the index when it finishes. */
+	bool bIndexSaveDeferred = false;
+
+	/** The index existed but could not be read (or, damaged, could not be moved aside): writing would replace what the user may want back. */
+	bool bIndexReadOnly = false;
+
+#if WITH_DEV_AUTOMATION_TESTS
+	/** See bHoldRestoreForTesting. */
+	TUniqueFunction<void()> HeldRestoreForTesting;
+#endif
 
 	/** Library writes (file copies, the index) run in order on this pipe, so an older index never overwrites a newer one. */
 	UE::Tasks::FPipe WritePipe{ UE_SOURCE_LOCATION };

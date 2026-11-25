@@ -14,6 +14,8 @@
 #include "Fixtures/StageGdtfParser.h"
 #include "Fixtures/Tests/StageGdtfTestFiles.h"
 #include "HAL/FileManager.h"
+#include "HAL/PlatformFileManager.h"
+#include "IO/StageCraftPaths.h"
 #include "Marketplace/StagePackage.h"
 #include "Misc/AutomationTest.h"
 #include "Misc/FileHelper.h"
@@ -508,6 +510,150 @@ bool FStageSceneFixtureTypesTest::RunTest(const FString& Parameters)
 
 	const FString Missing = StageFixtureLibrary::DescribeMissingTypes(Parsed.Items).ToString();
 	TestEqual(TEXT("A load without the type says what to import"), Missing, FString(TEXT("StageCraft Test Spot (Standard) is missing. Import its GDTF file to see this fixture.")));
+	return true;
+}
+
+// The library index holds what only the user knows (kind corrections, the names of imported files), and every import or removal
+// rewrites it from memory (audit risk R8, STATE.md #103):
+//  - a save asked for while the start-up restore runs waits for it, instead of writing an index without the restored types;
+//  - a damaged index is kept as .bak, and the library starts a new one;
+//  - an index that exists but cannot be read is never written over in that session.
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FStageFixturesLibraryIndexFileTest, "StageCraft.Fixtures.LibraryIndexFile", StageFixtureLibraryTests::Flags)
+
+bool FStageFixturesLibraryIndexFileTest::RunTest(const FString& Parameters)
+{
+	using namespace StageFixtureLibraryTests;
+
+	AddExpectedMessage(TEXT("is not a valid index; it was kept as"), EAutomationExpectedMessageFlags::Contains, 1);
+	AddExpectedMessage(TEXT("cannot be read; fixture types load with their inferred kind"), EAutomationExpectedMessageFlags::Contains, 1);
+
+	const FString Root = MakeRoot(TEXT("StageFixtureLibraryIndex"));
+	ON_SCOPE_EXIT { IFileManager::Get().DeleteDirectory(*Root, /*RequireExists*/ false, /*Tree*/ true); };
+	const FGuid SpotId = ParseId(StageGdtfTestFiles::SpotId);
+	const FGuid BarTypeId = ParseId(BarId);
+
+	// The user's earlier session: the spot in the library, its kind corrected to Blinder, imported from "My Spot.gdtf".
+	FString IndexPath;
+	FString UserIndex;
+	{
+		const FStageScopedDataRoot Scope(Root);
+		IndexPath = StageFixtureLibrary::GetIndexPath();
+		FFileHelper::SaveArrayToFile(StageGdtfTestFiles::MakeGdtf(StageGdtfTestFiles::SpotXml()), *StageFixtureLibrary::GetLibraryFilePath(SpotId));
+		StageFixtureLibrary::FIndexEntry Entry;
+		Entry.FixtureTypeId = SpotId;
+		Entry.SourceFileName = TEXT("My Spot.gdtf");
+		Entry.ImportedUtc = FDateTime(2026, 11, 1);
+		Entry.Kind = EStageFixtureKind::Blinder;
+		const TArray<StageFixtureLibrary::FIndexEntry> Entries = { Entry };
+		UserIndex = StageFixtureLibrary::WriteIndex(Entries);
+		FFileHelper::SaveStringToFile(UserIndex, *IndexPath);
+	}
+	const auto ReadBack = [](const FString& Path)
+	{
+		FString Text;
+		FFileHelper::LoadFileToString(Text, *Path);
+		return Text;
+	};
+	const auto AddBar = [](UStageFixtureLibrarySubsystem& Library)
+	{
+		const TSharedRef<UStageFixtureLibrarySubsystem::FParsedFile> Bar = UStageFixtureLibrarySubsystem::ParseEmbeddedFile(
+			StageGdtfTestFiles::MakeGdtf(StageGdtfTestFiles::BarXml(4)), TEXT("Bar.gdtf"));
+		return Library.AddEmbeddedFile(*Bar);
+	};
+	FStageTestGameInstanceOptions Options;
+	Options.Root = Root;
+
+	AddInfo(TEXT("A type added while the library is still being restored: the index is written once the restore has finished."));
+	{
+		// Held, so the restore is certainly still running when the bar is added (a fast restore can finish during start-up).
+		UStageFixtureLibrarySubsystem::bHoldRestoreForTesting = true;
+		ON_SCOPE_EXIT { UStageFixtureLibrarySubsystem::bHoldRestoreForTesting = false; };
+		FStageTestGameInstance Game(Options);
+		UStageFixtureLibrarySubsystem* Library = Game.Subsystem<UStageFixtureLibrarySubsystem>();
+		if (!TestTrue(TEXT("The test game instance starts"), Game.IsValid() && Library != nullptr))
+		{
+			return false;
+		}
+		TestTrue(TEXT("The restore is still running"), Library->HasLoadsInProgress());
+		TestTrue(TEXT("The bar (carried by an MVR scene, say) is added meanwhile"), AddBar(*Library).IsSuccess());
+		TestTrue(TEXT("The restore's result arrives"), Game.Pump([Library]() { return Library->ReleaseRestoreForTesting(); }, 20.0));
+		UStageFixtureLibrarySubsystem::bHoldRestoreForTesting = false;
+		TestFalse(TEXT("and the restore has finished"), Library->HasLoadsInProgress());
+		const FStageFixtureLibraryType* Spot = Library->FindType(SpotId);
+		TestTrue(TEXT("The spot is restored with the user's kind"), Spot && Spot->bKindCorrected && Spot->CorrectedKind == EStageFixtureKind::Blinder);
+		Game.Shutdown();
+
+		TArray<StageFixtureLibrary::FIndexEntry> Index;
+		int32 Skipped = 0;
+		TestTrue(TEXT("The index is valid"), StageFixtureLibrary::ReadIndex(ReadBack(IndexPath), Index, Skipped));
+		TestEqual(TEXT("and lists both types (an index written during the restore would list only the bar)"), Index.Num(), 2);
+		const StageFixtureLibrary::FIndexEntry* SpotEntry = Index.FindByPredicate([&SpotId](const StageFixtureLibrary::FIndexEntry& Entry) { return Entry.FixtureTypeId == SpotId; });
+		TestTrue(TEXT("The spot keeps its corrected kind and file name"), SpotEntry && SpotEntry->Kind == EStageFixtureKind::Blinder && SpotEntry->SourceFileName == TEXT("My Spot.gdtf"));
+		TestTrue(TEXT("The bar is listed"), Index.ContainsByPredicate([&BarTypeId](const StageFixtureLibrary::FIndexEntry& Entry) { return Entry.FixtureTypeId == BarTypeId; }));
+	}
+
+	AddInfo(TEXT("A damaged index is kept as .bak; the library starts a new one."));
+	const FString Damaged = TEXT("{\"format\":\"StageCraftFixtureLibrary\",\"version\":1,\"fixtures\":[{\"id\":\"");
+	FFileHelper::SaveStringToFile(Damaged, *IndexPath);
+	{
+		FStageTestGameInstance Game(Options);
+		UStageFixtureLibrarySubsystem* Library = Game.Subsystem<UStageFixtureLibrarySubsystem>();
+		if (!TestTrue(TEXT("The second game instance starts"), Game.IsValid() && Library != nullptr))
+		{
+			return false;
+		}
+		TestTrue(TEXT("The restore finishes"), Game.Pump([Library]() { return !Library->HasLoadsInProgress(); }, 20.0));
+		TestEqual(TEXT("Both types are restored from their files"), Library->GetTypes().Num(), 2);
+		const FStageFixtureLibraryType* Spot = Library->FindType(SpotId);
+		TestTrue(TEXT("with the inferred kind"), Spot && !Spot->bKindCorrected);
+		TestFalse(TEXT("The damaged index left the name the next write uses"), IFileManager::Get().FileExists(*IndexPath));
+		TestEqual(TEXT("It is kept byte for byte as .bak"), ReadBack(IndexPath + TEXT(".bak")), Damaged);
+		TestTrue(TEXT("A removal writes a new index"), Library->RemoveType(BarTypeId).IsSuccess());
+		Game.Shutdown();
+
+		TArray<StageFixtureLibrary::FIndexEntry> Index;
+		int32 Skipped = 0;
+		TestTrue(TEXT("The new index lists the spot"), StageFixtureLibrary::ReadIndex(ReadBack(IndexPath), Index, Skipped) && Index.Num() == 1 && Index[0].FixtureTypeId == SpotId);
+		TestEqual(TEXT("The .bak is untouched"), ReadBack(IndexPath + TEXT(".bak")), Damaged);
+	}
+
+	AddInfo(TEXT("An index that cannot be read (held open by another program) is not written over in that session."));
+	FFileHelper::SaveStringToFile(UserIndex, *IndexPath);
+	{
+		// Locked before the library starts (its restore reads the index on a worker) until the restore has finished.
+		TUniquePtr<IFileHandle> Lock(FPlatformFileManager::Get().GetPlatformFile().OpenWrite(*IndexPath, /*bAppend*/ true, /*bAllowRead*/ false));
+		if (!TestNotNull(TEXT("The index can be locked"), Lock.Get()))
+		{
+			return false;
+		}
+		FStageTestGameInstance Game(Options);
+		UStageFixtureLibrarySubsystem* Library = Game.Subsystem<UStageFixtureLibrarySubsystem>();
+		if (!TestTrue(TEXT("The third game instance starts"), Game.IsValid() && Library != nullptr))
+		{
+			return false;
+		}
+		TestTrue(TEXT("The restore finishes"), Game.Pump([Library]() { return !Library->HasLoadsInProgress(); }, 20.0));
+		Lock.Reset();
+		// The lock is gone: a write now would succeed, so only the session's read-only state keeps the user's index.
+		const FStageFixtureLibraryType* Spot = Library->FindType(SpotId);
+		TestTrue(TEXT("The spot is restored with the inferred kind"), Spot && !Spot->bKindCorrected);
+		TestTrue(TEXT("The bar is added again"), AddBar(*Library).IsSuccess());
+		Game.Shutdown();
+		TestEqual(TEXT("The user's index is unchanged"), ReadBack(IndexPath), UserIndex);
+	}
+
+	AddInfo(TEXT("The next session reads it again."));
+	{
+		FStageTestGameInstance Game(Options);
+		UStageFixtureLibrarySubsystem* Library = Game.Subsystem<UStageFixtureLibrarySubsystem>();
+		if (!TestTrue(TEXT("The fourth game instance starts"), Game.IsValid() && Library != nullptr))
+		{
+			return false;
+		}
+		TestTrue(TEXT("The restore finishes"), Game.Pump([Library]() { return !Library->HasLoadsInProgress(); }, 20.0));
+		const FStageFixtureLibraryType* Spot = Library->FindType(SpotId);
+		TestTrue(TEXT("The spot has the user's kind again"), Spot && Spot->bKindCorrected && Spot->CorrectedKind == EStageFixtureKind::Blinder);
+	}
 	return true;
 }
 
