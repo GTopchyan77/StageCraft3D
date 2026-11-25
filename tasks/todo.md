@@ -867,4 +867,10 @@ Gevor's choices: automation tests on a harness game instance (not AFunctionalTes
 - [x] 500-fixture crossfade: 20.2 ms a frame with pan/tilt fading, 13.7 ms with it fixed; zoom fades cost nothing measurable; the render thread is the bound (20.0 vs 13.7 ms; light and primitive scene updates 4.5 vs 0.5 ms, dynamic shadow setup 2.0 vs 0.6 ms)
 - [x] A/B: without the light rebuild workaround 111 ms a frame (kept); without collision on yoke and head the game thread drops 1-2 ms but the frame does not (20.5 -> 20.8 ms), and moving heads could no longer be clicked (kept)
 - [ ] If a game-thread-bound case shows up (weaker CPU): pivot propagation 3.5 ms, deferred render updates 2.4 ms, part bodies 1-2 ms; the bodies need a picking design first
-- [ ] Render-thread levers, each its own decision and A/B: fewer moved primitives per head, shorter beam attenuation, fewer shadow-casting moving lights
+- [x] Render-thread levers, each its own decision and A/B: fewer moved primitives per head, shorter beam attenuation, fewer shadow-casting moving lights (STATE.md #107: measured)
+
+## Phase 57 - Render-thread levers on the 500-fixture moving crossfade (requested by Gevor 2026-11-25; STATE.md #107)
+- [x] A/B with temporary switches (reverted): shadow budget 64 -> 32 / 16 / 0 gives 19.6-19.9 -> 18.3 / 17.5 / 17.2 ms a frame (dropped frames 397 -> 57 at 16); beam reach x0.5 no change, x0.25 about -1.4 ms (changes the look a lot); no lens mesh about -2 ms (changes the look); idle frames unchanged
+- [x] Nothing changed: each lever changes what the user sees
+- [ ] Gevor: decide the default MaxShadowedFixtures (64 now; 16 measured best for moving rigs), or a separate smaller budget for moving fixtures (an ADR 0018 §4 amendment)
+- [ ] With 16 or fewer shadowed fixtures the moving crossfade becomes game-thread bound (game 16.8 ms ≈ frame 17.5 ms): the #106 game-thread items (pivot propagation 3.5 ms, deferred render updates 2.4 ms, part bodies 1-2 ms) then matter

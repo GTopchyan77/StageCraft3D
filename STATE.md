@@ -10288,7 +10288,7 @@ All times in ms.
   - `ShowControl_Tick`, `LightingFixture_ApplyOutputs`, `LightingFixture_MovePivots`, "Move 0|1", "pan/tilt %s", "keeps pan and tilt fixed", `StageCraft.Bench.Fixtures` and "TempExp" are absent;
   - the Outliner UI strings are present as a control.
 
-**Commit:** uncommitted (working tree). STATE #105 now carries `337187a`.
+**Commit:** `9cda4b7` (committed by Gevor, 2026-11-25).
 
 **Known issues / follow-ups**
 - **The moving-head crossfade is render-thread bound** (about 20 ms at 500 moving heads on this machine).
@@ -10298,4 +10298,72 @@ All times in ms.
   - Revisit only if a measurement shows the game thread as the bound.
   - The bodies need a picking design first (picking without bodies, or bodies synced before every StageItem trace).
 - Slate prepass 1.2 ms (from #105) is unchanged and not measured panel by panel.
+- The Obsidian vault on S: is still unreachable, so there is no session log.
+
+## #107 — Render-thread levers on the 500-fixture moving crossfade measured: the shadow budget is the one that pays; nothing changed, a decision for Gevor (2026-11-25)
+
+**What & why**
+- Gevor asked (2026-11-25) for the next high-value item after #106. The two candidates were a render-thread lever on the moving crossfade, or the remaining 1.2 ms Slate prepass.
+  - **The render-thread lever was chosen:** #106 showed the render thread, not the game thread, sets the crossfade frame, so game-thread Slate time would not shorten it.
+  - The 1.2 ms Slate prepass is still open.
+- **Method.** Temporary console variables in a local Editor build (reverted afterwards, never committed), one `-game` session per sweep, `StageCraft.Bench.Fixtures 500 Seconds=10 Fade=2` (pan, tilt, zoom, colour and dimmer fading). The switches:
+  - `ShadowBudget`: overrides `UStageShowPerformanceSettings::MaxShadowedFixtures` (64 by default) in `UpdateShadowBudget`;
+  - `RangeScale`: the beam's attenuation radius times a factor (`BeamRange` 4000 cm on the Beam);
+  - `HideLens`: the lens mesh hidden, one fewer moved primitive per head.
+- **Session 1, one run each:**
+
+  | Crossfade, 500 fixtures | Frame mean | Game thread | GPU | Dropped |
+  |---|---|---|---|---|
+  | Base (64 shadowed) | 20.42 ms | 15.79 ms | 10.27 ms | 391 |
+  | Shadow budget 0 | 17.53 ms | 16.76 ms | 9.88 ms | 49 |
+  | Shadow budget 16 | 17.85 ms | 16.95 ms | 10.11 ms | 62 |
+  | Beam reach x0.5 | 20.26 ms | 17.15 ms | 9.29 ms | 253 |
+  | Beam reach x0.25 | 19.03 ms | 16.46 ms | 8.03 ms | 212 |
+  | No lens mesh | 18.68 ms | 16.54 ms | 10.35 ms | 88 |
+  | Base again | 21.25 ms | 17.41 ms | 10.50 ms | 360 |
+
+- **Session 2, shadow budget sweep:**
+
+  | Shadowed fixtures | Frame mean | Game thread | Dropped |
+  |---|---|---|---|
+  | 64 (default) | 19.61 ms | 15.33 ms | 397 |
+  | 32 | 18.31 ms | 16.85 ms | 98 |
+  | 16 | 17.52 ms | 16.79 ms | 57 |
+  | 0 | 17.15 ms | 16.68 ms | 53 |
+  | 64 again | 19.93 ms | 16.17 ms | 262 |
+
+  Idle frames stayed at 12.6–13.2 ms in every run.
+- **Reading.**
+  - **Shadow budget.** The fewer moving shadow casters, the shorter the frame, and the gain is repeatable: 64 → 16 takes about 2.2–2.5 ms (12 %) off the frame and the over-budget frames from about 400 to about 60. A moved shadowed light re-renders its shadow depths every frame (Docs/ADR/0018 §4, STATE #39, #45).
+  - **Beam reach.** Halving it did nothing; a quarter saved about 1.4 ms, mostly GPU. A 10 m beam is a visible change.
+  - **Lens mesh.** Removing it saved about 2 ms but takes away the glowing lens.
+  - **Below 16 shadowed fixtures the frame becomes game-thread bound** (game 16.8 ms against a 17.5 ms frame). From there the #106 game-thread items set it: pivot propagation 3.5 ms, deferred render updates 2.4 ms, the moving parts' bodies 1–2 ms.
+- **Nothing changed.**
+  - Every lever changes what the user sees: fewer beams with shadows, shorter beams, or no lens.
+  - The shadow budget is already a project setting (Project Settings > Game > StageCraft Performance > Max Shadowed Fixtures), and its default of 64 was a look decision (ADR 0018).
+  - Lowering the default, or adding a smaller budget for moving fixtures only, is Gevor's decision.
+  - A budget for moving fixtures would be an amendment to ADR 0018 §4.
+
+**Files changed**
+- `STATE.md` (this entry; #106 carries `9cda4b7`), `tasks/todo.md` (Phase 56 render-thread item ticked, Phase 57).
+- No source change: the temporary switches in `LightingFixtureActor.cpp` and `ShowControlSubsystem.cpp` were reverted with `git checkout`. No "TempExp" is left in `Source/`, and the Editor build was rebuilt from the clean tree.
+- No Blueprints, assets or maps. The scripted runs restored the profile, scenes, marketplace and imports (all reported restored).
+
+**Verification**
+- **Bench CSVs** in `Saved/StageCraft/Benchmarks/`:
+  - Session 1: `FixtureBench_20261125-181834` (base), `-181922` (budget 0), `-182010` (16), `-182058` (reach x0.5), `-182146` (x0.25), `-182234` (no lens), `-182322` (base again).
+  - Session 2: `-182459` (64), `-182547` (32), `-182635` (16), `-182723` (0), `-182811` (64 again).
+- Drift within a session was about 0.3–0.8 ms on the repeated base runs, well below the shadow-budget effect. There was one run per setting.
+- **No source change**, so no new test. The source tree equals `9cda4b7`, which #106 verified (suite 311/311; Editor, Game Development and Shipping with 0 warnings; Shipping scan clean). The Editor target was rebuilt after the revert and succeeded.
+- **Not verified:** the look of 16 against 64 shadowed beams on a real show (screenshots or Gevor's eye).
+
+**Commit:** uncommitted (working tree). STATE #106 now carries `9cda4b7`.
+
+**Known issues / follow-ups**
+- **Gevor to decide** one of:
+  - keep 64;
+  - lower `MaxShadowedFixtures` (16 measured best for moving rigs; 32 is half the gain);
+  - a separate, smaller budget for fixtures whose heads are moving (keeps static looks at 64; needs an ADR 0018 §4 amendment, tests for the selection, and an A/B).
+- **If the budget comes down**, the moving crossfade becomes game-thread bound. The #106 game-thread items are then the next measured costs.
+- The Slate prepass (1.2 ms) is still not measured panel by panel.
 - The Obsidian vault on S: is still unreachable, so there is no session log.
