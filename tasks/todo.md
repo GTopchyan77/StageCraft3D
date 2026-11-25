@@ -656,7 +656,7 @@ Gevor's choices: automation tests on a harness game instance (not AFunctionalTes
 - [x] CPU trace of the 500-fixture bench; native parameter delegate for C++ listeners; ResolveFixture scratch reuse (show tick about 35 % lower)
 - [x] Support screenshot PNG encode on a worker; StageCraft.Support.Screenshot test
 - [ ] UI: DisableNativeTick / invalidation for panels with no per-frame work (A/B each; Slate is about 6.5 ms a frame at 500 fixtures) (STATE.md #105: the Outliner, a widget per item, was 2 ms of it at 500 items and is now a virtualized list; Slate is about 2.7 ms a frame idle at 500 fixtures, prepass 1.2 ms; other panels not yet measured one by one)
-- [ ] Fixture moving-part physics bodies (SetBodyTransform about 1.5 ms per show tick at 500)
+- [x] Fixture moving-part physics bodies (SetBodyTransform about 1.5 ms per show tick at 500) (STATE.md #106: measured, 1 ms of show tick, 1-2 ms game thread; the frame is render-thread bound and the bodies make moving heads clickable, so kept)
 - [x] Fixture ID index (O(n^2) registration on load) (STATE.md #104: FixturesById map, registration 7.2 -> 2.2 us per fixture at 512)
 - [ ] Decide: in-app graphics quality settings (scalability, screen percentage, frame cap)
 - [ ] Gevor: tick INCLUDE SCREENSHOT at 4K; Patch panel live channel values while a show plays
@@ -859,4 +859,12 @@ Gevor's choices: automation tests on a harness game instance (not AFunctionalTes
 - [x] UStageOutlinerList: a virtualized SListView with pooled UStageOutlinerRow rows (UListView refuses a native entry class in editor builds); lines are UStageOutlinerEntry data, reused across rebuilds; StageOutliner::BuildListing (pure) decides the lines; Slate 4.99 -> 2.75 ms a frame idle at 500 fixtures (prepass 3.41 -> 1.21 ms), the same as with the panel closed
 - [x] Test StageCraft.Outliner.Listing (collapse, filter opens groups, counts, 500 items = 501 lines; mutation fails it); -game checks: screenshots of groups, selection, scroll to end, clipping; real OS clicks on a group eye, a group name and item names
 - [ ] Gevor: click through the Outliner on a large stage (scroll, collapse, filter, eye / lock on items and groups, Ctrl+Click)
-- [ ] Next measured costs at 500 fixtures crossfading: moving-head pivot transforms about 3.3 ms and deferred render updates about 2.8 ms of a 19.8 ms frame (todo Phase 37 physics bodies item); Slate prepass 1.2 ms
+- [x] Next measured costs at 500 fixtures crossfading: moving-head pivot transforms and deferred render updates measured in STATE.md #106 (the moving crossfade is render-thread bound; nothing changed); Slate prepass 1.2 ms still open
+- [ ] Slate prepass 1.2 ms a frame: not measured panel by panel
+
+## Phase 56 - Moving-head crossfade cost measured (requested by Gevor 2026-11-25; STATE.md #106)
+- [x] Trace scopes ShowControl_Tick, LightingFixture_ApplyOutputs, LightingFixture_MovePivots; bench option Move=0 (pan/tilt fixed)
+- [x] 500-fixture crossfade: 20.2 ms a frame with pan/tilt fading, 13.7 ms with it fixed; zoom fades cost nothing measurable; the render thread is the bound (20.0 vs 13.7 ms; light and primitive scene updates 4.5 vs 0.5 ms, dynamic shadow setup 2.0 vs 0.6 ms)
+- [x] A/B: without the light rebuild workaround 111 ms a frame (kept); without collision on yoke and head the game thread drops 1-2 ms but the frame does not (20.5 -> 20.8 ms), and moving heads could no longer be clicked (kept)
+- [ ] If a game-thread-bound case shows up (weaker CPU): pivot propagation 3.5 ms, deferred render updates 2.4 ms, part bodies 1-2 ms; the bodies need a picking design first
+- [ ] Render-thread levers, each its own decision and A/B: fewer moved primitives per head, shorter beam attenuation, fewer shadow-casting moving lights

@@ -10206,7 +10206,7 @@ All times in ms.
   - the Outliner's UI strings ("Show or hide the items of this group.", "No items match the filter.") are present.
 - **Not verified by hand:** Gevor clicking through the Outliner on a large stage (scroll, collapse, filter, Ctrl+Click, item eye and lock).
 
-**Commit:** uncommitted (working tree). STATE #104 now carries `ae9eaed`.
+**Commit:** `337187a` (committed by Gevor, 2026-11-25).
 
 **Known issues / follow-ups**
 - **Measured, not changed:**
@@ -10214,4 +10214,88 @@ All times in ms.
   - Slate prepass is 1.2 ms with the Outliner fixed; the other panels have not been measured one by one.
 - **Load time is spawn-bound** (0.46 ms per fixture, engine actor and component creation). A 1024-fixture show loads in about 0.55 s. Pooling or lighter fixture actors would be an architecture change; no need is known yet.
 - **Fade broadcast batching** (todo Phase 37) was not visible in this trace: the C++ listeners use the native delegate since #78, and there are no named scopes there. Left open.
+- The Obsidian vault on S: is still unreachable, so there is no session log.
+
+## #106 — Moving-head crossfade cost measured: render-thread bound, pivots / physics / light path left as they are (2026-11-25)
+
+**What & why**
+- Gevor asked (2026-11-25) to measure the next costs #105 left open before changing anything: moving-head pivot transforms (about 3.3 ms) and deferred render updates (about 2.8 ms) in a 19.8 ms frame of a 500-fixture crossfade (todo Phase 37 physics-bodies item, Phase 55). Optimize only what the numbers justify (Rules §22).
+- **Instrumentation added first** (kept; free unless a trace with the cpu channel runs, absent from Shipping):
+  - CPU trace scopes `ShowControl_Tick`, `LightingFixture_ApplyOutputs` and `LightingFixture_MovePivots` (around the pan/tilt pivot update).
+  - `StageCraft.Bench.Fixtures ... Move=0` keeps pan and tilt fixed in both bench looks, so the cost of moving the heads is measured apart from the rest of the fade (the start line now says "pan/tilt fading|fixed").
+- **Measured, one `-game` session, 500 Beam fixtures, Insights trace** (`StageCraft.Bench.Fixtures 500 Seconds=10 Fade=2`):
+
+  | Crossfade (500 fixtures) | Frame mean | Game thread | Show tick |
+  |---|---|---|---|
+  | Zoom fading, pan/tilt fading | 20.17 ms | 15.66 ms | 6.26 ms |
+  | Zoom fading, pan/tilt fixed (`Move=0`) | 13.69 ms | 7.32 ms | 2.80 ms |
+  | Zoom fixed, pan/tilt fading | 21.16 ms | 17.57 ms | 7.17 ms |
+  | Zoom fixed, pan/tilt fixed | 14.42 ms | 7.69 ms | 2.99 ms |
+
+  - Idle frames were 13.1–13.6 ms in every run (GPU about 9.7 ms).
+  - **Moving the heads is the whole crossfade overhead** (about +6.5 ms a frame); zoom fades cost nothing measurable.
+  - **Where it goes** (call trees from one second of each crossfade, events exported with `TimingInsights.ExportTimingEvents`):
+    - Game thread, per frame, moving vs still:
+      - `LightingFixture_MovePivots` 3.52 ms (490 a frame, 7.2 µs each; the PanPivot propagation to yoke, tilt pivot, head, lens and beam);
+      - `DeferredRenderUpdates_GameThread` 2.77 ms vs 0.38 ms;
+      - tick-completion waits 2.7 vs 0.5 ms;
+      - and the game thread still waits 4.5 ms a frame for the render thread.
+    - **Render thread: 20.0 ms a frame moving vs 13.7 ms still, so the moving crossfade is bound by the render thread.**
+      - `UpdateAllPrimitiveSceneInfos` 4.48 vs 0.48 ms, of which `FScene_UpdateAllLightSceneInfos` 2.09 vs 0.11 ms;
+      - `FinishInitDynamicShadows` 1.96 vs 0.56 ms;
+      - `SendAllEndOfFrameUpdates` 1.30 ms;
+      - distance-field object updates 0.39 ms.
+      - This is engine work proportional to moved lights and primitives.
+- **Two A/Bs** in a second session (temporary console variables in a local build, removed afterwards, never committed):
+  1. **The light rebuild workaround** (`BeamLight->MarkRenderStateDirty()` after a pivot move, Docs/ADR/0012 §3).
+     - Without it, moved lights take the engine's per-light transform update: **111.1 ms** a frame instead of 20.5 ms (GPU 17.4 ms).
+     - The workaround still holds in UE 5.8. **Kept**; its comment now cites this measurement.
+  2. **Collision on the yoke and head** (QueryOnly bodies on the StageItem channel, moved by every pan/tilt step).
+     - With collision off: show tick 6.41 → 5.37 ms and game thread 16.00 → 13.84 ms.
+     - But the frame did not improve: 20.53 → 20.84 ms, because the frame is render-thread bound.
+     - The base repeated at the end of the session measured 21.50 ms and 17.42 ms game thread, so drift within a session is about 1 ms.
+     - The bodies are what lets a moving part be clicked where it points (STATE #9: "The moving parts are selectable too").
+     - **Not changed:** removing them gains no frame time here and breaks a documented feature. Deferring their updates would leave every StageItem trace (placement, snapping, picking, photometric throw) with stale bodies, a hidden lifecycle assumption (Rules §18, §43).
+  - Combined: both off 110.7 ms (the light path dominates).
+- **Conclusion.**
+  - The pivot transforms, the physics bodies and the deferred render updates are each real game-thread time, but none of them sets the crossfade frame on this machine; the render thread does.
+  - The render-thread part is the engine re-adding moved lights and primitives, already on its cheapest path.
+  - So nothing in the pivot / physics / render-update path is changed (Rules §22: keep an optimization only when the result is meaningful).
+  - The evidence is recorded here and in comments at the two places a future change would start.
+
+**Files changed**
+- `Source/ModularSceneBuilder/Private/Actors/LightingFixtureActor.cpp`:
+  - trace scopes `LightingFixture_ApplyOutputs` and `LightingFixture_MovePivots` (and the `CpuProfilerTrace.h` include);
+  - comments: why the moving parts keep their query bodies (with the measured cost), and the re-measured light-rebuild workaround.
+- `Source/ModularSceneBuilder/Private/Subsystems/ShowControlSubsystem.cpp`: trace scope `ShowControl_Tick`.
+- `Source/ModularSceneBuilder/Private/Diagnostics/StageFixtureBenchmark.cpp` (Development only, compiled out of Shipping): `Move=0|1` option, usage strings and start line.
+- `tasks/todo.md` (Phase 37 physics-bodies item and Phase 55 item ticked with the result, Phase 56), `STATE.md` (this entry; #105 carries `337187a`).
+- No Blueprints, assets or maps. The scripted runs restored the profile, scenes, marketplace and imports (all reported restored).
+
+**Verification**
+- **Bench runs:**
+  - Session 1 CSVs: `Saved/StageCraft/Benchmarks/FixtureBench_20261125-174509.csv` (Zoom=1 Move=1), `-174557` (Move=0), `-174646` (Zoom=0), `-174733` (Zoom=0 Move=0).
+  - Session 2 CSVs (A/B): `-175058` (base), `-175147` (light transform path), `-175234` (no part collision), `-175323` (both), `-175410` (base again).
+  - Traces: `%TEMP%/StageCraftRuns/PivotBench.utrace` and `ExpBench.utrace`. The crossfade windows were found from the `ShowControl_Tick` events (40.4–50.4 s, 88.4–98.4 s, 136.4–146.5 s, 184.4–194.5 s in PivotBench).
+- **`Move=0` checked through the command itself:**
+  - the start line read "pan/tilt fixed";
+  - the still window had 0 `LightingFixture_MovePivots` events against 36,194 `LightingFixture_ApplyOutputs` (moving window: 25,000 of each).
+  - No unit test: the option is a parse branch inside the Development-only bench, whose settings are private to its .cpp.
+- **No temporary code left:** no "TempExp" in the source, and the Shipping binary has no such string.
+- **Tests:** `RunAutomation.ps1 -Filter StageCraft -NullRHI -ExpectedCount 311`, 311/311 passed, user data unchanged (141 files). No test was added: no behaviour changed, only trace scopes, comments and a dev bench option.
+- **Builds:** Editor Development, Game Development and Game Shipping succeeded with no warnings.
+- **Shipping scan** (UTF-16 at both byte alignments, and ASCII):
+  - `ShowControl_Tick`, `LightingFixture_ApplyOutputs`, `LightingFixture_MovePivots`, "Move 0|1", "pan/tilt %s", "keeps pan and tilt fixed", `StageCraft.Bench.Fixtures` and "TempExp" are absent;
+  - the Outliner UI strings are present as a control.
+
+**Commit:** uncommitted (working tree). STATE #105 now carries `337187a`.
+
+**Known issues / follow-ups**
+- **The moving-head crossfade is render-thread bound** (about 20 ms at 500 moving heads on this machine).
+  - Levers left are engine or content ones, each its own decision: fewer moved primitives per head (yoke, head and lens are three); shorter beam attenuation (fewer light-primitive interactions per moved light); fewer shadow-casting moving lights.
+  - None was measured here.
+- **Game-thread time a weaker CPU would feel first:** the pivot propagation (3.5 ms), deferred render updates (2.4 ms extra) and the moving parts' bodies (1–2 ms).
+  - Revisit only if a measurement shows the game thread as the bound.
+  - The bodies need a picking design first (picking without bodies, or bodies synced before every StageItem trace).
+- Slate prepass 1.2 ms (from #105) is unchanged and not measured panel by panel.
 - The Obsidian vault on S: is still unreachable, so there is no session log.

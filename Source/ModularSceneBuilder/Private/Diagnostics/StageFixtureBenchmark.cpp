@@ -4,7 +4,7 @@
 // running game world, records two cues, and measures frame, game thread, render thread, GPU and show-control tick time while
 // idle and while crossfading continuously; then removes everything it added. Development builds only (compiled out of Shipping).
 //
-//   StageCraft.Bench.Fixtures 50 200 500 [Seconds=10] [Fade=2] [Settle=3] [Zoom=1] [Item=<catalog asset name>] [GM=1]
+//   StageCraft.Bench.Fixtures 50 200 500 [Seconds=10] [Fade=2] [Settle=3] [Zoom=1] [Move=1] [Item=<catalog asset name>] [GM=1]
 //   (GM below 1 measures fades mixed in full every frame, as with a playback up or the Grand Master down; Docs/ADR/0026 §6.)
 //   (Effects=1 runs a circle and a dimmer sine on every bench fixture through both phases, Effects=2 adds a rainbow, Effects=3 stores them in the two cues instead (circle and dimmer sine in A, a bigger
 //   circle, dimmer sine and rainbow in B), so every crossfade fades, morphs and starts or stops effects; Docs/ADR/0027 §5, §7.)
@@ -14,6 +14,7 @@
 //   (Crowd=N also stands an audience area of N people (at most 20000) under the fixtures for every run: the GPU cost of the crowd of
 //   Docs/ADR/0031 §6 measured with the show. Set the camera first, e.g. StageCraft.View.Camera, so the crowd is in view.)
 //   (Zoom=0 keeps the zoom fixed: a cone change rebuilds the engine's light proxy, so zoom fades are measured apart.)
+//   (Move=0 keeps pan and tilt fixed, so the cost of moving the heads is measured apart.)
 //   StageCraft.Bench.Cancel
 //
 // Results go to the log ("StageCraft.Bench:") and to Saved/StageCraft/Benchmarks/FixtureBench_<time>.csv.
@@ -78,6 +79,8 @@ namespace StageFixtureBenchmark
 		double SettleSeconds = 3.0;
 		/** Whether the two looks differ in zoom. A cone change rebuilds the engine's light proxy, so zoom fades cost far more than the rest. */
 		bool bFadeZoom = true;
+		/** Whether the two looks differ in pan and tilt. Move=0 keeps the heads still, so the cost of moving them is measured apart. */
+		bool bFadePosition = true;
 		FString ItemName;
 		/**
 		 * The Grand Master during the run (Docs/ADR/0026 §6). Below 1 every fade frame is mixed in full (HTP, LTP, masters) instead of
@@ -271,9 +274,9 @@ namespace StageFixtureBenchmark
 				SavedLooks.Add(Fixture, Fixture->GetAttributes());
 			}
 			bSessionWasDirty = Session->IsDirty();
-			UE_LOG(LogStageCraft, Display, TEXT("StageCraft.Bench: %s fixtures of %s, %.0f s idle + %.0f s crossfading (%.1f s fades, zoom %s) each, RHI %s."),
+			UE_LOG(LogStageCraft, Display, TEXT("StageCraft.Bench: %s fixtures of %s, %.0f s idle + %.0f s crossfading (%.1f s fades, zoom %s, pan/tilt %s) each, RHI %s."),
 				*JoinCounts(Settings.Counts), *FixtureData->GetName(), Settings.PhaseSeconds, Settings.PhaseSeconds, Settings.FadeSeconds,
-				Settings.bFadeZoom ? TEXT("fading") : TEXT("fixed"),
+				Settings.bFadeZoom ? TEXT("fading") : TEXT("fixed"), Settings.bFadePosition ? TEXT("fading") : TEXT("fixed"),
 				GDynamicRHI ? GDynamicRHI->GetName() : TEXT("none"));
 			return true;
 		}
@@ -514,8 +517,8 @@ namespace StageFixtureBenchmark
 			Look.Add(StageCraftTags::Attribute_ColorR, bBright ? 0.2f : 1.f);
 			Look.Add(StageCraftTags::Attribute_ColorG, bBright ? 0.4f : 0.5f);
 			Look.Add(StageCraftTags::Attribute_ColorB, bBright ? 1.f : 0.1f);
-			Look.Add(StageCraftTags::Attribute_Pan, bBright ? 30.f : -30.f);
-			Look.Add(StageCraftTags::Attribute_Tilt, bBright ? 60.f : 20.f);
+			Look.Add(StageCraftTags::Attribute_Pan, bBright && Settings.bFadePosition ? 30.f : -30.f);
+			Look.Add(StageCraftTags::Attribute_Tilt, bBright && Settings.bFadePosition ? 60.f : 20.f);
 			Look.Add(StageCraftTags::Attribute_Zoom, bBright && Settings.bFadeZoom ? 35.f : 15.f);
 			for (const TWeakObjectPtr<ALightingFixtureActor>& Fixture : Spawned)
 			{
@@ -838,6 +841,10 @@ namespace StageFixtureBenchmark
 				{
 					Out.bFadeZoom = Value == TEXT("1");
 				}
+				else if (Key.Equals(TEXT("Move"), ESearchCase::IgnoreCase) && (Value == TEXT("0") || Value == TEXT("1")))
+				{
+					Out.bFadePosition = Value == TEXT("1");
+				}
 				else if (Key.Equals(TEXT("Item"), ESearchCase::IgnoreCase) && !Value.IsEmpty())
 				{
 					Out.ItemName = Value;
@@ -864,7 +871,7 @@ namespace StageFixtureBenchmark
 				}
 				else
 				{
-					UE_LOG(LogStageCraft, Display, TEXT("StageCraft.Bench: ignored \"%s\" (Seconds 1..600, Fade 0.1..60, Settle 0..60, Zoom 0|1, Item=<asset name>, GM 0..1, Effects 0|1|2|3, DMXOut 0|1, Audio 0|1, Crowd 0..20000)."), *Arg);
+					UE_LOG(LogStageCraft, Display, TEXT("StageCraft.Bench: ignored \"%s\" (Seconds 1..600, Fade 0.1..60, Settle 0..60, Zoom 0|1, Move 0|1, Item=<asset name>, GM 0..1, Effects 0|1|2|3, DMXOut 0|1, Audio 0|1, Crowd 0..20000)."), *Arg);
 				}
 				continue;
 			}
@@ -892,7 +899,7 @@ namespace StageFixtureBenchmark
 		FSettings Settings;
 		if (!World || !ParseSettings(Args, Settings))
 		{
-			UE_LOG(LogStageCraft, Display, TEXT("StageCraft.Bench.Fixtures <count> [<count>...] [Seconds=10] [Fade=2] [Settle=3] [Zoom=1] [Item=<asset name>]"));
+			UE_LOG(LogStageCraft, Display, TEXT("StageCraft.Bench.Fixtures <count> [<count>...] [Seconds=10] [Fade=2] [Settle=3] [Zoom=1] [Move=1] [Item=<asset name>]"));
 			return;
 		}
 
@@ -914,7 +921,7 @@ namespace StageFixtureBenchmark
 	}
 
 	FAutoConsoleCommandWithWorldAndArgs StartCommand(TEXT("StageCraft.Bench.Fixtures"),
-		TEXT("<count> [<count>...] [Seconds=10] [Fade=2] [Settle=3] [Zoom=1] [Item=<asset>] Spawns N fixtures, measures idle and continuous crossfades, removes them; results in the log and Saved/StageCraft/Benchmarks."),
+		TEXT("<count> [<count>...] [Seconds=10] [Fade=2] [Settle=3] [Zoom=1] [Move=1] [Item=<asset>] Spawns N fixtures, measures idle and continuous crossfades, removes them; results in the log and Saved/StageCraft/Benchmarks."),
 		FConsoleCommandWithWorldAndArgsDelegate::CreateStatic(&Start));
 	FAutoConsoleCommandWithWorldAndArgs CancelCommand(TEXT("StageCraft.Bench.Cancel"), TEXT("Stops the running fixture benchmark, removes its fixtures and cues, and reports what was measured."),
 		FConsoleCommandWithWorldAndArgsDelegate::CreateStatic(&Cancel));

@@ -12,6 +12,7 @@
 #include "Interaction/StageCraftCollision.h"
 #include "Materials/MaterialInstanceDynamic.h"
 #include "ModularSceneBuilder.h"
+#include "ProfilingDebugging/CpuProfilerTrace.h"
 #include "Show/StageDMXPatching.h"
 #include "Show/StageFixtureCells.h"
 #include "Show/StageGelLibrary.h"
@@ -25,7 +26,11 @@
 
 namespace
 {
-	/** Moving parts must be selectable like the base, but never block placement or physics. */
+	/**
+	 * Moving parts must be selectable like the base, but never block placement or physics. The query bodies follow every pan/tilt
+	 * step (1 to 2 ms of game thread at 500 moving heads, STATE.md #106); they stay because a head is picked where it points, and
+	 * that frame is bound by the render thread, so dropping them did not shorten it.
+	 */
 	void ConfigureSelectableMesh(UStaticMeshComponent& Mesh)
 	{
 		Mesh.SetMobility(EComponentMobility::Movable);
@@ -700,6 +705,7 @@ ALightingFixtureActor::EFixtureOutputs ALightingFixtureActor::GetDrivenOutputs(c
 
 void ALightingFixtureActor::ApplyOutputs(EFixtureOutputs Outputs)
 {
+	TRACE_CPUPROFILER_EVENT_SCOPE(LightingFixture_ApplyOutputs);
 	const ULightingFixtureData* Fixture = GetFixtureData();
 	if (!Fixture)
 	{
@@ -709,6 +715,7 @@ void ALightingFixtureActor::ApplyOutputs(EFixtureOutputs Outputs)
 
 	if (EnumHasAnyFlags(Outputs, EFixtureOutputs::Pivots) && Fixture->bHasPanTilt)
 	{
+		TRACE_CPUPROFILER_EVENT_SCOPE(LightingFixture_MovePivots);
 		// Both rotations first, then one transform update from the pan pivot down: setting them one after the other moved the
 		// head, the lens and the beam twice per change.
 		TiltPivot->SetRelativeRotation_Direct(FRotator(GetAttribute(StageCraftTags::Attribute_Tilt), 0.0, 0.0));
@@ -720,6 +727,7 @@ void ALightingFixtureActor::ApplyOutputs(EFixtureOutputs Outputs)
 		// through the batched remove/add, about 11 us. A pending rebuild replaces the transform update, so moving heads take
 		// the batched path: 500 fixtures panning went from 58 to 27 ms a frame. The light is rebuilt anyway on every zoom
 		// change (USpotLightComponent::SetOuterConeAngle). Docs/ADR/0012-production-reports-and-fixture-benchmark.md §3.
+		// Re-measured in STATE.md #106: without the rebuild a 500-fixture crossfade took 111 ms a frame instead of 20.5 ms.
 		BeamLight->MarkRenderStateDirty();
 	}
 

@@ -119,6 +119,7 @@ bool UShowControlSubsystem::IsTickable() const
 
 void UShowControlSubsystem::Tick(float DeltaTime)
 {
+	TRACE_CPUPROFILER_EVENT_SCOPE(ShowControl_Tick);
 	Super::Tick(DeltaTime);
 #if !UE_BUILD_SHIPPING
 	const double TickStart = FPlatformTime::Seconds();
