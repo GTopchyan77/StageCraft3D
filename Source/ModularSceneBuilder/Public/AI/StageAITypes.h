@@ -470,6 +470,12 @@ struct FStageAIActionOutcome
 	 */
 	TArray<int32> AffectedFixtureIds;
 
+	/**
+	 * Export: the reports whose export started (never All). The files are written later, on a worker; UStageAICommandSubsystem
+	 * reports each one in the conversation when its subsystem's OnExportFinished arrives (Docs/ADR/0016 §7).
+	 */
+	TArray<EStageAIReport> StartedExports;
+
 	static FStageAIActionOutcome Make(EStageAIOutcome InOutcome, const FText& InMessage)
 	{
 		FStageAIActionOutcome Result;

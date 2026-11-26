@@ -469,6 +469,7 @@ namespace StageAICommandRunner
 					&AModularPlayerController::RequestExportCableSchedule },
 			};
 			TArray<FText> Started;
+			TArray<EStageAIReport> StartedKinds;
 			TArray<FText> Failed;
 			for (const FReport& Report : Reports)
 			{
@@ -481,6 +482,7 @@ namespace StageAICommandRunner
 				if (bStarted)
 				{
 					Started.Add(Report.Name);
+					StartedKinds.Add(Report.Kind);
 				}
 				else
 				{
@@ -495,12 +497,14 @@ namespace StageAICommandRunner
 					FText::Join(LOCTEXT("FailSeparator", "; "), Failed)));
 			}
 			const FText StartedText = FText::Format(Pick(Language,
-					LOCTEXT("Exporting", "Exporting the {0} as PDF and CSV to Saved/StageCraft/Reports; the status bar shows when each file is written."),
-					INVTEXT("Արտահանում եմ {0}՝ PDF և CSV ձևաչափով, Saved/StageCraft/Reports թղթապանակում. վիճակի տողը ցույց կտա, երբ յուրաքանչյուր ֆայլ գրվի։")),
+					LOCTEXT("Exporting", "Exporting the {0} as PDF and CSV to Saved/StageCraft/Reports; I will say here when each file is written."),
+					INVTEXT("Արտահանում եմ {0}՝ PDF և CSV ձևաչափով, Saved/StageCraft/Reports թղթապանակում. կգրեմ այստեղ, երբ յուրաքանչյուր ֆայլ պատրաստ լինի։")),
 				FText::Join(Separator, Started));
-			return Failed.IsEmpty()
+			FStageAIActionOutcome Outcome = Failed.IsEmpty()
 				? Done(StartedText)
 				: Done(FText::Format(Pick(Language, LOCTEXT("ExportPartial", "{0} Also: {1}."), INVTEXT("{0} Նաև՝ {1}։")), StartedText, FText::Join(LOCTEXT("FailSeparator", "; "), Failed)));
+			Outcome.StartedExports = MoveTemp(StartedKinds);
+			return Outcome;
 		}
 
 		// --- Targeted edits and stage shapes (Docs/ADR/0018 §6) ---

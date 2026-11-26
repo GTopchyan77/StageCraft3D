@@ -1,6 +1,6 @@
 # ADR 0016: AI Assistant (chat panel and natural-language commands)
 
-- **Status:** accepted. See STATE.md #43; §6 amendment (STATE.md #114: bill of materials answers).
+- **Status:** accepted. See STATE.md #43; §6 amendment (STATE.md #114: bill of materials answers); §7 amendment (STATE.md #115: export completion in the chat).
 - **Related:**
   - ADR 0015 §2.5 (sketch plans placed all or nothing, one undo step): the assistant places fixtures through the same plan and builder.
   - ADR 0011 §2.2 (cue requests), ADR 0012 / 0014 (report exports), ADR 0009 (outdoor environment).
@@ -117,7 +117,7 @@ It binds `OnConversationChanged` in `NativeConstruct`, unbinds it in `NativeDest
 - Assistant weather and time changes are undoable; Environment panel changes still are not (follow-up).
 - The module gains the `HTTP` dependency.
 - **Follow-ups:**
-  - report export completion back into the chat;
+  - report export completion back into the chat (done, §7);
   - multi-command prompts ("add 4 pars and store cue 1");
   - fixture mounting ("hang them on the truss");
   - more languages in the local grammar;
@@ -143,4 +143,22 @@ Remove `Source/ModularSceneBuilder/*/AI/`, the panel definition and its menu ent
 - **Single source of truth:** `FStageAISceneView::BillOfMaterials` is a copy of `UStageBillOfMaterialsSubsystem::GetReport()`, so the chat, the panel and the export give the same numbers.
 - **Counts give rental units.** A count answer adds "In rental units: …" for matched items whose units differ from their placements (spans in sections, decks in panels). Count prompts drop need / rent / hire / to / order / panel(s) / segment(s), so "how many truss sections do I need" counts "truss".
 
-**Not in this amendment:** export completion in the chat (§4 follow-up, still open).
+**Not in this amendment:** export completion in the chat (§4 follow-up; done in §7).
+
+## 7. Amendment: export completion in the chat (STATE.md #115, 2026-11-26)
+
+**Measured before** (`-game` run `Export115Before`, Concert starter stage): "export the bill of materials" and "export all reports" wrote their PDF + CSV pairs 157–375 ms after the request. The conversation's only word on them was "the status bar shows when each file is written", and the status bar message is gone a few seconds later.
+
+**Decision:**
+- **The runner says what started.** `FStageAIActionOutcome::StartedExports` lists the reports whose `RequestExport*` returned true. A refused report is already explained in the reply.
+- **The subsystem waits for those, and only those.**
+  - `UStageAICommandSubsystem` keeps `AwaitedExports` (report → the prompt's language) and binds the three report subsystems' `OnExportFinished` for its lifetime (`InitializeDependency`, unbound in `Deinitialize`).
+  - Each report subsystem exports one file pair at a time, so its next result after a started export is that export.
+  - An awaited result adds one line: "The bill of materials is written: X.pdf and X.csv in Saved/StageCraft/Reports." A failed write names the path and why it may have failed.
+  - Results the assistant did not start (the panels, the menu) add nothing; the status bar reports them as before.
+- **The conversation is not blocked.** The export step is done when it starts (not Pending), so the player can keep asking while files are written. The line arrives whenever the worker finishes.
+- **Bubbles break long words.** File names are single words wider than a docked panel, so assistant bubbles use `AllowPerCharacterWrapping`, which breaks a word only when it does not fit on a line.
+
+**Alternatives considered:**
+- **Making the export step Pending until the files exist.** Rejected: it would hold the assistant busy for no gain, and "export all reports" would need to wait for three results inside one step.
+- **Copying the report subsystem's own `Message`.** Rejected: it is English only and phrased for the status bar.

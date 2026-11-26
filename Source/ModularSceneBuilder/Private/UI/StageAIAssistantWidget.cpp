@@ -103,6 +103,8 @@ UMultiLineEditableText* UStageAIAssistantWidget::MakeSelectableText(const FText&
 	Block->SetWidgetStyle(Style);
 	Block->SetIsReadOnly(true);
 	Block->SetAutoWrapText(true);
+	// Report file names and paths are single words wider than a docked panel: break them rather than clip them at the bubble's edge.
+	Block->SetWrappingPolicy(ETextWrappingPolicy::AllowPerCharacterWrapping);
 	Block->SetClearTextSelectionOnFocusLoss(true);
 	Block->SetText(Text);
 	return Block;

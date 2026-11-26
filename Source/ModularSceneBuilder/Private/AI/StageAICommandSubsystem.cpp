@@ -22,6 +22,9 @@
 #include "Marketplace/StageMarketplaceSubsystem.h"
 #include "ModularSceneBuilder.h"
 #include "Report/StageBillOfMaterialsSubsystem.h"
+#include "Report/StageCableScheduleSubsystem.h"
+#include "Report/StagePatchSheetSubsystem.h"
+#include "Misc/Paths.h"
 #include "Subsystems/ShowControlSubsystem.h"
 #include "Subsystems/StageProfileSubsystem.h"
 #include "Subsystems/StageSessionSubsystem.h"
@@ -47,6 +50,22 @@ void UStageAICommandSubsystem::Initialize(FSubsystemCollectionBase& Collection)
 	{
 		Backend = NewObject<UStageClaudeAssistantBackend>(this);
 	}
+	// Initialized first so their delegates exist; bound for good (a handful of exports per session), and filtered by AwaitedExports.
+	BillOfMaterials = Collection.InitializeDependency<UStageBillOfMaterialsSubsystem>();
+	PatchSheet = Collection.InitializeDependency<UStagePatchSheetSubsystem>();
+	CableSchedule = Collection.InitializeDependency<UStageCableScheduleSubsystem>();
+	if (UStageBillOfMaterialsSubsystem* Report = BillOfMaterials.Get())
+	{
+		Report->OnExportFinished.AddUniqueDynamic(this, &ThisClass::HandleBillOfMaterialsExported);
+	}
+	if (UStagePatchSheetSubsystem* Report = PatchSheet.Get())
+	{
+		Report->OnExportFinished.AddUniqueDynamic(this, &ThisClass::HandlePatchSheetExported);
+	}
+	if (UStageCableScheduleSubsystem* Report = CableSchedule.Get())
+	{
+		Report->OnExportFinished.AddUniqueDynamic(this, &ThisClass::HandleCableScheduleExported);
+	}
 }
 
 void UStageAICommandSubsystem::Deinitialize()
@@ -62,6 +81,19 @@ void UStageAICommandSubsystem::Deinitialize()
 		LoadHandle.Reset();
 	}
 	PendingAssetsCallback.Unbind();
+	if (UStageBillOfMaterialsSubsystem* Report = BillOfMaterials.Get())
+	{
+		Report->OnExportFinished.RemoveDynamic(this, &ThisClass::HandleBillOfMaterialsExported);
+	}
+	if (UStagePatchSheetSubsystem* Report = PatchSheet.Get())
+	{
+		Report->OnExportFinished.RemoveDynamic(this, &ThisClass::HandlePatchSheetExported);
+	}
+	if (UStageCableScheduleSubsystem* Report = CableSchedule.Get())
+	{
+		Report->OnExportFinished.RemoveDynamic(this, &ThisClass::HandleCableScheduleExported);
+	}
+	AwaitedExports.Reset();
 	StopMarketplaceWait();
 	PurchaseOffer.Reset();
 	Proposal.Reset();
@@ -705,6 +737,7 @@ void UStageAICommandSubsystem::AdvancePlan()
 			return;
 		}
 		RememberStep(RunningPlan->CurrentStep, Outcome);
+		AwaitExports(RunningPlan->CurrentStep, Outcome);
 		RunningPlan->StepLines.Add(Outcome.Message);
 		++RunningPlan->NextStep;
 	}
@@ -722,6 +755,7 @@ void UStageAICommandSubsystem::HandleStepOutcome(const FStageAIActionOutcome& Ou
 		return;
 	}
 	RememberStep(RunningPlan->CurrentStep, Outcome);
+	AwaitExports(RunningPlan->CurrentStep, Outcome);
 	RunningPlan->StepLines.Add(Outcome.Message);
 	++RunningPlan->NextStep;
 	AdvancePlan();
@@ -822,6 +856,7 @@ void UStageAICommandSubsystem::RunAction(const FStageAICommand& Command, const F
 		State = EStageAIAssistantState::Idle;
 		// Kept before the line is added, so a view refreshing on it already sees the offer.
 		PurchaseOffer = Outcome.PurchaseOffer;
+		AwaitExports(Command, Outcome);
 		AddMessage(EStageAISpeaker::Assistant, Outcome.Outcome, WithNote(Outcome.Message, Note));
 	}
 	PendingHost = FStageAIActionHost();
@@ -1120,6 +1155,65 @@ void UStageAICommandSubsystem::RememberStep(const FStageAICommand& Step, const F
 	{
 		Memory.LastChange = Step;
 	}
+}
+
+void UStageAICommandSubsystem::AwaitExports(const FStageAICommand& Step, const FStageAIActionOutcome& Outcome)
+{
+	if (Outcome.Outcome != EStageAIOutcome::Succeeded)
+	{
+		return;
+	}
+	for (const EStageAIReport Report : Outcome.StartedExports)
+	{
+		AwaitedExports.Add(Report, Step.Language);
+	}
+}
+
+void UStageAICommandSubsystem::HandleReportExported(EStageAIReport Report, const FStageReportExportResult& Result)
+{
+	using StageAILanguage::Pick;
+	EStageAILanguage Language = EStageAILanguage::English;
+	if (!AwaitedExports.RemoveAndCopyValue(Report, Language))
+	{
+		// Started from a panel or the menu: the status bar reports it, the conversation did not ask for it.
+		return;
+	}
+	FText Name;
+	switch (Report)
+	{
+	case EStageAIReport::BillOfMaterials:	Name = Pick(Language, LOCTEXT("ExportedBom", "bill of materials"), INVTEXT("նյութերի ցուցակը")); break;
+	case EStageAIReport::PatchSheet:		Name = Pick(Language, LOCTEXT("ExportedPatch", "DMX patch sheet"), INVTEXT("DMX պատչ-թերթը")); break;
+	default:								Name = Pick(Language, LOCTEXT("ExportedCables", "cable schedule and power plan"), INVTEXT("մալուխների ցուցակը և սնուցման պլանը")); break;
+	}
+	UE_LOG(LogStageCraft, Log, TEXT("AI assistant: export of %s %s (%s)."), *Name.ToString(), Result.bSucceeded ? TEXT("written") : TEXT("failed"), *Result.FilePath);
+	if (!Result.bSucceeded)
+	{
+		AddMessage(EStageAISpeaker::Assistant, EStageAIOutcome::Refused, FText::Format(Pick(Language,
+			LOCTEXT("ExportNotWritten", "The {0} was not written to {1}. Check that the folder is writable and the file is not open in another program."),
+			INVTEXT("{0} չգրվեց {1} ֆայլում։ Ստուգեք, որ թղթապանակը գրելի է, և ֆայլը բաց չէ այլ ծրագրում։")), Name, FText::FromString(Result.FilePath)));
+		return;
+	}
+	// The reports write a PDF and a CSV of the same name (FStageReportExportResult::FilePath is the PDF).
+	const FString Pdf = FPaths::GetCleanFilename(Result.FilePath);
+	const FString Csv = FPaths::GetBaseFilename(Result.FilePath) + TEXT(".csv");
+	AddMessage(EStageAISpeaker::Assistant, EStageAIOutcome::Succeeded, FText::Format(Pick(Language,
+		LOCTEXT("ExportWritten", "The {0} is written: {1} and {2} in Saved/StageCraft/Reports."),
+		INVTEXT("Պատրաստ է {0}՝ {1} և {2}, Saved/StageCraft/Reports թղթապանակում։")), Name, FText::FromString(Pdf), FText::FromString(Csv)));
+}
+
+void UStageAICommandSubsystem::HandleBillOfMaterialsExported(const FStageReportExportResult& Result)
+{
+	HandleReportExported(EStageAIReport::BillOfMaterials, Result);
+}
+
+void UStageAICommandSubsystem::HandlePatchSheetExported(const FStageReportExportResult& Result)
+{
+	HandleReportExported(EStageAIReport::PatchSheet, Result);
+}
+
+void UStageAICommandSubsystem::HandleCableScheduleExported(const FStageReportExportResult& Result)
+{
+	HandleReportExported(EStageAIReport::CableSchedule, Result);
 }
 
 FText UStageAICommandSubsystem::GetInterpreterDescription() const

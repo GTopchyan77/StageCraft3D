@@ -5,6 +5,7 @@
 #include "CoreMinimal.h"
 #include "AI/StageAITypes.h"
 #include "History/StageEditCommand.h"
+#include "Report/StageBillOfMaterialsSubsystem.h"
 #include "Subsystems/WorldSubsystem.h"
 #include "StageAICommandSubsystem.generated.h"
 
@@ -94,6 +95,9 @@ enum class EStageAIAssistantState : uint8
  *  - Memory (Docs/ADR/0030 §6): each change that succeeds is remembered with the fixtures it acted on, so "them" in a later step or
  *    prompt means those (unless the player has selected others since) and "do it again (on group 2)" repeats it. Several changes
  *    typed in one prompt become one plan (StageAICommandParser::ParsePlan).
+ *  - Exports (Docs/ADR/0016 §7): an export the assistant started is remembered per report until that report subsystem's
+ *    OnExportFinished arrives; then one line says which files were written (or why not). Exports started elsewhere (the
+ *    panels, the menu) are left to the status bar. The report subsystems are bound for the subsystem's lifetime.
  *
  * Game and PIE worlds only. Never ticks and never iterates the world.
  */
@@ -281,6 +285,21 @@ private:
 	void HandleMarketplaceAcquired(FGuid ListingId, FStageMarketplaceResultInfo Result, const FString& SceneName);
 	void HandleItemAssetsLoaded();
 
+	/** Remembers the exports a succeeded step started (FStageAIActionOutcome::StartedExports), in the language it was asked in. */
+	void AwaitExports(const FStageAICommand& Step, const FStageAIActionOutcome& Outcome);
+
+	/** One report's export finished: a line in the conversation if the assistant started it, nothing otherwise. */
+	void HandleReportExported(EStageAIReport Report, const FStageReportExportResult& Result);
+
+	UFUNCTION()
+	void HandleBillOfMaterialsExported(const FStageReportExportResult& Result);
+
+	UFUNCTION()
+	void HandlePatchSheetExported(const FStageReportExportResult& Result);
+
+	UFUNCTION()
+	void HandleCableScheduleExported(const FStageReportExportResult& Result);
+
 	/** Note appended to the next answer ("answered offline because ..."), then cleared. */
 	static FText WithNote(const FText& Text, const FText& Note);
 
@@ -361,4 +380,15 @@ private:
 	TOptional<FMarketplaceWait> MarketplaceWait;
 	TWeakObjectPtr<class UStageMarketplaceSubsystem> WaitingMarketplace;
 	FDelegateHandle PreviewReadyHandle;
+
+	/**
+	 * The reports the assistant is exporting, with the language each was asked in. A report subsystem exports one file pair at a
+	 * time, so its next OnExportFinished is this one; dropped with the world.
+	 */
+	TMap<EStageAIReport, EStageAILanguage> AwaitedExports;
+
+	/** Bound in Initialize, unbound in Deinitialize. */
+	TWeakObjectPtr<UStageBillOfMaterialsSubsystem> BillOfMaterials;
+	TWeakObjectPtr<class UStagePatchSheetSubsystem> PatchSheet;
+	TWeakObjectPtr<class UStageCableScheduleSubsystem> CableSchedule;
 };

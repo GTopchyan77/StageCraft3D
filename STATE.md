@@ -10880,10 +10880,70 @@ All times in ms.
 - **Shipping scan** (UTF-16 at both alignments, and ASCII): absent are the test name, its messages, "MUTATION" and the dev command `StageCraft.Assistant.Ask`; present as the control are the answer text "In rental units: {1}" and the wire name `bill_of_materials`.
 - **Not verified:** the online Claude model calling `bill_of_materials` live (no key in tests; the wire format is tested), and asking in the panel with the mouse and keyboard.
 
-**Commit:** uncommitted (working tree). STATE #113 now carries `3512485`.
+**Commit:** `1e39874`. STATE #113 carries `3512485`.
 
 **Known issues / follow-ups**
 - **Gevor:** in the AI Assistant panel, ask "what do I need to rent" and "how many truss sections do I need" on one of your stages.
 - **Labels:** discipline labels and catalog names in the Armenian answer are English (the report's own labels).
 - **Export completion** in the chat is still open (ADR 0016 §4).
+- The Obsidian vault on S: is still unreachable, so there is no session log.
+
+## #115 — The AI Assistant reports finished exports in the chat (2026-11-26)
+
+**What & why**
+- Gevor asked (2026-11-26) for export completion reporting in the AI Assistant chat. It was the open follow-up in ADR 0016 §4, Phase 20, H4 and STATE #114. He asked to check existing behaviour first.
+- **Already there:** `export` (local grammar and online tool) ran `RequestExportBillOfMaterials` / `RequestExportPatchSheet` / `RequestExportCableSchedule` and replied at once. Each report subsystem broadcasts `OnExportFinished`, and only the status bar listened to it.
+- **Measured first** (`-game` run `Export115Before`, Concert starter stage):
+  - "export the bill of materials" wrote `BOM_*.pdf` + `.csv` 157 ms after the request;
+  - "export all reports" wrote the BOM, patch sheet and cable schedule pairs 350–375 ms after it;
+  - the 4-line transcript never mentioned the files. It only said "the status bar shows when each file is written", and that message is gone a few seconds later.
+- **Change:**
+  - **`FStageAIActionOutcome::StartedExports`.** The runner's `Export` lists the reports whose request started; refused reports are already explained in the reply.
+  - **`UStageAICommandSubsystem`:**
+    - Keeps `AwaitedExports` (report → the prompt's language), filled from a succeeded step's outcome by `AwaitExports`. Exports run through `RunAction` (they run alone); plans call it too.
+    - Binds the three report subsystems' `OnExportFinished` for its lifetime (`InitializeDependency`; unbound in `Deinitialize`, which also empties the map).
+    - An awaited result adds one line, "The bill of materials is written: X.pdf and X.csv in Saved/StageCraft/Reports.", or names the path that could not be written. The line is in Armenian when the prompt was.
+    - Results the assistant did not start (the panels, the menu) add nothing; the status bar keeps reporting them.
+    - The export step is still done when it starts, so the player can keep asking while the files are written.
+  - **The export reply** now says "I will say here when each file is written" (EN and HY).
+  - **Panel:** assistant bubbles use `AllowPerCharacterWrapping`. The first `-game` run after the change showed the file names clipped at the docked bubble's edge (".pd", ".cs"). A word now breaks only when it is wider than the line.
+  - **Docs:** ADR 0016 §7 amendment, plus its status line and §4 follow-up; `Docs/CURRENT_SYSTEMS.md` (assistant row).
+
+**Files changed**
+- `Source/ModularSceneBuilder/Public/AI/StageAITypes.h` (`StartedExports`), `Private/AI/StageAICommandRunner.cpp` (fills it; reply text).
+- `Source/ModularSceneBuilder/Public/AI/StageAICommandSubsystem.h`, `Private/AI/StageAICommandSubsystem.cpp` (bindings, `AwaitedExports`, `AwaitExports`, `HandleReportExported` and three handlers).
+- `Source/ModularSceneBuilder/Private/UI/StageAIAssistantWidget.cpp` (wrapping policy).
+- Test: `Private/AI/Tests/StageAIExportTests.cpp` (new, `StageCraft.Assistant.ExportCompletion`).
+- `Docs/ADR/0016-ai-assistant.md`, `Docs/CURRENT_SYSTEMS.md`, `tasks/todo.md` (Phase 20, H4 and Phase 64 lines; Phase 65), `STATE.md` (this entry; #114 carries `1e39874`).
+- No Blueprint, asset, map or ini file.
+
+**Verification**
+- **Test `StageCraft.Assistant.ExportCompletion`** (game world; the report subsystems' `OnExportFinished` is broadcast by the test, so no file is written):
+  - an export nobody asked the assistant for adds no line;
+  - "export the bill of materials" adds exactly one line naming both files, and a later panel export adds nothing;
+  - for "export all reports" where the patch sheet did not start, only the started reports are reported, once each, in the order they arrive;
+  - a failed cable schedule write is a refused line naming the path;
+  - a refused export waits for nothing;
+  - the Armenian prompt gets the Armenian line;
+  - a question asked while the files are written does not lose the export.
+- **Mutations:**
+  - without the `RunAction` call (the first build) the test fails: no line arrives;
+  - reporting every export (filter off) fails 3 checks before the test stops. Reverted; `grep MUTATION` is clean.
+- **Suites:** `StageCraft.Assistant` 15/15. The full suite `RunAutomation.ps1 -Filter StageCraft -NullRHI` passed 319/319, with user data unchanged (181 files).
+- **`-game` `Export115After`** (same stage and prompts, plus «արտահանիր պատչը»):
+  - after "export the bill of materials": "The bill of materials is written: BOM_Untitled_20261126-152903.pdf and BOM_Untitled_20261126-152903.csv in Saved/StageCraft/Reports.";
+  - after "export all reports": three lines (bill of materials, DMX patch sheet, cable schedule and power plan), each naming the pair on disk;
+  - the Armenian prompt gives «Պատրաստ է DMX պատչ-թերթը՝ PatchSheet_Untitled_20261126-152915.pdf և … .csv, Saved/StageCraft/Reports թղթապանակում։»;
+  - the screenshot showed the clipped names, which led to the wrap fix;
+  - `WrapCheck115`: run after the wrap fix: the cable schedule line shows both full names, broken inside the word instead of clipped.
+  - Report files written by the runs were deleted afterwards. Logs: `%TEMP%/StageCraftRuns/Export115Before|After/game.log`.
+- **Builds:** Editor Development, Game Development and Game Shipping succeeded with no warnings (Shipping binary built after the last source edit); the full suite passed 319/319 again after the panel change.
+- **Shipping scan:** (UTF-16 at both alignments, and ASCII) absent are the test name, its world and messages, "MUTATION" and the dev command `StageCraft.Assistant.Ask`; present as the control are "is written: {1} and {2}" and "I will say here when each file is written".
+- **Not verified:** the online Claude model asking for an export live (it reaches the same `RunAction` path; no key in tests), and a real failed write in a running game (tested by broadcast only).
+
+**Commit:** uncommitted (working tree). STATE #114 now carries `1e39874`.
+
+**Known issues / follow-ups**
+- **Gevor:** in the AI Assistant panel, ask "export all reports" and check the three lines that follow.
+- **Labels:** discipline labels in the Armenian BOM answer are still English (#114).
 - The Obsidian vault on S: is still unreachable, so there is no session log.

@@ -384,7 +384,7 @@ See `STATE.md` for detailed history of completed work.
 - [x] `StageAICommandRunner` + controller `RequestAssistantPrompt`, `RequestBuildPlan` (shared with the Sketch window), `RequestSetEnvironment` + `FStageEnvironmentCommand` (assistant weather/time/sky changes are undoable), `RunCapturingRejections`
 - [x] Panel `UStageAIAssistantWidget` + `DA_Panel_Assistant` (pop-up 560 × 720); Edit › Assistant › AI Assistant..., Window menu, toolbar ASSIST
 - [ ] Manual verification (Gevor): type in the panel (Enter, SEND, chips, CLEAR), add fixtures and Ctrl+Z them, store/play cues, weather and time with Ctrl+Z, exports, the online model with a real API key
-- [ ] Follow-ups: export completion reported in the chat; several commands in one prompt; hanging added fixtures on truss; Environment panel edits undoable; conversation saved with scenes; more languages
+- [ ] Follow-ups: export completion reported in the chat (done in #115); several commands in one prompt; hanging added fixtures on truss; Environment panel edits undoable; conversation saved with scenes; more languages
 
 ## Phase 21 — Armenian & English assistant, voice prompts, photo / scan import for Sketch to Stage (requested by Gevor 2026-10-22; STATE.md #44, ADR 0017)
 Decisions (Gevor, 2026-10-22): voice via OpenAI transcription (off by default, OPENAI_API_KEY); an offline Armenian grammar plus Armenian replies; photo import = a local edge pipeline, with an optional Claude vision reading, landing as editable strokes in the Sketch canvas.
@@ -449,7 +449,7 @@ Gevor's fixture-suite request took #49 (Phase 27) and the marketplace took #50 /
 - [x] Reply action buttons; open and flash panels (SHOW ME / OPEN PANEL and the anchor pulse, H1, STATE.md #72; box found stale in #102)
 - [x] Multi-step prompts (splitter, queued plan, stop on first refusal) — Phase H4, STATE.md #75
 - [x] Conversation memory (last affected items, repeat with replaced slots) — Phase H4, STATE.md #75
-- [ ] New actions: selection, cue update/delete, BOM answers, export completion in chat (fixture parameters: done in #49 as set_fixture; cue update/delete in #74, selection in #75; BOM answers in #114 (bill_of_materials, rental units in counts); export completion in chat still open)
+- [x] New actions: selection, cue update/delete, BOM answers, export completion in chat (fixture parameters: done in #49 as set_fixture; cue update/delete in #74, selection in #75; BOM answers in #114 (bill_of_materials, rental units in counts); export completion in chat in #115)
 - [ ] Claude schema: new intents + steps; knowledge base in the system prompt
 - [ ] Tests (corpus EN/HY); builds 0 warnings; scripted runs
 - [ ] Manual verification (Gevor)
@@ -633,7 +633,7 @@ Gevor's choices: automation tests on a harness game instance (not AFunctionalTes
   - [x] H4d tools select_fixtures, apply_palette, record_palette, delete_palette, record_group, delete_group, start_effect, update_effect, stop_effect (catalogue, schema, runner through the panels' requests, grammar EN/HY, help)
   - [x] H4e tests (Assistant.MultiStep, Assistant.ToolGrammar, Assistant.ToolSchema, Assistant.Memory), builds, Shipping scan, scripted run H4
 - [ ] H4 manual verification (Gevor): type "add 4 pars and make them blue", APPLY, one Ctrl+Z; "select fixtures 1 to 2 and record a group called Front"; "start a circle effect on group front", "effect speed 1 hz", "stop all effects"; "do it again on group front" after a colour; the same in Armenian
-- [ ] H4 follow-ups: add or remove fixtures of an existing group, rename palettes and groups, per-fixture palettes, effect settings beyond rate and size, export completion in chat (Phase 26; BOM answers done in #114)
+- [ ] H4 follow-ups: add or remove fixtures of an existing group, rename palettes and groups, per-fixture palettes, effect settings beyond rate and size (Phase 26; BOM answers done in #114, export completion in chat in #115)
 - [x] UI overrides (Gevor 2026-11-06, STATE.md #76): no interface sounds (feedback cues, their table, SFX assets, Effects volume removed); a starter stage opens with the welcome screen and every floating panel closed, nothing opened
 - [x] I0 ADR 0031 (STATE.md #76): procedural stand-in people on a bone-animation-texture contract (art source still open for Gevor: real art drops into the same contract), crowd budget measured with Bench.Fixtures Crowd=N; OverCrowd not used
   - [x] I0a StageFigureRig: 11-bone rigid humanoid, 3 LODs (348 / 168 / 72 triangles), 10 clips (crowd idle / bounce / cheer / clap, drummer, guitarist, vocalist, keyboardist, desk operator, stagehand), baked 22 x 320 RGBA32F texture
@@ -930,4 +930,12 @@ Gevor's choices: automation tests on a harness game instance (not AFunctionalTes
 - [x] Count answers add rental units where they differ from placements ("In rental units: 16 × F34 Truss Run (2 m sections)"); count prompts drop need / rent / hire / panels / segments
 - [x] Test StageCraft.AI.BillOfMaterials (two mutations fail it, 17 checks); AI.Armenian counts the new help example; suite 318/318; -game Bom114After: every answer matches the report
 - [ ] Gevor: ask the AI Assistant panel "what do I need to rent" and "how many truss sections do I need" on your own stage
-- [ ] Export completion in the chat (Phase 20 / H4, still open); Armenian discipline labels in the answer (the report's labels are English)
+- [x] Export completion in the chat (done in #115, Phase 65)
+- [ ] Armenian discipline labels in the answer (the report's labels are English)
+
+## Phase 65 - Export completion reported in the assistant's chat (requested by Gevor 2026-11-26; STATE.md #115; ADR 0016 §7)
+- [x] Measured first (-game Export115Before, Concert): "export the bill of materials" and "export all reports" wrote their PDF + CSV pairs 157-375 ms later, but the 4-line transcript only said "the status bar shows when each file is written"
+- [x] FStageAIActionOutcome::StartedExports (filled by the runner's Export); UStageAICommandSubsystem remembers each started report with the prompt's language and binds the three report subsystems' OnExportFinished; one line per file pair ("The bill of materials is written: X.pdf and X.csv in Saved/StageCraft/Reports."), or where it could not write; exports from the panels or menu are left to the status bar
+- [x] Assistant bubbles break words wider than the panel (file names were clipped at the bubble's edge in the docked panel)
+- [x] Test StageCraft.Assistant.ExportCompletion (both mutations fail it); suite 319/319; -game Export115After: every export reported once with the files on disk, Armenian in Armenian
+- [ ] Gevor: in the AI Assistant panel, ask "export all reports" and check the three lines that follow
