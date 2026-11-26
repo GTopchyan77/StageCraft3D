@@ -110,7 +110,7 @@ What existed before:
 
 ## 5. Consequences
 
-- **History scope.** Non-transform parameter edits (label, patch, attributes, Type swap) are not undoable steps. They do survive undo and redo of Place and Delete through the snapshot. Adding them later is one more command type at `RequestParameterChange`.
+- **History scope** (superseded by §7, STATE.md #112). Non-transform parameter edits (label, patch, attributes, Type swap) are not undoable steps. They do survive undo and redo of Place and Delete through the snapshot. Adding them later is one more command type at `RequestParameterChange`.
 - **Fixture IDs.** A restored fixture keeps its fixture ID and patch, which assumes nothing took them while it was deleted. `UShowControlSubsystem` handles conflicts as it does for any registration.
 - **Placement snapping and meshes.** Placement snapping needs the item's `Mesh`. Fixtures whose look comes only from a Blueprint snap to the grid while placing, but do snap when moved, because a placed actor has bounds.
 - **No snap bypass key.** There is no hold-to-disable key yet; the Edit menu toggle is the only switch.
@@ -120,3 +120,14 @@ What existed before:
 
 - **Snapping:** unbind the two delegates in `AModularPlayerController::BeginPlay`. Placement falls back to the grid and the gizmo to its own step.
 - **Undo:** remove the `UndoAction` / `RedoAction` bindings and the Edit menu entries. Recording is harmless without them.
+
+## 7. Amendment: every item parameter edit is a step (2026-11-26, STATE.md #112)
+
+§5 "History scope" is superseded.
+
+- Every accepted item edit through `AModularPlayerController::RequestParameterChange` is an undo step (`FStageParameterItemCommand`), decided by `StageCraftTags::IsUndoableItemParameter`. This covers the label, visibility, lock, audio settings and DMX mode.
+- These already had their own steps before this amendment: shape and patch edits (#46 and later), the Type swap, transforms, and a fixture's look (the programmer, ADR 0025 §4).
+- **Not recorded here:** the transform, the type and the look, which keep their own paths.
+- A continuous inspector drag is still one step (edit transaction).
+- The Outliner's eye and lock on several items are one step, "Edit N items" (a transaction in the panel and in the `StageCraft.Outliner.Hide/Lock` command).
+- Undo and redo write through the same rules (`ParameterApplier` → GameMode), so a refused value is reported, not forced.

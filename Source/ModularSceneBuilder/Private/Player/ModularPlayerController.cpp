@@ -1251,11 +1251,12 @@ FStageEconomyResultInfo AModularPlayerController::RequestParameterChange(UObject
 		}
 	}
 
-	// Edits that reshape the item (a span's length or sag) or re-address a fixture are undoable steps, like placing or deleting.
-	FStageParameterValue QuantityBefore;
-	const bool bRecordParameter = (StageCraftTags::IsShapeParameter(ParameterId) || StageCraftTags::IsPatchParameter(ParameterId))
+	// Every other accepted item edit (shape, patch, label, visibility, lock, audio settings, ...) is an undoable step, like placing
+	// or deleting; the transform, the type and a fixture's look have history paths of their own.
+	FStageParameterValue ParameterBefore;
+	const bool bRecordParameter = StageCraftTags::IsUndoableItemParameter(ParameterId)
 		&& Target->Implements<UStageParameterInterface>()
-		&& IStageParameterInterface::Execute_GetParameterValue(Target, ParameterId, QuantityBefore);
+		&& IStageParameterInterface::Execute_GetParameterValue(Target, ParameterId, ParameterBefore);
 
 	const AModularBaseActor* SwapTarget = ParameterId == StageCraftTags::Param_Info_Type ? Cast<AModularBaseActor>(Target) : nullptr;
 	const UBaseItemData* TypeBefore = SwapTarget ? SwapTarget->GetItemData() : nullptr;
@@ -1288,7 +1289,7 @@ FStageEconomyResultInfo AModularPlayerController::RequestParameterChange(UObject
 
 	if (bRecordParameter)
 	{
-		EditHistory->RecordParameterChange(Cast<AActor>(Target), ParameterId, FindParameterName(*Target, ParameterId), QuantityBefore);
+		EditHistory->RecordParameterChange(Cast<AActor>(Target), ParameterId, FindParameterName(*Target, ParameterId), ParameterBefore);
 	}
 	if (TypeBefore)
 	{

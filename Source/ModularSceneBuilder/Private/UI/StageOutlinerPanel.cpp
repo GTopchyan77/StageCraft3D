@@ -746,6 +746,8 @@ void UStageOutlinerPanel::SetFlag(const TArray<AModularBaseActor*>& Items, const
 	{
 		return;
 	}
+	// A group's eye or lock is one click, so it is one undo step however many items it changes.
+	const bool bOwnsTransaction = Controller->BeginEditTransaction();
 	for (AModularBaseActor* Item : Items)
 	{
 		const bool bCurrent = ParameterId == StageCraftTags::Param_Info_Visible ? !Item->IsHiddenOnStage() : Item->IsTransformLocked();
@@ -754,6 +756,10 @@ void UStageOutlinerPanel::SetFlag(const TArray<AModularBaseActor*>& Items, const
 			// The request bridge validates and reports; the rows update from the session's change notification (read-back).
 			Controller->RequestParameterChange(Item, ParameterId, FStageParameterValue::MakeBool(bValue));
 		}
+	}
+	if (bOwnsTransaction)
+	{
+		Controller->EndEditTransaction();
 	}
 }
 

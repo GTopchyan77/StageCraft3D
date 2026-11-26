@@ -259,6 +259,14 @@ namespace StageCraftTags
 	/** Parameters that change how an item is listed (outliner, bill of materials): label, visibility, lock and quantity. */
 	MODULARSCENEBUILDER_API bool IsListingParameter(const FGameplayTag& ParameterId);
 
+	/**
+	 * Whether an accepted edit of this item parameter is recorded as its own undo step (FStageParameterItemCommand): every
+	 * parameter except those another history path records, the transform (FStageTransformItemCommand, group moves), the item
+	 * type (RecordItemTypeChange: a re-spawn) and a fixture's look (the programmer's step, Docs/ADR/0025 §4). Read-only
+	 * parameters never change, so they never become a step (STATE.md #112).
+	 */
+	MODULARSCENEBUILDER_API bool IsUndoableItemParameter(const FGameplayTag& ParameterId);
+
 	// Fixture attributes: recordable in cues and addressable over DMX. Stored as floats in physical units.
 	MODULARSCENEBUILDER_API UE_DECLARE_GAMEPLAY_TAG_EXTERN(Attribute);
 	MODULARSCENEBUILDER_API UE_DECLARE_GAMEPLAY_TAG_EXTERN(Attribute_Dimmer);		// 0..1

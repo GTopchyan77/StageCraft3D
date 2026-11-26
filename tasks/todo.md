@@ -186,7 +186,7 @@ See `STATE.md` for detailed history of completed work.
 - [x] Object snapping (`StageSnapMath`, `UStageSnappingComponent`): placement (X/Y) and gizmo Move (dragged axis), magenta guides, Snap cue, Edit > Snap to Items
 - [x] Tests `StageCraft.History.Stack`, `StageCraft.History.ItemCommands`, `StageCraft.Snap.Math`; scripted Standalone runs (STATE.md #25)
 - [ ] Gevor, by mouse/keyboard: shortcuts on the real keyboard (and not while typing in a field), mouse gizmo drag snapping + guide, Edit menu entries, status bar messages, Snap cue
-- [ ] Follow-ups: undo for non-transform parameter edits, hold-to-bypass snap key, placement snapping for Blueprint-only visuals
+- [ ] Follow-ups: hold-to-bypass snap key, placement snapping for Blueprint-only visuals
 
 ## Phase 9 — Multi-selection, Clear Stage, scene files, renders (STATE.md #26, ADR 0004)
 - [x] Selection set with Ctrl+Click toggle, Select All, group gizmo and numeric transforms, batch delete as one undo step
@@ -196,7 +196,7 @@ See `STATE.md` for detailed history of completed work.
 - [x] Editor / Game / Shipping builds clean; 20/20 automation; scripted Standalone runs R26_Run1-6
 - [ ] Manual verification (Gevor): STATE.md #26 "Not verified" list
 - [ ] Render banding in wide gradients: compare with viewport at the same framing; HDR capture + dithered quantisation
-- [ ] Render cancel button; group edit of non-transform parameters; save cue list with scenes
+- [ ] Render cancel button; group edit of non-transform parameters (cue list saved with scenes since STATE.md #38)
 
 ## Phase 10 — Spans, Outliner, Bill of Materials (STATE.md #27, ADR 0005)
 - [x] Span data (whole / stretch fit, segment + joint parts, caps), pure span math, instanced geometry component, span actor (Length parameter, quantity, no scale)
@@ -239,7 +239,8 @@ See `STATE.md` for detailed history of completed work.
 - [ ] Manual verification (Gevor): STATE.md #30 "Not verified" list
 - [ ] Re-enable plugins one by one once they compile with StageCraft (`PlacementGizmo` enum rename; UnrealNGGMCP pick one version)
 - [ ] Haze render banding in Off/FXAA: force temporal AA or finer fog Z for haze renders (measure first)
-- [ ] Undo for attribute and patch edits; cue list saved with scenes (patch edits undoable since STATE.md #46; attribute edits still open)
+- [x] Undo for attribute and patch edits (patch edits undoable since STATE.md #46; fixture looks through the programmer; every other item parameter since STATE.md #112)
+- [x] Cue list saved with scenes (scene format v3, STATE.md #38; stale box ticked in #112)
 
 ## Milestone audit (STATE.md #31, 2026-10-19)
 - [x] Audit every Tick / timer / polling path; gobo, iris and shutter MID updates only on attribute writes; patch sheet and faders push-only
@@ -905,3 +906,9 @@ Gevor's choices: automation tests on a harness game instance (not AFunctionalTes
 - [x] Test StageCraft.Settings.Graphics (two mutations fail it); suite 314/314; -game: applied (r.ScreenPercentage 50, t.MaxFPS 30, frames at 33.33 ms), saved and read back by the next launch, panel screenshot
 - [ ] Gevor: click through Preferences › Graphics (Low and back to Epic, a frame cap, VSync on a 60 Hz display)
 - [ ] Optional: first-run quality from the engine's hardware benchmark; dynamic resolution
+
+## Phase 62 - Undo for every item parameter edit (requested by Gevor 2026-11-26; STATE.md #112; ADR 0003 §7)
+- [x] Found: only transforms, shape and patch edits, the Type swap and fixture looks were undo steps; label, visibility, lock, audio settings (gain, delay, mute, polarity, splay), DMX mode and span fit / legs were not
+- [x] StageCraftTags::IsUndoableItemParameter (everything but transform, type and look, which have their own paths); the controller records through it; the Outliner's eye / lock on several items is one step
+- [x] Test StageCraft.History.ItemParameters (classifier; label, lock, group hide undo / redo through the session; the old rule fails it on 6 parameters); suite 315/315; -game: rename, lock and group hide undone and redone through the real controller
+- [ ] Gevor: rename an item, change a speaker's gain with the slider, hide a group in the Outliner; Ctrl+Z after each

@@ -10676,10 +10676,71 @@ All times in ms.
   - VSync on a real 60 Hz display;
   - a slower graphics card.
 
-**Commit:** uncommitted (working tree). STATE #110 now carries `5cd1ada`.
+**Commit:** `b4c468f`.
 
 **Known issues / follow-ups**
 - **Gevor:** click through Preferences › Graphics (Low and back to Epic, a frame cap, VSync).
 - Optional: a first-run quality from the engine's hardware benchmark (`RunHardwareBenchmark`), dynamic resolution.
 - The render thread stays the bound on this PC at 500 fixtures (#109). The UI and game-thread items are still not worth changing here.
+- The Obsidian vault on S: is still unreachable, so there is no session log.
+
+## #112 — Every item parameter edit is an undo step: label, visibility, lock, audio settings, DMX mode; Outliner group eye/lock one step (2026-11-26)
+
+**What & why**
+- Gevor asked (2026-11-26) for the next self-contained code item from todo; attribute-edit undo was one of the examples. Todo Phase 13 still listed "Undo for attribute and patch edits ... attribute edits still open", and §5 of ADR 0003 said non-transform edits are not steps.
+- **Measured first (the current behaviour):**
+  - `AModularPlayerController::RequestParameterChange` recorded a parameter step only for shape edits (`IsShapeParameter`) and patch edits (`IsPatchParameter`). Transforms, the Type swap and fixture looks (the programmer) had their own steps.
+  - Everything else the inspector, the Outliner or the Patch panel edits was applied and lost to Ctrl+Z: the label, visibility, lock, speaker gain / delay / mute / polarity / splay, a fixture's DMX mode, a span's fit and legs.
+  - The new test, run with the old rule as a mutation, fails on exactly those: Label, Visible, Locked, Audio.Gain, Audio.Mute, Patch.Mode.
+- **Change:**
+  - `StageCraftTags::IsUndoableItemParameter`: every valid item parameter except the transform, the item type and a fixture's look, which keep their own history paths. Read-only parameters never change, and `RecordParameterChange` ignores unchanged values, so they never become a step.
+  - The controller records through it. The before-value variable is renamed (`QuantityBefore` → `ParameterBefore`).
+  - **Drags:** an inspector drag was already one edit transaction (`UStageParameterViewWidget`), so a gain drag is one step.
+  - **Outliner:** the eye or lock on a group or a multi-selection is now one transaction, so one step ("Edit N items") instead of one per item; the dev command `StageCraft.Outliner.Hide/Lock` does the same.
+  - Undo and redo replay through the controller's `ParameterApplier` (GameMode rules), as before.
+- **Docs:** ADR 0003 §7 amendment (§5 "History scope" marked superseded).
+- **Stale todo boxes:**
+  - Phase 13 "attribute and patch edits" is done.
+  - "Cue list saved with scenes" was done in #38 (scene format v3).
+  - Phase 9's "undo for non-transform parameter edits" is removed.
+
+**Files changed**
+- `Source/ModularSceneBuilder/Public/Data/StageParameterTypes.h`, `Private/Data/StageParameterTypes.cpp` (`IsUndoableItemParameter`).
+- `Source/ModularSceneBuilder/Private/Player/ModularPlayerController.cpp` (record through it).
+- `Source/ModularSceneBuilder/Private/UI/StageOutlinerPanel.cpp`, `Private/Outliner/StageOutlinerConsoleCommands.cpp` (one transaction).
+- `Source/ModularSceneBuilder/Private/History/Tests/StageHistoryWorldTests.cpp` (new test `StageCraft.History.ItemParameters`).
+- `Docs/ADR/0003-undo-redo-and-object-snapping.md` (§7).
+- `tasks/todo.md` (Phases 9 and 13, Phase 62), `STATE.md` (this entry; #111 carries `b4c468f`).
+- No Blueprint, asset, map or ini file.
+
+**Verification**
+- **Test `StageCraft.History.ItemParameters`:**
+  - the classifier: label, visible, locked, audio gain and mute, patch address and mode, span length and deck height are recorded; location, rotation, scale, type, dimmer, pan, gel and an empty tag are not;
+  - in a game world with two placed crates:
+    - a rename is one step; undo brings back the old label, redo the new one;
+    - renaming to the same label is no step;
+    - undoing a lock unlocks;
+    - hiding both crates in one transaction is one step; undo shows both, redo hides both.
+- **Mutation:** the old rule (`IsShapeParameter || IsPatchParameter`) fails 6 checks (Label, Visible, Locked, Audio.Gain, Audio.Mute, Patch.Mode). Reverted, and no "MUTATION" marker is left in `Source/`.
+- **Suites:**
+  - `StageCraft.History` 11/11;
+  - full suite `RunAutomation.ps1 -Filter StageCraft -NullRHI -ExpectedCount 315`, 315/315, user data unchanged (181 files).
+- **`-game` runs, through the real controller:**
+  - **Rename** (`Undo112b`):
+    - `StageCraft.Show.Set Info.Label Renamed` gave one step, "Change Label of Renamed";
+    - Undo gave "Spot 101" again, and Redo gave "Renamed".
+  - **Lock** (`Undo112b`): `Info.Locked true` was one more step, and its undo succeeded.
+  - **Group hide** (`Undo112`): `StageCraft.Outliner.Hide group:Lighting on` changed 2 items as one step "Edit 2 items". Undo succeeded, and the next toggle hid both again, which shows they were visible.
+  - Logs: `%TEMP%/StageCraftRuns/Undo112/game.log`, `Undo112b/game.log`.
+- **Builds:** Editor Development, Game Development and Game Shipping succeeded with no warnings.
+- **Shipping scan** (UTF-16 at both alignments, and ASCII):
+  - absent: the test name, its messages, "Downstage Crate", `StageCraft.Outliner.Hide`, "MUTATION";
+  - the step text "Change {0} of {1}" is present as the control.
+- **Not verified by hand:** Ctrl+Z after an inspector rename, a speaker gain drag and an Outliner eye click with the mouse. The same request path was exercised by the commands.
+
+**Commit:** uncommitted (working tree). STATE #111 now carries `b4c468f`.
+
+**Known issues / follow-ups**
+- **Gevor:** rename an item, drag a speaker's gain, click a group's eye in the Outliner; Ctrl+Z and Ctrl+Y after each.
+- **Step names** use the item's label at the time of the edit ("Change Label of Renamed"). That is the existing naming for parameter steps; it could name the old label for renames.
 - The Obsidian vault on S: is still unreachable, so there is no session log.

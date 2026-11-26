@@ -239,4 +239,9 @@ namespace StageCraftTags
 	{
 		return ParameterId == Param_Info_Label || ParameterId == Param_Info_Visible || ParameterId == Param_Info_Locked || IsQuantityParameter(ParameterId);
 	}
+
+	bool IsUndoableItemParameter(const FGameplayTag& ParameterId)
+	{
+		return ParameterId.IsValid() && !IsTransformParameter(ParameterId) && ParameterId != Param_Info_Type && !IsFixtureLookParameter(ParameterId);
+	}
 }

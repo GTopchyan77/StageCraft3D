@@ -593,4 +593,89 @@ bool FStageSceneSaveFlowTest::RunTest(const FString& Parameters)
 	return true;
 }
 
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FStageHistoryItemParametersTest, "StageCraft.History.ItemParameters", StageHistoryWorldTests::Flags)
+
+// Every item edit through the request bridge is an undo step (STATE.md #112): which parameters the controller records
+// (StageCraftTags::IsUndoableItemParameter), and that label, visibility and lock steps undo and redo through the session.
+bool FStageHistoryItemParametersTest::RunTest(const FString& Parameters)
+{
+	using namespace StageHistoryWorldTests;
+	using namespace StageCraftTags;
+
+	// Recorded: everything an inspector, the Outliner or the Patch panel edits that has no other history path.
+	const TArray<FGameplayTag> Recorded = { Param_Info_Label, Param_Info_Visible, Param_Info_Locked, Param_Audio_Gain, Param_Audio_Mute, Param_Patch_Address,
+		Param_Patch_Mode, Param_Span_Length, Param_Deck_Height };
+	for (const FGameplayTag& Tag : Recorded)
+	{
+		TestTrue(FString::Printf(TEXT("%s is an undo step of its own"), *Tag.ToString()), IsUndoableItemParameter(Tag));
+	}
+	// Not recorded here: the transform, the type and a fixture's look have their own steps; an empty tag is nothing.
+	const TArray<FGameplayTag> RecordedElsewhere = { Param_Transform_Location, Param_Transform_Rotation, Param_Transform_Scale, Param_Info_Type,
+		Attribute_Dimmer, Attribute_Pan, Param_Fixture_Gel, FGameplayTag() };
+	for (const FGameplayTag& Tag : RecordedElsewhere)
+	{
+		TestFalse(FString::Printf(TEXT("%s is recorded elsewhere (or not at all)"), *Tag.ToString()), IsUndoableItemParameter(Tag));
+	}
+
+	FScopedStage Stage;
+	USpawnSystemComponent* Spawner = Stage.EditHistory->GetOwner()->FindComponentByClass<USpawnSystemComponent>();
+	UStageSessionSubsystem* Session = UWorld::GetSubsystem<UStageSessionSubsystem>(Stage.World);
+	UBaseItemData* Crate = LoadObject<UBaseItemData>(nullptr, TEXT("/Game/StageCraft/Items/DA_Test_Crate.DA_Test_Crate"));
+	if (!TestNotNull(TEXT("Spawn system"), Spawner) || !TestNotNull(TEXT("Session"), Session) || !TestNotNull(TEXT("Crate item"), Crate))
+	{
+		return false;
+	}
+	AModularBaseActor* Box = Spawner->SpawnItem(Crate, FTransform(FVector(0.0, 0.0, 0.0)));
+	AModularBaseActor* Other = Spawner->SpawnItem(Crate, FTransform(FVector(0.0, 300.0, 0.0)));
+	if (!TestNotNull(TEXT("A crate is placed"), Box) || !TestNotNull(TEXT("A second crate is placed"), Other))
+	{
+		return false;
+	}
+
+	// The controller's order: read the value before, apply it through the session, record.
+	const auto EditAndRecord = [&Stage, Session](AModularBaseActor& Item, const FGameplayTag& Tag, const FStageParameterValue& Value)
+	{
+		FStageParameterValue Before;
+		IStageParameterInterface::Execute_GetParameterValue(&Item, Tag, Before);
+		const bool bApplied = Session->ApplyParameterChange(&Item, Tag, Value);
+		Stage.EditHistory->RecordParameterChange(&Item, Tag, FText::FromString(Tag.ToString()), Before);
+		return bApplied;
+	};
+	const auto LabelOf = [](AModularBaseActor& Item) { return Item.GetInstanceLabel().ToString(); };
+
+	// Label.
+	const FString OriginalLabel = LabelOf(*Box);
+	const int32 Steps = Stage.History->GetUndoCount();
+	TestTrue(TEXT("Rename applied"), EditAndRecord(*Box, Param_Info_Label, FStageParameterValue::MakeText(FText::FromString(TEXT("Downstage Crate")))));
+	TestEqual(TEXT("A rename is one step"), Stage.History->GetUndoCount(), Steps + 1);
+	TestEqual(TEXT("Undo rename"), Str(Stage.EditHistory->Undo()), Str(EStageCommandResult::Succeeded));
+	TestEqual(TEXT("... the old label is back"), LabelOf(*Box), OriginalLabel);
+	TestEqual(TEXT("Redo rename"), Str(Stage.EditHistory->Redo()), Str(EStageCommandResult::Succeeded));
+	TestEqual(TEXT("... the new label again"), LabelOf(*Box), FString(TEXT("Downstage Crate")));
+
+	// Renaming to the same label records nothing.
+	const int32 StepsBeforeSame = Stage.History->GetUndoCount();
+	EditAndRecord(*Box, Param_Info_Label, FStageParameterValue::MakeText(FText::FromString(TEXT("Downstage Crate"))));
+	TestEqual(TEXT("An unchanged label is no step"), Stage.History->GetUndoCount(), StepsBeforeSame);
+
+	// Lock: undoing a lock unlocks.
+	TestTrue(TEXT("Lock applied"), EditAndRecord(*Box, Param_Info_Locked, FStageParameterValue::MakeBool(true)) && Box->IsTransformLocked());
+	TestEqual(TEXT("Undo lock"), Str(Stage.EditHistory->Undo()), Str(EStageCommandResult::Succeeded));
+	TestFalse(TEXT("... unlocked again"), Box->IsTransformLocked());
+
+	// The Outliner's group eye: two items hidden in one transaction are one step, and undo shows both.
+	const int32 StepsBeforeHide = Stage.History->GetUndoCount();
+	Stage.EditHistory->BeginTransaction();
+	EditAndRecord(*Box, Param_Info_Visible, FStageParameterValue::MakeBool(false));
+	EditAndRecord(*Other, Param_Info_Visible, FStageParameterValue::MakeBool(false));
+	Stage.EditHistory->EndTransaction();
+	TestTrue(TEXT("Both hidden"), Box->IsHiddenOnStage() && Other->IsHiddenOnStage());
+	TestEqual(TEXT("Hiding a group is one step"), Stage.History->GetUndoCount(), StepsBeforeHide + 1);
+	TestEqual(TEXT("Undo hide"), Str(Stage.EditHistory->Undo()), Str(EStageCommandResult::Succeeded));
+	TestTrue(TEXT("... both shown again"), !Box->IsHiddenOnStage() && !Other->IsHiddenOnStage());
+	TestEqual(TEXT("Redo hide"), Str(Stage.EditHistory->Redo()), Str(EStageCommandResult::Succeeded));
+	TestTrue(TEXT("... both hidden again"), Box->IsHiddenOnStage() && Other->IsHiddenOnStage());
+	return true;
+}
+
 #endif // WITH_DEV_AUTOMATION_TESTS

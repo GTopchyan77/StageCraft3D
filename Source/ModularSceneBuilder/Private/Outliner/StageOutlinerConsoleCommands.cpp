@@ -119,6 +119,8 @@ namespace StageOutlinerCommands
 		const bool bTurnOn = Args.IsValidIndex(1) ? Args[1].Equals(TEXT("on"), ESearchCase::IgnoreCase) : !Algo::AnyOf(Targets, IsSet);
 
 		int32 Changed = 0;
+		// One undo step, as for the Outliner panel's eye and lock.
+		const bool bOwnsTransaction = Controller->BeginEditTransaction();
 		for (AModularBaseActor* Item : Targets)
 		{
 			if (IsSet(Item) != bTurnOn)
@@ -127,6 +129,10 @@ namespace StageOutlinerCommands
 				const bool bValue = bVisibility ? !bTurnOn : bTurnOn;
 				Changed += Controller->RequestParameterChange(Item, ParameterId, FStageParameterValue::MakeBool(bValue)).IsSuccess() ? 1 : 0;
 			}
+		}
+		if (bOwnsTransaction)
+		{
+			Controller->EndEditTransaction();
 		}
 		UE_LOG(LogStageCraft, Display, TEXT("%s %s %s: %d of %d items changed; selection now %d."), CommandName, *Args[0], bTurnOn ? TEXT("on") : TEXT("off"),
 			Changed, Targets.Num(), Controller->GetSelection()->GetSelectionCount());
