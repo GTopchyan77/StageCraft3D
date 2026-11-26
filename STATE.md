@@ -11090,10 +11090,51 @@ All times in ms.
   - curved truss in a run (the code path is shared, but no arc was on the stage);
   - a mouse check by a person.
 
-**Commit:** uncommitted (working tree).
+**Commit:** `684cf06`. STATE #116 carries `8095118`.
 
 **Known issues / follow-ups**
 - **Gevor:** on a stage with truss, ask "hang 4 pars on the truss", then "add 2 spots on the back truss"; check where they hang, then Ctrl+Z.
 - Hung fixtures keep their home aim (straight down); aiming them at the stage centre is a follow-up.
 - With three or more runs, the middle ones are named by number from the front.
 - The Obsidian vault on S: is still unreachable, so there is no session log.
+
+## #118 — Armenian prompts name the front or back truss run (2026-11-26)
+
+**What & why**
+- **Prompt:** Gevor's KMidden prompt asked to finish the Armenian side of #117: the words for the truss run must reach `EStageAIFixtureMount` and stay out of the fixture query. It also asked to verify execution and undo.
+- **Checked first:** #117 was already committed as `684cf06`; its STATE line still said uncommitted (fixed). The runner, the schema `mount` field, the cards and `ֆերմա` / `կախ` were all in place.
+- **Measured before** (new checks in `StageCraft.AI.TrussHang`, run before the fix):
+  - «կախիր 2 լույս հետևի ֆերմայից» parsed as `add_fixtures 2 'light հետևի' truss`: the run went to the front-most one, and the back word was searched for as part of the fixture's name;
+  - the same for առջևի («'spot առջևի' truss») and the colloquial առաջի.
+- **Change:** lexicon entries in `StageAIArmenian.cpp`:
+  - the stem առջև- / առջեւ- (both spellings of և) and the whole word առաջի → front;
+  - the whole words հետևի, հետեւի, հետևից, հետեւից and հետին → back.
+  - Back is whole words only: the stem հետև- also begins հետևեն / հետևում ("follow(s)"), which the help questions use («ինչպե՞ս լույսերը հետևեն երաժշտությանը»).
+  - The English grammar (#117) already maps front / back to the run and drops those words from the query, so no parser change was needed.
+
+**Files**
+- `Source/ModularSceneBuilder/Private/AI/StageAIArmenian.cpp` (lexicon entries)
+- `Source/ModularSceneBuilder/Private/AI/Tests/StageAITrussTests.cpp` (+7 checks: back, front, colloquial front, the եւ spelling, "follow is not back", hang alone → truss, a plain add → floor)
+- `Docs/ADR/0016-ai-assistant.md` (§8 Armenian line), `Docs/CURRENT_SYSTEMS.md` (assistant row), `tasks/todo.md` (Phase 67), `STATE.md` (#117 commit, this entry)
+
+**Verification**
+- **Baseline:** the new checks failed 3 times before the fix (quoted above).
+- **Mutation:** making back a stem (հետև- → back) fails "follow is not back". Reverted; `grep MUTATION` is clean.
+- **Suites:** `StageCraft.AI` 18/18. Full `RunAutomation.ps1 -Filter StageCraft -NullRHI` 321/321, user data unchanged (181 files).
+- **`-game` `Hang118`** (Concert starter stage):
+  - «կախիր 2 փար հետևի ֆերմայից» hung 2 LED Pars on the back truss at X 400, Y ±400, Z 700, roll 180°;
+  - «կախիր 2 սփոթ առջևի ֆերմայից» hung 2 Profile 600 on the front truss at X −600, Y ±450;
+  - both replies were in Armenian and named the run («կախված հետևի ֆերմայից» / «առջևի ֆերմայից»);
+  - Ctrl+Z removed the profiles in one step, and the pars stayed (History: 1 undo, 1 redo).
+  - Screenshot `Window_174034.png`; log `%TEMP%/StageCraftRuns/Hang118/game.log`.
+- **Builds:** Editor Development, Game Development and Game Shipping succeeded with no warnings. The Shipping exe (17:41) was built after the last edit.
+- **Shipping scan** (ASCII and UTF-16 at both alignments):
+  - absent: "TrussHang", the test messages, "MUTATION", `StageCraft.Assistant.Ask`;
+  - present as the control: "front_truss", "hung from {0}, spread along it" and the Armenian back word.
+- **Not verified:** a person typing these in the panel; the online model (its tool already has `mount`, #117).
+
+**Commit:** uncommitted (working tree).
+
+**Known issues / follow-ups**
+- Gevor: on a stage with truss, type «կախիր 2 փար հետևի ֆերմայից» in the AI Assistant, check that they hang on the back run, then Ctrl+Z.
+- From #117: hung fixtures still point straight down (aim them at the stage); with three or more runs, the middle ones are named by number.

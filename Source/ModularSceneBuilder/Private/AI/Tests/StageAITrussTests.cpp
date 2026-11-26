@@ -9,6 +9,7 @@
 
 #if WITH_DEV_AUTOMATION_TESTS
 
+#include "AI/StageAIArmenian.h"
 #include "AI/StageAICommandParser.h"
 #include "AI/StageAICommandSchema.h"
 #include "AI/StageAIToolCatalogue.h"
@@ -75,6 +76,14 @@ bool FStageAITrussHangTest::RunTest(const FString& Parameters)
 		const TOptional<FStageAICommand> Armenian = StageAICommandParser::Parse(TEXT("կախիր 4 լույս ֆերմայից"));
 		TestTrue(TEXT("Armenian: hang on the truss"), Armenian.IsSet() && Armenian->Intent == EStageAIIntent::AddFixtures && Armenian->Count.Get(1) == 4
 			&& Armenian->Mount == EStageAIFixtureMount::Truss && Armenian->Language == EStageAILanguage::Armenian);
+		// Which run, in Armenian; the run words must not reach the fixture query ("light", not "light հետևի").
+		TestEqual(TEXT("Armenian: back truss"), Describe(TEXT("կախիր 2 լույս հետևի ֆերմայից")), FString(TEXT("add_fixtures 2 'light' back truss")));
+		TestEqual(TEXT("Armenian: front truss"), Describe(TEXT("կախիր 3 սփոթ առջևի ֆերմայից")), FString(TEXT("add_fixtures 3 'spot' front truss")));
+		TestEqual(TEXT("Armenian: colloquial front"), Describe(TEXT("ավելացրու 2 փար առաջի ֆերմային")), FString(TEXT("add_fixtures 2 'par' front truss")));
+		TestEqual(TEXT("Armenian: back, the other spelling of և"), Describe(TEXT("կախիր 2 փար հետեւի ֆերմայից")), FString(TEXT("add_fixtures 2 'par' back truss")));
+		TestEqual(TEXT("Armenian: follow is not back"), StageAIArmenian::TranslateToGrammar(TEXT("լույսերը հետևեն երաժշտությանը")).Contains(TEXT("back")), false);
+		TestEqual(TEXT("Armenian: hang alone means the truss"),Describe(TEXT("կախիր 4 փար")), FString(TEXT("add_fixtures 4 'par' truss")));
+		TestEqual(TEXT("Armenian: a plain add stays on the floor"), Describe(TEXT("ավելացրու 2 փար")), FString(TEXT("add_fixtures 2 'par' floor")));
 	}
 	{
 		const TArray<FStageAICommand> Steps = StageAICommandParser::ParsePlan(TEXT("hang 4 pars on the truss and make them blue"));

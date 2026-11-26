@@ -140,6 +140,11 @@ namespace StageAIArmenian
 			{ TEXT("փոխարին"), TEXT("replace") }, { TEXT("փոխիր"), TEXT("change"), Exact }, { TEXT("փոխեք"), TEXT("change"), Exact },
 			{ TEXT("ընտրված"), TEXT("selected") }, { TEXT("ընտրած"), TEXT("selected") }, { TEXT("նշված"), TEXT("selected") },
 			{ TEXT("ձախ"), TEXT("left") }, { TEXT("աջ"), TEXT("right") }, { TEXT("առաջ"), TEXT("forward"), Exact },
+			// Which truss run new fixtures hang on (ADR 0016 §8), both spellings of և. Back only as whole words: the stem հետև- also
+			// begins հետևեն / հետևում (follow, follows), which the help questions use.
+			{ TEXT("առջև"), TEXT("front") }, { TEXT("առջեւ"), TEXT("front") }, { TEXT("առաջի"), TEXT("front"), Exact },
+			{ TEXT("հետևի"), TEXT("back"), Exact }, { TEXT("հետեւի"), TEXT("back"), Exact }, { TEXT("հետևից"), TEXT("back"), Exact },
+			{ TEXT("հետեւից"), TEXT("back"), Exact }, { TEXT("հետին"), TEXT("back"), Exact },
 			{ TEXT("վեր"), TEXT("up"), Exact }, { TEXT("վերև"), TEXT("up") }, { TEXT("ներքև"), TEXT("down") }, { TEXT("ցած"), TEXT("down"), Exact },
 			{ TEXT("դեպի"), TEXT(""), Exact }, { TEXT("ուղղությ"), TEXT("") }, { TEXT("չափով"), TEXT(""), Exact },
 

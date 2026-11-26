@@ -955,3 +955,4 @@ Gevor's choices: automation tests on a harness game instance (not AFunctionalTes
 - [x] Test StageCraft.AI.TrussHang (two mutations fail it, 13 checks); -game Hang117After: pars at Y -700 / -200 / 200 / 700 between the Beams, back truss at ±400, Armenian on the front truss, "hang 20" refused with "room for 4 more", Ctrl+Z removes one add
 - [ ] Gevor: on a stage with truss, ask the AI Assistant "hang 4 pars on the truss", then "add 2 spots on the back truss"; check where they hang, then Ctrl+Z
 - [ ] Follow-up: aim the hung fixtures (home position towards the stage centre) and say which run by name when there are more than two
+- [x] Armenian run words (STATE.md #118): measured «կախիր 2 լույս հետևի ֆերմայից» → front-most run, query "light հետևի"; lexicon առջև- / առաջի → front, հետևի / հետևից / հետին → back (whole words; հետևեն = follow stays out); TrussHang +7 checks, stem mutation caught

@@ -175,7 +175,7 @@ Remove `Source/ModularSceneBuilder/*/AI/`, the panel definition and its menu ent
   - Local grammar: "truss" / "trusses", or hang / hung / fly / flown without floor / ground / deck, means a truss.
   - back / rear / upstage picks the back run; front / downstage the front one.
   - Those words are kept out of the fixture query.
-  - Armenian reaches it through the lexicon (կախ → hang, ֆերմա → truss).
+  - Armenian reaches it through the lexicon (կախ → hang, ֆերմա → truss; since STATE.md #118 առջև- / առաջի → front and հետևի / հետևից / հետին → back, whole words only for back because հետևեն / հետևում also mean "follow").
 - Online tool: a `mount` field (floor, truss, front_truss, back_truss), refused when unknown. Proposal cards say where they hang ("Add 2 spots on the back truss").
 - Runner: every truss run on the stage, most downstage (lowest X, towards the audience) first.
   - Straight truss spans of category `StageCraft.Category.Truss` give their path (the bottom chord, as the Sketch window hangs fixtures at a span's height).
