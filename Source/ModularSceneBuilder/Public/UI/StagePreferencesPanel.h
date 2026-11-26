@@ -14,7 +14,7 @@
  * A view in the project's binding pattern:
  *  - Every value is read from its owner and written back through that owner's single write path: the key map and look
  *    preferences through UStageInputPreferencesSubsystem, snapping through UStageSnappingComponent, the grid through
- *    UStageViewportComponent, audio through UStageAudioSubsystem. The panel re-reads after each owner's change event, so a
+ *    UStageViewportComponent, audio through UStageAudioSubsystem, graphics through UStageGraphicsSubsystem. The panel re-reads after each owner's change event, so a
  *    refused or clamped change shows the stored value. It never writes UStageCraftUserSettings.
  *  - Bound in NativeConstruct, unbound in NativeDestruct. No tick.
  *
@@ -71,6 +71,15 @@ private:
 	void HandleGridPicked(int32 Index);
 	void HandleMutePicked(int32 Index);
 	void HandleSliderMoved(int32 SliderIndex, float Value);
+
+	/** GRAPHICS (STATE.md #111): quality, render resolution, frame cap and VSync, written through UStageGraphicsSubsystem. */
+	void HandleQualityPicked(int32 Index);
+	void HandleResolutionPicked(int32 Index);
+	void HandleFrameCapPicked(int32 Index);
+	void HandleVSyncPicked(int32 Index);
+	/** Sends the stored choices with one row changed to the owner; the panel re-reads on its change event. */
+	void ApplyGraphics(TFunctionRef<void(struct FStageGraphicsChoices&)> Change);
+	void RefreshGraphics();
 
 	/**
 	 * REMOTE CONTROL (Docs/ADR/0035): OSC scope, MIDI input and output, the MIDI MAP editor (§11) and the status line. Written through
@@ -154,6 +163,24 @@ private:
 
 	UPROPERTY(Transient)
 	TArray<TObjectPtr<class UStageChoiceButton>> MuteButtons;
+
+	/** Low, Medium, High, Epic; none selected when the saved levels are Custom. */
+	UPROPERTY(Transient)
+	TArray<TObjectPtr<class UStageChoiceButton>> QualityButtons;
+
+	/** One per StageGraphics::GetResolutionPresets entry; none selected for a hand-edited value. */
+	UPROPERTY(Transient)
+	TArray<TObjectPtr<class UStageChoiceButton>> ResolutionButtons;
+
+	/** One per StageGraphics::GetFrameCapPresets entry; none selected for a hand-edited value. */
+	UPROPERTY(Transient)
+	TArray<TObjectPtr<class UStageChoiceButton>> FrameCapButtons;
+
+	UPROPERTY(Transient)
+	TArray<TObjectPtr<class UStageChoiceButton>> VSyncButtons;
+
+	TWeakObjectPtr<class UStageGraphicsSubsystem> BoundGraphics;
+	FDelegateHandle GraphicsHandle;
 
 	/** Look sensitivity, master volume, effects volume (StagePreferencesPanel::ESlider order). */
 	UPROPERTY(Transient)

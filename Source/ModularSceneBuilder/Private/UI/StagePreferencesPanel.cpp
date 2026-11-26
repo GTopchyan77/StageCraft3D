@@ -28,6 +28,7 @@
 #include "Cloud/StageCloudSubsystem.h"
 #include "Licence/StageLicenceSubsystem.h"
 #include "Settings/StageCraftUserSettings.h"
+#include "Settings/StageGraphicsSubsystem.h"
 #include "Show/ShowControlTypes.h"
 #include "UI/StageCraftUITheme.h"
 #include "UI/StageCraftWidgetStyle.h"
@@ -212,6 +213,28 @@ void UStagePreferencesPanel::BuildTree()
 		{ LOCTEXT("Off", "Off"), LOCTEXT("On", "On") }, SnapItemsButtons, &ThisClass::HandleSnapItemsPicked));
 	Add(BuildChoiceRow(LOCTEXT("Grid", "Grid"), LOCTEXT("GridTip", "The viewport's reference grid."),
 		{ LOCTEXT("GridHidden", "Hidden"), LOCTEXT("GridShown", "Shown") }, GridButtons, &ThisClass::HandleGridPicked), SectionGap);
+
+	// Rows follow StageGraphics' presets, so the panel and the rules cannot drift apart.
+	TArray<FText> ResolutionChoices;
+	for (const int32 Percent : StageGraphics::GetResolutionPresets())
+	{
+		ResolutionChoices.Add(Percent == 0 ? LOCTEXT("ResolutionAuto", "Auto") : FText::Format(LOCTEXT("Percent", "{0}%"), FText::AsNumber(Percent)));
+	}
+	TArray<FText> FrameCapChoices;
+	for (const int32 Cap : StageGraphics::GetFrameCapPresets())
+	{
+		FrameCapChoices.Add(Cap == 0 ? LOCTEXT("Off", "Off") : FText::AsNumber(Cap));
+	}
+	Add(BuildSectionTitle(LOCTEXT("Graphics", "GRAPHICS")));
+	Add(BuildChoiceRow(LOCTEXT("Quality", "Quality"), LOCTEXT("QualityTip", "Shadows, lighting, reflections and effects. Lower needs less from the graphics card.\nOn a fast card a large rig is limited by the processor, so a lower quality may not raise the frame rate."),
+		{ LOCTEXT("QualityLow", "Low"), LOCTEXT("QualityMedium", "Medium"), LOCTEXT("QualityHigh", "High"), LOCTEXT("QualityEpic", "Epic") },
+		QualityButtons, &ThisClass::HandleQualityPicked));
+	Add(BuildChoiceRow(LOCTEXT("Resolution", "Resolution"), LOCTEXT("ResolutionTip", "The size the stage is drawn at, then scaled to the viewport. Lower is faster and softer.\nAuto: the engine's choice for this display."),
+		ResolutionChoices, ResolutionButtons, &ThisClass::HandleResolutionPicked));
+	Add(BuildChoiceRow(LOCTEXT("FrameCap", "Frame cap"), LOCTEXT("FrameCapTip", "The most frames per second StageCraft draws. A cap keeps a laptop cooler and quieter."),
+		FrameCapChoices, FrameCapButtons, &ThisClass::HandleFrameCapPicked));
+	Add(BuildChoiceRow(LOCTEXT("VSync", "VSync"), LOCTEXT("VSyncTip", "Wait for the display's refresh: no tearing on fast moves, a little more input delay."),
+		{ LOCTEXT("Off", "Off"), LOCTEXT("On", "On") }, VSyncButtons, &ThisClass::HandleVSyncPicked), SectionGap);
 
 	Add(BuildSectionTitle(LOCTEXT("Audio", "AUDIO")));
 	Add(BuildSliderRow(LOCTEXT("Master", "Master"), LOCTEXT("MasterTip", "Volume of every sound."), int32(ESlider::MasterVolume), 0.f, 1.f));
@@ -608,6 +631,11 @@ void UStagePreferencesPanel::NativeConstruct()
 			BoundCloud = Cloud;
 			CloudHandle = Cloud->OnStateChanged.AddUObject(this, &ThisClass::RefreshPro);
 		}
+		if (UStageGraphicsSubsystem* Graphics = GameInstance->GetSubsystem<UStageGraphicsSubsystem>())
+		{
+			BoundGraphics = Graphics;
+			GraphicsHandle = Graphics->OnGraphicsChanged.AddUObject(this, &ThisClass::RefreshGraphics);
+		}
 	}
 	SetNotice(LOCTEXT("Intro", "Click a shortcut to change it. Fly keys work only while the right mouse button is held, so they may share a key with a tool (W: Move tool and fly forward)."), false);
 	Refresh();
@@ -663,6 +691,12 @@ void UStagePreferencesPanel::NativeDestruct()
 	}
 	CloudHandle.Reset();
 	BoundCloud.Reset();
+	if (UStageGraphicsSubsystem* Graphics = BoundGraphics.Get())
+	{
+		Graphics->OnGraphicsChanged.Remove(GraphicsHandle);
+	}
+	GraphicsHandle.Reset();
+	BoundGraphics.Reset();
 	BoundPreferences.Reset();
 	BoundAudio.Reset();
 	BoundSnapping.Reset();
@@ -771,6 +805,7 @@ void UStagePreferencesPanel::Refresh()
 	ShowSlider(ESlider::MasterVolume, Master, FText::AsPercent(Master), Audio != nullptr);
 	StyleRow(MuteButtons, Audio && Audio->IsMuted() ? 1 : 0, Audio != nullptr);
 
+	RefreshGraphics();
 	RefreshRemote();
 	RefreshWebRemote();
 	RefreshPro();
@@ -852,6 +887,66 @@ void UStagePreferencesPanel::HandleMutePicked(int32 Index)
 	{
 		Audio->SetMuted(Index == 1);
 	}
+}
+
+void UStagePreferencesPanel::RefreshGraphics()
+{
+	const UStageGraphicsSubsystem* Graphics = BoundGraphics.Get();
+	const FStageGraphicsChoices Choices = Graphics ? Graphics->GetChoices() : FStageGraphicsChoices();
+	// A value that is no button (Custom quality, a hand-edited resolution or cap) selects none; picking one replaces it.
+	const auto StyleRow = [this, Graphics](const TArray<TObjectPtr<UStageChoiceButton>>& Buttons, int32 Selected)
+	{
+		for (UStageChoiceButton* Button : Buttons)
+		{
+			if (Button)
+			{
+				StyleChoice(*Button, Button->GetChoiceIndex() == Selected);
+				Button->SetIsEnabled(Graphics != nullptr);
+			}
+		}
+	};
+	StyleRow(QualityButtons, StageGraphics::ToScalabilityLevel(Choices.Quality));
+	StyleRow(ResolutionButtons, StageGraphics::GetResolutionPresets().Find(Choices.ResolutionPercent));
+	StyleRow(FrameCapButtons, StageGraphics::GetFrameCapPresets().Find(Choices.FrameCap));
+	StyleRow(VSyncButtons, Choices.bVSync ? 1 : 0);
+}
+
+void UStagePreferencesPanel::ApplyGraphics(TFunctionRef<void(FStageGraphicsChoices&)> Change)
+{
+	if (UStageGraphicsSubsystem* Graphics = BoundGraphics.Get())
+	{
+		FStageGraphicsChoices Choices = Graphics->GetChoices();
+		Change(Choices);
+		Graphics->SetChoices(Choices);
+	}
+}
+
+void UStagePreferencesPanel::HandleQualityPicked(int32 Index)
+{
+	ApplyGraphics([Index](FStageGraphicsChoices& Choices) { Choices.Quality = static_cast<EStageGraphicsQuality>(FMath::Clamp(Index, 0, int32(EStageGraphicsQuality::Epic))); });
+}
+
+void UStagePreferencesPanel::HandleResolutionPicked(int32 Index)
+{
+	const TConstArrayView<int32> Presets = StageGraphics::GetResolutionPresets();
+	if (Presets.IsValidIndex(Index))
+	{
+		ApplyGraphics([Percent = Presets[Index]](FStageGraphicsChoices& Choices) { Choices.ResolutionPercent = Percent; });
+	}
+}
+
+void UStagePreferencesPanel::HandleFrameCapPicked(int32 Index)
+{
+	const TConstArrayView<int32> Presets = StageGraphics::GetFrameCapPresets();
+	if (Presets.IsValidIndex(Index))
+	{
+		ApplyGraphics([Cap = Presets[Index]](FStageGraphicsChoices& Choices) { Choices.FrameCap = Cap; });
+	}
+}
+
+void UStagePreferencesPanel::HandleVSyncPicked(int32 Index)
+{
+	ApplyGraphics([Index](FStageGraphicsChoices& Choices) { Choices.bVSync = Index == 1; });
 }
 
 void UStagePreferencesPanel::HandleOscPicked(int32 Index)

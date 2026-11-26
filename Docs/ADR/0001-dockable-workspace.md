@@ -280,3 +280,30 @@ Gevor's "Phase 1: Core Window Manager & Workspace Layout System" covers ADR Phas
 - **Delegates:** `OnLayoutApplied`, `OnLayoutsChanged`.
 
 Every layout operation returns `EStageLayoutResult` and logs failures with the layout name. A UMG view binds the same way as the inspector: read once, bind the delegates, commit through these calls.
+
+## 10. Amendment: graphics preferences (2026-11-26, STATE.md #111)
+
+The Preferences panel's Graphics part (§3, §6 Phase 3) is built as a **GRAPHICS** section of the panel. There is no separate page.
+
+- **Rows:**
+  - Quality: Low, Medium, High, Epic.
+  - Resolution: Auto, 50, 67, 75, 100 %.
+  - Frame cap: Off, 30, 60, 120.
+  - VSync: Off, On.
+  - The window mode and size are still not offered (§3, F8).
+- **Ownership:**
+  - `UGameUserSettings` stores the values in `GameUserSettings.ini` and applies them at startup (`UGameEngine::Start`).
+  - `UStageGraphicsSubsystem` (game instance) is the only writer. It sanitizes (`StageGraphics::Sanitize`), writes, calls `ApplyNonResolutionSettings` (no display-mode change), saves, and broadcasts `OnGraphicsChanged`.
+  - The panel reads back on that event.
+- **Engine detail behind two rules:**
+  - The engine's single quality level counts only when the render resolution equals that level's default (`BaseScalability.ini` "50 71 87 100"), and setting a level also resets the resolution.
+  - So Quality is read from the per-group levels (`StageGraphics::FromGroupLevels`), and the resolution is written after the quality every time.
+  - Mixed groups (a hand-edited ini) show as Custom: no Quality button lit, and the groups are kept until a level is picked.
+- **Why these rows:**
+  - At 500 fixtures on the development PC, the levels change the GPU time from 9.7 ms (Epic) to 6.0, 4.0 and 2.4 ms (Low).
+  - The frame time hardly changes, because the render thread is the bound there: idle 12.8–13.2 / 12.4 / 11.3 / 8.4 ms, crossfade 17.4–17.5 / 17.5 / 17.5 / 15.8 ms.
+  - So quality is a lever for slower graphics cards, not for this PC. The frame cap and VSync are for heat, noise and tearing.
+- **Not done:**
+  - an automatic first-run choice (`RunHardwareBenchmark`);
+  - dynamic resolution;
+  - Cinematic.

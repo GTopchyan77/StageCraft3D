@@ -580,7 +580,7 @@ void SStageWorkspaceMenuBar::FillEditMenu(FMenuBuilder& MenuBuilder)
 
 	MenuBuilder.BeginSection(TEXT("Preferences"));
 	MenuBuilder.AddMenuEntry(LOCTEXT("Preferences", "Preferences..."),
-		LOCTEXT("PreferencesTip", "Keyboard shortcuts, camera look, viewport and audio preferences."), FSlateIcon(),
+		LOCTEXT("PreferencesTip", "Keyboard shortcuts, camera look, viewport, graphics and audio preferences."), FSlateIcon(),
 		FUIAction(FExecuteAction::CreateSP(this, &SStageWorkspaceMenuBar::ShowPanel, FGameplayTag(StageCraftTags::Panel_Preferences))));
 	MenuBuilder.EndSection();
 }

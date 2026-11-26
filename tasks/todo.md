@@ -658,7 +658,7 @@ Gevor's choices: automation tests on a harness game instance (not AFunctionalTes
 - [ ] UI: DisableNativeTick / invalidation for panels with no per-frame work (A/B each; Slate is about 6.5 ms a frame at 500 fixtures) (STATE.md #105: the Outliner, a widget per item, was 2 ms of it at 500 items and is now a virtualized list; Slate is about 2.7 ms a frame idle at 500 fixtures, prepass 1.2 ms; other panels not yet measured one by one)
 - [x] Fixture moving-part physics bodies (SetBodyTransform about 1.5 ms per show tick at 500) (STATE.md #106: measured, 1 ms of show tick, 1-2 ms game thread; the frame is render-thread bound and the bodies make moving heads clickable, so kept)
 - [x] Fixture ID index (O(n^2) registration on load) (STATE.md #104: FixturesById map, registration 7.2 -> 2.2 us per fixture at 512)
-- [ ] Decide: in-app graphics quality settings (scalability, screen percentage, frame cap)
+- [x] Decide: in-app graphics quality settings (scalability, screen percentage, frame cap) (requested 2026-11-26: built in STATE.md #111, Phase 61)
 - [ ] Gevor: tick INCLUDE SCREENSHOT at 4K; Patch panel live channel values while a show plays
 
 ## Phase 37 - GDTF fixture import and device library (requested by Gevor 2026-11-09; STATE.md #79; ADR 0033 accepted)
@@ -888,8 +888,8 @@ Gevor's choices: automation tests on a harness game instance (not AFunctionalTes
 - [x] Largest RT item idle or not: deferred lights 3.7-4.2 ms (BatchedLights 3.0 ms, ~490 unshadowed spots one pass each)
 - [x] A/B: clustered deferred shading crashes the game (fatal shader compile; deprecated path); MegaLights at runtime does nothing; MegaLights for the project: idle 13.2 -> 8.0 ms (GPU 9.7 -> 6.3), moving crossfade 17.3-18.6 -> 14.0-14.7 ms (then game-thread bound); with the shadow budget off 8.1 / 23.2 ms (the budget still matters)
 - [x] ADR 0037 pre-accept checks (STATE.md #110): the close look fails, because MegaLights drops the fixtures' light functions (gobo, iris, blades); the hardware and scalability questions are answered; see Phase 60
-- [ ] Gevor: ADR 0037 §7.3 — keep MegaLights off, the hybrid (only light-function-free beams use MegaLights), or an atlas-compatible beam material
-- [ ] If accepted: packaged-build bench, scalability fallback, then the game-thread items (pivots ~3.9 ms, deferred render updates ~2.5 ms, part bodies 1-2 ms) and Slate (~3 ms game thread)
+- [x] Gevor: ADR 0037 §7.3 — keep MegaLights off, the hybrid (only light-function-free beams use MegaLights), or an atlas-compatible beam material (decided 2026-11-26: keep off; ADR 0037 rejected, STATE.md #111)
+- [x] If accepted: packaged-build bench, scalability fallback, then the game-thread items (not accepted; nothing to do)
 - [ ] With 16 or fewer shadowed fixtures the moving crossfade becomes game-thread bound (game 16.8 ms ≈ frame 17.5 ms): the #106 game-thread items (pivot propagation 3.5 ms, deferred render updates 2.4 ms, part bodies 1-2 ms) then matter
 
 ## Phase 60 - ADR 0037 pre-accept checks: MegaLights drops the fixtures' light functions (requested by Gevor 2026-11-26; STATE.md #110)
@@ -897,4 +897,11 @@ Gevor's choices: automation tests on a harness game instance (not AFunctionalTes
 - [x] Cause in the UE 5.8 source: MegaLights reads light functions only from the light function atlas; M_StageBeamLightFunction feeds a TextureCoordinate into its Custom node, so it is not atlas-compatible and gets no slot; the atlas also holds 16 instances by default (256 at most), one per fixture here, at 128 texels a slot
 - [x] Hardware: the project is already SM6-only; without ray tracing data MegaLights turns itself off per view (normal deferred path); r.MegaLights.Allowed is a scalability variable (a DefaultScalability.ini fallback is possible); MegaLights is still "Experimental" in 5.8
 - [x] Nothing applied; no packaged bench (pointless until the light functions survive); ADR 0037 §7 written
-- [ ] Gevor: choose ADR 0037 §7.3 option 1 (keep off, recommended now), 2 (hybrid: bAllowMegaLights off while a light function is attached; measure with gobos first) or 3 (atlas-compatible material, larger atlas, shared instances)
+- [x] Gevor: choose ADR 0037 §7.3 option 1 (keep off, recommended now), 2 (hybrid: bAllowMegaLights off while a light function is attached; measure with gobos first) or 3 (atlas-compatible material, larger atlas, shared instances) (decided 2026-11-26: option 1; ADR 0037 rejected)
+
+## Phase 61 - Graphics preferences (requested by Gevor 2026-11-26; STATE.md #111; ADR 0001 §10)
+- [x] Measured first: 500 fixtures at scalability Epic / High / Medium / Low: GPU 9.7 / 6.0 / 4.0 / 2.4 ms, frame idle 12.8 / 12.4 / 11.3 / 8.4 ms, crossfade 17.4 / 17.5 / 17.5 / 15.8 ms (render-thread bound on this PC; quality matters on slower graphics cards)
+- [x] StageGraphics (pure: presets, Sanitize, FromGroupLevels) + UStageGraphicsSubsystem (only writer: UGameUserSettings, applied at once, saved); Preferences GRAPHICS section: Quality, Resolution, Frame cap, VSync; dev command StageCraft.Graphics; help EN/HY (graphics)
+- [x] Test StageCraft.Settings.Graphics (two mutations fail it); suite 314/314; -game: applied (r.ScreenPercentage 50, t.MaxFPS 30, frames at 33.33 ms), saved and read back by the next launch, panel screenshot
+- [ ] Gevor: click through Preferences › Graphics (Low and back to Epic, a frame cap, VSync on a 60 Hz display)
+- [ ] Optional: first-run quality from the engine's hardware benchmark; dynamic resolution

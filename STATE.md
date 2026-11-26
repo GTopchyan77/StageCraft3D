@@ -10585,11 +10585,101 @@ All times in ms.
   - `Engine/Classes/Components/LightComponent.h` (`bAllowMegaLights`, no runtime setter).
 - **No code change**, so no test, suite run or build was needed. The tree's code equals `043db32`, which #108 verified (313/313; Editor, Game Development and Shipping with 0 warnings; Shipping scan clean).
 
-**Commit:** uncommitted (working tree). STATE #109 now carries `b67a824`.
+**Commit:** `5cd1ada`.
 
 **Known issues / follow-ups**
 - **Gevor:** choose ADR 0037 §7.3 option 1, 2 or 3.
   - **Option 2:** first a bench with gobos on part of the rig, to see how much of the #109 gain is left.
   - **Option 3:** first set the material flag on a copy and compare a close-up gobo (128-texel slots).
 - Until then the render thread stays the bound. The game-thread items (pivots, deferred render updates, part bodies) and Slate cannot shorten frames on this machine.
+- The Obsidian vault on S: is still unreachable, so there is no session log.
+
+## #111 — ADR 0037 rejected (MegaLights stays off); graphics preferences: Quality, Resolution, Frame cap, VSync in Preferences (2026-11-26)
+
+**What & why**
+- **ADR 0037 closed.** Gevor chose (2026-11-26) §7.3 option 1: MegaLights stays off, because it drops gobos, iris, blades, prism and frost (#110). The status is now "rejected", with the conditions to reopen it. No engine setting was changed.
+- **Next item:** todo Phase 36 "Decide: in-app graphics quality settings (scalability, screen percentage, frame cap)", which Gevor named in the request. Until now the app had no graphics settings: every PC ran the engine defaults (Epic, no cap).
+- **Measured first** (`StageCraft.Bench.Fixtures 500 Seconds=10 Fade=2`, one `-game` session, `scalability 3/2/1/0/3` before each bench):
+
+  | Level | GPU idle | Frame idle | Frame crossfade |
+  |---|---|---|---|
+  | Epic (3), first / last | 9.72 / 9.80 ms | 12.81 / 13.20 ms | 17.41 / 17.52 ms |
+  | High (2) | 5.98 ms | 12.35 ms | 17.52 ms |
+  | Medium (1) | 3.99 ms | 11.34 ms | 17.47 ms |
+  | Low (0) | 2.40 ms | 8.43 ms | 15.80 ms |
+
+  - The quality level is a GPU lever: Epic to Low cuts the GPU time by three quarters.
+  - On this PC the render thread is the bound, so the frame hardly moves. On a slower graphics card the GPU sets the frame, and the level then decides it.
+  - The frame cap and VSync are for laptops (heat, fan noise) and for tearing.
+  - CSVs: `Saved/StageCraft/Benchmarks/FixtureBench_20261126-102352`, `-102440`, `-102528`, `-102616`, `-102704`.
+- **Design (ADR 0001 §10):**
+  - **`StageGraphics`** (pure):
+    - presets (Resolution Auto/50/67/75/100 %, Frame cap Off/30/60/120);
+    - `Sanitize` (resolution 0 or 25–100, cap 0 or 15–360, unknown quality is Custom);
+    - `ToScalabilityLevel`;
+    - `FromGroupLevels`.
+  - **`UStageGraphicsSubsystem`** (game instance) is the only writer:
+    - `GetChoices`;
+    - `SetChoices`: sanitize, write to `UGameUserSettings`, `ApplyNonResolutionSettings` (no display-mode change), `SaveSettings`, `OnGraphicsChanged`;
+    - `ReadChoices` / `WriteChoices`, static, on any settings object.
+    - The engine applies the saved values itself at the next start.
+  - **Two engine details drive the rules:**
+    - `GetOverallScalabilityLevel` only reports a level when the resolution equals that level's default (BaseScalability "50 71 87 100"), so quality is read from the 11 per-group levels.
+    - `SetOverallScalabilityLevel` resets the resolution, so the resolution is written after the quality every time.
+    - Mixed groups (a hand-edited ini) show as Custom and are kept until a level is picked.
+  - **Preferences panel:**
+    - a GRAPHICS section after VIEWPORT (Quality, Resolution, Frame cap, VSync), written through the subsystem and re-read on its event;
+    - a value that is no button lights none;
+    - the Edit › Preferences tooltip and the panel's tag description mention graphics.
+  - **Dev command `StageCraft.Graphics`** `[Quality=] [Resolution=] [Cap=] [VSync=]` logs, or sets as the panel does (compiled out of Shipping).
+  - **Help:** `graphics.md` EN/HY for the assistant's knowledge base.
+
+**Files changed**
+- New:
+  - `Source/ModularSceneBuilder/Public/Settings/StageGraphicsSettings.h`, `Private/Settings/StageGraphicsSettings.cpp`;
+  - `Public/Settings/StageGraphicsSubsystem.h`, `Private/Settings/StageGraphicsSubsystem.cpp`;
+  - `Private/Settings/Tests/StageGraphicsSettingsTests.cpp`;
+  - `Content/StageCraft/Help/en/graphics.md`, `Content/StageCraft/Help/hy/graphics.md`.
+- Changed:
+  - `Source/ModularSceneBuilder/Public/UI/StagePreferencesPanel.h`, `Private/UI/StagePreferencesPanel.cpp` (GRAPHICS section);
+  - `Private/Workspace/SStageWorkspaceMenuBar.cpp`, `Private/Workspace/StageWorkspaceTypes.cpp` (descriptions);
+  - `Docs/ADR/0037-megalights-for-fixture-lighting.md` (rejected), `Docs/ADR/0001-dockable-workspace.md` (§10);
+  - `tasks/todo.md` (Phase 36 and 59/60 boxes, Phase 61), `STATE.md` (this entry; #110 carries `5cd1ada`).
+- No Blueprint, asset, map or ini file. The defaults stay the engine's: Epic, Auto, no cap, no VSync.
+
+**Verification**
+- **Test** `StageCraft.Settings.Graphics`:
+  - pure rules (presets survive Sanitize, clamps, Custom, levels, group mapping);
+  - a transient `UStageCraftUserSettings` (never applied or saved):
+    - Epic default read back;
+    - Low at 100 % reads back as Low (not Custom);
+    - writing the same choices again changes nothing;
+    - Low to Medium at an unchanged 100 % stays 100 %;
+    - Medium with Auto keeps Auto;
+    - out-of-range values are stored clamped;
+    - one hand-tuned group reads Custom, and Custom plus new rows keeps the groups.
+- **Mutations** (each reverted; no "MUTATION" in `Source/`):
+  - quality read through `GetOverallScalabilityLevel`: 3 checks fail;
+  - resolution written only when its row changed: "Low -> Medium at an unchanged 100 % stays 100 %" fails (this case was added because the first version of the test missed this mutation).
+- **Full suite:** `RunAutomation.ps1 -Filter StageCraft -NullRHI -ExpectedCount 314`, 314/314, user data unchanged (180 files).
+- **`-game` runs** (the real `GameUserSettings.ini` backed up first and restored after; the runner also restores it after each run):
+  - `StageCraft.Graphics Quality=Low Resolution=50 Cap=30` gave `r.ScreenPercentage 50`, `t.MaxFPS 30`, `sg.ShadowQuality 0`. A 50-fixture bench then ran at exactly 33.33 ms a frame.
+  - The ini written mid-run held `sg.ShadowQuality=0`, `sg.ResolutionQuality=50`, `FrameRateLimit=30`.
+  - A new launch with that file started with Quality Low, Resolution 50, Cap 30 applied.
+  - The Preferences window (`%TEMP%/StageCraftRuns/Gfx5/Floating1_104227.png`) shows Low, 50 %, 30 and VSync Off lit.
+- **Builds:** Editor Development, Game Development and Game Shipping succeeded with no warnings.
+- **Shipping scan** (UTF-16 at both alignments, and ASCII):
+  - absent: `StageCraft.Graphics`, `StageCraft.Settings.Graphics`, a test message, the command help, "MUTATION";
+  - "Frame cap" (UI) is present as the control.
+- **Not verified by hand:**
+  - clicking the GRAPHICS buttons (they call the same `SetChoices` as the command);
+  - VSync on a real 60 Hz display;
+  - a slower graphics card.
+
+**Commit:** uncommitted (working tree). STATE #110 now carries `5cd1ada`.
+
+**Known issues / follow-ups**
+- **Gevor:** click through Preferences › Graphics (Low and back to Epic, a frame cap, VSync).
+- Optional: a first-run quality from the engine's hardware benchmark (`RunHardwareBenchmark`), dynamic resolution.
+- The render thread stays the bound on this PC at 500 fixtures (#109). The UI and game-thread items are still not worth changing here.
 - The Obsidian vault on S: is still unreachable, so there is no session log.

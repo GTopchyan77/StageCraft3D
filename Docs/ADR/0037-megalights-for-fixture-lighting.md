@@ -1,8 +1,11 @@
 # ADR 0037: MegaLights for fixture lighting
 
-- **Status:** proposed, **blocked as written** (2026-11-26, STATE.md #110). Not applied: the project still renders with MegaLights off.
-  - Enabling MegaLights for the project drops every fixture's light function: gobos, iris, blades, prism and frost disappear, and shaped beams light their whole cone (§7).
-  - Gevor chooses one of the ways forward in §7.3 before anything is applied.
+- **Status:** **rejected** (Gevor, 2026-11-26, STATE.md #111). MegaLights stays off for the project (§7.3 option 1).
+  - Enabling it drops every fixture's light function: gobos, iris, blades, prism and frost disappear, and shaped beams light their whole cone (§7, STATE.md #110).
+  - The atlas slot limits and the softer, atlas-rasterised gobos are risks the project does not take for a 3–5 ms gain on one machine.
+  - **Reopen only if:**
+    - a later engine version lets MegaLights evaluate light functions without the atlas; or
+    - a gobo-heavy bench shows the §7.3 option 2 hybrid is still worth it.
 - **Related:**
   - ADR 0012 §3 (fixture benchmark and the light-rebuild workaround for moving heads).
   - ADR 0018 §4 and §4.1 (the shadow budget and its moving-caster limit, STATE.md #108).
@@ -38,7 +41,7 @@ All runs use `StageCraft.Bench.Fixtures 500 Seconds=10 Fade=2` in a `-game` wind
 - **Screenshots of the default view** (`Window_191237/191244` without, `Window_191356/191403` with, in `%TEMP%/StageCraftRuns/Shot*`) differ by 40–42 dB PSNR, which is noise-level.
 - That view shows the rig from above and mostly the floor. It is **not** a close look at beams, pools, gobos or shadows, so it does not prove the look is unchanged.
 
-## 3. Proposed decision
+## 3. Proposed decision (not taken: see Status)
 
 Enable MegaLights for the project and keep the shadow budget (64 still / 16 moving):
 - `DefaultEngine.ini` `[/Script/Engine.RendererSettings]`: `r.MegaLights.EnableForProject=True`.
