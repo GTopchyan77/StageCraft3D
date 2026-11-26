@@ -881,5 +881,12 @@ Gevor's choices: automation tests on a harness game instance (not AFunctionalTes
 - [x] Tests: StageCraft.Show.ShadowBudgetMoving (pure; two mutations fail it), StageCraft.Show.ShadowBudgetWorld (world + timers; fails without the timer fix); ShadowBudget / ShadowBudgetHold moved to the limits struct
 - [x] -game A/B at 500 fixtures: moving crossfade 20.0 / 20.3 -> 18.2 / 19.0 ms, over-budget frames 358 / 249 -> 92 / 101; still looks keep 64 casters (idle and Move=0 crossfade)
 - [ ] Gevor: watch a moving cue on a large rig: beams beyond the 16 brightest moving lose shadows while moving and get them back about a second after stopping; say if that switch is visible enough to matter
-- [ ] The frame is near game-thread bound now (game 16-18 ms): the #106 game-thread items are next if a measurement asks for them
+- [x] The frame is near game-thread bound now (game 16-18 ms): the #106 game-thread items are next if a measurement asks for them (STATE.md #109: measured; the render thread is still the bound, idle and crossfade)
+
+## Phase 59 - Where the frame goes after #108; MegaLights measured (requested by Gevor 2026-11-25; STATE.md #109; ADR 0037 proposed)
+- [x] Trace at 500 fixtures: idle render-thread bound (RT 12.7 ms, game thread waits 7.4 ms); moving crossfade render-thread bound (RT ~18 ms, game thread ~14.4 ms of its own work, waits 3.8 ms); Slate and the fixture game-thread items cannot shorten these frames on this machine
+- [x] Largest RT item idle or not: deferred lights 3.7-4.2 ms (BatchedLights 3.0 ms, ~490 unshadowed spots one pass each)
+- [x] A/B: clustered deferred shading crashes the game (fatal shader compile; deprecated path); MegaLights at runtime does nothing; MegaLights for the project: idle 13.2 -> 8.0 ms (GPU 9.7 -> 6.3), moving crossfade 17.3-18.6 -> 14.0-14.7 ms (then game-thread bound); with the shadow budget off 8.1 / 23.2 ms (the budget still matters)
+- [ ] Gevor: ADR 0037 (MegaLights for the project): check the look up close (beams, pools, gobos, shadows, haze, noise on moving beams), decide the low-end fallback, then accept or reject
+- [ ] If accepted: packaged-build bench, scalability fallback, then the game-thread items (pivots ~3.9 ms, deferred render updates ~2.5 ms, part bodies 1-2 ms) and Slate (~3 ms game thread)
 - [ ] With 16 or fewer shadowed fixtures the moving crossfade becomes game-thread bound (game 16.8 ms ≈ frame 17.5 ms): the #106 game-thread items (pivot propagation 3.5 ms, deferred render updates 2.4 ms, part bodies 1-2 ms) then matter

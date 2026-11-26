@@ -10460,10 +10460,76 @@ All times in ms.
   - the Outliner UI string is present as a control.
 - **Not verified by hand:** how the switch looks on a real show (beams beyond the 16 brightest moving lose shadows while moving and get them back about a second after stopping).
 
-**Commit:** uncommitted (working tree). STATE #107 now carries `a806a13`.
+**Commit:** `043db32` (committed by Gevor, 2026-11-25).
 
 **Known issues / follow-ups**
 - **Gevor to watch** a moving cue on a large rig and say whether the shadow switch at movement start and end is visible enough to matter. Tuning is `MaxShadowedMovingFixtures` and `MovingSeconds`; rollback is a moving limit of 64.
 - **With the cap the moving crossfade is near game-thread bound:** the #106 items (pivot propagation 3.5 ms, deferred render updates 2.4 ms, part bodies 1–2 ms) are next if a measurement asks for them.
 - The Slate prepass (1.2 ms) is still not measured panel by panel.
+- The Obsidian vault on S: is still unreachable, so there is no session log.
+
+## #109 — After #108 the render thread still sets the frame; Slate and game-thread work would not shorten it; MegaLights measured and proposed (ADR 0037); nothing changed (2026-11-25)
+
+**What & why**
+- Gevor asked (2026-11-25) for the next measured performance item after #108. The candidates were the Slate prepass and UI ticks, or the game-thread crossfade costs (pivots, deferred render updates, moving-part bodies). Measure first.
+- **Where the frame goes now** (500 Beam fixtures, `StageCraft.Bench.Fixtures 500 Seconds=10 Fade=2`, Insights trace `%TEMP%/StageCraftRuns/GTBench.utrace`, one second of each phase exported with `TimingInsights.ExportTimingEvents`):
+  - **Idle** (80 frames, 12.7 ms):
+    - the render thread is busy 12.7 ms a frame;
+    - the game thread waits 7.4 ms of each frame for it (`Sync_RenderingThread`);
+    - Slate on the game thread is 3.1 ms, inside that slack.
+  - **Moving crossfade** (56 frames, 18.25 ms):
+    - the render thread is busy about 18 ms;
+    - the game thread waits 2.2 ms in `Sync_RenderingThread` and 1.6 ms in tick-completion `WaitForTasks`, which overlaps the render thread's end-of-frame updates rather than physics (Chaos work on the workers is about 0.1 ms a frame);
+    - so the game thread's own work is about 14.4 ms: `ShowControl_Tick` 6.9 ms (`LightingFixture_MovePivots` 3.9 ms), `DeferredRenderUpdates_GameThread` 2.5 ms, Slate prepass 0.7 ms.
+  - **So neither the Slate prepass nor the game-thread fixture work can shorten these frames on this machine.** Rules §22: optimize the bottleneck. They were not changed.
+- **The render thread's largest item, idle or not:** `RenderDeferredLighting` 3.7–4.2 ms, of which `BatchedLights` alone is 3.0 ms (about 490 unshadowed spot lights, each a deferred light pass set up one by one). When heads move, add `UpdateAllPrimitiveSceneInfos` 3.8 ms and `SendAllEndOfFrameUpdates` 1.3 ms (#106, #107).
+- **A/B of engine lighting paths** (console variables and command-line overrides only; no file changed):
+
+  | Option | Idle frame | Moving crossfade frame |
+  |---|---|---|
+  | Current (MegaLights off, budget 64/16), three runs | 13.20 / 13.56 / 13.19 ms (GPU 9.6–9.8) | 17.29 / 18.56 / 17.73 ms |
+  | `r.UseClusteredDeferredShading_ToBeRemoved 1` | crash | crash |
+  | `r.MegaLights.Enable 1` at runtime | 13.24 ms | 17.66 ms (no effect) |
+  | **MegaLights for the project** (two runs) | **7.99 / 8.03 ms** (GPU 6.3) | **14.00 / 14.65 ms** (game thread 14.0–14.7: now game-thread bound) |
+  | MegaLights, shadow budget off (502 casters) | 8.09 ms | 23.21 ms |
+  | MegaLights off, shadow budget off | 16.53 ms | 46.85 ms |
+
+  - **Clustered deferred:** the game crashed at once with "Shader compilation failures are Fatal" (`PipelineStateCache.cpp`, a Foreground Worker). The path is deprecated (`_ToBeRemoved`). Rejected.
+  - **MegaLights** needs the project setting at startup (`-ini:Engine:[/Script/Engine.RendererSettings]:r.MegaLights.EnableForProject=1 -dpcvars=r.MegaLights.Enable=1` for the runs). It took 5 ms off the idle frame and 3–4 ms off the moving crossfade.
+  - The shadow budget still matters under MegaLights: with every fixture shadowed the moving crossfade is 23 ms.
+- **The look, first check only:**
+  - Screenshots of the default view with and without MegaLights (idle and crossfade) differ by 40–42 dB PSNR; the difference image is black except one small spot.
+  - That view shows the rig from above and mostly the floor, so it does not prove the beams, pools, gobos and shadows look the same.
+- **Proposed, not applied: ADR 0037.**
+  - Enable MegaLights for the project and keep the shadow budget.
+  - Before accepting, check the look up close, decide the fallback for GPUs without SM6, bench a packaged build, and confirm MegaLights' status in 5.8.
+  - It is a project-wide rendering decision with a visible effect, so it is Gevor's (Rules §49, §71).
+
+**Files changed**
+- `Docs/ADR/0037-megalights-for-fixture-lighting.md` (new, status proposed).
+- `tasks/todo.md` (Phase 58 item ticked, Phase 59), `STATE.md` (this entry; #108 carries `043db32`).
+- No source, config, Blueprint, asset or map change. The scripted runs restored the profile, scenes, marketplace and imports (all reported restored, including the run that crashed).
+
+**Verification**
+- **Bench CSVs** in `Saved/StageCraft/Benchmarks/`:
+  - trace run `FixtureBench_20261125-190156`;
+  - current settings `-190514`, `-190650`, `-190826`;
+  - MegaLights at runtime `-190738`;
+  - MegaLights for the project `-191026`, `-191114`;
+  - MegaLights with the budget off `-191557`;
+  - budget off without MegaLights `-191715`.
+- Crash log: `%TEMP%/StageCraftRuns/LightPathBench/game.log`.
+- Screenshots: `%TEMP%/StageCraftRuns/ShotBase/Window_191237.png`, `Window_191244.png`, `%TEMP%/StageCraftRuns/ShotMega/Window_191356.png`, `Window_191403.png`; difference images `%TEMP%/StageCraftRuns/diff_idle.png`, `diff_fade.png`.
+- **No code change**, so no test, suite run or build was needed. The tree equals `043db32`, which #108 verified (313/313; Editor, Game Development and Shipping with 0 warnings; Shipping scan clean).
+
+**Commit:** uncommitted (working tree). STATE #108 now carries `043db32`.
+
+**Known issues / follow-ups**
+- **Gevor:** ADR 0037. Look at a lit rig with MegaLights up close (run with the two switches above), decide the low-end fallback, accept or reject.
+- **If accepted:**
+  - set `r.MegaLights.EnableForProject=True` in `DefaultEngine.ini`;
+  - bench a packaged build;
+  - add a scalability fallback;
+  - then the game-thread items (pivots ~3.9 ms, deferred render updates ~2.5 ms, part bodies 1–2 ms) and Slate (~3 ms) become the measured next costs.
+- **If rejected:** the render thread stays the bound, and the UI and game-thread items stay unchanged until a measurement on another machine shows the game thread as the bound.
 - The Obsidian vault on S: is still unreachable, so there is no session log.
