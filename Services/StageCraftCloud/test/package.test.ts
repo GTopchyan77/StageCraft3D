@@ -221,7 +221,7 @@ test('validateManifest names the broken rule', () => {
 
 test('scene checks: version, items, ids, portability, origin, cues, counts', () => {
   const pkg = (scene: Record<string, unknown>, manifestFields: Record<string, unknown> = {}) => writePackage({ scene, manifest: manifestJson(manifestFields, scene) }).bytes;
-  refused(() => readPackage(pkg(sceneJson([], { version: 13 }))), 'VersionMismatch');
+  refused(() => readPackage(pkg(sceneJson([], { version: 14 }))), 'VersionMismatch');
   refused(() => readPackage(pkg(sceneJson([], { version: 0 }))), 'VersionMismatch');
   refused(() => readPackage(pkg(sceneJson([], { format: 'Nope' }))), 'Corrupt');
   refused(() => readPackage(writePackage({ sceneRaw: '{bad' }).bytes), 'Corrupt');
@@ -315,4 +315,18 @@ test('readSection refuses a section over its cap before allocating', () => {
   const bytes = writePackage().bytes;
   const [manifest] = readDirectory(bytes);
   refused(() => readSection(bytes, { ...manifest!, rawSize: 1n << 40n }), 'TooLarge');
+});
+
+test('scene v13: a package whose stage keeps its sketch is accepted (the client validates the sketch itself)', () => {
+  const sketch = {
+    settings: { deckHeight: 80, trussHeight: 750, gridStep: 50, snap: true, smoothing: 0.5, photoWidth: 2000 },
+    items: { Deck: '/Game/StageCraft/Items/DA_Deck_Riser.DA_Deck_Riser' },
+    strokes: [{ kind: 'Shape', closed: true, deckHeight: 80, points: [0, 0, 800, 0, 800, 600, 0, 600] }],
+  };
+  const scene = sceneJson([sceneItem()], { version: 13, sketch });
+  const summary = checkScene(JSON.stringify(scene));
+  assert.equal(summary.version, 13);
+  assert.equal(summary.repairs, 0);
+  const read = readPackage(writePackage({ scene, manifest: manifestJson({}, scene) }).bytes);
+  assert.equal(read.scene.version, 13);
 });

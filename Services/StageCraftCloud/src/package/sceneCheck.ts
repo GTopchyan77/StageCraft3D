@@ -6,12 +6,12 @@
 //
 // Not ported (validated by the client's StagePackage::Read when it acquires the package): cue fixture states, cue timing and
 // effects, the programmer, groups, palettes, playbacks and the environment, i.e. the FStageSceneParseReport counters
-// InvalidShowEntries and the per-fixture part of InvalidCueEntries.
+// InvalidShowEntries and the per-fixture part of InvalidCueEntries, and the v13 "sketch" (InvalidSketchEntries).
 import { parseGuid, isValidGuid, PackageError } from './stagePackage.ts';
 import { isStrictBase64 } from '../base64.ts';
 
 export const SceneFormatTag = 'StageCraftScene';
-export const SceneFormatVersion = 12;
+export const SceneFormatVersion = 13;
 export const MinReadableSceneVersion = 1;
 export const MaxSceneItemsInFile = 10_000;
 export const MaxSceneCuesInFile = 2_000;

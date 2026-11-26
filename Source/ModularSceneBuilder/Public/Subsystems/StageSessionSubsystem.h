@@ -136,7 +136,7 @@ private:
 
 	/**
 	 * Show data is part of the scene file: cues (format version 3), the programmer and fixture groups (version 6), so changing any of
-	 * them is an unsaved edit.
+	 * them is an unsaved edit. So is the sketch (version 13).
 	 */
 	UFUNCTION()
 	void HandleShowDataChanged();
@@ -144,6 +144,7 @@ private:
 	TWeakObjectPtr<class UShowControlSubsystem> BoundShowControl;
 	TWeakObjectPtr<class UStageProgrammerSubsystem> BoundProgrammer;
 	TWeakObjectPtr<class UStageShowLibrarySubsystem> BoundShowLibrary;
+	TWeakObjectPtr<class UStageSketchSubsystem> BoundSketch;
 
 	void RecomputeStats();
 	void SetDirty(bool bNewDirty);

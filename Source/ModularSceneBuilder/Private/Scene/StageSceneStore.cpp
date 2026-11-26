@@ -18,6 +18,7 @@
 #include "Serialization/JsonReader.h"
 #include "Serialization/JsonSerializer.h"
 #include "Serialization/JsonWriter.h"
+#include "Sketch/StageSketchMath.h"
 #include "IO/StageAtomicFile.h"
 #include "Workspace/StageLayoutStore.h"
 
@@ -1139,6 +1140,16 @@ namespace StageSceneStore
 		return true;
 	}
 
+	/**
+	 * Only catalog paths: content items live under /Game, imported models under the import root, device-library fixtures under the
+	 * fixture root. Membership in the catalog is checked when the scene is applied.
+	 */
+	bool IsCatalogItemPath(const FSoftObjectPath& Path)
+	{
+		const FString PackageName = Path.GetLongPackageName();
+		return Path.IsValid() && (PackageName.StartsWith(TEXT("/Game/")) || StageMeshImport::IsImportedItemPath(PackageName) || StageFixtureLibrary::IsFixtureItemPath(PackageName));
+	}
+
 	/** One item record, validated. False drops the item. */
 	bool ParseItem(const FJsonObject& Object, FStageItemSnapshot& OutItem)
 	{
@@ -1153,11 +1164,9 @@ namespace StageSceneStore
 		{
 			return false;
 		}
-		// Only catalog paths: content items live under /Game, imported models under the import root, device-library fixtures under
-		// the fixture root. Membership in the catalog is checked when the scene is applied.
 		const FSoftObjectPath Path(ItemPath);
 		const FString PackageName = Path.GetLongPackageName();
-		if (!Path.IsValid() || !(PackageName.StartsWith(TEXT("/Game/")) || StageMeshImport::IsImportedItemPath(PackageName) || StageFixtureLibrary::IsFixtureItemPath(PackageName)))
+		if (!IsCatalogItemPath(Path))
 		{
 			return false;
 		}
@@ -1217,6 +1226,183 @@ namespace StageSceneStore
 			}
 		}
 		return true;
+	}
+
+	// --- Version 13: the Sketch to Stage drawing (Docs/ADR/0015 §5) ---
+
+	namespace SketchField
+	{
+		const TCHAR* Sketch = TEXT("sketch");
+		const TCHAR* Settings = TEXT("settings");
+		const TCHAR* Items = TEXT("items");
+		const TCHAR* Strokes = TEXT("strokes");
+		const TCHAR* Kind = TEXT("kind");
+		const TCHAR* Closed = TEXT("closed");
+		const TCHAR* DeckHeight = TEXT("deckHeight");
+		const TCHAR* Points = TEXT("points");
+		const TCHAR* TrussHeight = TEXT("trussHeight");
+		const TCHAR* GridStep = TEXT("gridStep");
+		const TCHAR* Snap = TEXT("snap");
+		const TCHAR* Smoothing = TEXT("smoothing");
+		const TCHAR* PhotoWidth = TEXT("photoWidth");
+	}
+
+	TSharedRef<FJsonObject> WriteSketch(const FStageSketchSceneState& Sketch)
+	{
+		const TSharedRef<FJsonObject> Settings = MakeShared<FJsonObject>();
+		Settings->SetNumberField(SketchField::DeckHeight, Sketch.Settings.DeckHeight);
+		Settings->SetNumberField(SketchField::TrussHeight, Sketch.Settings.TrussHeight);
+		Settings->SetNumberField(SketchField::GridStep, Sketch.Settings.GridStep);
+		Settings->SetBoolField(SketchField::Snap, Sketch.Settings.bSnapToGrid);
+		Settings->SetNumberField(SketchField::Smoothing, Sketch.Settings.Smoothing);
+		Settings->SetNumberField(SketchField::PhotoWidth, Sketch.Settings.PhotoWidth);
+
+		// Keyed by element name; only the elements whose item was chosen.
+		const TSharedRef<FJsonObject> Items = MakeShared<FJsonObject>();
+		const UEnum* Elements = StaticEnum<EStageSketchElement>();
+		for (int32 Element = 0; Element < Sketch.Items.Num() && Element < int32(EStageSketchElement::Count); ++Element)
+		{
+			if (!Sketch.Items[Element].IsNull())
+			{
+				Items->SetStringField(Elements->GetNameStringByValue(Element), Sketch.Items[Element].ToString());
+			}
+		}
+
+		TArray<TSharedPtr<FJsonValue>> Strokes;
+		Strokes.Reserve(Sketch.Strokes.Num());
+		const UEnum* Kinds = StaticEnum<EStageSketchStrokeKind>();
+		for (const FStageSketchStroke& Stroke : Sketch.Strokes)
+		{
+			const TSharedRef<FJsonObject> Object = MakeShared<FJsonObject>();
+			Object->SetStringField(SketchField::Kind, Kinds->GetNameStringByValue(int64(Stroke.Kind)));
+			Object->SetBoolField(SketchField::Closed, Stroke.bClosed);
+			Object->SetNumberField(SketchField::DeckHeight, Stroke.DeckHeight);
+			// Flat x, y pairs in cm: a long freehand stroke stays compact.
+			TArray<TSharedPtr<FJsonValue>> Points;
+			Points.Reserve(Stroke.Points.Num() * 2);
+			for (const FVector2D& Point : Stroke.Points)
+			{
+				Points.Add(MakeShared<FJsonValueNumber>(Point.X));
+				Points.Add(MakeShared<FJsonValueNumber>(Point.Y));
+			}
+			Object->SetArrayField(SketchField::Points, Points);
+			Strokes.Add(MakeShared<FJsonValueObject>(Object));
+		}
+
+		const TSharedRef<FJsonObject> Object = MakeShared<FJsonObject>();
+		Object->SetObjectField(SketchField::Settings, Settings);
+		Object->SetObjectField(SketchField::Items, Items);
+		Object->SetArrayField(SketchField::Strokes, Strokes);
+		return Object;
+	}
+
+	/** One stroke record; false drops it (unknown kind, unreadable or odd point list, too many points, too few left after sanitizing). */
+	bool ReadSketchStroke(const FJsonObject& Object, FStageSketchStroke& OutStroke)
+	{
+		FString KindName;
+		const int64 Kind = Object.TryGetStringField(SketchField::Kind, KindName)
+			? StaticEnum<EStageSketchStrokeKind>()->GetValueByNameString(KindName, EGetByNameFlags::None) : INDEX_NONE;
+		const TArray<TSharedPtr<FJsonValue>>* Points = nullptr;
+		if (Kind == INDEX_NONE || !Object.TryGetArrayField(SketchField::Points, Points)
+			|| Points->Num() % 2 != 0 || Points->Num() > StageSketchMath::MaxStrokePoints * 2)
+		{
+			return false;
+		}
+		OutStroke.Kind = EStageSketchStrokeKind(Kind);
+		Object.TryGetBoolField(SketchField::Closed, OutStroke.bClosed);
+		Object.TryGetNumberField(SketchField::DeckHeight, OutStroke.DeckHeight);
+		OutStroke.Points.Reserve(Points->Num() / 2);
+		for (int32 Index = 0; Index < Points->Num(); Index += 2)
+		{
+			double X = 0.0;
+			double Y = 0.0;
+			if (!(*Points)[Index].IsValid() || !(*Points)[Index]->TryGetNumber(X) || !(*Points)[Index + 1].IsValid() || !(*Points)[Index + 1]->TryGetNumber(Y))
+			{
+				return false;
+			}
+			OutStroke.Points.Emplace(X, Y);
+		}
+		// Range, spacing and closing rules of a finished stroke; non-finite or far points are dropped there.
+		return StageSketchMath::SanitizeSavedStroke(OutStroke);
+	}
+
+	/**
+	 * The sketch of a version 13 file. A missing sketch is an empty one; a missing setting keeps its default; an unreadable stroke
+	 * or item path is dropped and counted, the rest loads. Strokes beyond StageSketchMath::MaxStrokes are dropped and counted.
+	 */
+	FStageSketchSceneState ReadSketch(const FJsonObject& Root, int32& InOutInvalid)
+	{
+		FStageSketchSceneState Sketch;
+		Sketch.Items.SetNum(int32(EStageSketchElement::Count));
+		const TSharedPtr<FJsonValue> Value = Root.TryGetField(SketchField::Sketch);
+		if (!Value.IsValid())
+		{
+			return Sketch;
+		}
+		const TSharedPtr<FJsonObject>* ObjectPtr = nullptr;
+		if (!Value->TryGetObject(ObjectPtr) || !ObjectPtr->IsValid())
+		{
+			++InOutInvalid;
+			return Sketch;
+		}
+		const FJsonObject& Object = **ObjectPtr;
+
+		const TSharedPtr<FJsonObject>* Settings = nullptr;
+		if (Object.TryGetObjectField(SketchField::Settings, Settings) && Settings->IsValid())
+		{
+			(*Settings)->TryGetNumberField(SketchField::DeckHeight, Sketch.Settings.DeckHeight);
+			(*Settings)->TryGetNumberField(SketchField::TrussHeight, Sketch.Settings.TrussHeight);
+			(*Settings)->TryGetNumberField(SketchField::GridStep, Sketch.Settings.GridStep);
+			(*Settings)->TryGetBoolField(SketchField::Snap, Sketch.Settings.bSnapToGrid);
+			(*Settings)->TryGetNumberField(SketchField::Smoothing, Sketch.Settings.Smoothing);
+			(*Settings)->TryGetNumberField(SketchField::PhotoWidth, Sketch.Settings.PhotoWidth);
+		}
+		Sketch.Settings = StageSketchMath::SanitizeSettings(Sketch.Settings);
+
+		const TSharedPtr<FJsonObject>* Items = nullptr;
+		if (Object.TryGetObjectField(SketchField::Items, Items) && Items->IsValid())
+		{
+			const UEnum* Elements = StaticEnum<EStageSketchElement>();
+			for (int32 Element = 0; Element < int32(EStageSketchElement::Count); ++Element)
+			{
+				FString PathString;
+				if (!(*Items)->TryGetStringField(Elements->GetNameStringByValue(Element), PathString))
+				{
+					continue;
+				}
+				// The same catalog roots as placed items; whether it is still a candidate is decided when the sketch is restored.
+				const FSoftObjectPath Path(PathString);
+				if (IsCatalogItemPath(Path))
+				{
+					Sketch.Items[Element] = Path;
+				}
+				else
+				{
+					++InOutInvalid;
+				}
+			}
+		}
+
+		const TArray<TSharedPtr<FJsonValue>>* Strokes = nullptr;
+		if (Object.TryGetArrayField(SketchField::Strokes, Strokes))
+		{
+			Sketch.Strokes.Reserve(FMath::Min(Strokes->Num(), StageSketchMath::MaxStrokes));
+			for (const TSharedPtr<FJsonValue>& StrokeValue : *Strokes)
+			{
+				const TSharedPtr<FJsonObject>* StrokeObject = nullptr;
+				FStageSketchStroke Stroke;
+				if (Sketch.Strokes.Num() < StageSketchMath::MaxStrokes && StrokeValue.IsValid() && StrokeValue->TryGetObject(StrokeObject)
+					&& StrokeObject->IsValid() && ReadSketchStroke(**StrokeObject, Stroke))
+				{
+					Sketch.Strokes.Add(MoveTemp(Stroke));
+				}
+				else
+				{
+					++InOutInvalid;
+				}
+			}
+		}
+		return Sketch;
 	}
 }
 
@@ -1399,6 +1585,11 @@ FString FStageSceneStore::Serialize(const FStageSceneDocument& Document)
 	{
 		Root->SetNumberField(Field::ActiveCue, Document.ActiveCueNumber.GetValue());
 	}
+	// Only when there is one: a stage nobody sketched (and every starter stage) stays free of it.
+	if (!Document.Sketch.IsEmpty())
+	{
+		Root->SetObjectField(SketchField::Sketch, WriteSketch(Document.Sketch));
+	}
 	// Only when set: the user's own stages stay free of it.
 	if (Document.OriginListingId.IsValid())
 	{
@@ -1498,6 +1689,11 @@ EStageSceneResult FStageSceneStore::Parse(const FString& Contents, FStageSceneDo
 	}
 	// Migration 6 -> 7: older stages (and every starter stage) get the starter palettes; a version 7 file has exactly its own.
 	OutDocument.Palettes = Version >= 7 ? ReadPalettes(*Root, OutReport.InvalidShowEntries) : StagePaletteRules::MakeStarterPalettes();
+	// Migration 12 -> 13: older stages have no sketch; they open with an empty one and the default settings.
+	if (Version >= 13)
+	{
+		OutDocument.Sketch = ReadSketch(*Root, OutReport.InvalidSketchEntries);
+	}
 	// Migration 3 -> 4: older stages are the user's own. Deny by default: an origin that is there but unreadable is not "own".
 	FString Origin;
 	if (Version >= 4 && Root->TryGetStringField(Field::OriginListingId, Origin)

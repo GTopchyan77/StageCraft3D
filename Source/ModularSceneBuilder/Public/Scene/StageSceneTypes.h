@@ -6,6 +6,7 @@
 #include "Environment/StageEnvironmentTypes.h"
 #include "History/StageItemSnapshot.h"
 #include "Show/ShowControlTypes.h"
+#include "Sketch/StageSketchTypes.h"
 #include "StageSceneTypes.generated.h"
 
 /** Outcome of a scene file operation (Docs/ADR/0004-selection-scenes-and-rendering.md §4). */
@@ -137,4 +138,10 @@ struct FStageSceneDocument
 
 	/** The playback faders' recorded content (format version 8; Docs/ADR/0026 §6), StagePlaybackRules::Count of them. Older files: empty. */
 	TArray<FStagePlayback> Playbacks;
+
+	/**
+	 * The Sketch to Stage drawing (format version 13; Docs/ADR/0015-sketch-to-stage.md §5): strokes, settings and chosen items.
+	 * Sanitized (StageSketchMath). Older files, and files without one, read as an empty sketch with the default settings.
+	 */
+	FStageSketchSceneState Sketch;
 };

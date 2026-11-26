@@ -27,6 +27,48 @@ namespace StageSketchMath
 		{
 			return FMath::IsFinite(Value) ? FMath::Clamp(Value, Min, Max) : Default;
 		}
+
+		/** The stroke's usable points (finite, in range, at least MinPointSpacing apart, at most MaxStrokePoints); clamps its deck height. */
+		TArray<FVector2D> CleanPoints(FStageSketchStroke& Stroke)
+		{
+			TArray<FVector2D> Clean;
+			Clean.Reserve(FMath::Min(Stroke.Points.Num(), MaxStrokePoints));
+			for (const FVector2D& Point : Stroke.Points)
+			{
+				if (Clean.Num() >= MaxStrokePoints)
+				{
+					break;
+				}
+				if (IsUsablePoint(Point) && (Clean.IsEmpty() || FVector2D::Distance(Clean.Last(), Point) >= MinPointSpacing))
+				{
+					Clean.Add(Point);
+				}
+			}
+			Stroke.DeckHeight = ClampOrDefault(Stroke.DeckHeight, MinDeckHeight, MaxDeckHeight, FStageSketchSettings().DeckHeight);
+			return Clean;
+		}
+
+		/** Stores Clean as the stroke's points after the closed-stroke rules shared by new and saved strokes; false when too few are left. */
+		bool FinishStroke(FStageSketchStroke& Stroke, TArray<FVector2D> Clean)
+		{
+			// A closed stroke repeats no point; three corners are the least that encloses anything.
+			while (Stroke.bClosed && Clean.Num() >= 2 && FVector2D::Distance(Clean[0], Clean.Last()) < MinPointSpacing)
+			{
+				Clean.Pop();
+			}
+			if (Stroke.bClosed && Clean.Num() < 3)
+			{
+				Stroke.bClosed = false;
+				if (Stroke.Kind == EStageSketchStrokeKind::Shape)
+				{
+					return false;
+				}
+			}
+
+			const int32 Required = Stroke.Kind == EStageSketchStrokeKind::Fixture ? 1 : 2;
+			Stroke.Points = MoveTemp(Clean);
+			return Stroke.Points.Num() >= Required;
+		}
 	}
 
 	FVector2D Stabilize(const FVector2D& Previous, const FVector2D& Raw, double Strength)
@@ -127,21 +169,7 @@ namespace StageSketchMath
 
 	bool SanitizeStroke(FStageSketchStroke& Stroke)
 	{
-		TArray<FVector2D> Clean;
-		Clean.Reserve(FMath::Min(Stroke.Points.Num(), MaxStrokePoints));
-		for (const FVector2D& Point : Stroke.Points)
-		{
-			if (Clean.Num() >= MaxStrokePoints)
-			{
-				break;
-			}
-			if (IsUsablePoint(Point) && (Clean.IsEmpty() || FVector2D::Distance(Clean.Last(), Point) >= MinPointSpacing))
-			{
-				Clean.Add(Point);
-			}
-		}
-		Stroke.DeckHeight = ClampOrDefault(Stroke.DeckHeight, MinDeckHeight, MaxDeckHeight, FStageSketchSettings().DeckHeight);
-
+		TArray<FVector2D> Clean = CleanPoints(Stroke);
 		switch (Stroke.Kind)
 		{
 		case EStageSketchStrokeKind::Freehand:
@@ -173,24 +201,32 @@ namespace StageSketchMath
 		default:
 			return false;
 		}
+		return FinishStroke(Stroke, MoveTemp(Clean));
+	}
 
-		// A closed stroke repeats no point; three corners are the least that encloses anything.
-		while (Stroke.bClosed && Clean.Num() >= 2 && FVector2D::Distance(Clean[0], Clean.Last()) < MinPointSpacing)
+	bool SanitizeSavedStroke(FStageSketchStroke& Stroke)
+	{
+		TArray<FVector2D> Clean = CleanPoints(Stroke);
+		switch (Stroke.Kind)
 		{
-			Clean.Pop();
-		}
-		if (Stroke.bClosed && Clean.Num() < 3)
-		{
+		case EStageSketchStrokeKind::Freehand:
+		case EStageSketchStrokeKind::Truss:
+			// Closed as saved: re-deciding it from the end points would open a freehand outline whose last edge is long.
+			break;
+
+		case EStageSketchStrokeKind::Shape:
+			Stroke.bClosed = true;
+			break;
+
+		case EStageSketchStrokeKind::Fixture:
+			Clean.SetNum(FMath::Min(Clean.Num(), 1));
 			Stroke.bClosed = false;
-			if (Stroke.Kind == EStageSketchStrokeKind::Shape)
-			{
-				return false;
-			}
-		}
+			break;
 
-		const int32 Required = Stroke.Kind == EStageSketchStrokeKind::Fixture ? 1 : 2;
-		Stroke.Points = MoveTemp(Clean);
-		return Stroke.Points.Num() >= Required;
+		default:
+			return false;
+		}
+		return FinishStroke(Stroke, MoveTemp(Clean));
 	}
 
 	FStageSketchSettings SanitizeSettings(const FStageSketchSettings& Settings)

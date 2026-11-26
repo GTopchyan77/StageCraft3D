@@ -450,7 +450,8 @@ bool FStageSceneFixtureTypesTest::RunTest(const FString& Parameters)
 	Crate.Item = TSoftObjectPtr<UBaseItemData>(FSoftObjectPath(TEXT("/Game/StageCraft/Items/DA_Test_Crate.DA_Test_Crate")));
 
 	const FString Json = FStageSceneStore::Serialize(Document);
-	TestTrue(TEXT("Version 12 is written"), Json.Contains(TEXT("\"version\": 12")));
+	const FString WrittenVersion = FString::Printf(TEXT("\"version\": %d"), FStageSceneStore::FormatVersion);
+	TestTrue(TEXT("The current version (12 or later) is written"), Json.Contains(WrittenVersion));
 	TestTrue(TEXT("The fixture names its type"), Json.Contains(TEXT("\"fixtureType\"")) && Json.Contains(TEXT("\"manufacturer\": \"StageCraft\"")));
 	FStageSceneDocument Parsed;
 	FStageSceneParseReport Report;
@@ -476,13 +477,13 @@ bool FStageSceneFixtureTypesTest::RunTest(const FString& Parameters)
 		&& Again.Items.Num() == 2 && Again.Items[0].FixtureType.Id == SpotId && Again.Items[0].FixtureType.Mode == TEXT("Standard"));
 
 	AddInfo(TEXT("Version 11 files load as before."));
-	const FString Version11 = Json.Replace(TEXT("\"version\": 12"), TEXT("\"version\": 11"));
+	const FString Version11 = Json.Replace(*WrittenVersion, TEXT("\"version\": 11"));
 	FStageSceneDocument Old;
 	TestTrue(TEXT("A v11 file loads"), FStageSceneStore::Parse(Version11, Old, Report) == EStageSceneResult::Success && Old.Items.Num() == 2);
 	FString Crate11 = FString::Printf(TEXT("{\"format\":\"StageCraftScene\",\"version\":11,\"name\":\"T\",\"items\":[{\"id\":\"%s\",\"item\":\"/Game/StageCraft/Items/DA_Test_Crate.DA_Test_Crate\",")
 		TEXT("\"location\":[1,2,3],\"rotation\":[0,0,0,1],\"scale\":[1,1,1],\"label\":\"Crate\",\"state\":\"\"}]}"), *FGuid::NewGuid().ToString(EGuidFormats::DigitsWithHyphens));
 	TestTrue(TEXT("A plain v11 scene loads unchanged"), FStageSceneStore::Parse(Crate11, Old, Report) == EStageSceneResult::Success && Old.Items.Num() == 1 && !Old.Items[0].FixtureType.IsSet());
-	TestEqual(TEXT("Version 13 is refused"), Str(FStageSceneStore::Parse(Json.Replace(TEXT("\"version\": 12"), TEXT("\"version\": 13")), Old, Report)), Str(EStageSceneResult::VersionMismatch));
+	TestEqual(TEXT("The next version is refused"), Str(FStageSceneStore::Parse(Json.Replace(*WrittenVersion, *FString::Printf(TEXT("\"version\": %d"), FStageSceneStore::FormatVersion + 1)), Old, Report)), Str(EStageSceneResult::VersionMismatch));
 
 	AddInfo(TEXT("Hostile references: the item loads, the reference does not."));
 	const FString Path = StageFixtureLibrary::MakeItemPath(SpotId, TEXT("Standard")).ToString();

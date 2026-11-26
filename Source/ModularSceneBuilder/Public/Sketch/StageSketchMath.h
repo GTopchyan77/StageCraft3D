@@ -73,6 +73,15 @@ namespace StageSketchMath
 	 */
 	MODULARSCENEBUILDER_API bool SanitizeStroke(FStageSketchStroke& Stroke);
 
+	/**
+	 * Makes a finished stroke read back from a scene file usable, without redoing the gesture work SanitizeStroke does on a new
+	 * stroke: the same point and height checks, but no freehand simplification and no closing by distance, so a saved stroke loads
+	 * exactly as it was drawn (a closed freehand outline stays a deck). By kind: Shape always closed and needs three points;
+	 * Freehand and Truss keep their closed flag when three points are left; Fixture keeps its first point. False when too few
+	 * points are left.
+	 */
+	MODULARSCENEBUILDER_API bool SanitizeSavedStroke(FStageSketchStroke& Stroke);
+
 	/** Clamps every setting to its range; non-finite values take the defaults. */
 	MODULARSCENEBUILDER_API FStageSketchSettings SanitizeSettings(const FStageSketchSettings& Settings);
 }

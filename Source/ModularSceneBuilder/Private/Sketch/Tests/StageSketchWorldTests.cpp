@@ -25,6 +25,8 @@
 #include "Misc/AutomationTest.h"
 #include "Sketch/StageSketchBuilder.h"
 #include "Sketch/StageSketchGenerator.h"
+#include "Sketch/StageSketchMath.h"
+#include "Sketch/StageSketchSubsystem.h"
 #include "Subsystems/StageSessionSubsystem.h"
 #include "UObject/Package.h"
 
@@ -224,6 +226,90 @@ bool FStageSketchGenerateTest::RunTest(const FString& Parameters)
 	{
 		AddError(TEXT("The damaged deck did not spawn"));
 	}
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FStageSketchSceneStateTest, "StageCraft.Sketch.SceneState", StageSketchWorldTests::Flags)
+
+/** The sketch is part of the stage (format version 13, Docs/ADR/0015 §5, STATE.md #113): drawing is an unsaved change, and a loaded scene's sketch replaces the one drawn. */
+bool FStageSketchSceneStateTest::RunTest(const FString& Parameters)
+{
+	using namespace StageSketchWorldTests;
+
+	FScopedStage Stage;
+	UStageSketchSubsystem* Sketch = UWorld::GetSubsystem<UStageSketchSubsystem>(Stage.World);
+	if (!TestNotNull(TEXT("Session"), Stage.Session) || !TestNotNull(TEXT("Sketch"), Sketch))
+	{
+		return false;
+	}
+
+	// Unsaved changes: every sketch edit during play marks the stage dirty, so autosave and the exit prompt cover it.
+	Stage.Session->MarkClean();
+	TestTrue(TEXT("A stroke is added"), Sketch->AddStroke(MakeStroke(EStageSketchStrokeKind::Shape, { { 0.0, 0.0 }, { 600.0, 0.0 }, { 600.0, 400.0 }, { 0.0, 400.0 } })));
+	TestTrue(TEXT("Drawing marks the stage unsaved"), Stage.Session->IsDirty());
+	Stage.Session->MarkClean();
+	FStageSketchSettings Settings = Sketch->GetSettings();
+	Settings.TrussHeight = 800.f;
+	Sketch->SetSettings(Settings);
+	TestTrue(TEXT("A settings change marks the stage unsaved"), Stage.Session->IsDirty());
+	Stage.Session->MarkClean();
+	Sketch->SetSettings(Settings);
+	TestFalse(TEXT("Setting the same settings is no change"), Stage.Session->IsDirty());
+	Stage.Session->MarkClean();
+	TestTrue(TEXT("Undo stroke"), Sketch->RemoveLastStroke());
+	TestTrue(TEXT("Removing a stroke marks the stage unsaved"), Stage.Session->IsDirty());
+
+	// Capture and restore: a scene's sketch comes back exactly; the one drawn before is replaced.
+	Sketch->AddStroke(MakeStroke(EStageSketchStrokeKind::Freehand, { { 0.0, 0.0 }, { 0.0, 800.0 }, { 600.0, 800.0 }, { 600.0, 0.0 }, { 10.0, 10.0 } }));
+	Sketch->AddStroke(MakeStroke(EStageSketchStrokeKind::Truss, { { -100.0, -100.0 }, { 700.0, -100.0 } }));
+	Sketch->AddStroke(MakeStroke(EStageSketchStrokeKind::Fixture, { { 300.0, 200.0 } }));
+	const FStageSketchSceneState Captured = Sketch->CaptureSceneState();
+	if (!TestEqual(TEXT("Three strokes captured"), Captured.Strokes.Num(), 3) || !TestTrue(TEXT("The freehand gesture closed into a deck"), Captured.Strokes[0].bClosed))
+	{
+		return false;
+	}
+	TestEqual(TEXT("One item slot per element"), Captured.Items.Num(), int32(EStageSketchElement::Count));
+	TestTrue(TEXT("Settings captured"), Captured.Settings == Settings);
+
+	Sketch->ClearStrokes();
+	Sketch->SetSettings(FStageSketchSettings());
+	TestEqual(TEXT("Everything restored"), Sketch->RestoreSceneState(Captured), 0);
+	if (TestEqual(TEXT("Strokes back"), Sketch->GetStrokes().Num(), 3))
+	{
+		for (int32 Index = 0; Index < 3; ++Index)
+		{
+			TestTrue(FString::Printf(TEXT("Stroke %d exactly as captured"), Index), Sketch->GetStrokes()[Index].Points == Captured.Strokes[Index].Points
+				&& Sketch->GetStrokes()[Index].bClosed == Captured.Strokes[Index].bClosed && Sketch->GetStrokes()[Index].Kind == Captured.Strokes[Index].Kind);
+		}
+		TestEqual(TEXT("Still one deck"), Sketch->CountStrokes(EStageSketchElement::Deck), 1);
+	}
+	TestTrue(TEXT("Settings back"), Sketch->GetSettings() == Settings);
+
+	// Deny by default: an item that is not a candidate of its element here is not chosen; the default builds it.
+	FStageSketchSceneState Foreign = Captured;
+	Foreign.Items[int32(EStageSketchElement::Deck)] = FSoftObjectPath(TEXT("/Game/StageCraft/Items/DA_Missing.DA_Missing"));
+	TestEqual(TEXT("The unknown item is reported"), Sketch->RestoreSceneState(Foreign), 1);
+	const TArray<UBaseItemData*> DeckCandidates = Sketch->GetCandidateItems(EStageSketchElement::Deck);
+	TestTrue(TEXT("... and the first candidate builds decks"), Sketch->GetItem(EStageSketchElement::Deck) == (DeckCandidates.IsEmpty() ? nullptr : DeckCandidates[0]));
+	TestTrue(TEXT("... and nothing is chosen"), Sketch->CaptureSceneState().Items[int32(EStageSketchElement::Deck)].IsNull());
+
+	// Damaged strokes and the stroke limit, as a hand-edited state could hold them.
+	FStageSketchSceneState Damaged;
+	Damaged.Strokes.Add(MakeStroke(EStageSketchStrokeKind::Shape, { { 0.0, 0.0 }, { 100.0, 0.0 } }, true));
+	for (int32 Index = 0; Index < StageSketchMath::MaxStrokes + 2; ++Index)
+	{
+		Damaged.Strokes.Add(MakeStroke(EStageSketchStrokeKind::Fixture, { { Index * 10.0, 0.0 } }));
+	}
+	TestEqual(TEXT("A two-corner shape and the strokes over the limit are not restored"), Sketch->RestoreSceneState(Damaged), 3);
+	TestEqual(TEXT("... the sketch is full"), Sketch->GetStrokes().Num(), StageSketchMath::MaxStrokes);
+
+	// A scene without a sketch (an older file, a starter stage) leaves an empty sketch with the default settings.
+	Stage.Session->MarkClean();
+	TestEqual(TEXT("An empty state restores"), Sketch->RestoreSceneState(FStageSketchSceneState()), 0);
+	TestTrue(TEXT("... to an empty sketch"), Sketch->GetStrokes().IsEmpty());
+	TestTrue(TEXT("... with the default settings"), Sketch->GetSettings() == FStageSketchSettings());
+	TestTrue(TEXT("... and it is captured as empty"), Sketch->CaptureSceneState().IsEmpty());
+	TestTrue(TEXT("Replacing the sketch during play is a change (a load marks the stage clean or unsaved afterwards)"), Stage.Session->IsDirty());
 	return true;
 }
 

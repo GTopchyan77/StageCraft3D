@@ -139,6 +139,77 @@ int32 UStageSketchSubsystem::CountStrokes(EStageSketchElement Element) const
 	return Count;
 }
 
+FStageSketchSceneState UStageSketchSubsystem::CaptureSceneState() const
+{
+	FStageSketchSceneState State;
+	State.Strokes = Strokes;
+	State.Settings = Settings;
+	State.Items.SetNum(int32(EStageSketchElement::Count));
+	for (int32 Element = 0; Element < ChosenItems.Num() && Element < State.Items.Num(); ++Element)
+	{
+		if (const UBaseItemData* Chosen = ChosenItems[Element].Get())
+		{
+			State.Items[Element] = FSoftObjectPath(Chosen);
+		}
+	}
+	return State;
+}
+
+int32 UStageSketchSubsystem::RestoreSceneState(const FStageSketchSceneState& State)
+{
+	int32 NotRestored = 0;
+
+	// The import and the photo under the canvas belong to the sketch being replaced; a late result must not land in the loaded one.
+	CancelImport();
+	ClearReference();
+
+	Strokes.Reset();
+	for (const FStageSketchStroke& Saved : State.Strokes)
+	{
+		FStageSketchStroke Clean = Saved;
+		if (Strokes.Num() < StageSketchMath::MaxStrokes && StageSketchMath::SanitizeSavedStroke(Clean))
+		{
+			Strokes.Add(MoveTemp(Clean));
+		}
+		else
+		{
+			++NotRestored;
+		}
+	}
+	Settings = StageSketchMath::SanitizeSettings(State.Settings);
+
+	// Deny by default: a saved path is only chosen while it is still a candidate of its element on this PC.
+	ChosenItems.Reset();
+	ChosenItems.SetNum(int32(EStageSketchElement::Count));
+	for (int32 Element = 0; Element < State.Items.Num() && Element < ChosenItems.Num(); ++Element)
+	{
+		const FSoftObjectPath& Path = State.Items[Element];
+		if (Path.IsNull())
+		{
+			continue;
+		}
+		UBaseItemData* const* Match = GetCandidateItems(EStageSketchElement(Element)).FindByPredicate([&Path](const UBaseItemData* Candidate)
+		{
+			return FSoftObjectPath(Candidate) == Path;
+		});
+		if (Match)
+		{
+			ChosenItems[Element] = *Match;
+		}
+		else
+		{
+			++NotRestored;
+		}
+	}
+
+	if (NotRestored > 0)
+	{
+		UE_LOG(LogStageCraft, Warning, TEXT("Sketch: %d saved strokes or chosen items could not be restored; %d strokes loaded."), NotRestored, Strokes.Num());
+	}
+	OnSketchChanged.Broadcast();
+	return NotRestored;
+}
+
 void UStageSketchSubsystem::SetSettings(const FStageSketchSettings& NewSettings)
 {
 	const FStageSketchSettings Clean = StageSketchMath::SanitizeSettings(NewSettings);

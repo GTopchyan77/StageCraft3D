@@ -143,6 +143,25 @@ struct MODULARSCENEBUILDER_API FStageSketchSettings
 	}
 };
 
+/**
+ * The sketch as a scene file keeps it (format version 13; Docs/ADR/0015-sketch-to-stage.md §5): the strokes, the settings and the
+ * catalog item chosen for each element. Plain values only, so it can be read on a background task. The reference photo is not part
+ * of it (a transient texture made from a file the scene does not own).
+ */
+struct FStageSketchSceneState
+{
+	TArray<FStageSketchStroke> Strokes;
+	FStageSketchSettings Settings;
+	/** One entry per EStageSketchElement; an empty path means "the first candidate" (nothing chosen). */
+	TArray<FSoftObjectPath> Items;
+
+	/** Nothing drawn, default settings and no item chosen: what a stage without a sketch has, and what older files read as. */
+	bool IsEmpty() const
+	{
+		return Strokes.IsEmpty() && Settings == FStageSketchSettings() && !Items.ContainsByPredicate([](const FSoftObjectPath& Path) { return !Path.IsNull(); });
+	}
+};
+
 /** One deck to build: a sanitized outline around its origin, which stands on the floor. */
 struct FStageSketchDeckPlan
 {

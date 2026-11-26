@@ -20,6 +20,7 @@
 #include "Placement/StagePlacementToolComponent.h"
 #include "ProfilingDebugging/CpuProfilerTrace.h"
 #include "Scene/StageSceneStore.h"
+#include "Sketch/StageSketchSubsystem.h"
 #include "Subsystems/ShowControlSubsystem.h"
 #include "Subsystems/StageItemSubsystem.h"
 #include "Subsystems/StageProgrammerSubsystem.h"
@@ -148,6 +149,10 @@ FStageSceneDocument UStageSceneComponent::CaptureStage(const FString& Name) cons
 	{
 		Document.Groups = Library->GetGroups();
 		Document.Palettes = Library->GetPalettes();
+	}
+	if (const UStageSketchSubsystem* Sketch = UWorld::GetSubsystem<UStageSketchSubsystem>(GetWorld()))
+	{
+		Document.Sketch = Sketch->CaptureSceneState();
 	}
 	return Document;
 }
@@ -479,6 +484,11 @@ FStageSceneOperationResult UStageSceneComponent::ApplyDocument(const FStageScene
 	{
 		Environment->SetSettings(Document.Environment);
 	}
+	// The sketch is the scene's too (format version 13): the one drawn before is replaced, also by an older file's empty sketch.
+	if (UStageSketchSubsystem* Sketch = UWorld::GetSubsystem<UStageSketchSubsystem>(GetWorld()))
+	{
+		Sketch->RestoreSceneState(Document.Sketch);
+	}
 	// After the items, whose fixtures have registered with the IDs these name: the show resumes where it was saved.
 	if (Show && Document.ActiveCueNumber.IsSet())
 	{
@@ -497,6 +507,10 @@ FStageSceneOperationResult UStageSceneComponent::ApplyDocument(const FStageScene
 	if (Report.InvalidShowEntries > 0)
 	{
 		UE_LOG(LogStageCraft, Warning, TEXT("Scene \"%s\": %d damaged programmer, group, palette or playback entries were skipped."), *Document.Name, Report.InvalidShowEntries);
+	}
+	if (Report.InvalidSketchEntries > 0)
+	{
+		UE_LOG(LogStageCraft, Warning, TEXT("Scene \"%s\": %d damaged sketch strokes or items were skipped."), *Document.Name, Report.InvalidSketchEntries);
 	}
 	if (Report.InvalidCueEntries > 0)
 	{

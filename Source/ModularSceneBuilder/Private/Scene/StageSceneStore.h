@@ -20,6 +20,9 @@ struct FStageSceneParseReport
 
 	/** Programmer entries, groups, palettes, palette references and an active cue dropped because they were invalid (format versions 6, 7). Logged; the rest loads. */
 	int32 InvalidShowEntries = 0;
+
+	/** Sketch strokes, settings and chosen items dropped because they were unreadable (format version 13). Logged; the rest loads. */
+	int32 InvalidSketchEntries = 0;
 };
 
 /**
@@ -66,8 +69,10 @@ public:
 	 *  - 12: an item of a device-library fixture type (path under StageFixtureLibrary::PackageRoot) holds "fixtureType" {id,
 	 *    manufacturer, name, mode} (Docs/ADR/0033 §7.1), so a PC without that type can name the GDTF file to import. Older files
 	 *    have no such items and load unchanged; an unreadable reference is dropped and the item still loads.
+	 *  - 13: adds "sketch" {settings, items, strokes}, the Sketch to Stage drawing (Docs/ADR/0015 §5), written only when the sketch is
+	 *    not empty. Older files, and files without it, load with an empty sketch and the default settings, replacing the one drawn.
 	 */
-	static constexpr int32 FormatVersion = 12;
+	static constexpr int32 FormatVersion = 13;
 	static constexpr int32 MaxGroups = StageFixtureGroupRules::MaxGroups;
 	/** The oldest version Parse still migrates. Older or newer files are refused as VersionMismatch and left untouched. */
 	static constexpr int32 MinReadableVersion = 1;

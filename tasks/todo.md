@@ -322,7 +322,8 @@ See `STATE.md` for detailed history of completed work.
 - [x] Patch sheet: `FStagePdfDocument`, `StagePatchSheet` (PDF + CSV), `UStagePatchSheetSubsystem`, File > Production entry, Patch panel EXPORT PDF, status bar; tests
 - [x] Builds: Editor / Game Development / Game Shipping; 54/54 automation; scripted runs R38_Run1-4 (cue ops, refusals, undo, save/load v3, playback on fixtures, PDF checked)
 - [ ] Manual verification (Gevor): Cue panel by mouse (GO/BACK, STORE/RE-RECORD, inline label/fade, GO TO, DELETE, source segment), File > Production entries, EXPORT PDF, print the PDF (STATE.md #38)
-- [ ] GO keyboard shortcut; tracking cues, follow/wait times, timeline
+- [x] GO keyboard shortcut (Ctrl+Enter GO, Ctrl+Backspace BACK, rebindable; StageKeyBindings), tracking cues and follow/wait times (F3a, STATE.md #61) (box found stale in #113)
+- [ ] Cue timeline view (not started)
 - [x] Packaged build check with the new panel asset (#39: DA_Panel_Cues in the Shipping and Development containers)
 - [ ] PDF: embedded Unicode font if non-Latin labels matter
 
@@ -371,7 +372,8 @@ See `STATE.md` for detailed history of completed work.
 - [x] Sketch window `UStageSketchCanvasWidget` + canvas `UStageSketchSurfaceWidget` (freehand, stage shape, truss line, fixture, erase; undo stroke, clear, frame; heights, grid, snap, smoothing, item choice; live plan summary); `DA_Panel_Sketch`; Edit › Sketch to Stage..., Window menu, toolbar SKETCH
 - [x] Builds: Editor, Game Development, Game Shipping (0 warnings in project code); 75/75 automation; scripted runs R42
 - [ ] Manual verification (Gevor): draw with the real mouse (freehand drag, shape clicks, double-click/Enter, Backspace/Esc, erase, wheel zoom, right-drag pan), GENERATE 3D, Ctrl+Z / Ctrl+Shift+Z of a generation, deck Height in the inspector, placing DA_Deck_Riser from the Library, saving and loading a scene with decks
-- [ ] Sketch not saved with scenes; no 3D preview of the plan; truss legs level at one height, no towers / motors / ground supports generated
+- [x] Sketch saved with scenes (format v13: strokes, settings, chosen items; STATE.md #113, ADR 0015 §5)
+- [ ] No 3D preview of the plan; truss legs level at one height, no towers / motors / ground supports generated
 - [ ] Deck outline cannot be edited after generating (redraw it); no deck legs / stairs / handrails
 
 ## Phase 20 — AI Assistant: chat panel and natural-language commands (requested by Gevor 2026-10-21; STATE.md #43, ADR 0016)
@@ -912,3 +914,12 @@ Gevor's choices: automation tests on a harness game instance (not AFunctionalTes
 - [x] StageCraftTags::IsUndoableItemParameter (everything but transform, type and look, which have their own paths); the controller records through it; the Outliner's eye / lock on several items is one step
 - [x] Test StageCraft.History.ItemParameters (classifier; label, lock, group hide undo / redo through the session; the old rule fails it on 6 parameters); suite 315/315; -game: rename, lock and group hide undone and redone through the real controller
 - [ ] Gevor: rename an item, change a speaker's gain with the slider, hide a group in the Outliner; Ctrl+Z after each
+
+## Phase 63 - Sketch saved with scenes (requested by Gevor 2026-11-26; STATE.md #113; ADR 0015 §5)
+- [x] Measured first (-game Sketch113Before): sketch edits left the stage "clean", the v12 file had no sketch, clear + load gave 0 strokes and the session's truss height
+- [x] Scene format v13 "sketch" (settings, chosen items, strokes), written only when not empty; ReadSketch validates (catalog paths, SanitizeSavedStroke, MaxStrokes, InvalidSketchEntries); v1-v12 read as an empty sketch
+- [x] UStageSketchSubsystem CaptureSceneState / RestoreSceneState (one event, cancels the photo import, items only while still candidates); UStageSceneComponent captures and applies it; sketch edits are unsaved changes (UStageSessionSubsystem)
+- [x] Marketplace: a sketch repair refuses a package like other repairs; cloud server accepts scene v13 (sceneCheck.ts, test)
+- [x] Tests StageCraft.Scene.Sketch and StageCraft.Sketch.SceneState (two mutations fail them); suite 317/317; server 84/84; -game: unsaved after drawing, v13 file, clear + load and a fresh launch restore 3 strokes and truss 750 cm (Sketch window screenshot)
+- [ ] Gevor: draw in the Sketch window, Save, close the app, reopen the scene; check the drawing, the heights and the chosen Items
+- [ ] Optional: keep the reference photo with the scene (copy the image next to the scene file)

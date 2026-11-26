@@ -8,6 +8,7 @@
 #include "Environment/StageEnvironmentSubsystem.h"
 #include "Interaction/StageParameterInterface.h"
 #include "ModularSceneBuilder.h"
+#include "Sketch/StageSketchSubsystem.h"
 #include "Subsystems/ShowControlSubsystem.h"
 #include "Subsystems/StageProgrammerSubsystem.h"
 #include "Subsystems/StageShowLibrarySubsystem.h"
@@ -47,6 +48,12 @@ void UStageSessionSubsystem::Initialize(FSubsystemCollectionBase& Collection)
 		Library->OnGroupsChanged.AddUniqueDynamic(this, &ThisClass::HandleShowDataChanged);
 		Library->OnPalettesChanged.AddUniqueDynamic(this, &ThisClass::HandleShowDataChanged);
 		BoundShowLibrary = Library;
+	}
+	// The sketch is saved with the scene (format version 13, Docs/ADR/0015 §5): drawing is an unsaved change like any other.
+	if (UStageSketchSubsystem* Sketch = Collection.InitializeDependency<UStageSketchSubsystem>())
+	{
+		Sketch->OnSketchChanged.AddUniqueDynamic(this, &ThisClass::HandleShowDataChanged);
+		BoundSketch = Sketch;
 	}
 }
 
@@ -94,6 +101,11 @@ void UStageSessionSubsystem::Deinitialize()
 		Library->OnPalettesChanged.RemoveDynamic(this, &ThisClass::HandleShowDataChanged);
 	}
 	BoundShowLibrary.Reset();
+	if (UStageSketchSubsystem* Sketch = BoundSketch.Get())
+	{
+		Sketch->OnSketchChanged.RemoveDynamic(this, &ThisClass::HandleShowDataChanged);
+	}
+	BoundSketch.Reset();
 
 	for (const TWeakObjectPtr<AModularBaseActor>& Item : Items)
 	{

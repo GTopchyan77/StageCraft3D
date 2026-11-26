@@ -1,6 +1,6 @@
 # ADR 0015: Sketch to Stage (2D drawing window and 3D generation)
 
-- **Status:** accepted. See STATE.md #42.
+- **Status:** accepted. See STATE.md #42; amended in §5 (STATE.md #113: saved with the scene).
 - **Related:**
   - ADR 0005 §2 and ADR 0007 §4 (spans and drawn paths: the truss lines become `AStageSpanActor` paths).
   - ADR 0003 and ADR 0004 §3.3 (undo history, `FStageBatchCommand`), ADR 0010 (rules decide undo).
@@ -37,7 +37,7 @@ What exists:
 | `UStageDeckData`, `AStageDeckActor` | catalog item, placed item | a deck's outline and height (SaveGame) and its procedural mesh |
 | `UStageSketchCanvasWidget` (panel) + `UStageSketchSurfaceWidget` (canvas) | views | the tool being used and the stroke being drawn (transient UI state only) |
 
-- The sketch lives in a **world subsystem**, not in the widget: closing and reopening the window, floating it to another monitor or re-docking it keeps the drawing, and console commands and tests reach the same document. It is per stage session (dropped on level change). It is not saved in scene files (follow-up).
+- The sketch lives in a **world subsystem**, not in the widget: closing and reopening the window, floating it to another monitor or re-docking it keeps the drawing, and console commands and tests reach the same document. It is per stage session (dropped on level change). It is saved in scene files since §5 (format v13).
 - Sketch edits (add, erase, clear, settings) are tool state, not stage state. The panel writes them through the subsystem's validated setters, as the Preferences panel writes the snapping component. Everything that changes the stage goes through the controller.
 - The subsystem never iterates the world and never ticks. Views bind `OnSketchChanged` and `OnGenerationFinished`.
 
@@ -111,7 +111,7 @@ The sketch is kept after generating, so a shape can be corrected and generated a
 
 - New placed item type (`AStageDeckActor`), saved through SaveGame properties: scene files stay at format v3.
 - The truss height is one value per generation; truss legs are level. Towers, motors and ground supports are not generated.
-- The sketch is not saved with the scene, and there is no 3D preview of the plan.
+- The sketch is saved with the scene since §5 (format v13). There is no 3D preview of the plan.
 - A fixture on a deck counts as rigged in the cable schedule when the deck top is 2 m or higher (existing rule, ADR 0014).
 
 ## Amendment: toolbar dropdowns (STATE.md #100, 2026-11-17)
@@ -126,3 +126,23 @@ The window had five rows of segments above the canvas (tools and actions; height
 - TRACE ANYWAY and USE COLOURS stay buttons, next to the result line, shown only while an image is refused as a photograph: the refusal message names them, so they must be visible then.
 
 The menus are pure functions of the sketch's state (`StageSketchMenus`), tested in `StageCraft.UI.SketchMenus`.
+
+## 5. Amendment: the sketch is saved with the scene (STATE.md #113, 2026-11-26)
+
+§2.1 "not saved in scene files" and §4 "not saved with the scene" are superseded.
+
+**Measured before the change** (scripted `-game` run `Sketch113Before`): after three strokes and a truss height change the stage still read "clean"; the saved file (v12) had no sketch. After clearing the sketch and loading the scene, it had 0 strokes, and the truss height was the session's, not the file's.
+
+- **Scene format v13** adds `"sketch"`: `settings` (deckHeight, trussHeight, gridStep, snap, smoothing, photoWidth), `items` (the item chosen for an element, keyed `Deck` / `Truss` / `Fixture`, only when one was chosen) and `strokes` (kind, closed, deckHeight, points as flat x, y pairs in cm). It is written only when the sketch is not empty (`FStageSketchSceneState::IsEmpty`), so starter stages and stages nobody sketched are unchanged.
+- **Reading is a trust boundary** (`FStageSceneStore::ReadSketch`). A missing sketch or setting keeps its default, and settings go through `SanitizeSettings`. Item paths must be under the catalog roots that placed items use (`IsCatalogItemPath`). Each stroke goes through the new `StageSketchMath::SanitizeSavedStroke`, and only `MaxStrokes` are kept. Anything dropped is counted in `FStageSceneParseReport::InvalidSketchEntries` and logged; the rest of the scene loads. Older files (v1–v12) read as an empty sketch, and one found in them is ignored.
+- **`SanitizeSavedStroke`, not `SanitizeStroke`.** A finished stroke must not go through the gesture work again. Re-running freehand closing on a saved outline whose last edge is longer than `CloseDistance` would open it, turning a deck into a truss line. The saved variant keeps the point, range and height rules and the closed flag as saved. Both share `CleanPoints` / `FinishStroke`.
+- **The subsystem stays the source of truth.**
+  - `CaptureSceneState` and `RestoreSceneState` are called only by `UStageSceneComponent`: from `CaptureStage`, and from `ApplyDocument` with the environment, before the load marks the stage clean or unsaved.
+  - Restore replaces the whole sketch with one `OnSketchChanged`. It cancels a photo import in progress and removes the reference photo (they belonged to the replaced sketch), and chooses a saved item only while it is still a candidate of its element on this PC (deny by default; otherwise the first candidate builds it).
+  - Opening a scene, autosave or starter stage replaces the sketch drawn before.
+- **Unsaved changes.** `UStageSessionSubsystem` listens to `OnSketchChanged`, as it does to the show data. Drawing, erasing or changing a sketch setting during play marks the stage unsaved, so autosave and the exit prompt cover it.
+- **Not saved:** the reference photo (a transient texture made from a file the scene does not own) and the photo import state.
+- **Marketplace.** A package whose scene needed a sketch repair is refused like any other repair (`StagePackage::Read`, publishing). The cloud server accepts scene v13 (`sceneCheck.ts`), and validates the sketch on the client only, like the environment and the show data.
+- **Measured after** (`Sketch113After`, `Sketch113Fresh`): sketch edits show "unsaved changes"; the file is v13 with the sketch; clear, then load, gives 3 strokes at truss 750 cm, stage clean; a fresh launch that loads the scene gives the same, shown in the Sketch window.
+
+Rollback: stop writing `"sketch"` (and the session binding); v13 files still load, because the field is optional.

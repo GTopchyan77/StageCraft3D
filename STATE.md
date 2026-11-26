@@ -10738,9 +10738,88 @@ All times in ms.
   - the step text "Change {0} of {1}" is present as the control.
 - **Not verified by hand:** Ctrl+Z after an inspector rename, a speaker gain drag and an Outliner eye click with the mouse. The same request path was exercised by the commands.
 
-**Commit:** uncommitted (working tree). STATE #111 now carries `b4c468f`.
+**Commit:** `5e9c854`.
 
 **Known issues / follow-ups**
 - **Gevor:** rename an item, drag a speaker's gain, click a group's eye in the Outliner; Ctrl+Z and Ctrl+Y after each.
 - **Step names** use the item's label at the time of the edit ("Change Label of Renamed"). That is the existing naming for parameter steps; it could name the old label for renames.
+- The Obsidian vault on S: is still unreachable, so there is no session log.
+
+## #113 — The Sketch to Stage drawing is saved with the scene (scene format v13); sketch edits are unsaved changes (2026-11-26)
+
+**What & why**
+- Gevor asked (2026-11-26) for the next high-value self-contained item from todo; saving sketch state with scenes was one of the examples.
+- **Candidates checked for staleness first:**
+  - "GO keyboard shortcut; tracking cues, follow/wait times, timeline" (Phase 13) was mostly stale. GO is Ctrl+Enter and BACK is Ctrl+Backspace (`StageKeyBindings`, rebindable), and tracking and follow/wait were done in F3a (#61). The box is ticked, and only "Cue timeline view" stays open.
+  - The GDTF logo needs the official artwork, so it is not something to make here. Bill of Materials answers in chat are still open.
+- **Measured first** (scripted `-game` run `Sketch113Before`, the build at `5e9c854`):
+  - After three strokes (shape, truss, fixture) and a truss height of 750 cm, `StageCraft.Scene.Status` said **"clean"**: a sketch was never an unsaved change.
+  - The saved file was format **v12 with no sketch**.
+  - After `Sketch.Clear` and `Scene.Load` of that scene, the sketch had **0 strokes**, and the truss height was the session's (750), not anything from the file. A drawing was lost with every restart and carried over between scenes.
+- **Change:**
+  - **Scene format v13** (`FStageSceneStore::FormatVersion` 12 → 13) adds `"sketch"`:
+    - `settings`: deckHeight, trussHeight, gridStep, snap, smoothing, photoWidth;
+    - `items`: the item chosen for an element, keyed `Deck` / `Truss` / `Fixture`, only when chosen;
+    - `strokes`: kind, closed, deckHeight, and points as flat x, y pairs in cm.
+
+    It is written only when the sketch is not empty, so starter stages and unsketched stages are unchanged. Older files read as an empty sketch, and a "sketch" found in a v1–v12 file is ignored.
+  - **Validation at the trust boundary** (`ReadSketch`):
+    - Settings go through `SanitizeSettings`.
+    - Item paths must be under the catalog roots placed items use; the check moved into a shared `IsCatalogItemPath`.
+    - Strokes need a known kind, an even, readable point list of at most 512 points, and must pass the new `StageSketchMath::SanitizeSavedStroke`. At most `MaxStrokes` (256) are read.
+    - Drops are counted in the new `FStageSceneParseReport::InvalidSketchEntries` and logged on load.
+  - **`SanitizeSavedStroke`:** the point, range and height rules of `SanitizeStroke` (shared `CleanPoints` / `FinishStroke`), without redoing the gesture. Re-running freehand closing on a saved closed outline whose last edge is longer than 75 cm would open it and turn a deck into a truss line; the test checks this premise.
+  - **`UStageSketchSubsystem::CaptureSceneState` / `RestoreSceneState`.** Restore replaces the whole sketch with one `OnSketchChanged`, cancels a photo import in progress and removes the reference photo. A saved item is chosen only while it is still a candidate of its element here (deny by default); otherwise the first candidate builds it. It returns what could not be restored.
+  - **`UStageSceneComponent`:** `CaptureStage` stores the sketch, and `ApplyDocument` restores it next to the environment, before the load marks the stage clean or unsaved. Opening a scene, autosave or starter stage replaces the sketch drawn before.
+  - **`UStageSessionSubsystem`** binds `OnSketchChanged` like the show data, so drawing, erasing or a sketch setting during play marks the stage unsaved (autosave and the exit prompt cover it).
+  - **Marketplace:** `StagePackage::Read` and publishing refuse a scene that needed a sketch repair, like other repairs. The cloud server's `sceneCheck.ts` accepted only scene v12 and would have refused every newly saved stage (the failure already fixed once for v12, todo "scene format 12 accepted"). It now accepts v13; the sketch is validated by the client, like the environment and the show data.
+  - **Docs:** ADR 0015 §5 amendment (status line, §2.1 and §4 updated); `Docs/CURRENT_SYSTEMS.md` (Sketch row, "Saved in scenes" row).
+
+**Files changed**
+- `Source/ModularSceneBuilder/Public/Sketch/StageSketchTypes.h` (`FStageSketchSceneState`), `Public/Sketch/StageSketchMath.h`, `Private/Sketch/StageSketchMath.cpp` (`SanitizeSavedStroke`, `CleanPoints`, `FinishStroke`).
+- `Source/ModularSceneBuilder/Public/Sketch/StageSketchSubsystem.h`, `Private/Sketch/StageSketchSubsystem.cpp` (capture, restore, class comment).
+- `Source/ModularSceneBuilder/Public/Scene/StageSceneTypes.h` (`FStageSceneDocument::Sketch`), `Private/Scene/StageSceneStore.h` (v13, `InvalidSketchEntries`), `Private/Scene/StageSceneStore.cpp` (`WriteSketch`, `ReadSketch`, `ReadSketchStroke`, `IsCatalogItemPath`), `Private/Scene/StageSceneComponent.cpp`.
+- `Source/ModularSceneBuilder/Public/Subsystems/StageSessionSubsystem.h`, `Private/Subsystems/StageSessionSubsystem.cpp` (sketch binding).
+- `Source/ModularSceneBuilder/Private/Marketplace/StagePackage.cpp`, `Private/Marketplace/StageMarketplaceSubsystem.cpp` (sketch repairs refuse).
+- Tests: `Private/Scene/Tests/StageSceneStoreTests.cpp` (new `StageCraft.Scene.Sketch`), `Private/Sketch/Tests/StageSketchWorldTests.cpp` (new `StageCraft.Sketch.SceneState`), and `Private/Fixtures/Tests/StageFixtureLibraryTests.cpp` (`Scene.FixtureTypes` asserted the literal "version": 12; it now uses `FormatVersion`).
+- `Services/StageCraftCloud/src/package/sceneCheck.ts` (v13), `Services/StageCraftCloud/test/package.test.ts` (the refused version is now 14; new test "scene v13: a package whose stage keeps its sketch is accepted").
+- `Docs/ADR/0015-sketch-to-stage.md`, `Docs/CURRENT_SYSTEMS.md`, `tasks/todo.md` (Phases 13 and 19, Phase 63), `STATE.md` (this entry; #112 carries `5e9c854`).
+- No Blueprint, asset, map or ini file.
+
+**Verification**
+- **Test `StageCraft.Scene.Sketch`** (no world):
+  - **Round trip:** five strokes (a closed freehand outline with an 800 cm closing edge, a shape, open and closed truss, a fixture), all settings and a chosen deck item, kept exactly (points, closed flags, heights, kinds); the outline is still a deck.
+  - An empty sketch is not written. Changed settings alone are.
+  - A v12 file with a stray sketch reads as empty.
+  - **Hostile v13:** six bad strokes (unknown kind, odd and non-numeric point lists, a two-corner shape, an out-of-range fixture, a non-object) and one bad item path are counted as 7, and the good stroke is kept. Its repeated end is dropped, its height clamped and it stays closed as a shape. Settings are clamped, or defaulted when of the wrong type.
+  - A non-object sketch counts 1. 259 strokes are capped at 256, with 3 counted.
+- **Test `StageCraft.Sketch.SceneState`** (game world after BeginPlay):
+  - adding a stroke, changing a setting and removing a stroke each mark the session dirty; setting the same settings does not;
+  - capture, then restore into a cleared sketch, gives the strokes and settings exactly;
+  - an unknown item path is reported and not chosen;
+  - a two-corner shape and the strokes over the limit are not restored, and the sketch is full;
+  - an empty state restores the default settings.
+- **Mutations** (both reverted; `grep MUTATION` clean):
+  - `ReadSketchStroke` using `SanitizeStroke` fails `Scene.Sketch` ("The closed freehand outline is still a deck").
+  - Removing the session's `OnSketchChanged` binding fails `Sketch.SceneState` on four dirty checks.
+- **Suites:** `StageCraft.Scene` and `StageCraft.Sketch` 27/27 after the fixture test fix. The full suite `RunAutomation.ps1 -Filter StageCraft -NullRHI` passed 317/317, with user data unchanged (181 files). Cloud server `npm test` passed 84/84, and the package files 20/20.
+- **`-game` runs** (logs in `%TEMP%/StageCraftRuns/<name>/game.log`):
+  - **`Sketch113After`**, the same steps as before:
+    - after drawing, `Scene.Status` says **"unsaved changes"**;
+    - the saved file is **v13** with the three strokes, truss 750 cm and empty items;
+    - after `Sketch.Clear`, `Set TrussHeight 300` and `Scene.Load`, the sketch has **3 strokes at truss 750 cm**, and the stage is "clean".
+  - **`Sketch113Fresh`:** a new launch (sketch 0 strokes, truss 600) loads the scene and gets 3 strokes at truss 750 cm, stage clean. The Sketch window shows the 0.80 m deck, the truss line, the fixture and "Will build: 1 deck (24 panels), 1 truss run (5 sections), 1 fixture". The scene file was removed afterwards.
+- **Builds:** Editor Development, Game Development and Game Shipping succeeded with no warnings, built twice: before and after the final comment-only ADR reference edits; the rescan of the second Shipping binary is the same.
+- **Shipping scan** (UTF-16 at both alignments, and ASCII):
+  - absent: `StageCraft.Scene.Sketch`, `StageCraft.Sketch.SceneState`, the test messages, "MUTATION", the dev command `StageCraft.Sketch.Add`, and the load warning (UE_LOG compiled out);
+  - the format keys `photoWidth` and `trussHeight` are present as the control.
+- **Not verified by hand:** drawing with the mouse, saving, quitting and reopening; choosing a non-default item in the Items menu and reloading. The item round trip is covered by tests only.
+
+**Commit:** uncommitted (working tree). STATE #112 now carries `5e9c854`.
+
+**Known issues / follow-ups**
+- **Gevor:** draw in the Sketch window, Save, close the app, open the scene again; check the drawing, the DECK and TRUSS heights and a chosen item.
+- The reference photo is not saved (it would mean copying the image next to the scene). Re-import it if needed.
+- Opening a scene or starter stage replaces the current sketch. That is intended, since the sketch belongs to the stage, and the unsaved-changes prompt protects it.
+- Still open from the candidates: Bill of Materials answers in chat (Phase 20 and H4), the GDTF logo artwork, and the cue timeline view.
 - The Obsidian vault on S: is still unreachable, so there is no session log.

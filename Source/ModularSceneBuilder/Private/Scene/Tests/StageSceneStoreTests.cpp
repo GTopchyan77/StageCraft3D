@@ -15,6 +15,7 @@
 #include "Misc/FileHelper.h"
 #include "Misc/Paths.h"
 #include "Scene/StageSceneStore.h"
+#include "Sketch/StageSketchMath.h"
 
 namespace StageSceneStoreTests
 {
@@ -411,6 +412,141 @@ bool FStageScenePartialLoadTest::RunTest(const FString& Parameters)
 	TestEqual(TEXT("Backup: never listed as a scene"), FString::Join(Store.ListScenes(), TEXT("|")), FString(TEXT("Partial")));
 
 	IFileManager::Get().DeleteDirectory(*Directory, /*RequireExists*/ false, /*Tree*/ true);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FStageSceneSketchTest, "StageCraft.Scene.Sketch", StageSceneStoreTests::Flags)
+
+/** Format version 13 (Docs/ADR/0015-sketch-to-stage.md §5): the sketch round trip, v12 migration and hostile sketch data (STATE.md #113). */
+bool FStageSceneSketchTest::RunTest(const FString& Parameters)
+{
+	using namespace StageSceneStoreTests;
+
+	const auto MakeStroke = [](EStageSketchStrokeKind Kind, TArray<FVector2D> Points, bool bClosed, float DeckHeight = 60.f)
+	{
+		FStageSketchStroke Stroke;
+		Stroke.Kind = Kind;
+		Stroke.Points = MoveTemp(Points);
+		Stroke.bClosed = bClosed;
+		Stroke.DeckHeight = DeckHeight;
+		return Stroke;
+	};
+	const FString DeckPath = TEXT("/Game/StageCraft/Items/DA_Deck_Riser.DA_Deck_Riser");
+
+	// A closed freehand outline whose closing edge (800 cm) is far longer than the gesture's close distance: re-deciding the
+	// closing from the end points, as a new stroke is, would open it and turn the deck into a truss line.
+	FStageSketchSceneState Sketch;
+	Sketch.Strokes.Add(MakeStroke(EStageSketchStrokeKind::Freehand, { { 0.0, 0.0 }, { 0.0, 800.0 }, { 600.0, 800.0 }, { 600.0, 0.0 } }, true, 120.f));
+	Sketch.Strokes.Add(MakeStroke(EStageSketchStrokeKind::Shape, { { -100.25, 50.5 }, { 300.0, 50.5 }, { 300.0, 400.0 } }, true));
+	Sketch.Strokes.Add(MakeStroke(EStageSketchStrokeKind::Truss, { { -200.0, -200.0 }, { 900.0, -200.0 } }, false));
+	Sketch.Strokes.Add(MakeStroke(EStageSketchStrokeKind::Truss, { { 0.0, 0.0 }, { 500.0, 0.0 }, { 250.0, 400.0 } }, true));
+	Sketch.Strokes.Add(MakeStroke(EStageSketchStrokeKind::Fixture, { { 412.5, 333.0 } }, false));
+	Sketch.Settings.DeckHeight = 80.f;
+	Sketch.Settings.TrussHeight = 750.f;
+	Sketch.Settings.GridStep = 25.f;
+	Sketch.Settings.bSnapToGrid = false;
+	Sketch.Settings.Smoothing = 0.25f;
+	Sketch.Settings.PhotoWidth = 3000.f;
+	Sketch.Items.SetNum(int32(EStageSketchElement::Count));
+	Sketch.Items[int32(EStageSketchElement::Deck)] = FSoftObjectPath(DeckPath);
+
+	FStageSketchStroke Reopened = Sketch.Strokes[0];
+	TestTrue(TEXT("Premise: a new-stroke sanitize would reopen the saved outline"), StageSketchMath::SanitizeStroke(Reopened) && !Reopened.bClosed);
+
+	FStageSceneDocument Document;
+	Document.Name = TEXT("Sketched");
+	Document.Items.Add(MakeItem(TEXT("Crate"), FTransform(FVector(1, 2, 3))));
+	Document.Sketch = Sketch;
+
+	FStageSceneDocument Parsed;
+	FStageSceneParseReport Report;
+	const FString Saved = FStageSceneStore::Serialize(Document);
+	TestTrue(TEXT("Saves write version 13"), Saved.Contains(TEXT("\"version\": 13")));
+	TestEqual(TEXT("Sketched scene parses"), Str(FStageSceneStore::Parse(Saved, Parsed, Report)), Str(EStageSceneResult::Success));
+	TestEqual(TEXT("Nothing in the sketch dropped"), Report.InvalidSketchEntries, 0);
+	if (TestEqual(TEXT("Every stroke kept"), Parsed.Sketch.Strokes.Num(), Sketch.Strokes.Num()))
+	{
+		for (int32 Index = 0; Index < Sketch.Strokes.Num(); ++Index)
+		{
+			const FStageSketchStroke& In = Sketch.Strokes[Index];
+			const FStageSketchStroke& Out = Parsed.Sketch.Strokes[Index];
+			const FString What = FString::Printf(TEXT("Stroke %d"), Index);
+			TestTrue(What + TEXT(" kind kept"), Out.Kind == In.Kind);
+			TestEqual(What + TEXT(" closed kept"), Out.bClosed, In.bClosed);
+			TestEqual(What + TEXT(" height kept"), Out.DeckHeight, In.DeckHeight);
+			TestTrue(What + TEXT(" points kept exactly"), Out.Points == In.Points);
+		}
+		TestTrue(TEXT("The closed freehand outline is still a deck"), Parsed.Sketch.Strokes[0].GetElement() == EStageSketchElement::Deck);
+	}
+	TestTrue(TEXT("Settings kept"), Parsed.Sketch.Settings == Sketch.Settings);
+	if (TestEqual(TEXT("One item slot per element"), Parsed.Sketch.Items.Num(), int32(EStageSketchElement::Count)))
+	{
+		TestEqual(TEXT("Chosen deck item kept"), Parsed.Sketch.Items[int32(EStageSketchElement::Deck)].ToString(), DeckPath);
+		TestTrue(TEXT("Unchosen truss stays the default"), Parsed.Sketch.Items[int32(EStageSketchElement::Truss)].IsNull());
+	}
+	TestEqual(TEXT("Items still round-trip"), Parsed.Items.Num(), 1);
+
+	// A stage nobody sketched is written without a sketch and reads as an empty one.
+	FStageSceneDocument Plain;
+	Plain.Name = TEXT("Plain");
+	const FString PlainSaved = FStageSceneStore::Serialize(Plain);
+	TestFalse(TEXT("No sketch written for an empty sketch"), PlainSaved.Contains(TEXT("\"sketch\"")));
+	TestEqual(TEXT("Plain scene parses"), Str(FStageSceneStore::Parse(PlainSaved, Parsed, Report)), Str(EStageSceneResult::Success));
+	TestTrue(TEXT("... with an empty sketch"), Parsed.Sketch.IsEmpty());
+	FStageSketchSceneState SettingsOnly;
+	SettingsOnly.Settings.TrussHeight = 900.f;
+	Plain.Sketch = SettingsOnly;
+	TestTrue(TEXT("Changed settings alone are saved"), FStageSceneStore::Serialize(Plain).Contains(TEXT("\"trussHeight\": 900")));
+
+	// Migration 12 -> 13: an older file has no sketch; one found in it is not trusted to mean anything.
+	const FString V12 = TEXT("{\"format\":\"StageCraftScene\",\"version\":12,\"items\":[],\"sketch\":{\"strokes\":[{\"kind\":\"Fixture\",\"points\":[0,0]}]}}");
+	TestEqual(TEXT("Version 12 parses"), Str(FStageSceneStore::Parse(V12, Parsed, Report)), Str(EStageSceneResult::Success));
+	TestTrue(TEXT("... with an empty sketch"), Parsed.Sketch.IsEmpty());
+
+	// Hostile sketch data: each bad stroke or item is dropped and counted, settings are clamped, the rest of the scene loads.
+	const FString Hostile = TEXT("{\"format\":\"StageCraftScene\",\"version\":13,\"items\":[],\"sketch\":{"
+		"\"settings\":{\"deckHeight\":-5,\"trussHeight\":99999,\"gridStep\":\"wide\",\"smoothing\":3},"
+		"\"items\":{\"Deck\":\"/Script/Engine.Actor\",\"Truss\":\"/Game/StageCraft/Items/DA_Span_TrussF34.DA_Span_TrussF34\",\"Count\":\"/Game/A.A\"},"
+		"\"strokes\":["
+		"{\"kind\":\"Laser\",\"points\":[0,0]},"
+		"{\"kind\":\"Truss\",\"points\":[0,0,100]},"
+		"{\"kind\":\"Truss\",\"points\":[0,0,\"x\",5]},"
+		"{\"kind\":\"Shape\",\"closed\":true,\"points\":[0,0,100,0]},"
+		"{\"kind\":\"Fixture\",\"points\":[1e12,0]},"
+		"\"not an object\","
+		"{\"kind\":\"Shape\",\"closed\":false,\"deckHeight\":9999,\"points\":[0,0,100,0,100,100,0,0]}"
+		"]}}");
+	TestEqual(TEXT("Hostile sketch still parses"), Str(FStageSceneStore::Parse(Hostile, Parsed, Report)), Str(EStageSceneResult::Success));
+	TestEqual(TEXT("Six bad strokes and one bad item counted"), Report.InvalidSketchEntries, 7);
+	if (TestEqual(TEXT("The good stroke kept"), Parsed.Sketch.Strokes.Num(), 1))
+	{
+		const FStageSketchStroke& Shape = Parsed.Sketch.Strokes[0];
+		TestTrue(TEXT("A shape is always closed"), Shape.bClosed);
+		TestEqual(TEXT("... its repeated end dropped"), Shape.Points.Num(), 3);
+		TestEqual(TEXT("... its height clamped"), Shape.DeckHeight, StageSketchMath::MaxDeckHeight);
+	}
+	TestEqual(TEXT("Deck height clamped"), Parsed.Sketch.Settings.DeckHeight, StageSketchMath::MinDeckHeight);
+	TestEqual(TEXT("Truss height clamped"), Parsed.Sketch.Settings.TrussHeight, StageSketchMath::MaxTrussHeight);
+	TestEqual(TEXT("A setting of the wrong type keeps its default"), Parsed.Sketch.Settings.GridStep, FStageSketchSettings().GridStep);
+	TestEqual(TEXT("Smoothing clamped"), Parsed.Sketch.Settings.Smoothing, StageSketchMath::MaxSmoothing);
+	TestTrue(TEXT("A path outside the catalog roots is not chosen"), Parsed.Sketch.Items[int32(EStageSketchElement::Deck)].IsNull());
+	TestFalse(TEXT("A catalog path is kept (the world checks it is a candidate)"), Parsed.Sketch.Items[int32(EStageSketchElement::Truss)].IsNull());
+
+	const FString NotAnObject = TEXT("{\"format\":\"StageCraftScene\",\"version\":13,\"items\":[],\"sketch\":[1,2]}");
+	TestEqual(TEXT("A sketch that is not an object parses"), Str(FStageSceneStore::Parse(NotAnObject, Parsed, Report)), Str(EStageSceneResult::Success));
+	TestEqual(TEXT("... counted"), Report.InvalidSketchEntries, 1);
+	TestTrue(TEXT("... as an empty sketch"), Parsed.Sketch.IsEmpty());
+
+	// A hostile stroke count is capped at what the Sketch window holds.
+	FString Many = TEXT("{\"format\":\"StageCraftScene\",\"version\":13,\"items\":[],\"sketch\":{\"strokes\":[");
+	for (int32 Index = 0; Index < StageSketchMath::MaxStrokes + 3; ++Index)
+	{
+		Many += FString::Printf(TEXT("%s{\"kind\":\"Fixture\",\"points\":[%d,0]}"), Index == 0 ? TEXT("") : TEXT(","), Index * 10);
+	}
+	Many += TEXT("]}}");
+	TestEqual(TEXT("Many strokes parse"), Str(FStageSceneStore::Parse(Many, Parsed, Report)), Str(EStageSceneResult::Success));
+	TestEqual(TEXT("... capped"), Parsed.Sketch.Strokes.Num(), StageSketchMath::MaxStrokes);
+	TestEqual(TEXT("... the rest counted"), Report.InvalidSketchEntries, 3);
 	return true;
 }
 

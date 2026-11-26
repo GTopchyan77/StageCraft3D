@@ -29,8 +29,10 @@ DECLARE_DYNAMIC_MULTICAST_DELEGATE(FOnStageSketchImportChanged);
  *    no UObject, and the result is applied on the game thread if that import is still current. One import at a time; the online
  *    request and any late worker result are dropped when the world ends. The reference photo is a transient texture owned here.
  *
- * Per stage session: the sketch is dropped with the world and is not saved in scene files. Game and PIE worlds only. Never ticks
- * and never iterates the world; the catalog is read from UStageItemSubsystem.
+ * Per stage session, saved with the stage: scene files keep the strokes, settings and chosen items (format version 13, ADR 0015
+ * §5), so a sketch change is an unsaved change of the stage (UStageSessionSubsystem listens to OnSketchChanged), and opening a
+ * scene replaces the sketch with the scene's (RestoreSceneState). Game and PIE worlds only. Never ticks and never iterates the
+ * world; the catalog is read from UStageItemSubsystem.
  */
 UCLASS()
 class MODULARSCENEBUILDER_API UStageSketchSubsystem : public UWorldSubsystem
@@ -63,6 +65,20 @@ public:
 
 	/** Strokes that become Element. */
 	int32 CountStrokes(EStageSketchElement Element) const;
+
+	// --- Scene files (format version 13; Docs/ADR/0015-sketch-to-stage.md §5) ---
+
+	/** The sketch as a scene file keeps it: strokes, settings and the items chosen with SetItem (empty paths where none was). */
+	FStageSketchSceneState CaptureSceneState() const;
+
+	/**
+	 * Replaces the whole sketch with a loaded scene's (UStageSceneComponent, when a scene, autosave or starter stage is opened): each
+	 * stroke through StageSketchMath::SanitizeSavedStroke, at most MaxStrokes, the settings sanitized, and each item chosen only when
+	 * it is still one of its element's candidates (otherwise the first candidate builds it, as with nothing chosen). The photo import
+	 * in progress is cancelled and the reference photo removed: they belonged to the sketch being replaced. One OnSketchChanged.
+	 * Returns the strokes and items that could not be restored.
+	 */
+	int32 RestoreSceneState(const FStageSketchSceneState& State);
 
 	// --- Settings ---
 
