@@ -10815,11 +10815,75 @@ All times in ms.
   - the format keys `photoWidth` and `trussHeight` are present as the control.
 - **Not verified by hand:** drawing with the mouse, saving, quitting and reopening; choosing a non-default item in the Items menu and reloading. The item round trip is covered by tests only.
 
-**Commit:** uncommitted (working tree). STATE #112 now carries `5e9c854`.
+**Commit:** `3512485`.
 
 **Known issues / follow-ups**
 - **Gevor:** draw in the Sketch window, Save, close the app, open the scene again; check the drawing, the DECK and TRUSS heights and a chosen item.
 - The reference photo is not saved (it would mean copying the image next to the scene). Re-import it if needed.
 - Opening a scene or starter stage replaces the current sketch. That is intended, since the sketch belongs to the stage, and the unsaved-changes prompt protects it.
 - Still open from the candidates: Bill of Materials answers in chat (Phase 20 and H4), the GDTF logo artwork, and the cue timeline view.
+- The Obsidian vault on S: is still unreachable, so there is no session log.
+
+## #114 — The AI Assistant answers about the bill of materials; counts give rental units (truss sections, deck panels) (2026-11-26)
+
+**What & why**
+- Gevor asked (2026-11-26) for AI Assistant answers about the bill of materials (Phase 20 and the H4 follow-ups: "BOM answers ... in chat still open"), checking first what already existed.
+- **Already there:** `stage_summary`, `item_count`, `total_weight`, `power_draw`, `fixture_count` and `count_matching` questions, and `export` of the BOM (PDF + CSV). No answer read the report's lines, and counts counted placements only.
+- **Measured first** (`-game` run `Bom114Before`, Concert starter stage, local interpreter):
+  - `StageCraft.Report.Status`: 15 lines, 92 units, 26 placements, 3,519 kg, 16,390 W. That includes 16 F34 truss sections in 2 runs, 54 deck panels in 2 decks, and 9 Beam 280.
+  - "what is on the bill of materials" and «նյութերի ցուցակը» got the help article "The Bill of Materials panel opens from Window › Bill of Materials".
+  - "what do I need to rent" and "show me the BOM" were **not understood**.
+  - "list the equipment" got the **cue list** help article.
+  - "how many truss sections do I need" answered **"None of the 26 placed items match "truss need""**.
+- **Change:**
+  - **New question intent `EStageAIIntent::BillOfMaterials`** (wire name `bill_of_materials`). It is read-only, listed in `IsQuestion`, the tool catalogue and the online schema's description, so the Claude model reaches the same local answer.
+  - **Local grammar** (`ParseQuestion`):
+    - **It triggers on:** bom, materials, inventory, rent / rental / hire, pick list, packing list, equipment list, gear list, "list the equipment"; Armenian նյութ… reaches it through the lexicon (→ materials).
+    - **It is not taken when:** the prompt counts ("how many"), or asks where or to open ("where / open / panel / window / find" stay with the help articles). Exports are parsed earlier and stay exports.
+  - **Answer** (`DescribeBillOfMaterials`): the totals (units, lines, weight, power), then each discipline's lines in rental units, at most four per discipline ("and N more"), then a pointer to "export the bill of materials". It has English and Armenian frames.
+  - **`FStageAISceneView::BillOfMaterials`** is a copy of `UStageBillOfMaterialsSubsystem::GetReport()` made in `CaptureScene`, so the chat, the panel and the export always agree.
+  - **Counts:**
+    - `count_matching` adds "In rental units: …" for matched lines whose units differ from their placements (`DescribeRentalUnits`).
+    - Count prompts now also drop need / needed / require / required / rent / hire / to / order / panel(s) / segment(s), so the query is the item word.
+  - **Help text:** the examples gain "how many truss sections", "what is on the bill of materials" and «նյութերի ցուցակը».
+  - **Docs:** ADR 0016 §6 amendment and status line; `Docs/CURRENT_SYSTEMS.md` (assistant row).
+
+**Files changed**
+- `Source/ModularSceneBuilder/Public/AI/StageAITypes.h` (intent, scene view field, include), `Private/AI/StageAITypes.cpp` (`IsQuestion`).
+- `Source/ModularSceneBuilder/Private/AI/StageAIToolCatalogue.cpp` (tool entry), `Private/AI/StageAICommandSchema.cpp` (intent description).
+- `Source/ModularSceneBuilder/Private/AI/StageAICommandParser.cpp` (rule, count words, answers, help examples), `Private/AI/StageAICommandSubsystem.cpp` (`CaptureScene`).
+- Tests: `Private/AI/Tests/StageAIBillOfMaterialsTests.cpp` (new, `StageCraft.AI.BillOfMaterials`), `Private/AI/Tests/StageAIArmenianTests.cpp` (help examples 54 → 55; each must still parse as Armenian).
+- `Docs/ADR/0016-ai-assistant.md`, `Docs/CURRENT_SYSTEMS.md`, `tasks/todo.md` (Phase 20 and H4 lines, Phase 64), `STATE.md` (this entry; #113 carries `3512485`).
+- No Blueprint, asset, map or ini file.
+
+**Verification**
+- **Test `StageCraft.AI.BillOfMaterials`** (no world):
+  - eight prompts (EN, HY) parse to `bill_of_materials`;
+  - export, "where is", "open … panel" and "total weight of the materials" keep their own intents;
+  - "how many truss sections do I need" and "how many deck panels do we have to hire" count "truss" and "deck";
+  - **answer on a built report** (2 truss runs of 6 + 10, 2 decks of 27, 9 heads): "79 units in 3 lines", "16 × …", "54 × …", "9 × …" and the export pointer; the Armenian answer is in Armenian;
+  - **count answers:** truss gives "2 placed items match "truss"" and "In rental units: 16 × F34 Truss Run (2 m sections)"; moving heads have no rental line;
+  - six lines in one discipline give "and 2 more", and an empty stage says so;
+  - the online tool input `{"intent":"bill_of_materials"}` parses to a question, and the tool definition lists it.
+- **Mutations** (both reverted; `grep` clean): disabling the parser rule and the rental-unit clause together fails 17 checks (every prompt, the answer contents and the rental line).
+- **Suites:** `StageCraft.AI` and `StageCraft.Knowledge` 17/17 after the Armenian count fix. The full suite `RunAutomation.ps1 -Filter StageCraft -NullRHI` passed 318/318, with user data unchanged (181 files).
+- **`-game` `Bom114After`** (same stage, same prompts):
+  - "what is on the bill of materials", "what do I need to rent", "show me the BOM" and "list the equipment" each answer "Bill of materials: 92 units in 15 lines, 3,519 kg, 16.4 kW. Stage: 1 × LED Wall Backdrop …, 54 × Stage Deck / Riser (2 x 1 m panels); Truss: 16 × F34 Truss Run (2 m sections); Lighting: 9 × Beam 280 (Moving Head); Prop: …; People: … and 6 more. …";
+  - «նյութերի ցուցակը» answers in Armenian with the same numbers;
+  - "how many truss sections do I need" gives "2 placed items match "truss" … In rental units: 16 × F34 Truss Run (2 m sections)";
+  - "how many deck panels" gives "… In rental units: 54 × Stage Deck / Riser (2 x 1 m panels)";
+  - "how many moving heads" is unchanged;
+  - "where is the bill of materials" still gets the help article;
+  - the AI Assistant panel screenshot shows the conversation.
+  - Log: `%TEMP%/StageCraftRuns/Bom114After/game.log`.
+- **Builds:** Editor Development, Game Development and Game Shipping succeeded with no warnings.
+- **Shipping scan** (UTF-16 at both alignments, and ASCII): absent are the test name, its messages, "MUTATION" and the dev command `StageCraft.Assistant.Ask`; present as the control are the answer text "In rental units: {1}" and the wire name `bill_of_materials`.
+- **Not verified:** the online Claude model calling `bill_of_materials` live (no key in tests; the wire format is tested), and asking in the panel with the mouse and keyboard.
+
+**Commit:** uncommitted (working tree). STATE #113 now carries `3512485`.
+
+**Known issues / follow-ups**
+- **Gevor:** in the AI Assistant panel, ask "what do I need to rent" and "how many truss sections do I need" on one of your stages.
+- **Labels:** discipline labels and catalog names in the Armenian answer are English (the report's own labels).
+- **Export completion** in the chat is still open (ADR 0016 §4).
 - The Obsidian vault on S: is still unreachable, so there is no session log.

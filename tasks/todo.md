@@ -449,7 +449,7 @@ Gevor's fixture-suite request took #49 (Phase 27) and the marketplace took #50 /
 - [x] Reply action buttons; open and flash panels (SHOW ME / OPEN PANEL and the anchor pulse, H1, STATE.md #72; box found stale in #102)
 - [x] Multi-step prompts (splitter, queued plan, stop on first refusal) — Phase H4, STATE.md #75
 - [x] Conversation memory (last affected items, repeat with replaced slots) — Phase H4, STATE.md #75
-- [ ] New actions: selection, cue update/delete, BOM answers, export completion in chat (fixture parameters: done in #49 as set_fixture; cue update/delete in #74, selection in #75; BOM answers and export completion in chat still open)
+- [ ] New actions: selection, cue update/delete, BOM answers, export completion in chat (fixture parameters: done in #49 as set_fixture; cue update/delete in #74, selection in #75; BOM answers in #114 (bill_of_materials, rental units in counts); export completion in chat still open)
 - [ ] Claude schema: new intents + steps; knowledge base in the system prompt
 - [ ] Tests (corpus EN/HY); builds 0 warnings; scripted runs
 - [ ] Manual verification (Gevor)
@@ -633,7 +633,7 @@ Gevor's choices: automation tests on a harness game instance (not AFunctionalTes
   - [x] H4d tools select_fixtures, apply_palette, record_palette, delete_palette, record_group, delete_group, start_effect, update_effect, stop_effect (catalogue, schema, runner through the panels' requests, grammar EN/HY, help)
   - [x] H4e tests (Assistant.MultiStep, Assistant.ToolGrammar, Assistant.ToolSchema, Assistant.Memory), builds, Shipping scan, scripted run H4
 - [ ] H4 manual verification (Gevor): type "add 4 pars and make them blue", APPLY, one Ctrl+Z; "select fixtures 1 to 2 and record a group called Front"; "start a circle effect on group front", "effect speed 1 hz", "stop all effects"; "do it again on group front" after a colour; the same in Armenian
-- [ ] H4 follow-ups: add or remove fixtures of an existing group, rename palettes and groups, per-fixture palettes, effect settings beyond rate and size, BOM answers and export completion in chat (Phase 26)
+- [ ] H4 follow-ups: add or remove fixtures of an existing group, rename palettes and groups, per-fixture palettes, effect settings beyond rate and size, export completion in chat (Phase 26; BOM answers done in #114)
 - [x] UI overrides (Gevor 2026-11-06, STATE.md #76): no interface sounds (feedback cues, their table, SFX assets, Effects volume removed); a starter stage opens with the welcome screen and every floating panel closed, nothing opened
 - [x] I0 ADR 0031 (STATE.md #76): procedural stand-in people on a bone-animation-texture contract (art source still open for Gevor: real art drops into the same contract), crowd budget measured with Bench.Fixtures Crowd=N; OverCrowd not used
   - [x] I0a StageFigureRig: 11-bone rigid humanoid, 3 LODs (348 / 168 / 72 triangles), 10 clips (crowd idle / bounce / cheer / clap, drummer, guitarist, vocalist, keyboardist, desk operator, stagehand), baked 22 x 320 RGBA32F texture
@@ -923,3 +923,11 @@ Gevor's choices: automation tests on a harness game instance (not AFunctionalTes
 - [x] Tests StageCraft.Scene.Sketch and StageCraft.Sketch.SceneState (two mutations fail them); suite 317/317; server 84/84; -game: unsaved after drawing, v13 file, clear + load and a fresh launch restore 3 strokes and truss 750 cm (Sketch window screenshot)
 - [ ] Gevor: draw in the Sketch window, Save, close the app, reopen the scene; check the drawing, the heights and the chosen Items
 - [ ] Optional: keep the reference photo with the scene (copy the image next to the scene file)
+
+## Phase 64 - Assistant answers about the bill of materials (requested by Gevor 2026-11-26; STATE.md #114; ADR 0016 §6)
+- [x] Measured first (-game Bom114Before, Concert): BOM 15 lines / 92 units / 3,519 kg / 16.4 kW, but "what is on the bill of materials" and "նյութերի ցուցակը" got the panel's help article, "what do I need to rent" and "show me the BOM" were not understood, "list the equipment" got the cue list article, "how many truss sections do I need" matched nothing ("truss need")
+- [x] Question bill_of_materials (local grammar EN/HY and the online tool): totals and each discipline's lines in rental units, four per discipline, the export named; the scene view copies UStageBillOfMaterialsSubsystem's report
+- [x] Count answers add rental units where they differ from placements ("In rental units: 16 × F34 Truss Run (2 m sections)"); count prompts drop need / rent / hire / panels / segments
+- [x] Test StageCraft.AI.BillOfMaterials (two mutations fail it, 17 checks); AI.Armenian counts the new help example; suite 318/318; -game Bom114After: every answer matches the report
+- [ ] Gevor: ask the AI Assistant panel "what do I need to rent" and "how many truss sections do I need" on your own stage
+- [ ] Export completion in the chat (Phase 20 / H4, still open); Armenian discipline labels in the answer (the report's labels are English)

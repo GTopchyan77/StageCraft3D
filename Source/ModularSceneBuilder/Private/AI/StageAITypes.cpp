@@ -18,6 +18,7 @@ bool FStageAICommand::IsQuestion() const
 	case EStageAIIntent::EnvironmentStatus:
 	case EStageAIIntent::ExplainFixture:
 	case EStageAIIntent::ListProblems:
+	case EStageAIIntent::BillOfMaterials:
 	case EStageAIIntent::ListingDetails:
 		return true;
 	default:

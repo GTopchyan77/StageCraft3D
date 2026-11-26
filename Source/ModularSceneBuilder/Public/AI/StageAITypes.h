@@ -8,6 +8,7 @@
 #include "Environment/StageEnvironmentTypes.h"
 #include "GameplayTagContainer.h"
 #include "Marketplace/StageMarketplaceTypes.h"
+#include "Report/StageBillOfMaterials.h"
 #include "Show/ShowControlTypes.h"
 #include "StageAITypes.generated.h"
 
@@ -33,6 +34,11 @@ enum class EStageAIIntent : uint8
 	ExplainFixture,
 	/** "Any problems?": the show's diagnostics, worst first (Docs/ADR/0030 §5). */
 	ListProblems,
+	/**
+	 * "What is on the bill of materials?", "what do I need to rent?": the production report's lines by discipline with the totals
+	 * (STATE.md #114). The rental units of matching items also answer CountMatching ("how many truss sections").
+	 */
+	BillOfMaterials,
 
 	// Actions (through the controller's requests).
 	AddFixtures,
@@ -496,6 +502,9 @@ struct FStageAISceneView
 
 	/** Fixture count per fixture name, in first-seen order. */
 	TArray<TPair<FString, int32>> FixturesByName;
+
+	/** The bill of materials as the report shows it (UStageBillOfMaterialsSubsystem): rental units per catalog item, by discipline. */
+	FStageBillOfMaterials BillOfMaterials;
 
 	struct FCue
 	{

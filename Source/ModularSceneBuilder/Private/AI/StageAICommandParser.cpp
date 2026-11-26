@@ -530,6 +530,16 @@ namespace StageAICommandParser
 			}
 
 			const bool bCounting = Prompt.HasPhrase({ TEXT("how"), TEXT("many") }) || Prompt.HasAny({ TEXT("count"), TEXT("number") });
+			// The bill of materials as an answer. "How many truss sections do I need" still counts (with rental units, below), and
+			// "where is / open the bill of materials" is left to the help articles, which name the panel.
+			const bool bBomWords = Prompt.HasAny({ TEXT("bom"), TEXT("materials"), TEXT("material"), TEXT("inventory"), TEXT("rent"), TEXT("rental"),
+				TEXT("hire"), TEXT("picklist") }) || Prompt.HasPhrase({ TEXT("pick"), TEXT("list") }) || Prompt.HasPhrase({ TEXT("packing"), TEXT("list") })
+				|| Prompt.HasPhrase({ TEXT("equipment"), TEXT("list") }) || Prompt.HasPhrase({ TEXT("gear"), TEXT("list") }) || Prompt.IsExactly({ TEXT("list"), TEXT("the"), TEXT("equipment") });
+			if (bBomWords && !bCounting && !Prompt.HasAny({ TEXT("where"), TEXT("open"), TEXT("panel"), TEXT("window"), TEXT("find") }))
+			{
+				Command.Intent = EStageAIIntent::BillOfMaterials;
+				return Command;
+			}
 			TArray<FString> Target;
 			for (const FString& Word : Prompt.Words)
 			{
@@ -537,7 +547,8 @@ namespace StageAICommandParser
 					TEXT("on"), TEXT("stage"), TEXT("do"), TEXT("i"), TEXT("we"), TEXT("have"), TEXT("placed"), TEXT("in"), TEXT("scene"), TEXT("total"),
 					TEXT("my"), TEXT("what"), TEXT("whats"), TEXT("show"), TEXT("list"), TEXT("tell"), TEXT("me"), TEXT("all"), TEXT("give"), TEXT("which"),
 					TEXT("our"), TEXT("currently"), TEXT("now"), TEXT("so"), TEXT("far"), TEXT("used"), TEXT("got"),
-					TEXT("section"), TEXT("sections"), TEXT("piece"), TEXT("pieces"), TEXT("unit"), TEXT("units") }))
+					TEXT("section"), TEXT("sections"), TEXT("piece"), TEXT("pieces"), TEXT("unit"), TEXT("units"), TEXT("need"), TEXT("needed"), TEXT("require"),
+					TEXT("required"), TEXT("rent"), TEXT("hire"), TEXT("to"), TEXT("order"), TEXT("panel"), TEXT("panels"), TEXT("segment"), TEXT("segments") }))
 				{
 					Target.Add(Word);
 				}
@@ -3334,6 +3345,62 @@ namespace StageAIAnswers
 				FText::AsPercent(Settings.Snow), FText::AsPercent(Settings.Fog));
 		}
 
+		/** "16 × F34 Truss Run (2 m sections)": a report line in rental units. */
+		FText DescribeBomLine(const FStageBomLine& Line)
+		{
+			return FText::Format(LOCTEXT("CountedName", "{0} × {1}"), FText::AsNumber(Line.Quantity), Line.ItemName);
+		}
+
+		/** The report by discipline, a few lines each, with the totals; the export names the full report. */
+		FText DescribeBillOfMaterials(const FStageBillOfMaterials& Report, EStageAILanguage Language)
+		{
+			if (Report.IsEmpty())
+			{
+				return Pick(Language, LOCTEXT("BomEmpty", "The bill of materials is empty: nothing is placed yet."),
+					INVTEXT("Նյութերի ցուցակը դատարկ է. դեռ ոչինչ տեղադրված չէ։"));
+			}
+			// A chat line, not the report: the biggest disciplines can hold dozens of lines, the PDF and the panel list them all.
+			constexpr int32 MaxLinesPerGroup = 4;
+			TArray<FText> Groups;
+			for (const FStageBomGroup& Group : Report.Groups)
+			{
+				TArray<FText> Lines;
+				for (int32 Index = 0; Index < Group.Lines.Num() && Index < MaxLinesPerGroup; ++Index)
+				{
+					Lines.Add(DescribeBomLine(Group.Lines[Index]));
+				}
+				FText Joined = FText::Join(LOCTEXT("ListSeparator", ", "), Lines);
+				if (Group.Lines.Num() > MaxLinesPerGroup)
+				{
+					Joined = FText::Format(Pick(Language, LOCTEXT("BomMore", "{0} and {1} more"), INVTEXT("{0} և ևս {1}")), Joined, FText::AsNumber(Group.Lines.Num() - MaxLinesPerGroup));
+				}
+				Groups.Add(FText::Format(LOCTEXT("BomGroup", "{0}: {1}"), Group.Label, Joined));
+			}
+			return FText::Format(Pick(Language,
+					LOCTEXT("BomAnswer", "Bill of materials: {0} {0}|plural(one=unit,other=units) in {1} {1}|plural(one=line,other=lines), {2}, {3}. {4}. Say \"export the bill of materials\" for the full PDF and CSV."),
+					INVTEXT("Նյութերի ցուցակ՝ {0} միավոր {1} տողում, {2}, {3}։ {4}։ Ամբողջական PDF-ի և CSV-ի համար գրեք «արտահանիր նյութերի ցուցակը»։")),
+				FText::AsNumber(Report.Quantity), FText::AsNumber(Report.LineCount), FormatKg(float(Report.TotalWeightKg), Language),
+				FormatWatts(float(Report.TotalPowerWatts), Language), FText::Join(LOCTEXT("BomGroupSeparator", "; "), Groups));
+		}
+
+		/** Report lines of the matched names whose rental units differ from their placements (spans in sections, decks in panels). */
+		TArray<FText> DescribeRentalUnits(const FStageBillOfMaterials& Report, TConstArrayView<TPair<FString, int32>> Matched)
+		{
+			TArray<FText> Parts;
+			for (const FStageBomGroup& Group : Report.Groups)
+			{
+				for (const FStageBomLine& Line : Group.Lines)
+				{
+					const FString Name = Line.ItemName.ToString();
+					if (Line.Quantity != Line.Placements && Algo::AnyOf(Matched, [&Name](const TPair<FString, int32>& Entry) { return Entry.Key == Name; }))
+					{
+						Parts.Add(DescribeBomLine(Line));
+					}
+				}
+			}
+			return Parts;
+		}
+
 		/** Placed item names matching every word of Query (singular, case-insensitive), counted per name. */
 		TArray<TPair<FString, int32>> CountMatching(TConstArrayView<FString> Names, const FString& Query)
 		{
@@ -3391,7 +3458,7 @@ namespace StageAIAnswers
 	{
 		return Pick(Language, LOCTEXT("Help",
 			"I can answer questions about the stage and make safe, undoable changes. Try:\n"
-			"• \"status\", \"how many fixtures\", \"total weight\", \"power draw\", \"list cues\", \"how many truss\"\n"
+			"• \"status\", \"how many fixtures\", \"total weight\", \"power draw\", \"list cues\", \"how many truss sections\", \"what is on the bill of materials\"\n"
 			"• \"add 6 moving heads\", \"place a led par\"\n"
 			"• \"delete the selected\", \"remove the spots\", \"move the selected 2 m left\", \"raise the truss 50 cm\", \"replace the pars with washes\"\n"
 			"• \"build a 4 m round riser 60 cm high\", \"add stairs 80 cm high\", \"add a 6 m circle truss at 7 m\", \"make a 180° arc truss radius 5 m\"\n"
@@ -3407,7 +3474,7 @@ namespace StageAIAnswers
 			"I also understand Armenian. Everything I change goes through the stage's rules and can be undone with Ctrl+Z, and I always ask before spending credits."),
 			INVTEXT(
 			"Կարող եմ պատասխանել բեմի մասին հարցերին և կատարել անվտանգ փոփոխություններ, որոնք կարելի է հետարկել։ Փորձեք՝\n"
-			"• վիճակը · քանի՞ սարք կա · ընդհանուր քաշը · հզորությունը · կյուների ցանկը · քանի՞ ֆերմա կա\n"
+			"• վիճակը · քանի՞ սարք կա · ընդհանուր քաշը · հզորությունը · կյուների ցանկը · քանի՞ ֆերմա կա · նյութերի ցուցակը\n"
 			"• ավելացրու 6 շարժական գլուխ · տեղադրիր մեկ LED փար\n"
 			"• ջնջիր ընտրվածը · հեռացրու սփոթերը · տեղափոխիր ընտրվածը 2 մ ձախ · բարձրացրու ֆերման 50 սմ · փոխարինիր փարերը վոշերով\n"
 			"• վոշերը դարձրու կարմիր · դիմեր 50 տոկոս · լի 106 ժել ընտրվածին · զում 20 աստիճան · միացրու ֆրոստը · պրիզմա · գոբո աստղ · ստրոբ\n"
@@ -3484,12 +3551,22 @@ namespace StageAIAnswers
 			{
 				Total += Entry.Value;
 			}
-			return Total == 0
-				? FText::Format(Pick(Language, LOCTEXT("NoneMatch", "None of the {0} placed {0}|plural(one=item,other=items) match \"{1}\"."), INVTEXT("Տեղադրված {0} իրերից ոչ մեկը չի համապատասխանում «{1}»-ին։")),
-					FText::AsNumber(Scene.PlacedItems), FText::FromString(Command.ItemQuery))
-				: FText::Format(Pick(Language, LOCTEXT("Matches", "{0} placed {0}|plural(one=item matches,other=items match) \"{1}\": {2}."), INVTEXT("«{1}»-ին համապատասխանում է {0} տեղադրված իր՝ {2}։")),
-					FText::AsNumber(Total), FText::FromString(Command.ItemQuery), JoinCounts(Counts));
+			if (Total == 0)
+			{
+				return FText::Format(Pick(Language, LOCTEXT("NoneMatch", "None of the {0} placed {0}|plural(one=item,other=items) match \"{1}\"."), INVTEXT("Տեղադրված {0} իրերից ոչ մեկը չի համապատասխանում «{1}»-ին։")),
+					FText::AsNumber(Scene.PlacedItems), FText::FromString(Command.ItemQuery));
+			}
+			const FText Matches = FText::Format(Pick(Language, LOCTEXT("Matches", "{0} placed {0}|plural(one=item matches,other=items match) \"{1}\": {2}."), INVTEXT("«{1}»-ին համապատասխանում է {0} տեղադրված իր՝ {2}։")),
+				FText::AsNumber(Total), FText::FromString(Command.ItemQuery), JoinCounts(Counts));
+			// A truss run or a deck is one placement but many rental units: "how many truss sections" means the units.
+			const TArray<FText> Units = DescribeRentalUnits(Scene.BillOfMaterials, Counts);
+			return Units.IsEmpty() ? Matches
+				: FText::Format(Pick(Language, LOCTEXT("MatchesUnits", "{0} In rental units: {1}."), INVTEXT("{0} Վարձույթի միավորներով՝ {1}։")),
+					Matches, FText::Join(LOCTEXT("ListSeparator", ", "), Units));
 		}
+
+		case EStageAIIntent::BillOfMaterials:
+			return DescribeBillOfMaterials(Scene.BillOfMaterials, Language);
 
 		case EStageAIIntent::ListCues:
 		{

@@ -36,6 +36,7 @@ namespace StageAIToolCatalogue
 			{ EStageAIIntent::EnvironmentStatus, TEXT("environment_status"), EEffect::None, NotUndoable, Alone },
 			{ EStageAIIntent::ExplainFixture, TEXT("explain_fixture"), EEffect::None, NotUndoable, Alone },
 			{ EStageAIIntent::ListProblems, TEXT("list_problems"), EEffect::None, NotUndoable, Alone },
+			{ EStageAIIntent::BillOfMaterials, TEXT("bill_of_materials"), EEffect::None, NotUndoable, Alone },
 			{ EStageAIIntent::AddFixtures, TEXT("add_fixtures"), EEffect::Stage, Undoable, Plannable },
 			{ EStageAIIntent::StoreCue, TEXT("store_cue"), EEffect::Cues, Undoable, Plannable },
 			{ EStageAIIntent::UpdateCue, TEXT("update_cue"), EEffect::Cues, Undoable, Plannable },

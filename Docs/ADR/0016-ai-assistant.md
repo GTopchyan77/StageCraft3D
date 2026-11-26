@@ -1,6 +1,6 @@
 # ADR 0016: AI Assistant (chat panel and natural-language commands)
 
-- **Status:** accepted. See STATE.md #43.
+- **Status:** accepted. See STATE.md #43; §6 amendment (STATE.md #114: bill of materials answers).
 - **Related:**
   - ADR 0015 §2.5 (sketch plans placed all or nothing, one undo step): the assistant places fixtures through the same plan and builder.
   - ADR 0011 §2.2 (cue requests), ADR 0012 / 0014 (report exports), ADR 0009 (outdoor environment).
@@ -126,3 +126,21 @@ It binds `OnConversationChanged` in `NativeConstruct`, unbinds it in `NativeDest
 ## 5. Rollback
 
 Remove `Source/ModularSceneBuilder/*/AI/`, the panel definition and its menu entries, and the two controller requests (re-inline `RequestBuildPlan` into `HandleSketchAssetsReady`). `FStageEnvironmentCommand` can stay; it is unused without the assistant.
+
+## 6. Amendment: bill of materials answers (STATE.md #114, 2026-11-26)
+
+**Measured before** (`-game` run `Bom114Before`, Concert starter stage, local interpreter): the BOM panel's report had 15 lines, 92 units, 3,519 kg and 16.4 kW, but the assistant answered none of these questions from it.
+- "what is on the bill of materials" and "նյութերի ցուցակը" got the help article that names the panel.
+- "what do I need to rent" and "show me the BOM" were not understood.
+- "list the equipment" got the cue list article.
+- "how many truss sections do I need" answered "None of the 26 placed items match "truss need"", although the stage holds 16 sections in 2 runs.
+
+**Decision:**
+- **New question `bill_of_materials`** (`EStageAIIntent::BillOfMaterials`, read-only, answered from the live stage like `total_weight`). The online model gets the same tool name, so it reaches the same answer.
+  - **Words that trigger it:** bom, materials, inventory, rent / rental / hire, pick list, packing list, equipment list, gear list, "list the equipment", and Armenian նյութ… (→ materials).
+  - **Words that don't:** "where / open / panel / window / find" are left to the help articles, which name the panel. "export …" stays an export, and "how many …" stays a count.
+- **The answer gives** the totals (units, lines, weight, power) and each discipline's lines in rental units ("16 × F34 Truss Run (2 m sections)"). It shows at most four lines per discipline ("and N more") and ends by pointing to the export for the full PDF and CSV. It uses English and Armenian frames; group labels and catalog names stay as the report has them.
+- **Single source of truth:** `FStageAISceneView::BillOfMaterials` is a copy of `UStageBillOfMaterialsSubsystem::GetReport()`, so the chat, the panel and the export give the same numbers.
+- **Counts give rental units.** A count answer adds "In rental units: …" for matched items whose units differ from their placements (spans in sections, decks in panels). Count prompts drop need / rent / hire / to / order / panel(s) / segment(s), so "how many truss sections do I need" counts "truss".
+
+**Not in this amendment:** export completion in the chat (§4 follow-up, still open).

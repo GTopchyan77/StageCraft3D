@@ -21,6 +21,7 @@
 #include "Environment/StageEnvironmentSubsystem.h"
 #include "Marketplace/StageMarketplaceSubsystem.h"
 #include "ModularSceneBuilder.h"
+#include "Report/StageBillOfMaterialsSubsystem.h"
 #include "Subsystems/ShowControlSubsystem.h"
 #include "Subsystems/StageProfileSubsystem.h"
 #include "Subsystems/StageSessionSubsystem.h"
@@ -1174,6 +1175,11 @@ FStageAISceneView UStageAICommandSubsystem::CaptureScene() const
 			Scene.Cues.Add({ Cue.Number, Cue.Label.ToString(), Cue.FadeTime });
 		}
 		Scene.ActiveCue = Show->GetActiveCueNumber();
+	}
+	// The report's own cache (rebuilt when the item list changes), so the chat and the BOM panel always give the same numbers.
+	if (const UStageBillOfMaterialsSubsystem* Bom = UWorld::GetSubsystem<UStageBillOfMaterialsSubsystem>(World))
+	{
+		Scene.BillOfMaterials = Bom->GetReport();
 	}
 	if (const UStageEnvironmentSubsystem* Environment = UWorld::GetSubsystem<UStageEnvironmentSubsystem>(World))
 	{
