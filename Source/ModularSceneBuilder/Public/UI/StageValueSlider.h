@@ -9,6 +9,9 @@
 /** Reports which slider of a panel moved, and its new value. */
 DECLARE_DELEGATE_TwoParams(FOnStageSliderMoved, int32 /*SliderIndex*/, float /*Value*/);
 
+/** Reports which slider of a panel the user took hold of or let go of. */
+DECLARE_DELEGATE_OneParam(FOnStageSliderHeld, int32 /*SliderIndex*/);
+
 /**
  * A slider in a code-built panel (e.g. the Environment panel). A plain USlider's value event does not say which slider
  * moved, so each one carries its index and reports it on OnMoved, like UStageChoiceButton does for buttons.
@@ -35,6 +38,13 @@ public:
 
 	/** Bound by the panel that owns the slider; unbound when the panel is destroyed with it. */
 	FOnStageSliderMoved OnMoved;
+
+	/**
+	 * The user took hold of the slider (mouse capture begins, before the click's own move) and let go of it (capture ends or is
+	 * lost). Exactly one OnReleased follows each OnGrabbed, so a panel can bracket the drag as one undo step.
+	 */
+	FOnStageSliderHeld OnGrabbed;
+	FOnStageSliderHeld OnReleased;
 
 private:
 	UFUNCTION()

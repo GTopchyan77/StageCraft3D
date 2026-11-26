@@ -10941,9 +10941,84 @@ All times in ms.
 - **Shipping scan:** (UTF-16 at both alignments, and ASCII) absent are the test name, its world and messages, "MUTATION" and the dev command `StageCraft.Assistant.Ask`; present as the control are "is written: {1} and {2}" and "I will say here when each file is written".
 - **Not verified:** the online Claude model asking for an export live (it reaches the same `RunAction` path; no key in tests), and a real failed write in a running game (tested by broadcast only).
 
-**Commit:** uncommitted (working tree). STATE #114 now carries `1e39874`.
+**Commit:** `b605378`. STATE #114 carries `1e39874`.
 
 **Known issues / follow-ups**
 - **Gevor:** in the AI Assistant panel, ask "export all reports" and check the three lines that follow.
 - **Labels:** discipline labels in the Armenian BOM answer are still English (#114).
+- The Obsidian vault on S: is still unreachable, so there is no session log.
+
+## #116 — Environment panel edits are undo steps; a slider drag is one step (2026-11-26)
+
+**What & why**
+- **Request:** Gevor asked (2026-11-26) for the next high-value code item from `tasks/todo.md`, checking existing code first. The open follow-up "Environment panel edits undoable" (Phase 20 line, ADR 0016 follow-ups) was not done.
+- **What existed:**
+  - Atmosphere cards (`RequestApplyAtmosphere`) and the assistant (`RequestSetEnvironment` + `FStageEnvironmentCommand`, ADR 0016 §2.4) recorded steps.
+  - The panel's lighting buttons, weather buttons and ten sliders wrote `UStageEnvironmentSubsystem::SetSettings` directly. That is no history, and it bypassed the controller (Rules.md, Safe data binding).
+- **Measured first** (`-game` run `Env116Before`, Concert starter stage):
+  - New dev command `StageCraft.Environment.DragSlider <index> <to> [frames]`: a real left-button drag through Slate on the open panel's slider. It logs whether the press captured the slider, the value and the undo stack.
+  - Results:
+    - Time of day dragged 22:30 to 19:43 in 20 moves: 0 undo steps.
+    - Clouds 35% to 93%: 0 steps.
+    - `Environment.Preset Rain` and `Set Lighting Studio` (the panel's button paths): 0 steps.
+    - Ctrl+Z: `NothingToDo`.
+  - A first attempt clicked the Inspector, which hid the Environment tab; the command now says "NOT GRABBED" in that case, and the run uses `StageCraft.Workspace.OpenPanel`.
+- **Change:**
+  - **`UStageEnvironmentPanel`:**
+    - Every write goes through `RequestSetEnvironment` (`WriteSettings`); a view without a StageCraft controller still writes `SetSettings` directly.
+    - Lighting is one step "Lighting: Studio"; weather is one step "Weather: Rain" (`StageEnvironment::ApplyWeatherPreset` on the current settings).
+    - A slider drag opens the controller's edit transaction on grab and ends it on release or in `NativeDestruct`. The whole drag is one step named by the slider ("Time of day"), and the sky still follows every move.
+    - Labels moved to `GetLightingLabels` / `GetWeatherLabels`, shared by the buttons and the step names.
+  - **`UStageValueSlider`:** `OnGrabbed` / `OnReleased`, exactly one release per grab. SSlider ends a capture twice, on button up and on capture lost.
+  - **`UStageEditHistoryComponent::RecordEnvironmentChange`:**
+    - Inside an open transaction it collects the change: the first "before" and the latest "after", named by the first.
+    - `EndTransaction` adds one `FStageEnvironmentCommand` unless they are equal, so a drag back to the start is no step.
+    - Before this change an environment change ended an open transaction. Now it joins it.
+  - **Dev commands:** `StageCraft.Environment.Set` / `Preset` write through the controller like the panel.
+  - **Docs:** ADR 0009 §9 amendment (measured before, decision, alternatives, verified), plus §4 lines and status; `Docs/CURRENT_SYSTEMS.md` (undo coverage, atmospheres row); `tasks/todo.md` (follow-up line 387, Phase 66).
+
+**Files changed**
+- `Source/ModularSceneBuilder/Public/UI/StageEnvironmentPanel.h`, `Private/UI/StageEnvironmentPanel.cpp`.
+- `Source/ModularSceneBuilder/Public/UI/StageValueSlider.h`, `Private/UI/StageValueSlider.cpp`.
+- `Source/ModularSceneBuilder/Public/History/StageEditHistoryComponent.h` (includes `Environment/StageEnvironmentTypes.h`; pending environment in `FPendingTransaction`), `Private/History/StageEditHistoryComponent.cpp`.
+- `Source/ModularSceneBuilder/Public/Player/ModularPlayerController.h` (docs only).
+- `Source/ModularSceneBuilder/Private/Environment/StageEnvironmentConsoleCommands.cpp` (`DragSlider`; Set / Preset through the controller).
+- Tests: `Private/History/Tests/StageHistoryWorldTests.cpp` (new `StageCraft.History.EnvironmentDrag`; `History.Environment` transaction case rewritten), `Private/UI/Tests/StageUITests.cpp` (`UI.ValueSlider` grab / release).
+- `Docs/ADR/0009-outdoor-environment.md`, `Docs/CURRENT_SYSTEMS.md`, `tasks/todo.md`, `STATE.md` (this entry; #115 carries `b605378`).
+- No Blueprint, asset, map or ini file.
+
+**Verification**
+- **Tests:**
+  - `StageCraft.History.EnvironmentDrag`:
+    - four moves inside a transaction are no step mid-drag and one step "Time of day" on release;
+    - undo goes back to the grab point (12:00) and redo to the release point (20:15);
+    - a drag back to its start is no step;
+    - a second drag is its own step.
+  - `StageCraft.History.Environment`: an environment change during an open item drag keeps the transaction open, and both become one step that undoes and redoes together.
+  - `StageCraft.UI.ValueSlider`: one grab before the first move and one release, even when the capture end arrives twice.
+- **Mutations:**
+  - The old rule (an environment change ends the transaction) fails `History.Environment` and `History.EnvironmentDrag` (9 checks: "Mid-drag: no step yet" was 4).
+  - No release guard fails `UI.ValueSlider` ("release 3, release 3").
+  - Both reverted; `grep MUTATION` is clean.
+- **Suites:** `StageCraft.History` + `UI.ValueSlider` 13/13. Full `RunAutomation.ps1 -Filter StageCraft -NullRHI` 320/320, user data unchanged (181 files).
+- **`-game` `Env116After`** (same steps):
+  - Time of day drag: 1 step "Time of day". Clouds drag: 2 steps, "Clouds".
+  - Rain and Studio: 4 steps.
+  - Four Ctrl+Z restore Outdoor, then clouds 0.35 / rain 0.20, then clouds 0.35, then 22:30, exactly the start. Ctrl+Y re-applies 19:43.
+  - Screenshot: the panel reads back 19:43 / 35% / 20% / Outdoor lit, and the status bar shows "Redo: Time of day".
+  - Logs: `%TEMP%/StageCraftRuns/Env116Before|After/game.log`.
+- **Builds:** Editor Development, Game Development and Game Shipping succeeded with no warnings. They were rebuilt after the last (comment-only) source edit; the Shipping binary is from 17:14.
+- **Shipping scan** (ASCII and UTF-16 at both alignments):
+  - absent: `StageCraft.Environment.DragSlider`, `StageCraft.Environment.Set`, `History.EnvironmentDrag`, the test's messages, "NOT GRABBED" and "MUTATION";
+  - present as the control: "Lighting: {0}" and "Weather: {0}".
+- **Not verified:**
+  - the panel's lighting and weather *buttons* clicked with a real mouse; the run used the dev commands, which take the same controller path;
+  - a mouse drag by a person;
+  - closing the panel mid-drag (handled in `NativeDestruct`, not exercised).
+
+**Commit:** uncommitted (working tree).
+
+**Known issues / follow-ups**
+- **Gevor:** in the Environment panel, drag Time of day, click Rain and Studio; then Ctrl+Z three times and Ctrl+Y.
+- The step name for the dev command `Environment.Set` is its arguments ("Lighting Studio"), unlike the panel's "Lighting: Studio" (development only).
 - The Obsidian vault on S: is still unreachable, so there is no session log.

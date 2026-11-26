@@ -43,6 +43,22 @@ namespace StageEnvironmentPanel
 	 */
 	constexpr float LastMinuteOfDay = 24.f - 1.f / 60.f;
 
+	/** The LIGHTING choices, in EStageLightingSource order; also the undo step names. */
+	TConstArrayView<FText> GetLightingLabels()
+	{
+		static const FText Labels[] = { LOCTEXT("LightingLevel", "Venue"), LOCTEXT("LightingOutdoor", "Outdoor"), LOCTEXT("LightingStudio", "Studio") };
+		static_assert(UE_ARRAY_COUNT(Labels) == int32(EStageLightingSource::Studio) + 1, "One label per lighting source.");
+		return Labels;
+	}
+
+	/** The WEATHER choices, in EStageWeatherPreset order (Custom has no button); also the undo step names. */
+	TConstArrayView<FText> GetWeatherLabels()
+	{
+		static const FText Labels[] = { LOCTEXT("Clear", "Clear"), LOCTEXT("Cloudy", "Cloudy"), LOCTEXT("RainPreset", "Rain"), LOCTEXT("SnowPreset", "Snow"), LOCTEXT("FogPreset", "Fog") };
+		static_assert(UE_ARRAY_COUNT(Labels) == int32(EStageWeatherPreset::Custom), "One label per weather preset but Custom.");
+		return Labels;
+	}
+
 	/** The sliders, in panel order; each one's index in UStageEnvironmentPanel::Sliders. */
 	enum class ESlider : int32
 	{
@@ -235,8 +251,7 @@ void UStageEnvironmentPanel::BuildTree()
 		AddSection(Section);
 	}
 
-	AddSection(BuildChoiceRow(LOCTEXT("Lighting", "LIGHTING"),
-		{ LOCTEXT("LightingLevel", "Venue"), LOCTEXT("LightingOutdoor", "Outdoor"), LOCTEXT("LightingStudio", "Studio") },
+	AddSection(BuildChoiceRow(LOCTEXT("Lighting", "LIGHTING"), GetLightingLabels(),
 		{ LOCTEXT("LightingLevelTip", "The venue's own lights, sky light and fog, as the level was built."),
 		  LOCTEXT("LightingOutdoorTip", "Outdoor stage: a real sky with sun, moon, clouds, rain, snow and fog. The venue's own lights are hidden meanwhile."),
 		  LOCTEXT("LightingStudioTip", "Photo studio: soft even light from every side, a key light and a seamless light-grey backdrop. The venue's own lights are hidden meanwhile.") },
@@ -246,8 +261,7 @@ void UStageEnvironmentPanel::BuildTree()
 	NoticeText->SetAutoWrapText(true);
 	AddSection(NoticeText);
 
-	AddSection(BuildChoiceRow(LOCTEXT("Weather", "WEATHER"),
-		{ LOCTEXT("Clear", "Clear"), LOCTEXT("Cloudy", "Cloudy"), LOCTEXT("RainPreset", "Rain"), LOCTEXT("SnowPreset", "Snow"), LOCTEXT("FogPreset", "Fog") },
+	AddSection(BuildChoiceRow(LOCTEXT("Weather", "WEATHER"), GetWeatherLabels(),
 		{ LOCTEXT("ClearTip", "Clear sky, light haze."), LOCTEXT("CloudyTip", "Broken cloud, no precipitation."),
 		  LOCTEXT("RainPresetTip", "Overcast with steady rain."), LOCTEXT("SnowPresetTip", "Overcast with snowfall."),
 		  LOCTEXT("FogPresetTip", "Thick fog under a broken sky.") },
@@ -349,6 +363,8 @@ UWidget* UStageEnvironmentPanel::BuildSliderSection(const FText& Title, int32 Fi
 		Slider->SetMaxValue(Spec.Max);
 		Slider->SetWidgetStyle(SliderStyle);
 		Slider->OnMoved.BindUObject(this, &ThisClass::HandleSliderMoved);
+		Slider->OnGrabbed.BindUObject(this, &ThisClass::HandleSliderGrabbed);
+		Slider->OnReleased.BindUObject(this, &ThisClass::HandleSliderReleased);
 		if (UHorizontalBoxSlot* SliderSlot = Row->AddChildToHorizontalBox(Slider))
 		{
 			SliderSlot->SetSize(FSlateChildSize(ESlateSizeRule::Fill));
@@ -402,6 +418,8 @@ void UStageEnvironmentPanel::NativeConstruct()
 
 void UStageEnvironmentPanel::NativeDestruct()
 {
+	// Closed mid-drag: the drag so far is still one step.
+	EndOwnEditTransaction();
 	if (UStageEnvironmentSubsystem* Subsystem = Environment.Get())
 	{
 		Subsystem->OnEnvironmentChanged.RemoveDynamic(this, &ThisClass::HandleEnvironmentChanged);
@@ -615,32 +633,77 @@ void UStageEnvironmentPanel::HandleAtmospherePicked(int32 Index)
 	}
 }
 
+void UStageEnvironmentPanel::WriteSettings(const FStageEnvironmentSettings& Settings, const FText& StepName)
+{
+	// Through the request bridge, so the edit is an undo step; the panel updates from OnEnvironmentChanged, not from what it asked for.
+	if (AModularPlayerController* Controller = Cast<AModularPlayerController>(GetOwningPlayer()))
+	{
+		Controller->RequestSetEnvironment(Settings, StepName);
+	}
+	else if (UStageEnvironmentSubsystem* Subsystem = Environment.Get())
+	{
+		// A view not owned by a StageCraft controller (an editor utility) writes directly.
+		Subsystem->SetSettings(Settings);
+	}
+}
+
 void UStageEnvironmentPanel::HandleLightingPicked(int32 Index)
 {
-	// The single write path; the panel updates from OnEnvironmentChanged, not from what it asked for.
-	if (UStageEnvironmentSubsystem* Subsystem = Environment.Get())
+	using namespace StageEnvironmentPanel;
+	if (const UStageEnvironmentSubsystem* Subsystem = Environment.Get(); Subsystem && GetLightingLabels().IsValidIndex(Index))
 	{
 		FStageEnvironmentSettings Settings = Subsystem->GetSettings();
-		Settings.Lighting = EStageLightingSource(FMath::Clamp(Index, 0, int32(EStageLightingSource::Studio)));
-		Subsystem->SetSettings(Settings);
+		Settings.Lighting = EStageLightingSource(Index);
+		WriteSettings(Settings, FText::Format(LOCTEXT("LightingStep", "Lighting: {0}"), GetLightingLabels()[Index]));
 	}
 }
 
 void UStageEnvironmentPanel::HandleWeatherPicked(int32 Index)
 {
-	if (UStageEnvironmentSubsystem* Subsystem = Environment.Get())
+	using namespace StageEnvironmentPanel;
+	if (const UStageEnvironmentSubsystem* Subsystem = Environment.Get(); Subsystem && GetWeatherLabels().IsValidIndex(Index))
 	{
-		Subsystem->ApplyWeatherPreset(static_cast<EStageWeatherPreset>(Index));
+		WriteSettings(StageEnvironment::ApplyWeatherPreset(Subsystem->GetSettings(), static_cast<EStageWeatherPreset>(Index)),
+			FText::Format(LOCTEXT("WeatherStep", "Weather: {0}"), GetWeatherLabels()[Index]));
 	}
 }
 
 void UStageEnvironmentPanel::HandleSliderMoved(int32 SliderIndex, float Value)
 {
-	if (UStageEnvironmentSubsystem* Subsystem = Environment.Get())
+	using namespace StageEnvironmentPanel;
+	if (const UStageEnvironmentSubsystem* Subsystem = Environment.Get(); Subsystem && SliderIndex >= 0 && SliderIndex < int32(ESlider::Count))
 	{
 		FStageEnvironmentSettings Settings = Subsystem->GetSettings();
-		StageEnvironmentPanel::SetValue(Settings, static_cast<StageEnvironmentPanel::ESlider>(SliderIndex), Value);
-		Subsystem->SetSettings(Settings);
+		SetValue(Settings, static_cast<ESlider>(SliderIndex), Value);
+		WriteSettings(Settings, GetSpec(static_cast<ESlider>(SliderIndex)).Label);
+	}
+}
+
+void UStageEnvironmentPanel::HandleSliderGrabbed(int32 SliderIndex)
+{
+	// The whole drag, every move of it, is one undo step (like an inspector slider). Only the caller that opened it ends it.
+	AModularPlayerController* Controller = Cast<AModularPlayerController>(GetOwningPlayer());
+	if (Controller && !bOwnsEditTransaction)
+	{
+		bOwnsEditTransaction = Controller->BeginEditTransaction();
+	}
+}
+
+void UStageEnvironmentPanel::HandleSliderReleased(int32 SliderIndex)
+{
+	EndOwnEditTransaction();
+}
+
+void UStageEnvironmentPanel::EndOwnEditTransaction()
+{
+	if (!bOwnsEditTransaction)
+	{
+		return;
+	}
+	bOwnsEditTransaction = false;
+	if (AModularPlayerController* Controller = Cast<AModularPlayerController>(GetOwningPlayer()))
+	{
+		Controller->EndEditTransaction();
 	}
 }
 

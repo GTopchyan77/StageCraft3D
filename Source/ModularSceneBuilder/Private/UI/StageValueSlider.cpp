@@ -34,11 +34,21 @@ void UStageValueSlider::HandleValueChanged(float NewValue)
 
 void UStageValueSlider::HandleCaptureBegin()
 {
+	if (bUserMoving)
+	{
+		return;
+	}
 	// Fires before the click's own value change, so a click on the bar counts as a move.
 	bUserMoving = true;
+	OnGrabbed.ExecuteIfBound(SliderIndex);
 }
 
 void UStageValueSlider::HandleCaptureEnd()
 {
+	if (!bUserMoving)
+	{
+		return;
+	}
 	bUserMoving = false;
+	OnReleased.ExecuteIfBound(SliderIndex);
 }

@@ -1,8 +1,8 @@
 // Copyright Epic Games, Inc. All Rights Reserved.
 
-// Development console commands for the outdoor environment (Docs/ADR/0009). Each one goes through
-// UStageEnvironmentSubsystem::SetSettings, the Environment panel's own write path, so a scripted run exercises the real
-// path. Compiled out of Shipping.
+// Development console commands for the outdoor environment (Docs/ADR/0009). Each one writes like the Environment panel:
+// through AModularPlayerController::RequestSetEnvironment as one undo step (ADR 0009 §9), so a scripted run exercises the
+// real path. Compiled out of Shipping.
 
 #include "CoreMinimal.h"
 
@@ -14,10 +14,16 @@
 #include "Environment/StageAtmospherePreset.h"
 #include "Environment/StageAtmosphereSubsystem.h"
 #include "Environment/StageEnvironmentSubsystem.h"
+#include "Framework/Application/SlateApplication.h"
+#include "GenericPlatform/GenericPlatformInputDeviceMapper.h"
 #include "HAL/IConsoleManager.h"
+#include "History/StageEditHistorySubsystem.h"
 #include "ModularSceneBuilder.h"
 #include "Player/ModularPlayerController.h"
 #include "RenderTimer.h"
+#include "UI/StageEnvironmentPanel.h"
+#include "UI/StageValueSlider.h"
+#include "UObject/UObjectIterator.h"
 
 namespace StageEnvironmentCommands
 {
@@ -39,6 +45,19 @@ namespace StageEnvironmentCommands
 			Environment.IsSkyAvailable() ? *Environment.GetSkySystemName().ToString() : TEXT("no backend"),
 			Settings.TimeOfDay, Settings.SunElevation, Settings.SunAzimuth, Settings.CloudCoverage, Settings.Rain, Settings.Snow, Settings.Fog,
 			*UEnum::GetValueAsString(StageEnvironment::FindWeatherPreset(Settings)));
+	}
+
+	/** Writes Settings as the panel does: through the controller as one undo step named StepName, or directly without one. */
+	void Write(UWorld* World, UStageEnvironmentSubsystem& Environment, const FStageEnvironmentSettings& Settings, const FString& StepName)
+	{
+		if (AModularPlayerController* Controller = Cast<AModularPlayerController>(World->GetFirstPlayerController()))
+		{
+			Controller->RequestSetEnvironment(Settings, FText::FromString(StepName));
+		}
+		else
+		{
+			Environment.SetSettings(Settings);
+		}
 	}
 
 	void Status(const TArray<FString>& Args, UWorld* World)
@@ -86,7 +105,7 @@ namespace StageEnvironmentCommands
 			UE_LOG(LogStageCraft, Display, TEXT("StageCraft.Environment.Set: unknown field '%s'."), *Field);
 			return;
 		}
-		Environment->SetSettings(Settings);
+		Write(World, *Environment, Settings, FString::Join(Args, TEXT(" ")));
 		LogSettings(TEXT("StageCraft.Environment.Set"), *Environment);
 	}
 
@@ -100,7 +119,7 @@ namespace StageEnvironmentCommands
 			UE_LOG(LogStageCraft, Display, TEXT("Usage: StageCraft.Environment.Preset <Clear|Cloudy|Rain|Snow|Fog>"));
 			return;
 		}
-		Environment->ApplyWeatherPreset(static_cast<EStageWeatherPreset>(Value));
+		Write(World, *Environment, StageEnvironment::ApplyWeatherPreset(Environment->GetSettings(), static_cast<EStageWeatherPreset>(Value)), TEXT("Weather: ") + Args[0]);
 		LogSettings(TEXT("StageCraft.Environment.Preset"), *Environment);
 	}
 
@@ -248,6 +267,77 @@ namespace StageEnvironmentCommands
 		FConsoleCommandWithWorldAndArgsDelegate::CreateStatic(&Atmosphere));
 	FAutoConsoleCommandWithWorldAndArgs BenchCommand(TEXT("StageCraft.Bench.AtmosphereBlend"), TEXT("Cycles every atmosphere and logs frame and game-thread times while blending against at rest."),
 		FConsoleCommandWithWorldAndArgsDelegate::CreateStatic(&BenchAtmosphereBlend));
+
+	/** The open Environment panel's slider Index in World (shown, so it has a geometry to click), or null. */
+	UStageValueSlider* FindPanelSlider(const UWorld* World, int32 Index)
+	{
+		for (TObjectIterator<UStageValueSlider> It; It; ++It)
+		{
+			if (It->GetWorld() == World && It->GetSliderIndex() == Index && It->GetTypedOuter<UStageEnvironmentPanel>() && It->GetCachedWidget().IsValid())
+			{
+				return *It;
+			}
+		}
+		return nullptr;
+	}
+
+	/**
+	 * StageCraft.Environment.DragSlider <Index> <To 0..1> [Frames=10]: a real left-button drag through Slate on the open
+	 * Environment panel's slider Index (panel order, 0 Time of day ... 9 White balance), from its handle to the fraction To of
+	 * its length, as a user's drag; after the release it logs the value and the undo stack, so a run can count the steps.
+	 */
+	void DragSlider(const TArray<FString>& Args, UWorld* World)
+	{
+		UStageValueSlider* Slider = Args.Num() >= 2 ? FindPanelSlider(World, FCString::Atoi(*Args[0])) : nullptr;
+		if (!Slider || !FSlateApplication::IsInitialized())
+		{
+			UE_LOG(LogStageCraft, Display, TEXT("Usage: StageCraft.Environment.DragSlider <0..9> <To 0..1> [Frames=10] (the Environment panel must be open)"));
+			return;
+		}
+		const float To = FMath::Clamp(FCString::Atof(*Args[1]), 0.f, 1.f);
+		const int32 Frames = Args.IsValidIndex(2) ? FMath::Clamp(FCString::Atoi(*Args[2]), 1, 600) : 10;
+		const FGeometry& Geometry = Slider->GetCachedWidget()->GetCachedGeometry();
+		const FVector2D Start = FVector2D(Geometry.GetAbsolutePositionAtCoordinates(FVector2f(Slider->GetNormalizedValue(), 0.5f)));
+		const FVector2D End = FVector2D(Geometry.GetAbsolutePositionAtCoordinates(FVector2f(To, 0.5f)));
+
+		FSlateApplication& Slate = FSlateApplication::Get();
+		const FInputDeviceId Mouse = IPlatformInputDeviceMapper::Get().GetDefaultInputDevice();
+		const TSet<FKey> Held({ EKeys::LeftMouseButton });
+		Slate.SetCursorPos(Start);
+		Slate.ProcessMouseButtonDownEvent(nullptr, FPointerEvent(Mouse, FSlateApplicationBase::CursorPointerIndex, Start, Start, Held, EKeys::LeftMouseButton, 0.f, FModifierKeysState()));
+		// A hidden panel (behind another tab) would take no click; the log says so instead of reporting an unchanged value.
+		const bool bGrabbed = Slider->GetCachedWidget()->HasMouseCapture();
+
+		const TWeakObjectPtr<UStageValueSlider> WeakSlider(Slider);
+		const TWeakObjectPtr<UWorld> WeakWorld(World);
+		int32 Frame = 0;
+		FVector2D Last = Start;
+		FTSTicker::GetCoreTicker().AddTicker(FTickerDelegate::CreateLambda([WeakSlider, WeakWorld, Mouse, Held, Start, End, Frames, bGrabbed, Frame, Last](float) mutable
+		{
+			if (!FSlateApplication::IsInitialized())
+			{
+				return false;
+			}
+			FSlateApplication& Slate = FSlateApplication::Get();
+			if (++Frame <= Frames)
+			{
+				const FVector2D Position = FMath::Lerp(Start, End, float(Frame) / Frames);
+				Slate.SetCursorPos(Position);
+				Slate.ProcessMouseMoveEvent(FPointerEvent(Mouse, FSlateApplicationBase::CursorPointerIndex, Position, Last, Held, EKeys::Invalid, 0.f, FModifierKeysState()));
+				Last = Position;
+				return true;
+			}
+			Slate.ProcessMouseButtonUpEvent(FPointerEvent(Mouse, FSlateApplicationBase::CursorPointerIndex, Last, Last, TSet<FKey>(), EKeys::LeftMouseButton, 0.f, FModifierKeysState()));
+			const UStageEditHistorySubsystem* History = WeakWorld.IsValid() ? UWorld::GetSubsystem<UStageEditHistorySubsystem>(WeakWorld.Get()) : nullptr;
+			UE_LOG(LogStageCraft, Display, TEXT("StageCraft.Environment.DragSlider %d: %s, %d moves, value now %.3f; undo steps %d, next undo \"%s\"."),
+				WeakSlider.IsValid() ? WeakSlider->GetSliderIndex() : INDEX_NONE, bGrabbed ? TEXT("grabbed") : TEXT("NOT GRABBED (panel hidden?)"), Frames, WeakSlider.IsValid() ? WeakSlider->GetValue() : 0.f,
+				History ? History->GetUndoCount() : -1, History ? *History->GetUndoDescription().ToString() : TEXT("-"));
+			return false;
+		}));
+	}
+
+	FAutoConsoleCommandWithWorldAndArgs DragSliderCommand(TEXT("StageCraft.Environment.DragSlider"), TEXT("<0..9> <To 0..1> [Frames] A real mouse drag through Slate on the open Environment panel's slider; logs the undo stack after."),
+		FConsoleCommandWithWorldAndArgsDelegate::CreateStatic(&DragSlider));
 }
 
 #endif // !UE_BUILD_SHIPPING

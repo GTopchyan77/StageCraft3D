@@ -2,7 +2,7 @@
 
 // Integration tests for undo/redo against a real game world (Docs/ADR/0010-edit-rules-autosave-scene-v2.md §2): the rules
 // decide every undone or redone transform (a locked item stays put, a group step is all-or-nothing), damaged steps are
-// dropped, and a continuous edit inside a transaction becomes exactly one step. History.Cues covers cue edits (ADR 0011 §2), History.Environment environment steps (ADR 0016 §2.4).
+// dropped, and a continuous edit inside a transaction becomes exactly one step. History.Cues covers cue edits (ADR 0011 §2), History.Environment environment steps (ADR 0016 §2.4), History.EnvironmentDrag an Environment panel slider drag (ADR 0009 §9).
 // Run: UnrealEditor-Cmd <project> -ExecCmds="Automation RunTests StageCraft.History; Quit" -unattended -nullrhi
 
 #include "CoreMinimal.h"
@@ -433,21 +433,90 @@ bool FStageHistoryEnvironmentTest::RunTest(const FString& Parameters)
 	Stage.EditHistory->RecordEnvironmentChange(FText::FromString(TEXT("No change")), After, After);
 	TestEqual(TEXT("No-op not recorded"), Stage.History->GetUndoCount(), 1);
 
-	// A change while an inspector drag is open: the drag becomes its own step first.
+	// A change while a transaction is open belongs to it (ADR 0009 §9): one step with the item's move, undone together.
 	AModularBaseActor* Item = Stage.SpawnItem(FVector::ZeroVector);
 	if (TestNotNull(TEXT("Item"), Item))
 	{
+		const FVector Placed = Item->GetActorLocation();
 		const int32 Steps = Stage.History->GetUndoCount();
 		Stage.EditHistory->BeginTransaction();
 		Stage.MoveAndRecord(*Item, FVector(50.0, 0.0, 0.0));
 		FStageEnvironmentSettings Foggy = StageEnvironment::ApplyWeatherPreset(After, EStageWeatherPreset::Fog);
 		Environment->SetSettings(Foggy);
-		Stage.EditHistory->RecordEnvironmentChange(FText::FromString(TEXT("Assistant: weather fog")), After, Environment->GetSettings());
-		TestFalse(TEXT("The environment step closed the open drag"), Stage.EditHistory->IsTransactionOpen());
-		TestEqual(TEXT("... two steps"), Stage.History->GetUndoCount(), Steps + 2);
+		Stage.EditHistory->RecordEnvironmentChange(FText::FromString(TEXT("Weather: Fog")), After, Environment->GetSettings());
+		TestTrue(TEXT("The environment change kept the transaction open"), Stage.EditHistory->IsTransactionOpen());
+		TestEqual(TEXT("... nothing recorded yet"), Stage.History->GetUndoCount(), Steps);
+		Stage.EditHistory->EndTransaction();
+		TestEqual(TEXT("... one step"), Stage.History->GetUndoCount(), Steps + 1);
 		Stage.EditHistory->Undo();
-		TestTrue(TEXT("... undo restores the weather only"), Environment->GetSettings().Equals(After) && Item->GetActorLocation().Equals(FVector(50.0, 0.0, 0.0)));
+		TestTrue(TEXT("... undo restores the weather and the item"), Environment->GetSettings().Equals(After) && Item->GetActorLocation().Equals(Placed));
+		Stage.EditHistory->Redo();
+		TestTrue(TEXT("... redo brings both back"), StageEnvironment::FindWeatherPreset(Environment->GetSettings()) == EStageWeatherPreset::Fog
+			&& Item->GetActorLocation().Equals(FVector(50.0, 0.0, 0.0)));
 	}
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FStageHistoryEnvironmentDragTest, "StageCraft.History.EnvironmentDrag", StageHistoryWorldTests::Flags)
+
+// An Environment panel slider drag (ADR 0009 §9): the panel writes on every move inside one edit transaction, as
+// AModularPlayerController::RequestSetEnvironment does (apply, then record the stored before / after). The drag is one step
+// named by the slider, from where it was grabbed to where it was let go; a drag back to the start is no step at all.
+bool FStageHistoryEnvironmentDragTest::RunTest(const FString& Parameters)
+{
+	using namespace StageHistoryWorldTests;
+
+	FScopedStage Stage;
+	UStageEnvironmentSubsystem* Environment = UWorld::GetSubsystem<UStageEnvironmentSubsystem>(Stage.World);
+	if (!TestNotNull(TEXT("Environment"), Environment) || !TestNotNull(TEXT("History"), Stage.History))
+	{
+		return false;
+	}
+	const auto Move = [&](float TimeOfDay)
+	{
+		const FStageEnvironmentSettings Before = Environment->GetSettings();
+		FStageEnvironmentSettings Wanted = Before;
+		Wanted.TimeOfDay = TimeOfDay;
+		Environment->SetSettings(Wanted);
+		Stage.EditHistory->RecordEnvironmentChange(FText::FromString(TEXT("Time of day")), Before, Environment->GetSettings());
+	};
+
+	FStageEnvironmentSettings Start = Environment->GetSettings();
+	Start.TimeOfDay = 12.f;
+	Environment->SetSettings(Start);
+	Start = Environment->GetSettings();
+
+	TestTrue(TEXT("Grab: the transaction opens"), Stage.EditHistory->BeginTransaction());
+	for (const float Time : { 13.f, 15.5f, 18.f, 20.25f })
+	{
+		Move(Time);
+	}
+	TestEqual(TEXT("Mid-drag: no step yet"), Stage.History->GetUndoCount(), 0);
+	TestEqual(TEXT("... the sky follows the slider live"), Environment->GetSettings().TimeOfDay, 20.25f);
+	Stage.EditHistory->EndTransaction();
+	TestEqual(TEXT("Release: four moves are one step"), Stage.History->GetUndoCount(), 1);
+	TestEqual(TEXT("... named by the slider"), Stage.History->GetUndoDescription().ToString(), FString(TEXT("Time of day")));
+
+	TestEqual(TEXT("Undo"), Str(Stage.EditHistory->Undo()), Str(EStageCommandResult::Succeeded));
+	TestTrue(TEXT("... back to where it was grabbed (12:00)"), Environment->GetSettings().Equals(Start));
+	TestEqual(TEXT("Redo"), Str(Stage.EditHistory->Redo()), Str(EStageCommandResult::Succeeded));
+	TestEqual(TEXT("... where it was let go (20:15)"), Environment->GetSettings().TimeOfDay, 20.25f);
+
+	// Dragged away and back to the same value: nothing to undo.
+	const FStageEnvironmentSettings Settled = Environment->GetSettings();
+	Stage.EditHistory->BeginTransaction();
+	Move(9.f);
+	Move(Settled.TimeOfDay);
+	Stage.EditHistory->EndTransaction();
+	TestEqual(TEXT("A drag back to the start is no step"), Stage.History->GetUndoCount(), 1);
+
+	// A second drag is a second step; undo takes back only the latest.
+	Stage.EditHistory->BeginTransaction();
+	Move(6.f);
+	Stage.EditHistory->EndTransaction();
+	TestEqual(TEXT("A second drag is its own step"), Stage.History->GetUndoCount(), 2);
+	Stage.EditHistory->Undo();
+	TestTrue(TEXT("... its undo leaves the first drag in place"), Environment->GetSettings().Equals(Settled));
 	return true;
 }
 

@@ -199,8 +199,9 @@ public:
 	EStageCommandResult RequestRedo();
 
 	/**
-	 * Starts one continuous edit (a slider drag in the inspector): every RequestParameterChange until EndEditTransaction is
-	 * still validated and applied at once, but together they become ONE undo step. Returns false if an edit is already open;
+	 * Starts one continuous edit (a slider drag in the inspector or the Environment panel): every RequestParameterChange and
+	 * RequestSetEnvironment until EndEditTransaction is still validated and applied at once, but together they become ONE
+	 * undo step. Returns false if an edit is already open;
 	 * only the caller that got true ends it. Callers end it when the interaction ends or their view goes away.
 	 */
 	bool BeginEditTransaction();
@@ -323,7 +324,8 @@ public:
 
 	/**
 	 * Replaces the outdoor environment (time of day, sun path, weather, sky on/off) and records the change as ONE undo step named
-	 * StepName (Docs/ADR/0016-ai-assistant.md §2.4). The environment sanitizes the values and refuses the sky without a sky system,
+	 * StepName (Docs/ADR/0016-ai-assistant.md §2.4), or as part of the open edit transaction (a panel slider drag, ADR 0009 §9).
+	 * Used by the Environment panel, atmospheres and the assistant. The environment sanitizes the values and refuses the sky without a sky system,
 	 * so callers read the stored settings back. False, reported on OnRequestRejected, when the level has no environment.
 	 */
 	bool RequestSetEnvironment(const FStageEnvironmentSettings& Settings, const FText& StepName, EStageEnvironmentTransition Transition = EStageEnvironmentTransition::Instant);

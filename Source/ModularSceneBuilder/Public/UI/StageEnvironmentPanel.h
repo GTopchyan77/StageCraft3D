@@ -13,9 +13,12 @@
  * snow and fog (Docs/ADR/0009-outdoor-environment.md §4), and the camera look (exposure, bloom, white balance).
  *
  * A view in the project's binding pattern:
- *  - Settings are read from UStageEnvironmentSubsystem and written back through SetSettings, its single write path; the
- *    panel shows them again from OnEnvironmentChanged (read-back), never from its own copy. A slider drag writes on every
- *    move, so the sky follows the slider live.
+ *  - Settings are read from UStageEnvironmentSubsystem and written through the controller (RequestSetEnvironment), so every
+ *    edit is an undo step (ADR 0009 §9); the panel shows them again from OnEnvironmentChanged (read-back), never from its
+ *    own copy. A view without a StageCraft controller (an editor utility) writes SetSettings directly.
+ *  - A slider drag writes on every move, so the sky follows the slider live, inside one edit transaction opened when the
+ *    slider is grabbed and ended when it is let go (or the panel closes): the whole drag is ONE step named by the slider.
+ *    A lighting or weather button is one step ("Lighting: Studio", "Weather: Rain").
  *  - Bound in NativeConstruct, unbound in NativeDestruct. No tick. Sliders and buttons never take keyboard focus.
  *  - An atmosphere card goes through the controller (RequestApplyAtmosphere): one undo step, blended in. The card whose
  *    settings match the stored ones is lit.
@@ -56,6 +59,14 @@ private:
 	void HandleLightingPicked(int32 Index);
 	void HandleWeatherPicked(int32 Index);
 	void HandleSliderMoved(int32 SliderIndex, float Value);
+	void HandleSliderGrabbed(int32 SliderIndex);
+	void HandleSliderReleased(int32 SliderIndex);
+
+	/** Writes Settings as an undo step named StepName (or into the open drag's step). */
+	void WriteSettings(const FStageEnvironmentSettings& Settings, const FText& StepName);
+
+	/** Ends the edit transaction this panel opened for a slider drag; no-op when it holds none. */
+	void EndOwnEditTransaction();
 
 	UFUNCTION()
 	void HandleEnvironmentChanged(const FStageEnvironmentSettings& Settings);
@@ -90,4 +101,7 @@ private:
 	TWeakObjectPtr<class UStageEnvironmentSubsystem> Environment;
 	TWeakObjectPtr<class UStageAtmosphereSubsystem> AtmosphereCatalog;
 	FDelegateHandle AtmospheresLoadedHandle;
+
+	/** This panel opened the controller's edit transaction for the slider being dragged, and must end it. */
+	bool bOwnsEditTransaction = false;
 };

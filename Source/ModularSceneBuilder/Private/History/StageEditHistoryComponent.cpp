@@ -311,7 +311,17 @@ void UStageEditHistoryComponent::RecordItemTypeChange(AActor* Target, const UBas
 
 void UStageEditHistoryComponent::RecordEnvironmentChange(const FText& Description, const FStageEnvironmentSettings& Before, const FStageEnvironmentSettings& After)
 {
-	EndTransaction();
+	if (Transaction.IsSet())
+	{
+		// A slider drag writes on every move; the drag is one step from where it started to where it was let go.
+		if (!Transaction->EnvironmentBefore.IsSet())
+		{
+			Transaction->EnvironmentBefore = Before;
+			Transaction->EnvironmentDescription = Description;
+		}
+		Transaction->EnvironmentAfter = After;
+		return;
+	}
 	if (!Before.Equals(After))
 	{
 		Record(MakeShared<FStageEnvironmentCommand>(Description, Before, After));
@@ -632,6 +642,13 @@ void UStageEditHistoryComponent::EndTransaction()
 	if (const TSharedPtr<IStageEditCommand> Programmed = MakeProgrammerCommand(Collected.ProgrammerDescription, Collected.ProgrammerFixtures, Collected.ProgrammerBefore))
 	{
 		Commands.Add(Programmed.ToSharedRef());
+		++Count;
+	}
+
+	// Alone, the command keeps its own name ("Time of day"); in a batch the environment counts as one more thing changed.
+	if (Collected.EnvironmentBefore.IsSet() && !Collected.EnvironmentBefore->Equals(Collected.EnvironmentAfter))
+	{
+		Commands.Add(MakeShared<FStageEnvironmentCommand>(Collected.EnvironmentDescription, *Collected.EnvironmentBefore, Collected.EnvironmentAfter));
 		++Count;
 	}
 

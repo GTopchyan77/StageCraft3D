@@ -1,6 +1,6 @@
 # ADR 0009: Outdoor environment (sky, time of day, weather) and viewport toolbar sections
 
-- **Status:** accepted, implemented. See STATE.md #35.
+- **Status:** accepted, implemented. See STATE.md #35; amended by §8 (STATE.md #58) and §9 (STATE.md #116).
 - **Related:** ADR 0001 (dockable workspace, panel definitions), ADR 0004 (render subsystem, the panel pattern this follows), ADR 0008 §4.6 (viewport toolbar). Rules.md "Where state lives", "Safe data binding", Engineering Standard §9, §16, §21, §24, §28, §38, §57, §65.
 
 ## 1. Problem
@@ -68,11 +68,11 @@ With the sky on, the level's directional lights, sky lights, sky atmospheres, vo
 - **SUN**: Time of day (shown as HH:MM, 00:00–23:59), Sun height (5–90°), Sun direction (0–359°).
 - **CONDITIONS**: Clouds, Rain, Snow, Fog (%).
 
-Sliders write on every move through `SetSettings`, and the panel redraws only from `OnEnvironmentChanged`. Slider tops stop one step short of the wrap point (23:59, 359°). Otherwise a value at the very end would read back as 0 and the handle would jump to the left end mid-drag. Without a backend every control is disabled and the panel says so. With the sky off, only Off / On is live.
+Sliders write on every move (through the controller since #116, §9), and the panel redraws only from `OnEnvironmentChanged`. Slider tops stop one step short of the wrap point (23:59, 359°). Otherwise a value at the very end would read back as 0 and the handle would jump to the left end mid-drag. Without a backend every control is disabled and the panel says so. With the sky off, only Off / On is live.
 
 `UStageValueSlider` is a never-focusable `USlider` that reports its index (like `UStageChoiceButton`). `SetValue` does not fire `OnValueChanged`, so the read-back cannot loop.
 
-Development console commands (compiled out of Shipping): `StageCraft.Environment.Status`, `StageCraft.Environment.Set <Sky|Time|SunHeight|SunDirection|Clouds|Rain|Snow|Fog> <value>` and `StageCraft.Environment.Preset <name>`. They all go through `SetSettings`.
+Development console commands (compiled out of Shipping): `StageCraft.Environment.Status`, `StageCraft.Environment.Set <Sky|Time|SunHeight|SunDirection|Clouds|Rain|Snow|Fog> <value>` and `StageCraft.Environment.Preset <name>`. They write like the panel (through the controller since #116, §9).
 
 ## 5. Toolbar sections
 
@@ -105,3 +105,33 @@ Closed by STATE.md #37 (ADR 0010):
 - Hiding and restoring the level's sun, sky light, atmosphere, clouds and fog moved from `UStageSkyCreatorBackend` into `FStageHiddenLevelLighting` (ModularSceneBuilder), shared with the studio rig.
 - Changes can blend (`EStageEnvironmentTransition::Blend`): the subsystem then calls the backend's `Apply` every frame for the 2 s of a blend with interpolated settings (measured affordable, ADR 0024 §5). It still never ticks at rest.
 - Scene format v5 saves the source by name and the look; v2–v4 `skyEnabled` reads as OutdoorSky or Level.
+
+## 9. Amendment: Environment panel edits are undo steps (STATE.md #116)
+
+**Measured before** (`-game` run `Env116Before`, Concert starter stage, real Slate drags on the panel through the new dev command `StageCraft.Environment.DragSlider`):
+- Dragging Time of day (22:30 to 19:43) and Clouds (35% to 93%) changed the sky live but left 0 undo steps.
+- The Rain preset and Studio lighting (the panel's buttons, mirrored by `StageCraft.Environment.Preset` / `Set`) also left 0 steps.
+- Ctrl+Z answered `NothingToDo`.
+- Only atmosphere cards (`RequestApplyAtmosphere`) and the assistant (`RequestSetEnvironment`, ADR 0016 §2.4) recorded a step. The panel's other controls wrote `UStageEnvironmentSubsystem::SetSettings` directly, which also broke the "widgets write through the controller in play" rule (Rules.md, Safe data binding).
+
+**Decision:**
+- The panel writes through `AModularPlayerController::RequestSetEnvironment`, the path the assistant already used. A view without a StageCraft controller (an editor utility) still writes `SetSettings` directly.
+  - A lighting button is one step "Lighting: Studio"; a weather button is one step "Weather: Rain" (`StageEnvironment::ApplyWeatherPreset` on the current settings).
+- A slider drag is ONE step named by the slider ("Time of day"):
+  - `UStageValueSlider` gains `OnGrabbed` / `OnReleased`. Exactly one release follows each grab; SSlider reports the end of a capture twice, on button up and on capture lost.
+  - The panel opens the controller's edit transaction on grab (`BeginEditTransaction`, the inspector's mechanism) and ends it on release, or in `NativeDestruct` if the panel closes mid-drag. Only the panel that opened it ends it.
+  - The sky still follows every move.
+- `UStageEditHistoryComponent::RecordEnvironmentChange` collects into an open transaction: the first "before" and the latest "after", named by the first change. `EndTransaction` adds one `FStageEnvironmentCommand` unless they are equal, so a drag back to the start is no step.
+  - Before this change an environment change ended the open transaction. Now an environment change made during an inspector drag joins that drag's step (one transaction, one step). That only happens if an assistant reply lands mid-drag.
+- `StageCraft.Environment.Set` / `Preset` (development only) write through the controller too, as the panel does.
+
+**Alternatives considered:**
+- An environment-only "pending drag" held in the panel, recorded on release. Rejected: it duplicates what edit transactions already do, and the panel would have to record history itself.
+- A boolean "record or not" parameter on `RequestSetEnvironment`. Rejected: a hidden mode flag (Engineering Standard §7), and a drag would still need its first "before" kept somewhere.
+- Recording every move as a step. Rejected: a 20-move drag would take 20 Ctrl+Z.
+
+**Verified** (`Env116After`, same steps):
+- Each 20-move drag is one step ("Time of day", "Clouds"). The preset and lighting are one step each.
+- Four Ctrl+Z bring back Outdoor, then clouds 0.35 / rain 0.20, then clouds 0.35, then 22:30. Ctrl+Y re-applies 19:43.
+- The panel reads back each value.
+- Tests: `StageCraft.History.EnvironmentDrag`, `StageCraft.History.Environment` (the transaction case), `StageCraft.UI.ValueSlider` (one grab, one release).

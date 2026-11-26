@@ -160,6 +160,10 @@ bool FStageValueSliderTest::RunTest(const FString& Parameters)
 	int32 MovedIndex = INDEX_NONE;
 	float MovedValue = -1.f;
 	Slider->OnMoved.BindLambda([&](int32 Index, float Value) { ++Moves; MovedIndex = Index; MovedValue = Value; });
+	// Grab and release bracket a drag as one undo step (the Environment panel, ADR 0009 §9): exactly one release per grab.
+	TArray<FString> Held;
+	Slider->OnGrabbed.BindLambda([&](int32 Index) { Held.Add(FString::Printf(TEXT("grab %d (moves %d)"), Index, Moves)); });
+	Slider->OnReleased.BindLambda([&](int32 Index) { Held.Add(FString::Printf(TEXT("release %d"), Index)); });
 
 	Slider->SetValue(0.4f);
 	TestEqual(TEXT("A read-back is not a move"), Moves, 0);
@@ -167,10 +171,15 @@ bool FStageValueSliderTest::RunTest(const FString& Parameters)
 	Slider->OnMouseCaptureBegin.Broadcast();
 	Slider->SetValue(0.7f);
 	TestTrue(TEXT("The user's change is a move, with the slider's index"), Moves == 1 && MovedIndex == 3 && MovedValue == 0.7f);
+	// SSlider ends the capture on the button's release and again when the capture is lost: one release all the same.
+	Slider->OnMouseCaptureEnd.Broadcast();
 	Slider->OnMouseCaptureEnd.Broadcast();
 	Slider->SetValue(0.1f);
 	TestEqual(TEXT("After release, read-backs are quiet again"), Moves, 1);
+	TestEqual(TEXT("One grab before the first move, one release"), FString::Join(Held, TEXT(", ")), FString(TEXT("grab 3 (moves 0), release 3")));
 	Slider->OnMoved.Unbind();
+	Slider->OnGrabbed.Unbind();
+	Slider->OnReleased.Unbind();
 	return true;
 }
 

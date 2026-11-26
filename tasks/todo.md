@@ -384,7 +384,7 @@ See `STATE.md` for detailed history of completed work.
 - [x] `StageAICommandRunner` + controller `RequestAssistantPrompt`, `RequestBuildPlan` (shared with the Sketch window), `RequestSetEnvironment` + `FStageEnvironmentCommand` (assistant weather/time/sky changes are undoable), `RunCapturingRejections`
 - [x] Panel `UStageAIAssistantWidget` + `DA_Panel_Assistant` (pop-up 560 × 720); Edit › Assistant › AI Assistant..., Window menu, toolbar ASSIST
 - [ ] Manual verification (Gevor): type in the panel (Enter, SEND, chips, CLEAR), add fixtures and Ctrl+Z them, store/play cues, weather and time with Ctrl+Z, exports, the online model with a real API key
-- [ ] Follow-ups: export completion reported in the chat (done in #115); several commands in one prompt; hanging added fixtures on truss; Environment panel edits undoable; conversation saved with scenes; more languages
+- [ ] Follow-ups: export completion reported in the chat (done in #115); several commands in one prompt; hanging added fixtures on truss; Environment panel edits undoable (done in #116); conversation saved with scenes; more languages
 
 ## Phase 21 — Armenian & English assistant, voice prompts, photo / scan import for Sketch to Stage (requested by Gevor 2026-10-22; STATE.md #44, ADR 0017)
 Decisions (Gevor, 2026-10-22): voice via OpenAI transcription (off by default, OPENAI_API_KEY); an offline Armenian grammar plus Armenian replies; photo import = a local edge pipeline, with an optional Claude vision reading, landing as editable strokes in the Sketch canvas.
@@ -939,3 +939,11 @@ Gevor's choices: automation tests on a harness game instance (not AFunctionalTes
 - [x] Assistant bubbles break words wider than the panel (file names were clipped at the bubble's edge in the docked panel)
 - [x] Test StageCraft.Assistant.ExportCompletion (both mutations fail it); suite 319/319; -game Export115After: every export reported once with the files on disk, Armenian in Armenian
 - [ ] Gevor: in the AI Assistant panel, ask "export all reports" and check the three lines that follow
+
+## Phase 66 - Environment panel edits are undo steps (requested by Gevor 2026-11-26; STATE.md #116; ADR 0009 §9)
+- [x] Measured first (-game Env116Before, Concert, real Slate drags via the new dev command StageCraft.Environment.DragSlider): Time of day 22:30 to 19:43 and Clouds 35% to 93%, Rain preset and Studio lighting left 0 undo steps; Ctrl+Z answered NothingToDo (the panel wrote UStageEnvironmentSubsystem::SetSettings directly)
+- [x] Panel writes through AModularPlayerController::RequestSetEnvironment: "Lighting: Studio", "Weather: Rain"; a slider drag is one step named by the slider (UStageValueSlider OnGrabbed / OnReleased bracket the controller's edit transaction; closing the panel mid-drag ends it)
+- [x] UStageEditHistoryComponent: an environment change inside an open transaction is collected (first before, latest after) and recorded once when it ends; a drag back to the start is no step
+- [x] Dev StageCraft.Environment.Set / Preset write through the controller too
+- [x] Tests StageCraft.History.EnvironmentDrag (new), History.Environment (transaction case), UI.ValueSlider (one grab, one release); two mutations fail them; suite 320/320; -game Env116After: each drag one step, four Ctrl+Z restore 22:30 / 35% / 20% / Outdoor, Ctrl+Y re-applies 19:43
+- [ ] Gevor: in the Environment panel drag Time of day, click Rain and Studio; Ctrl+Z three times, then Ctrl+Y

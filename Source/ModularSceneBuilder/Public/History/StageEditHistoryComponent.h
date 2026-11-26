@@ -5,6 +5,7 @@
 #include "CoreMinimal.h"
 #include "Components/ActorComponent.h"
 #include "Data/StageParameterTypes.h"
+#include "Environment/StageEnvironmentTypes.h"
 #include "History/StageEditCommand.h"
 #include "Show/ShowControlTypes.h"
 #include "StageEditHistoryComponent.generated.h"
@@ -42,12 +43,13 @@ DECLARE_DELEGATE_RetVal_TwoParams(bool, FStageTransformValidator, const class AM
  *  - Transform: RecordTransformChange, called by the controller when a gizmo drag ends and after a
  *    validated Location / Rotation / Scale edit.
  *  - Cues: RecordCueListChange, called by the controller after a validated cue store / update / delete.
- *  - Environment: RecordEnvironmentChange, called by the controller after an assistant weather, time or sky change.
+ *  - Environment: RecordEnvironmentChange, called by the controller after an Environment panel, atmosphere or assistant change.
  * Undo and redo never go through those entry points, so they can never record themselves.
  *
- * Transactions (BeginTransaction / EndTransaction): a continuous edit (dragging an inspector field) changes the stage many
- * times. Transform and parameter changes recorded while a transaction is open are merged per item and parameter, keeping
- * the first "before", and become ONE step when it ends. Only one transaction is open at a time.
+ * Transactions (BeginTransaction / EndTransaction): a continuous edit (dragging an inspector field or an Environment panel
+ * slider) changes the stage many times. Transform, parameter and environment changes recorded while a transaction is open
+ * are merged (per item and parameter), keeping the first "before", and become ONE step when it ends. Only one transaction
+ * is open at a time.
  *
  * Applying: restores go through USpawnSystemComponent::RestoreItem (the placement rules still decide),
  * removals release the selection first. A transform must be sane and is checked by TransformValidator (lock, scale support)
@@ -127,9 +129,10 @@ public:
 
 	/**
 	 * Records an environment change as one step holding the whole settings before and after it (Docs/ADR/0016-ai-assistant.md §2.4).
-	 * An open transaction is ended first. Nothing is recorded when Before and After are equal.
+	 * While a transaction is open (an Environment panel slider drag) the change is collected instead: the first Before and
+	 * the latest After become one environment command when it ends (ADR 0009 §9). Nothing is recorded when they are equal.
 	 */
-	void RecordEnvironmentChange(const FText& Description, const struct FStageEnvironmentSettings& Before, const struct FStageEnvironmentSettings& After);
+	void RecordEnvironmentChange(const FText& Description, const FStageEnvironmentSettings& Before, const FStageEnvironmentSettings& After);
 
 	/**
 	 * Records a programmer edit of FixtureIds (Docs/ADR/0025-programmer-and-output-mix.md §3). Before is the programmer's
@@ -251,6 +254,10 @@ private:
 		TArray<int32> ProgrammerFixtures;
 		TArray<FShowCueFixtureState> ProgrammerBefore;
 		FText ProgrammerDescription;
+		/** Environment edits: the settings before the first one and after the latest one, named by the first. */
+		TOptional<FStageEnvironmentSettings> EnvironmentBefore;
+		FStageEnvironmentSettings EnvironmentAfter;
+		FText EnvironmentDescription;
 	};
 
 	TOptional<FPendingTransaction> Transaction;
