@@ -10522,7 +10522,7 @@ All times in ms.
 - Screenshots: `%TEMP%/StageCraftRuns/ShotBase/Window_191237.png`, `Window_191244.png`, `%TEMP%/StageCraftRuns/ShotMega/Window_191356.png`, `Window_191403.png`; difference images `%TEMP%/StageCraftRuns/diff_idle.png`, `diff_fade.png`.
 - **No code change**, so no test, suite run or build was needed. The tree equals `043db32`, which #108 verified (313/313; Editor, Game Development and Shipping with 0 warnings; Shipping scan clean).
 
-**Commit:** uncommitted (working tree). STATE #108 now carries `043db32`.
+**Commit:** `b67a824`.
 
 **Known issues / follow-ups**
 - **Gevor:** ADR 0037. Look at a lit rig with MegaLights up close (run with the two switches above), decide the low-end fallback, accept or reject.
@@ -10532,4 +10532,64 @@ All times in ms.
   - add a scalability fallback;
   - then the game-thread items (pivots ~3.9 ms, deferred render updates ~2.5 ms, part bodies 1–2 ms) and Slate (~3 ms) become the measured next costs.
 - **If rejected:** the render thread stays the bound, and the UI and game-thread items stay unchanged until a measurement on another machine shows the game thread as the bound.
+- The Obsidian vault on S: is still unreachable, so there is no session log.
+
+## #110 — ADR 0037 pre-accept checks: MegaLights drops the fixtures' light functions (gobos, iris, blades), so it is not applied; hardware and fallback answered (2026-11-26)
+
+**What & why**
+- Gevor asked (2026-11-26) to follow up on #109 and ADR 0037: apply MegaLights with a fallback and a packaged bench if accepted, or move on. No accept or reject had been given, so the pre-accept checks in ADR 0037 §4 that need no decision were run first. Nothing was applied.
+- **The look, up close (blocking):**
+  - **Setup:** the starter stage's two Spots tilted onto the floor (`StageCraft.Show.Set Tilt 115`, dimmer full). Spot 101 on gobo 2 (star), Spot 102 iris 0.6. Top-down camera (`StageCraft.View.Camera 0 0 9 -89 0`). One `-game` run without and one with `-ini:Engine:[/Script/Engine.RendererSettings]:r.MegaLights.EnableForProject=1 -dpcvars=r.MegaLights.Enable=1`.
+  - **Without MegaLights:** the star gobo and the small iris pool project.
+  - **With MegaLights:** there is no star and no iris. Each beam lights its full light cone (60° and 30°), much brighter.
+  - Photometrics and fixture state were identical in both runs (same light function instance, same values).
+- **Cause, from the UE 5.8 source:**
+  - MegaLights samples light functions only from the light function atlas.
+  - A material enters the atlas only if the compiler marks it compatible (`bIsLightFunctionAtlasCompatible`): no vertex position, scene depth or scene textures, and no TextureCoordinate fed into the graph.
+  - `M_StageBeamLightFunction` feeds a TextureCoordinate (cone coordinates) into its Custom node, so it is incompatible. Its lights get atlas index 0, which means no light function.
+  - **Even with the material's "Compatible With Light Function Atlas" flag set:**
+    - the atlas keys its slots by material instance, and each shaped fixture has its own dynamic instance;
+    - it holds 16 slots by default and 256 at most (`r.LightFunctionAtlas.Size`), each 128×128 by default;
+    - lights beyond that silently lose their gobo.
+  - The #109 frame gains came from a bench without light functions.
+- **Hardware and fallback:**
+  - The project already targets SM6 only (D3D12 `PCD3D_SM6`, Vulkan `SF_VULKAN_SM6`).
+  - MegaLights compiles where the platform has SM6, wave operations and ray tracing. At runtime, without hardware ray tracing or distance-field tracing, it turns itself off and lights take the normal deferred path.
+  - `r.MegaLights.Allowed` is a scalability variable (the engine keeps MegaLights settings under `[ShadowQuality@N]`), so a `DefaultScalability.ini` fallback is possible.
+  - MegaLights is still "Experimental" in 5.8.
+- **Packaged-build bench:** not run. It cannot answer anything until the light functions survive.
+- **ADR 0037:**
+  - Status is "proposed, blocked as written".
+  - New §7 records these checks and three ways forward:
+    1. keep MegaLights off (recommended now);
+    2. a hybrid where a fixture turns its spot light's `bAllowMegaLights` off while a light function is attached (today's look by construction; measure with gobos on part of the rig first);
+    3. an atlas-compatible beam material with a larger atlas and shared instances (largest change, quality risk).
+
+**Files changed**
+- `Docs/ADR/0037-megalights-for-fixture-lighting.md` (status, §7).
+- `tasks/todo.md` (Phase 59 check ticked, Phase 60).
+- `STATE.md` (this entry; #109 carries `b67a824`).
+- No source, config, Blueprint, asset or map change. Each scripted run reported the profile, scenes, marketplace and imports restored.
+
+**Verification**
+- Screenshots:
+  - without MegaLights: `%TEMP%/StageCraftRuns/LfBase2/Window_101259.png` (default view) and `Window_101304.png` (top-down);
+  - with MegaLights: `%TEMP%/StageCraftRuns/LfMega2/Window_101341.png` and `Window_101346.png`;
+  - tilt probe: `%TEMP%/StageCraftRuns/LfTilt/game.log`.
+- Engine source read:
+  - `Renderer/Private/MegaLights/MegaLights.cpp` (`IsRequested`, `IsEnabled`, `GetMegaLightsMode`, project and scalability variables);
+  - `MegaLightsRayTracing.cpp`;
+  - `RenderCore/Private/RenderUtils.cpp` (`ShouldCompileMegaLightsShaders`);
+  - `Renderer/Private/LightFunctionAtlas.cpp` / `.h` (slot key, size, incompatible materials);
+  - `Engine/Private/Materials/HLSLMaterialTranslator.cpp` and `MaterialExpressions.cpp` (compatibility rule, TextureCoordinate);
+  - `Engine/Classes/Components/LightComponent.h` (`bAllowMegaLights`, no runtime setter).
+- **No code change**, so no test, suite run or build was needed. The tree's code equals `043db32`, which #108 verified (313/313; Editor, Game Development and Shipping with 0 warnings; Shipping scan clean).
+
+**Commit:** uncommitted (working tree). STATE #109 now carries `b67a824`.
+
+**Known issues / follow-ups**
+- **Gevor:** choose ADR 0037 §7.3 option 1, 2 or 3.
+  - **Option 2:** first a bench with gobos on part of the rig, to see how much of the #109 gain is left.
+  - **Option 3:** first set the material flag on a copy and compare a close-up gobo (128-texel slots).
+- Until then the render thread stays the bound. The game-thread items (pivots, deferred render updates, part bodies) and Slate cannot shorten frames on this machine.
 - The Obsidian vault on S: is still unreachable, so there is no session log.

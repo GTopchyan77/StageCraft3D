@@ -1,6 +1,8 @@
 # ADR 0037: MegaLights for fixture lighting
 
-- **Status:** proposed (2026-11-25, STATE.md #109). Not applied: the project still renders with MegaLights off. Gevor decides.
+- **Status:** proposed, **blocked as written** (2026-11-26, STATE.md #110). Not applied: the project still renders with MegaLights off.
+  - Enabling MegaLights for the project drops every fixture's light function: gobos, iris, blades, prism and frost disappear, and shaped beams light their whole cone (§7).
+  - Gevor chooses one of the ways forward in §7.3 before anything is applied.
 - **Related:**
   - ADR 0012 §3 (fixture benchmark and the light-rebuild workaround for moving heads).
   - ADR 0018 §4 and §4.1 (the shadow budget and its moving-caster limit, STATE.md #108).
@@ -70,3 +72,50 @@ Enable MegaLights for the project and keep the shadow budget (64 still / 16 movi
 ## 6. Rollback
 
 Remove `r.MegaLights.EnableForProject` (or set it False) in `DefaultEngine.ini`; nothing else depends on it.
+
+## 7. Pre-accept checks (2026-11-26, STATE.md #110)
+
+### 7.1 The look: light functions are lost (blocking)
+
+- **A/B:** the starter stage's two Spot fixtures, tilt 115°, dimmer full; Spot 101 on gobo 2 (star), Spot 102 iris 0.6; top-down camera; run with and without the two MegaLights switches.
+  - **Without MegaLights:** the star gobo and the small iris pool project as expected.
+  - **With MegaLights:** Spot 101 lights a full, much brighter open cone with no star, and Spot 102 lights its full 30° cone instead of the iris pool.
+  - Screenshots: `%TEMP%/StageCraftRuns/LfBase2/Window_101304.png` (without) and `%TEMP%/StageCraftRuns/LfMega2/Window_101346.png` (with).
+- **Cause (UE 5.8 source):**
+  - MegaLights samples a light function only through the light function atlas.
+  - The atlas takes only materials the material compiler marks compatible: no vertex position, scene depth or scene textures, and no texture coordinates fed into the graph (`HLSLMaterialTranslator.cpp`, `bIsLightFunctionAtlasCompatible`).
+  - `M_StageBeamLightFunction` feeds a TextureCoordinate into its Custom node (the cone coordinates), so it is marked incompatible. The light then gets atlas index 0, which means no light function (`LightFunctionAtlas.cpp`).
+  - The light function also narrows the light's cone to the beam angle (`ConeToBeam`), so even open-but-zoomed beams change.
+- **Also limiting even with a compatible material:**
+  - The atlas keys slots by material instance (`FLightFunctionSlotKey::LFMaterialUniqueID`).
+  - Every fixture with beam shaping has its own dynamic instance, so each needs its own slot.
+  - The atlas holds 4×4 = 16 slots by default (`r.LightFunctionAtlas.Size`), and at most 16×16 = 256.
+  - Each slot is 128×128 texels by default (`r.LightFunctionAtlas.SlotResolution`): a gobo is rasterised once into its slot instead of evaluated per pixel, which is softer close up.
+  - Lights over the slot count silently lose their light function.
+- **The #109 performance numbers** come from `StageCraft.Bench.Fixtures`, whose fixtures project no gobo. They do not include light functions.
+
+### 7.2 The other checks
+
+- **Hardware:**
+  - The project already targets SM6 only (`DefaultEngine.ini`: D3D12 `PCD3D_SM6`, Vulkan `SF_VULKAN_SM6`; SM5 removed), so "GPUs without SM6" are not a new MegaLights constraint.
+  - MegaLights compiles only where the shader platform has SM6, wave operations and ray tracing (`ShouldCompileMegaLightsShaders`).
+  - At runtime it needs hardware ray tracing or distance-field software tracing (`HasRequiredTracingData`). Without either, `MegaLights::IsEnabled` is false and the lights fall back to the normal deferred path, with an on-screen warning in non-Shipping builds.
+  - **The scalability fallback already exists:** `r.MegaLights.Allowed` is an `ECVF_Scalability` variable. The engine's MegaLights settings live under `[ShadowQuality@N]` (`BaseScalability.ini`), so a project `DefaultScalability.ini` can set `r.MegaLights.Allowed=0` for low shadow quality. Not added (nothing is enabled).
+- **Engine status:** UE 5.8 still calls MegaLights an "Experimental feature" (help text of `r.MegaLights.EnableForProject`).
+- **Packaged build:** not run. Benching a packaged build is pointless until §7.1 is solved, because the bench does not exercise light functions.
+
+### 7.3 Ways forward (Gevor decides)
+
+1. **Keep MegaLights off (no change).** The render thread stays the bound, about 13 ms idle and 17–19 ms moving crossfade at 500 fixtures on this machine.
+2. **Hybrid: only light-function-free beams use MegaLights.**
+   - A fixture turns `bAllowMegaLights` off on its spot light while its light function is attached, and back on when it detaches. The engine reads `ULightComponent::bAllowMegaLights` per light. It has no runtime setter: set the member and rebuild the light's render state, as the fixture already does after head moves.
+   - Gobos and shaping then look exactly as today; only open beams take the MegaLights path.
+   - The gain shrinks as more fixtures project gobos, so measure with a gobo-heavy bench.
+   - This is a small code change (fixture actor plus a test) and needs the project setting as well.
+3. **Make the beam material atlas-compatible.**
+   - Set the material's "Compatible With Light Function Atlas" flag, then check the look.
+   - Raise `r.LightFunctionAtlas.Size` to 16 and possibly the slot resolution.
+   - Share instances between fixtures with identical shaping, or accept that more than 256 shaped fixtures lose their gobos.
+   - This is the largest change, with a visible quality risk (128-texel gobos).
+
+- **Recommendation:** option 1 now. Option 2 if Gevor wants the open-beam gain, measured first with gobos on part of the rig; it keeps today's look by construction.
