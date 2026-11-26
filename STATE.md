@@ -11016,9 +11016,84 @@ All times in ms.
   - a mouse drag by a person;
   - closing the panel mid-drag (handled in `NativeDestruct`, not exercised).
 
-**Commit:** uncommitted (working tree).
+**Commit:** `8095118`. STATE #115 carries `b605378`.
 
 **Known issues / follow-ups**
 - **Gevor:** in the Environment panel, drag Time of day, click Rain and Studio; then Ctrl+Z three times and Ctrl+Y.
 - The step name for the dev command `Environment.Set` is its arguments ("Lighting Studio"), unlike the panel's "Lighting: Studio" (development only).
+- The Obsidian vault on S: is still unreachable, so there is no session log.
+
+## #117 — The AI Assistant hangs added fixtures on the truss (2026-11-26)
+
+**What & why**
+- **Request:** Gevor asked (2026-11-26) for the next high-value code item from `tasks/todo.md`, checking existing code first.
+- **Checked first:**
+  - "Several commands in one prompt" was already done in H4 (#75, ADR 0030 §17). Its line in `tasks/todo.md` (387) and ADR 0016 §4 were stale; both are now marked done.
+  - "Hanging added fixtures on truss" was open. Only Sketch plans hung fixtures, and only from truss drawn in the same sketch.
+  - Also fixed: ADR 0016 §4 still said Environment panel edits were not undoable (done in #116).
+- **Measured first** (`-game` run `Hang117Before`, Concert starter stage: two F34 truss runs at 7 m, front X = −600 and back X = 400, nine Beams hung):
+  - "hang 4 pars on the truss" and "add 2 moving head spots to the truss" were read as plain adds.
+  - The fixtures were placed on the floor at X = −2300 / −2500, behind the FOH desks.
+  - The reply said "in a row on the floor".
+- **Change:**
+  - **`FStageAICommand::Mount`** (`EStageAIFixtureMount`): Floor (default), Truss, FrontTruss or BackTruss.
+  - **Local grammar:**
+    - "truss" / "trusses", or hang / hung / fly / flown without floor / ground / deck, means a truss;
+    - back / rear / upstage and front / downstage pick a run;
+    - those words are kept out of the fixture query.
+    - Armenian works through the lexicon («կախիր 2 լույս ֆերմայից»).
+  - **Online tool:** a `mount` field (floor, truss, front_truss, back_truss); an unknown value is refused. Proposal cards say where they hang (EN / HY).
+  - **Pure layout:** `StageAICommandParser::FindFreeTrussSpots` (a spot every 50 cm along a run's bottom chord, none within 60 cm horizontally and 150 cm vertically of a fixture) and `SpreadOverSpots` (centres of equal shares).
+  - **Runner (`AddFixtures`):**
+    - Gathers straight truss spans (category `StageCraft.Category.Truss`, path in world space) and curved truss (sampled half a profile below the origin), front first.
+    - "The truss" takes the first run from the front with room for them all; front / back name one run.
+    - Not enough room is refused with the number that fits; no truss is refused with "say on the floor".
+    - The fixtures hang upside down (roll 180°) and go through `RequestBuildPlan` as one plan, so the rules judge each one and it is one undo step.
+    - The reply names the run. The floor path and its reply are unchanged.
+  - **Docs:** ADR 0016 §8 amendment, plus its status and §4; `Docs/CURRENT_SYSTEMS.md` (assistant row); `tasks/todo.md` (line 387, Phase 67).
+
+**Files changed**
+- `Source/ModularSceneBuilder/Public/AI/StageAITypes.h` (`EStageAIFixtureMount`, `FStageAICommand::Mount`).
+- `Source/ModularSceneBuilder/Public/AI/StageAICommandParser.h`, `Private/AI/StageAICommandParser.cpp` (grammar; `FindFreeTrussSpots`, `SpreadOverSpots`).
+- `Source/ModularSceneBuilder/Private/AI/StageAICommandRunner.cpp` (`GatherTrussRuns`, `NameTrussRun`, `PlanTrussFixtures`; `AddFixtures` reply).
+- `Source/ModularSceneBuilder/Private/AI/StageAICommandSchema.cpp` (`mount` field).
+- `Source/ModularSceneBuilder/Private/AI/StageAIToolCatalogue.cpp` (card wording).
+- Test: `Private/AI/Tests/StageAITrussTests.cpp` (new, `StageCraft.AI.TrussHang`).
+- `Docs/ADR/0016-ai-assistant.md`, `Docs/CURRENT_SYSTEMS.md`, `tasks/todo.md`, `STATE.md` (this entry; #116 carries `8095118`).
+- No Blueprint, asset, map or ini file.
+
+**Verification**
+- **Test `StageCraft.AI.TrussHang`:**
+  - grammar: hang, to the truss, back, upstage and front runs, floor kept, the Armenian prompt, a multi-step prompt;
+  - tool field: reads, defaults to floor, an unknown value is refused, offered in the definition;
+  - EN / HY cards;
+  - spots on the Concert front run: 33 empty, 18 free between five Beams, 4 spread to Y −700 / −200 / 200 / 700;
+  - too many gives none; a fixture below does not take a spot; a closed square gives 16 spots, an open one 13.
+- **Mutations:**
+  - no truss detection fails 13 checks;
+  - ignoring hung fixtures fails ("18 but 33"; pars would land on the Beams at ±600).
+  - Both reverted; `grep MUTATION` is clean.
+- **Suites:** `StageCraft.AI` + `StageCraft.Assistant` 33/33. Full `RunAutomation.ps1 -Filter StageCraft -NullRHI` 321/321, user data unchanged (181 files).
+- **`-game` `Hang117After`** (same stage):
+  - 4 LED Pars at Y −700 / −200 / 200 / 700 on the front truss (Z 700, roll 180°);
+  - 2 Profile 600 at ±400 on the back truss;
+  - Armenian: 2 Beams at ±450 on the front truss with an Armenian reply;
+  - "hang 20 pars on the front truss" refused with "room for 4 more";
+  - Ctrl+Z removed the last add (one step).
+  - Screenshot: fixtures on the rig, refusal in the chat. Logs: `%TEMP%/StageCraftRuns/Hang117Before|After/game.log`.
+- **Builds:** Editor Development, Game Development and Game Shipping succeeded with no warnings. The Shipping binary (17:30) was built after the last source edit.
+- **Shipping scan** (ASCII and UTF-16 at both alignments):
+  - absent: the test name and its messages, "MUTATION", and the dev commands `StageCraft.Assistant.Ask` and `StageCraft.Environment.DragSlider`;
+  - present as the control: "front_truss", "hung from {0}, spread along it" and "There is no truss on the stage".
+- **Not verified:**
+  - the online model choosing `mount` live (no key in tests);
+  - curved truss in a run (the code path is shared, but no arc was on the stage);
+  - a mouse check by a person.
+
+**Commit:** uncommitted (working tree).
+
+**Known issues / follow-ups**
+- **Gevor:** on a stage with truss, ask "hang 4 pars on the truss", then "add 2 spots on the back truss"; check where they hang, then Ctrl+Z.
+- Hung fixtures keep their home aim (straight down); aiming them at the stage centre is a follow-up.
+- With three or more runs, the middle ones are named by number from the front.
 - The Obsidian vault on S: is still unreachable, so there is no session log.

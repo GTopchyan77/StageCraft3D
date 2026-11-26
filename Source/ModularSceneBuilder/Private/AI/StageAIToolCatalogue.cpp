@@ -344,8 +344,22 @@ namespace StageAIToolCatalogue
 		switch (Command.Intent)
 		{
 		case EStageAIIntent::AddFixtures:
-			return FText::Format(Pick(Language, LOCTEXT("AddFixtures", "Add {0} {1}"), INVTEXT("Ավելացնել {0} {1}")), FText::AsNumber(Command.Count.Get(1)),
+		{
+			const FText Added = FText::Format(Pick(Language, LOCTEXT("AddFixtures", "Add {0} {1}"), INVTEXT("Ավելացնել {0} {1}")), FText::AsNumber(Command.Count.Get(1)),
 				Command.ItemQuery.IsEmpty() ? Pick(Language, LOCTEXT("AddFixturesAny", "fixtures"), INVTEXT("սարք")) : FText::FromString(Command.ItemQuery));
+			// The card says where they will hang, so APPLY is agreed to knowing it.
+			switch (Command.Mount)
+			{
+			case EStageAIFixtureMount::Truss:
+				return FText::Format(Pick(Language, LOCTEXT("AddOnTruss", "{0} on the truss"), INVTEXT("{0} ֆերմայի վրա")), Added);
+			case EStageAIFixtureMount::FrontTruss:
+				return FText::Format(Pick(Language, LOCTEXT("AddOnFrontTruss", "{0} on the front truss"), INVTEXT("{0} առջևի ֆերմայի վրա")), Added);
+			case EStageAIFixtureMount::BackTruss:
+				return FText::Format(Pick(Language, LOCTEXT("AddOnBackTruss", "{0} on the back truss"), INVTEXT("{0} հետևի ֆերմայի վրա")), Added);
+			default:
+				return Added;
+			}
+		}
 		case EStageAIIntent::StoreCue:
 		{
 			FText Text = Command.CueNumber.IsSet()

@@ -149,6 +149,19 @@ enum class EStageAIDirection : uint8
 	Down,
 };
 
+/** Where AddFixtures puts the new fixtures (Docs/ADR/0016-ai-assistant.md §8). Front is downstage (-X), towards the audience. */
+enum class EStageAIFixtureMount : uint8
+{
+	/** In a row on the floor, in front of everything placed. */
+	Floor,
+	/** Hung on the most downstage truss run with room for all of them, else the next one upstage. */
+	Truss,
+	/** Hung on the most downstage truss run. */
+	FrontTruss,
+	/** Hung on the most upstage truss run. */
+	BackTruss,
+};
+
 /** A BuildShape shape. */
 enum class EStageAIShape : uint8
 {
@@ -235,6 +248,9 @@ struct MODULARSCENEBUILDER_API FStageAICommand
 	 * Unsupported: the operation.
 	 */
 	FString ItemQuery;
+
+	/** AddFixtures: on the floor, or hung on a truss run already on the stage. */
+	EStageAIFixtureMount Mount = EStageAIFixtureMount::Floor;
 
 	/** DeleteItems, MoveItems, ReplaceItems. */
 	EStageAITarget Target = EStageAITarget::Selection;

@@ -454,6 +454,15 @@ namespace StageAICommandParser
 			}
 			FStageAICommand Command;
 			Command.Intent = EStageAIIntent::AddFixtures;
+			// "On the truss", or hanging / flying them without saying "floor": they hang on a run already on the stage (ADR 0016 §8).
+			const bool bOnTruss = Prompt.HasAny({ TEXT("truss"), TEXT("trusses") })
+				|| (Prompt.HasAny({ TEXT("hang"), TEXT("hung"), TEXT("fly"), TEXT("flown") }) && !Prompt.HasAny({ TEXT("floor"), TEXT("ground"), TEXT("deck") }));
+			if (bOnTruss)
+			{
+				Command.Mount = Prompt.HasAny({ TEXT("back"), TEXT("rear"), TEXT("upstage") }) ? EStageAIFixtureMount::BackTruss
+					: Prompt.HasAny({ TEXT("front"), TEXT("downstage") }) ? EStageAIFixtureMount::FrontTruss
+					: EStageAIFixtureMount::Truss;
+			}
 			bool bExplicitCount = false;
 			TArray<FString> QueryWords;
 			for (const FString& Word : Prompt.Words)
@@ -499,6 +508,12 @@ namespace StageAICommandParser
 					TEXT("the"), TEXT("some"), TEXT("more"), TEXT("of"), TEXT("on"), TEXT("to"), TEXT("in"), TEXT("stage"), TEXT("me"), TEXT("new"), TEXT("x"),
 					TEXT("a"), TEXT("an"), TEXT("another"), TEXT("couple"), TEXT("pair"), TEXT("few"), TEXT("dozen"), TEXT("can"), TEXT("you"), TEXT("i"),
 					TEXT("want"), TEXT("would"), TEXT("like"), TEXT("could"), TEXT("floor"), TEXT("row"), TEXT("front"), TEXT("there"), TEXT("here") }))
+				{
+					continue;
+				}
+				// Where they hang is not part of what to add ("pars", not "pars truss").
+				if (bOnTruss && IsOneOf(Word, { TEXT("truss"), TEXT("trusses"), TEXT("hung"), TEXT("fly"), TEXT("flown"), TEXT("from"), TEXT("under"), TEXT("along"),
+					TEXT("across"), TEXT("back"), TEXT("rear"), TEXT("upstage"), TEXT("downstage"), TEXT("at"), TEXT("onto") }))
 				{
 					continue;
 				}
@@ -3192,6 +3207,64 @@ namespace StageAICommandParser
 			Points.Add(FVector2D(X, FMath::GridSnap(Y, FixtureRowGrid)));
 		}
 		return Points;
+	}
+
+	TArray<FVector> FindFreeTrussSpots(TConstArrayView<FVector> Run, bool bClosed, TConstArrayView<FVector> Occupied)
+	{
+		TArray<FVector> Free;
+		if (Run.Num() < 2)
+		{
+			return Free;
+		}
+		const auto IsTaken = [Occupied](const FVector& Spot)
+		{
+			return Algo::AnyOf(Occupied, [&Spot](const FVector& Fixture)
+			{
+				return FVector2D::Distance(FVector2D(Fixture), FVector2D(Spot)) < TrussClearance && FMath::Abs(Fixture.Z - Spot.Z) < TrussClearanceHeight;
+			});
+		};
+
+		// Measured along the whole run rather than per leg, so the spacing carries round corners and no corner gets two spots.
+		const int32 LegCount = bClosed ? Run.Num() : Run.Num() - 1;
+		double LegStart = 0.0;
+		double Next = 0.0;
+		for (int32 Leg = 0; Leg < LegCount; ++Leg)
+		{
+			const FVector& A = Run[Leg];
+			const FVector& B = Run[(Leg + 1) % Run.Num()];
+			const double Length = FVector::Distance(A, B);
+			const bool bLastLeg = Leg == LegCount - 1;
+			// An open run's far end is a spot; a closed run's is its start again, already counted.
+			const double End = LegStart + Length + (bLastLeg && !bClosed ? UE_KINDA_SMALL_NUMBER : -UE_KINDA_SMALL_NUMBER);
+			for (; Next <= End; Next += TrussSlotSpacing)
+			{
+				const double Alpha = Length > UE_KINDA_SMALL_NUMBER ? FMath::Clamp((Next - LegStart) / Length, 0.0, 1.0) : 0.0;
+				const FVector Spot = FMath::Lerp(A, B, Alpha);
+				if (!IsTaken(Spot))
+				{
+					Free.Add(Spot);
+				}
+			}
+			LegStart += Length;
+		}
+		return Free;
+	}
+
+	TArray<FVector> SpreadOverSpots(TConstArrayView<FVector> Free, int32 Count)
+	{
+		TArray<FVector> Picked;
+		if (Count < 1 || Count > Free.Num())
+		{
+			return Picked;
+		}
+		Picked.Reserve(Count);
+		for (int32 Index = 0; Index < Count; ++Index)
+		{
+			// The centre of share Index; distinct shares never round to the same spot because each share is at least one spot wide.
+			const int32 Spot = FMath::Clamp(FMath::FloorToInt((double(Index) + 0.5) * Free.Num() / Count), 0, Free.Num() - 1);
+			Picked.Add(Free[Spot]);
+		}
+		return Picked;
 	}
 	EStageAIConfirmation ParseConfirmation(const FString& Text)
 	{

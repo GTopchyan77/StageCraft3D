@@ -39,6 +39,11 @@ namespace StageAICommandSchema
 			{ EStageAIDirection::Left, TEXT("left") }, { EStageAIDirection::Right, TEXT("right") }, { EStageAIDirection::Forward, TEXT("forward") },
 			{ EStageAIDirection::Back, TEXT("back") }, { EStageAIDirection::Up, TEXT("up") }, { EStageAIDirection::Down, TEXT("down") } };
 
+		struct FMountName { EStageAIFixtureMount Mount; const TCHAR* Name; };
+		const FMountName MountNames[] = {
+			{ EStageAIFixtureMount::Floor, TEXT("floor") }, { EStageAIFixtureMount::Truss, TEXT("truss") },
+			{ EStageAIFixtureMount::FrontTruss, TEXT("front_truss") }, { EStageAIFixtureMount::BackTruss, TEXT("back_truss") } };
+
 		struct FControlName { EStageAIFixtureControl Control; const TCHAR* Name; };
 		const FControlName ControlNames[] = {
 			{ EStageAIFixtureControl::Dimmer, TEXT("dimmer") }, { EStageAIFixtureControl::Color, TEXT("color") }, { EStageAIFixtureControl::Gel, TEXT("gel") },
@@ -151,6 +156,9 @@ namespace StageAICommandSchema
 			Properties->SetObjectField(TEXT("count"), MakeProperty(TEXT("integer"), FString::Printf(TEXT("add_fixtures: how many, 1 to %d. Default 1. delete_items, move_items, replace_items with target named: at most how many of the matching items (the latest placed first); omit for all of them."), StageAICommandParser::MaxFixturesPerCommand)));
 			Properties->SetObjectField(TEXT("fixture_id"), MakeProperty(TEXT("integer"), TEXT("explain_fixture: the fixture ID the user names (\"why is fixture 12 dark\" is 12); omit for the selected fixture.")));
 			Properties->SetObjectField(TEXT("item"), MakeProperty(TEXT("string"), TEXT("add_fixtures: words naming the fixture type or catalog name (e.g. \"moving head spot\"); empty picks the first fixture. count_matching, and delete_items / move_items / replace_items with target named: words naming the placed items (\"spot\", \"truss\", \"lights\" for every fixture). unsupported: one of delete (clearing the whole stage), open, save.")));
+			TSharedRef<FJsonObject> Mount = MakeProperty(TEXT("string"), TEXT("add_fixtures: floor (default: a row on the floor) or hung on a truss run already on the stage: truss (the most downstage run with room for them all), front_truss (downstage, towards the audience) or back_truss (upstage)."));
+			Mount->SetArrayField(TEXT("enum"), StringValues(NamesOf(MakeArrayView(MountNames))));
+			Properties->SetObjectField(TEXT("mount"), Mount);
 			TSharedRef<FJsonObject> Target = MakeProperty(TEXT("string"), TEXT("delete_items, move_items, replace_items and the fixture tools (set_fixture, select_fixtures, apply_palette, record_palette, record_group, start_effect): selection for the user's selected items (\"this\", \"the selected\"), named for the placed items matching item. Fixture tools only: fixtures for fixture_ids, group for the group named in group, recent for the fixtures the conversation last changed (\"them\", \"those\")."));
 			Target->SetArrayField(TEXT("enum"), StringValues(NamesOf(MakeArrayView(TargetNames))));
 			Properties->SetObjectField(TEXT("target"), Target);
@@ -283,7 +291,7 @@ namespace StageAICommandSchema
 				TEXT("distance_cm"), TEXT("shape"), TEXT("radius_cm"), TEXT("width_cm"), TEXT("height_cm"), TEXT("angle_degrees"), TEXT("handrails"),
 				TEXT("fixture_settings"), TEXT("search"), TEXT("listing_kinds"), TEXT("category"), TEXT("price"), TEXT("max_credits"), TEXT("sort"),
 				TEXT("listing_number"), TEXT("listing_title"), TEXT("fixture_id"), TEXT("fixture_ids"), TEXT("universe"), TEXT("address"),
-				TEXT("group"), TEXT("palette"), TEXT("palette_kind"), TEXT("effect"), TEXT("rate_hz"), TEXT("effect_size") };
+				TEXT("group"), TEXT("palette"), TEXT("palette_kind"), TEXT("effect"), TEXT("rate_hz"), TEXT("effect_size"), TEXT("mount") };
 			for (const TPair<FString, TSharedPtr<FJsonValue>>& Field : Input.Values)
 			{
 				if (!Algo::FindByPredicate(KnownFields, [&Field](const TCHAR* Known) { return Field.Key == Known; }))
@@ -528,6 +536,17 @@ namespace StageAICommandSchema
 				Command.Hour = float(*Hour);
 			}
 			Input.TryGetStringField(TEXT("item"), Command.ItemQuery);
+			FString MountName;
+			if (Input.TryGetStringField(TEXT("mount"), MountName))
+			{
+				const FMountName* Found = FindByName(MakeArrayView(MountNames), MountName);
+				if (!Found)
+				{
+					OutError = LOCTEXT("UnknownMount", "Fixtures go on the floor, the truss, the front truss or the back truss.");
+					return false;
+				}
+				Command.Mount = Found->Mount;
+			}
 			// Items named without a target are the placed items of that name, not the selected ones.
 			if (!Input.HasField(TEXT("target")) && !Command.ItemQuery.TrimStartAndEnd().IsEmpty())
 			{

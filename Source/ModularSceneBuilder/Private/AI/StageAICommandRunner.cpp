@@ -4,6 +4,8 @@
 
 #include "Actors/LightingFixtureActor.h"
 #include "Actors/ModularBaseActor.h"
+#include "Actors/StageArcTrussActor.h"
+#include "Actors/StageSpanActor.h"
 #include "AI/StageAICommandParser.h"
 #include "AI/StageAICommandSubsystem.h"
 #include "AI/StageAIMarketplaceRunner.h"
@@ -13,6 +15,8 @@
 #include "Data/LightingFixtureData.h"
 #include "Data/StageArcTrussData.h"
 #include "Data/StageDeckData.h"
+#include "Data/StageItemTypes.h"
+#include "Data/StageSpanData.h"
 #include "Data/StageStairsData.h"
 #include "Engine/GameInstance.h"
 #include "Engine/World.h"
@@ -20,6 +24,7 @@
 #include "History/StageEditHistorySubsystem.h"
 #include "Placement/StageDeckMath.h"
 #include "Placement/StageProceduralShapes.h"
+#include "Placement/StageSpanMath.h"
 #include "Show/StageGelLibrary.h"
 #include "Sketch/StageSketchGenerator.h"
 #include "Subsystems/ShowControlSubsystem.h"
@@ -64,6 +69,151 @@ namespace StageAICommandRunner
 		FText RefusalOf(const TArray<FStageEconomyResultInfo>& Refusals, const FText& Fallback)
 		{
 			return Refusals.IsEmpty() || Refusals[0].Message.IsEmpty() ? Fallback : Refusals[0].Message;
+		}
+
+		/** A truss run on the stage: its bottom chord in world space (cm), where fixtures hang. */
+		struct FTrussRun
+		{
+			TArray<FVector> Points;
+			bool bClosed = false;
+			double MeanX = 0.0;
+		};
+
+		/**
+		 * Every truss run on the stage (straight truss spans and curved truss), most downstage (lowest X, towards the audience)
+		 * first. A straight span's points are its bottom chord already (the Sketch window hangs fixtures at the span's height); a
+		 * curved truss is centred on its origin's height, so its chord is half a profile lower, sampled finer than a fixture spot.
+		 */
+		TArray<FTrussRun> GatherTrussRuns(const UStageSessionSubsystem& Session)
+		{
+			TArray<FTrussRun> Runs;
+			for (const AModularBaseActor* Placed : Session.GetPlacedItems())
+			{
+				FTrussRun Run;
+				if (const AStageSpanActor* Span = Cast<AStageSpanActor>(Placed))
+				{
+					const UStageSpanData* Data = Span->GetSpanData();
+					const FStageSpanPathLayout Layout = Span->GetPathLayout();
+					if (!Data || !Data->CategoryTag.MatchesTag(StageCraftTags::Category_Truss) || !Layout.IsValid())
+					{
+						continue;
+					}
+					for (const FVector& Point : Layout.Points)
+					{
+						Run.Points.Add(Span->GetActorTransform().TransformPosition(Point));
+					}
+					Run.bClosed = Layout.bClosed;
+				}
+				else if (const AStageArcTrussActor* Arc = Cast<AStageArcTrussActor>(Placed))
+				{
+					const FStageArcTrussLayout& Layout = Arc->GetLayout();
+					if (!Layout.IsValid())
+					{
+						continue;
+					}
+					const int32 Segments = FMath::Max(2, FMath::CeilToInt(Layout.ArcLength / (StageAICommandParser::TrussSlotSpacing * 0.5)));
+					Run.bClosed = Layout.IsFullCircle();
+					for (int32 Index = 0; Index < (Run.bClosed ? Segments : Segments + 1); ++Index)
+					{
+						const FVector2D Point = Layout.GetPoint(double(Index) / Segments);
+						Run.Points.Add(Arc->GetActorTransform().TransformPosition(FVector(Point.X, Point.Y, -Layout.ProfileWidth * 0.5)));
+					}
+				}
+				else
+				{
+					continue;
+				}
+				for (const FVector& Point : Run.Points)
+				{
+					Run.MeanX += Point.X / Run.Points.Num();
+				}
+				Runs.Add(MoveTemp(Run));
+			}
+			Runs.StableSort([](const FTrussRun& A, const FTrussRun& B) { return A.MeanX < B.MeanX; });
+			return Runs;
+		}
+
+		/** "the front truss", as the reply names run Index of Count (front first). */
+		FText NameTrussRun(int32 Index, int32 Count, EStageAILanguage Language)
+		{
+			if (Count == 1)
+			{
+				return Pick(Language, LOCTEXT("TheTruss", "the truss"), INVTEXT("ֆերմայից"));
+			}
+			if (Index == 0)
+			{
+				return Pick(Language, LOCTEXT("TheFrontTruss", "the front truss"), INVTEXT("առջևի ֆերմայից"));
+			}
+			if (Index == Count - 1)
+			{
+				return Pick(Language, LOCTEXT("TheBackTruss", "the back truss"), INVTEXT("հետևի ֆերմայից"));
+			}
+			return FText::Format(Pick(Language, LOCTEXT("TrussRunNumber", "truss run {0} of {1} from the front"), INVTEXT("{0}-րդ ֆերմայից ({1}-ից, առջևից հաշված)")),
+				FText::AsNumber(Index + 1), FText::AsNumber(Count));
+		}
+
+		/**
+		 * Where Count fixtures hang for Mount (Docs/ADR/0016 §8): spread over the free spots of the chosen run, upside down like the
+		 * Sketch window's hung fixtures. False with OutRefusal when there is no truss or not room enough; OutRunName names the run.
+		 */
+		bool PlanTrussFixtures(const UStageSessionSubsystem& Session, EStageAIFixtureMount Mount, int32 Count, EStageAILanguage Language,
+			TArray<FTransform>& OutTransforms, FText& OutRunName, FText& OutRefusal)
+		{
+			const TArray<FTrussRun> Runs = GatherTrussRuns(Session);
+			if (Runs.IsEmpty())
+			{
+				OutRefusal = Pick(Language, LOCTEXT("NoTruss", "There is no truss on the stage to hang them on. Add truss first, or say \"on the floor\"."),
+					INVTEXT("Բեմում ֆերմա չկա, որից կախել։ Նախ ավելացրեք ֆերմա կամ ասեք «հատակին»։"));
+				return false;
+			}
+			TArray<FVector> Occupied;
+			for (const AModularBaseActor* Placed : Session.GetPlacedItems())
+			{
+				if (const ALightingFixtureActor* Fixture = Cast<ALightingFixtureActor>(Placed))
+				{
+					Occupied.Add(Fixture->GetActorLocation());
+				}
+			}
+
+			// Front and back name one run; "the truss" takes the first run, from the front, with room for them all.
+			TArray<int32> Candidates;
+			if (Mount == EStageAIFixtureMount::FrontTruss)
+			{
+				Candidates.Add(0);
+			}
+			else if (Mount == EStageAIFixtureMount::BackTruss)
+			{
+				Candidates.Add(Runs.Num() - 1);
+			}
+			else
+			{
+				for (int32 Index = 0; Index < Runs.Num(); ++Index)
+				{
+					Candidates.Add(Index);
+				}
+			}
+			int32 MostFree = 0;
+			for (const int32 Index : Candidates)
+			{
+				const TArray<FVector> Free = StageAICommandParser::FindFreeTrussSpots(Runs[Index].Points, Runs[Index].bClosed, Occupied);
+				const TArray<FVector> Spots = StageAICommandParser::SpreadOverSpots(Free, Count);
+				if (!Spots.IsEmpty())
+				{
+					OutRunName = NameTrussRun(Index, Runs.Num(), Language);
+					for (const FVector& Spot : Spots)
+					{
+						OutTransforms.Add(FTransform(FRotator(0.0, 0.0, 180.0), Spot));
+					}
+					return true;
+				}
+				MostFree = FMath::Max(MostFree, Free.Num());
+			}
+			const FText Where = Candidates.Num() == 1 ? NameTrussRun(Candidates[0], Runs.Num(), Language) : Pick(Language, LOCTEXT("AnyTruss", "any truss run"), INVTEXT("որևէ ֆերմայից"));
+			OutRefusal = FText::Format(Pick(Language,
+				LOCTEXT("NoTrussRoom", "There is room for {0} more {0}|plural(one=fixture,other=fixtures) on {1} (a spot every 50 cm, clear of the fixtures already hanging); ask for fewer or name another run."),
+				INVTEXT("{1} կարելի է կախել ևս {0} սարք (ամեն 50 սմ-ը մեկ, արդեն կախվածներից հեռու)։ Խնդրեք ավելի քիչ կամ նշեք այլ ֆերմա։")),
+				FText::AsNumber(MostFree), Where);
+			return false;
 		}
 
 		FText FormatCue(float Number)
@@ -122,30 +272,53 @@ namespace StageAICommandRunner
 				return Refused(FText::Format(Pick(Language, LOCTEXT("NotAllowed", "I can't place {0}: {1}"), INVTEXT("Չեմ կարող տեղադրել {0}՝ {1}")), Item->DisplayName, Allowed.Message));
 			}
 
-			// A row beyond everything already placed, so nothing lands inside other gear.
-			TOptional<double> LowestX;
-			if (const UStageSessionSubsystem* Session = UWorld::GetSubsystem<UStageSessionSubsystem>(World))
+			const UStageSessionSubsystem* Session = UWorld::GetSubsystem<UStageSessionSubsystem>(World);
+			const int32 Count = Command.Count.Get(1);
+			FStageSketchBuildPlan Plan;
+			FText Placement;
+			if (Command.Mount != EStageAIFixtureMount::Floor)
 			{
-				for (const AModularBaseActor* Placed : Session->GetPlacedItems())
+				// Hung on a truss run already on the stage (ADR 0016 §8); the rules still judge every fixture when the plan is built.
+				TArray<FTransform> Transforms;
+				FText RunName;
+				FText Refusal;
+				if (!Session || !PlanTrussFixtures(*Session, Command.Mount, Count, Language, Transforms, RunName, Refusal))
+				{
+					return Refused(Session ? Refusal : Pick(Language, LOCTEXT("NoSession", "There is no stage session in this level."), INVTEXT("Այս մակարդակում բեմի նիստ չկա։")));
+				}
+				Plan.FixtureItem = Item;
+				for (const FTransform& Transform : Transforms)
+				{
+					FStageSketchFixturePlan& Planned = Plan.Fixtures.AddDefaulted_GetRef();
+					Planned.Transform = Transform;
+					Planned.Mount = EStageSketchFixtureMount::Truss;
+				}
+				Placement = FText::Format(Pick(Language, LOCTEXT("PlacedOnTruss", "hung from {0}, spread along it"), INVTEXT("կախված {0}՝ հավասար բաշխված")), RunName);
+			}
+			else
+			{
+				// A row beyond everything already placed, so nothing lands inside other gear.
+				TOptional<double> LowestX;
+				for (const AModularBaseActor* Placed : Session ? Session->GetPlacedItems() : TArray<AModularBaseActor*>())
 				{
 					if (Placed)
 					{
 						LowestX = FMath::Min(LowestX.Get(TNumericLimits<double>::Max()), Placed->GetActorLocation().X);
 					}
 				}
+				TArray<FStageSketchStroke> Strokes;
+				for (const FVector2D& Point : StageAICommandParser::LayoutFixtureRow(Count, LowestX))
+				{
+					FStageSketchStroke& Stroke = Strokes.AddDefaulted_GetRef();
+					Stroke.Kind = EStageSketchStrokeKind::Fixture;
+					Stroke.Points.Add(Point);
+				}
+				FStageSketchBuildRules Rules;
+				Rules.GridStep = StageAICommandParser::FixtureRowGrid;
+				Rules.FixtureItem = Item;
+				Plan = StageSketchGenerator::BuildPlan(Strokes, Rules);
+				Placement = Pick(Language, LOCTEXT("PlacedOnFloor", "in a row on the floor, ready to move into place"), INVTEXT("մեկ շարքով հատակին, պատրաստ տեղափոխման"));
 			}
-			const int32 Count = Command.Count.Get(1);
-			TArray<FStageSketchStroke> Strokes;
-			for (const FVector2D& Point : StageAICommandParser::LayoutFixtureRow(Count, LowestX))
-			{
-				FStageSketchStroke& Stroke = Strokes.AddDefaulted_GetRef();
-				Stroke.Kind = EStageSketchStrokeKind::Fixture;
-				Stroke.Points.Add(Point);
-			}
-			FStageSketchBuildRules Rules;
-			Rules.GridStep = StageAICommandParser::FixtureRowGrid;
-			Rules.FixtureItem = Item;
-			FStageSketchBuildPlan Plan = StageSketchGenerator::BuildPlan(Strokes, Rules);
 			if (Plan.Fixtures.Num() != Count)
 			{
 				return Refused(Plan.Warnings.IsEmpty()
@@ -158,7 +331,7 @@ namespace StageAICommandRunner
 			const FText StepName = FText::Format(LOCTEXT("AddStep", "Assistant: add {0} × {1}"), FText::AsNumber(Count), Name);
 			TWeakObjectPtr<AModularPlayerController> WeakController = &Controller;
 			TWeakObjectPtr<UStageAICommandSubsystem> WeakAssistant = Assistant;
-			const bool bStarted = Assistant->RequestItemAssets(*Item, FSimpleDelegate::CreateLambda([WeakController, WeakAssistant, Plan, StepName, Name, Count, Language]()
+			const bool bStarted = Assistant->RequestItemAssets(*Item, FSimpleDelegate::CreateLambda([WeakController, WeakAssistant, Plan, StepName, Name, Count, Placement, Language]()
 			{
 				UStageAICommandSubsystem* PendingAssistant = WeakAssistant.Get();
 				AModularPlayerController* PendingController = WeakController.Get();
@@ -190,8 +363,8 @@ namespace StageAICommandRunner
 					}
 				}
 				PendingAssistant->FinishPendingAction(Result.bSucceeded
-					? WithFixtures(Done(FText::Format(Pick(Language, LOCTEXT("Added", "Added {0} × {1} in a row on the floor, ready to move into place. Ctrl+Z removes all of them."),
-						INVTEXT("Ավելացվեց {0} × {1}՝ մեկ շարքով հատակին, պատրաստ տեղափոխման։ Ctrl+Z-ը կհեռացնի բոլորը։")), FText::AsNumber(Count), Name)), Added)
+					? WithFixtures(Done(FText::Format(Pick(Language, LOCTEXT("Added", "Added {0} × {1} {2}. Ctrl+Z removes all of them."),
+						INVTEXT("Ավելացվեց {0} × {1}՝ {2}։ Ctrl+Z-ը կհեռացնի բոլորը։")), FText::AsNumber(Count), Name, Placement)), Added)
 					: Refused(FText::Format(Pick(Language, LOCTEXT("AddRefused", "Nothing was placed: {0}"), INVTEXT("Ոչինչ չտեղադրվեց՝ {0}")), Result.Message)));
 			}));
 			return bStarted

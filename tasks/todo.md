@@ -384,7 +384,7 @@ See `STATE.md` for detailed history of completed work.
 - [x] `StageAICommandRunner` + controller `RequestAssistantPrompt`, `RequestBuildPlan` (shared with the Sketch window), `RequestSetEnvironment` + `FStageEnvironmentCommand` (assistant weather/time/sky changes are undoable), `RunCapturingRejections`
 - [x] Panel `UStageAIAssistantWidget` + `DA_Panel_Assistant` (pop-up 560 × 720); Edit › Assistant › AI Assistant..., Window menu, toolbar ASSIST
 - [ ] Manual verification (Gevor): type in the panel (Enter, SEND, chips, CLEAR), add fixtures and Ctrl+Z them, store/play cues, weather and time with Ctrl+Z, exports, the online model with a real API key
-- [ ] Follow-ups: export completion reported in the chat (done in #115); several commands in one prompt; hanging added fixtures on truss; Environment panel edits undoable (done in #116); conversation saved with scenes; more languages
+- [ ] Follow-ups: export completion reported in the chat (done in #115); several commands in one prompt (done in H4, #75); hanging added fixtures on truss (done in #117); Environment panel edits undoable (done in #116); conversation saved with scenes; more languages
 
 ## Phase 21 — Armenian & English assistant, voice prompts, photo / scan import for Sketch to Stage (requested by Gevor 2026-10-22; STATE.md #44, ADR 0017)
 Decisions (Gevor, 2026-10-22): voice via OpenAI transcription (off by default, OPENAI_API_KEY); an offline Armenian grammar plus Armenian replies; photo import = a local edge pipeline, with an optional Claude vision reading, landing as editable strokes in the Sketch canvas.
@@ -947,3 +947,11 @@ Gevor's choices: automation tests on a harness game instance (not AFunctionalTes
 - [x] Dev StageCraft.Environment.Set / Preset write through the controller too
 - [x] Tests StageCraft.History.EnvironmentDrag (new), History.Environment (transaction case), UI.ValueSlider (one grab, one release); two mutations fail them; suite 320/320; -game Env116After: each drag one step, four Ctrl+Z restore 22:30 / 35% / 20% / Outdoor, Ctrl+Y re-applies 19:43
 - [ ] Gevor: in the Environment panel drag Time of day, click Rain and Studio; Ctrl+Z three times, then Ctrl+Y
+
+## Phase 67 - Assistant hangs added fixtures on the truss (requested by Gevor 2026-11-26; STATE.md #117; ADR 0016 §8)
+- [x] Measured first (-game Hang117Before, Concert): "hang 4 pars on the truss" and "add 2 moving head spots to the truss" were plain adds, placed on the floor at X -2300 / -2500 behind FOH, reply "in a row on the floor"
+- [x] FStageAICommand::Mount (Floor / Truss / FrontTruss / BackTruss): local grammar (truss words, hang / fly without floor; front / back / upstage / downstage), online tool field mount, proposal card wording EN / HY
+- [x] StageAICommandParser::FindFreeTrussSpots (a spot every 50 cm, 60 cm clear of hung fixtures) and SpreadOverSpots; runner gathers straight and curved truss runs front first, picks the run, places one plan through RequestBuildPlan (upside down, one undo step), refuses with the number that fits
+- [x] Test StageCraft.AI.TrussHang (two mutations fail it, 13 checks); -game Hang117After: pars at Y -700 / -200 / 200 / 700 between the Beams, back truss at ±400, Armenian on the front truss, "hang 20" refused with "room for 4 more", Ctrl+Z removes one add
+- [ ] Gevor: on a stage with truss, ask the AI Assistant "hang 4 pars on the truss", then "add 2 spots on the back truss"; check where they hang, then Ctrl+Z
+- [ ] Follow-up: aim the hung fixtures (home position towards the stage centre) and say which run by name when there are more than two

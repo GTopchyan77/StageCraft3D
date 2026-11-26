@@ -144,6 +144,27 @@ namespace StageAICommandParser
 	 * Count is clamped to 1..MaxFixturesPerCommand.
 	 */
 	MODULARSCENEBUILDER_API TArray<FVector2D> LayoutFixtureRow(int32 Count, TOptional<double> LowestPlacedX);
+
+	/** Fixtures hung by the assistant: spots every TrussSlotSpacing cm along a run, none within TrussClearance cm of a fixture there. */
+	constexpr double TrussSlotSpacing = 50.0;
+	constexpr double TrussClearance = 60.0;
+
+	/** A fixture this far (cm) above or below a run's chord is not on that run, so it does not take its spots. */
+	constexpr double TrussClearanceHeight = 150.0;
+
+	/**
+	 * The spots on a truss run where a fixture can hang (Docs/ADR/0016 §8): every TrussSlotSpacing cm along Run's bottom chord (a
+	 * world polyline in cm; Closed joins the last point to the first), from its start, leaving out those within TrussClearance cm
+	 * (horizontally, and TrussClearanceHeight vertically) of an Occupied fixture. In order along the run. Empty for a run of
+	 * fewer than two points.
+	 */
+	MODULARSCENEBUILDER_API TArray<FVector> FindFreeTrussSpots(TConstArrayView<FVector> Run, bool bClosed, TConstArrayView<FVector> Occupied);
+
+	/**
+	 * Count of the Free spots spread evenly over them (the centre of each of Count equal shares, in order). Empty when Count is
+	 * less than 1 or more than Free holds.
+	 */
+	MODULARSCENEBUILDER_API TArray<FVector> SpreadOverSpots(TConstArrayView<FVector> Free, int32 Count);
 }
 
 /** The assistant's words (Docs/ADR/0016-ai-assistant.md §2.3): help, answers to questions and explanations. Pure. */

@@ -1,6 +1,6 @@
 # ADR 0016: AI Assistant (chat panel and natural-language commands)
 
-- **Status:** accepted. See STATE.md #43; §6 amendment (STATE.md #114: bill of materials answers); §7 amendment (STATE.md #115: export completion in the chat).
+- **Status:** accepted. See STATE.md #43; §6 amendment (STATE.md #114: bill of materials answers); §7 amendment (STATE.md #115: export completion in the chat); §8 amendment (STATE.md #117: fixtures hung on the truss).
 - **Related:**
   - ADR 0015 §2.5 (sketch plans placed all or nothing, one undo step): the assistant places fixtures through the same plan and builder.
   - ADR 0011 §2.2 (cue requests), ADR 0012 / 0014 (report exports), ADR 0009 (outdoor environment).
@@ -114,12 +114,12 @@ It binds `OnConversationChanged` in `NativeConstruct`, unbinds it in `NativeDest
 ## 4. Consequences
 
 - Assistant actions cannot do anything the user could not do with the buttons, and they are refused by exactly the same rules.
-- Assistant weather and time changes are undoable; Environment panel changes still are not (follow-up).
+- Assistant weather and time changes are undoable; so are Environment panel changes since STATE.md #116 (ADR 0009 §9).
 - The module gains the `HTTP` dependency.
 - **Follow-ups:**
   - report export completion back into the chat (done, §7);
-  - multi-command prompts ("add 4 pars and store cue 1");
-  - fixture mounting ("hang them on the truss");
+  - multi-command prompts ("add 4 pars and store cue 1"; done in H4, STATE.md #75, ADR 0030 §17);
+  - fixture mounting ("hang them on the truss"; done, §8);
   - more languages in the local grammar;
   - saving the conversation with the scene.
 
@@ -162,3 +162,44 @@ Remove `Source/ModularSceneBuilder/*/AI/`, the panel definition and its menu ent
 **Alternatives considered:**
 - **Making the export step Pending until the files exist.** Rejected: it would hold the assistant busy for no gain, and "export all reports" would need to wait for three results inside one step.
 - **Copying the report subsystem's own `Message`.** Rejected: it is English only and phrased for the status bar.
+
+## 8. Amendment: fixtures hung on the truss (STATE.md #117, 2026-11-26)
+
+**Measured before** (`-game` run `Hang117Before`, Concert starter stage: two F34 truss runs at 7 m, front at X = −600 and back at X = 400, with nine Beams already hung):
+- "hang 4 pars on the truss" and "add 2 moving head spots to the truss" were read as plain adds; "truss" was dropped as a word.
+- The fixtures were placed on the floor at X = −2300 / −2500, behind the FOH desks. The reply said "in a row on the floor".
+- Only Sketch plans hung fixtures, and only from truss drawn in the same sketch.
+
+**Decision:**
+- `FStageAICommand::Mount` (`EStageAIFixtureMount`): Floor (default), Truss, FrontTruss or BackTruss.
+  - Local grammar: "truss" / "trusses", or hang / hung / fly / flown without floor / ground / deck, means a truss.
+  - back / rear / upstage picks the back run; front / downstage the front one.
+  - Those words are kept out of the fixture query.
+  - Armenian reaches it through the lexicon (կախ → hang, ֆերմա → truss).
+- Online tool: a `mount` field (floor, truss, front_truss, back_truss), refused when unknown. Proposal cards say where they hang ("Add 2 spots on the back truss").
+- Runner: every truss run on the stage, most downstage (lowest X, towards the audience) first.
+  - Straight truss spans of category `StageCraft.Category.Truss` give their path (the bottom chord, as the Sketch window hangs fixtures at a span's height).
+  - Curved truss is sampled along its arc half a profile below its origin.
+- Pure layout (`StageAICommandParser::FindFreeTrussSpots`, `SpreadOverSpots`):
+  - a spot every 50 cm along the run, measured over the whole run so corners get one spot;
+  - spots within 60 cm (and 150 cm vertically) of a fixture already there are left out;
+  - the fixtures go at the centres of equal shares of the free spots.
+- Which run:
+  - "the truss" takes the first run, from the front, with room for them all;
+  - front and back name one run;
+  - not enough room is refused with the number that fits.
+- The fixtures hang upside down (roll 180°) like the Sketch window's. They are placed as one plan through `RequestBuildPlan`: every fixture is judged by the rules, and Ctrl+Z removes them all.
+- The reply names the run ("hung from the front truss, spread along it"). The floor reply is unchanged.
+
+**Alternatives considered:**
+- Snapping to the nearest truss from the floor row. Rejected: the floor row lies in front of everything, far from any truss.
+- Asking which run every time. Rejected: "the truss" has an obvious default, and front / back pick another.
+- Moving `FindTrussMount` from the Sketch generator. Rejected: it projects a drawn marker, not an even spread over the free length.
+
+**Verified** (`Hang117After`, same stage):
+- **Pars:** 4 hung at Y −700, −200, 200, 700 on the front truss, between the Beams.
+- **Back truss:** 2 Profile 600 at Y ±400.
+- **Armenian:** «կախիր 2 լույս ֆերմայից» hung 2 Beams at ±450 on the front truss, with an Armenian reply.
+- **Refusal:** "hang 20 pars on the front truss" answered "room for 4 more".
+- **Undo:** Ctrl+Z removed the last add as one step.
+- **Tests:** `StageCraft.AI.TrussHang`.
